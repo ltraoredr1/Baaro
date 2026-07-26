@@ -1,19 +1,25 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { supabase } from "./supabaseClient.js";
 import { API_BASE } from "./config.js";
-import { Heart, MessageCircle, Share2, Wallet, Send, Sparkles, Globe2, ArrowUpRight, Play, Users, UserPlus, TrendingUp, Check, Lock, ShieldCheck, Coins, ArrowRightLeft, AlertTriangle, Settings, Bell, Moon, LogOut, ChevronRight, Languages, Vote, Menu, X, HelpCircle, Radio, Smartphone, Bookmark, Music2, Volume2, BadgeCheck, Briefcase, FileText, Copy, BarChart3, Clock } from "lucide-react";
+import { Heart, MessageCircle, Share2, Wallet, Send, Sparkles, Globe2, ArrowUpRight, Play, Users, UserPlus, TrendingUp, Check, Lock, ShieldCheck, Coins, ArrowRightLeft, AlertTriangle, Settings, Bell, Moon, LogOut, ChevronRight, Languages, Vote, Menu, X, HelpCircle, Radio, Smartphone, Bookmark, Music2, Volume2, BadgeCheck, Briefcase, FileText, Copy, BarChart3, Clock, PlusCircle, Search, Flag, UserX, Download, Trash2, ShieldAlert, WifiOff, Swords, Plus, MessageSquare, ArrowRight, LogIn, ChevronDown, Zap, Mic, MicOff, Video, VideoOff, PhoneOff } from "lucide-react";
 import { isNearbyAvailable, startNearby, stopNearby, sendNearbyMessage, onNearbyEvent } from "./nearby.js";
+import { useMessaging } from "./hooks/useMessaging.js";
+import { useDebates } from "./hooks/useDebates.js";
+import { createLiveSession, getLocalMedia } from "./lib/webrtc.js";
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, ResponsiveContainer, Tooltip } from "recharts";
-
-const COLORS = {
-  bg: "#0B1526",
-  surface: "#121F35",
-  surface2: "#182948",
-  gold: "#D4A93E",
-  teal: "#3FA796",
-  ivory: "#EDEAE0",
-  muted: "#7C879C",
-};
+import { TurnstileWidget } from "./Turnstile.jsx";
+import { COLORS } from "./theme.js";
+import {
+  useSession,
+  useWallet,
+  useCrypto,
+  usePosts,
+  useVideos,
+  useFollowers,
+  useGovernance,
+  useNotifications,
+  useStories,
+} from "./hooks/dataHooks.js";
 
 const LANGUAGES = [
   { code: "fr", label: "Français" },
@@ -53,13 +59,6 @@ function t(lang, key) {
   return (I18N[lang] && I18N[lang][key]) || I18N.en[key] || key;
 }
 
-const SEED_POSTS = [
-  { id: 1, name: "Amara K.", flag: "🇳🇬", handle: "Lagos", text: "Premier live de cuisine sur BAARO aujourd'hui — merci pour vos retours, la communauté grandit vite ici.", likes: 214, comments: 38, earned: 0 },
-  { id: 2, name: "Louis F.", flag: "🇫🇷", handle: "Lyon", text: "L'assistant IA m'a aidé à traduire mon post en 6 langues en un clic. Portée x4 sur ma dernière publication.", likes: 156, comments: 22, earned: 0 },
-  { id: 3, name: "Mei T.", flag: "🇹🇼", handle: "Taipei", text: "3 mois sur la plateforme, déjà convertis mes premiers points en récompense réelle. Simple et transparent.", likes: 341, comments: 54, earned: 0 },
-  { id: 4, name: "Diego R.", flag: "🇦🇷", handle: "Rosario", text: "Le fil d'actualité résumé par l'IA le matin me fait gagner un temps fou avant le travail.", likes: 98, comments: 11, earned: 0 },
-];
-
 const TICKER_EVENTS = [
   "🇰🇷 Séoul — +12 pts pour une publication engageante",
   "🇧🇷 São Paulo — +8 pts pour un commentaire utile",
@@ -77,21 +76,6 @@ const EARN_RULES = [
   { label: "Parrainage validé", pts: "20 pts" },
   { label: "Série d'activité (7 jours)", pts: "10 pts" },
   { label: "Question posée à l'assistant IA", pts: "0.5 pt" },
-];
-
-const SEED_VIDEOS = [
-  { id: "v1", title: "Recette de jollof rice en 10 minutes", author: "Amara K.", flag: "🇳🇬", views: "128K", likes: 4200, duration: "9:41", earned: 62, color: COLORS.teal },
-  { id: "v2", title: "Comment j'utilise l'IA pour traduire mes vidéos", author: "Louis F.", flag: "🇫🇷", views: "84K", likes: 2600, duration: "6:12", earned: 38, color: COLORS.gold },
-  { id: "v3", title: "Studio de danse à Taipei — vlog", author: "Mei T.", flag: "🇹🇼", views: "210K", likes: 9100, duration: "12:04", earned: 97, color: "#6C7FD1" },
-  { id: "v4", title: "Marché de rue à Rosario, en direct", author: "Diego R.", flag: "🇦🇷", views: "45K", likes: 1800, duration: "18:30", earned: 21, color: "#E27D60" },
-];
-
-const SEED_FOLLOWERS = [
-  { id: "f1", name: "Sofia N.", flag: "🇮🇹", handle: "Milan", since: "Nouvel abonné" },
-  { id: "f2", name: "Kwame A.", flag: "🇬🇭", handle: "Accra", since: "Il y a 2 jours" },
-  { id: "f3", name: "Yuki S.", flag: "🇯🇵", handle: "Kyoto", since: "Il y a 4 jours" },
-  { id: "f4", name: "Elena V.", flag: "🇪🇸", handle: "Séville", since: "Il y a 1 semaine" },
-  { id: "f5", name: "Tom B.", flag: "🇬🇧", handle: "Bristol", since: "Il y a 2 semaines" },
 ];
 
 const PROFIT_HISTORY = [
@@ -127,276 +111,6 @@ const BARO_PRICE_HISTORY = [
 
 const POINTS_PER_BARO = 100; // 100 points = 1 BARO
 
-function useSession() {
-  const [userId, setUserId] = useState(null);
-  const [ready, setReady] = useState(false);
-
-  useEffect(() => {
-    (async () => {
-      try {
-        let { data: { session } } = await supabase.auth.getSession();
-        if (!session) {
-          const { data, error } = await supabase.auth.signInAnonymously();
-          if (error) throw error;
-          session = data.session;
-        }
-        setUserId(session?.user?.id || null);
-      } catch (e) {
-        console.error("Erreur de session Supabase :", e);
-      } finally {
-        setReady(true);
-      }
-    })();
-  }, []);
-
-  return { userId, ready };
-}
-
-function useWallet(userId) {
-  const [balance, setBalance] = useState(1284);
-  const [history, setHistory] = useState([]);
-
-  useEffect(() => {
-    if (!userId) return;
-    (async () => {
-      let { data: wallet } = await supabase.from("wallets").select("*").eq("user_id", userId).single();
-      if (!wallet) {
-        const { data: created } = await supabase.from("wallets").insert({ user_id: userId, balance: 1284 }).select().single();
-        wallet = created;
-      }
-      setBalance(wallet.balance);
-
-      const { data: txs } = await supabase
-        .from("transactions")
-        .select("*")
-        .eq("user_id", userId)
-        .order("created_at", { ascending: false })
-        .limit(20);
-      setHistory(
-        (txs || []).map((tx) => ({
-          id: tx.id,
-          label: tx.label,
-          pts: tx.pts,
-          ts: new Date(tx.created_at).toLocaleString("fr-FR"),
-        }))
-      );
-    })();
-  }, [userId]);
-
-  const earn = async (amount, label) => {
-    if (!userId) return;
-    setBalance((prevBal) => {
-      const newBal = prevBal + amount;
-      supabase.from("wallets").update({ balance: newBal }).eq("user_id", userId).then(() => {});
-      return newBal;
-    });
-    const { data: tx } = await supabase.from("transactions").insert({ user_id: userId, label, pts: amount }).select().single();
-    if (tx) setHistory((prev) => [{ id: tx.id, label, pts: amount, ts: "À l'instant" }, ...prev].slice(0, 20));
-  };
-
-  const redeem = async (cost, label) => {
-    if (!userId || balance < cost) return false;
-    const newBal = balance - cost;
-    setBalance(newBal);
-    await supabase.from("wallets").update({ balance: newBal }).eq("user_id", userId);
-    const { data: tx } = await supabase.from("transactions").insert({ user_id: userId, label, pts: -cost }).select().single();
-    if (tx) setHistory((prev) => [{ id: tx.id, label, pts: -cost, ts: "À l'instant" }, ...prev].slice(0, 20));
-    return true;
-  };
-
-  return { balance, history, earn, redeem };
-}
-
-function useCrypto(userId) {
-  const [holdings, setHoldings] = useState(0);
-
-  useEffect(() => {
-    if (!userId) return;
-    (async () => {
-      let { data: row } = await supabase.from("crypto_holdings").select("*").eq("user_id", userId).single();
-      if (!row) {
-        const { data: created } = await supabase.from("crypto_holdings").insert({ user_id: userId, holdings: 0 }).select().single();
-        row = created;
-      }
-      setHoldings(row.holdings);
-    })();
-  }, [userId]);
-
-  const addHoldings = async (amount) => {
-    const next = holdings + amount;
-    setHoldings(next);
-    if (userId) await supabase.from("crypto_holdings").update({ holdings: next }).eq("user_id", userId);
-  };
-
-  return { holdings, addHoldings };
-}
-
-function usePosts(userId) {
-  const [posts, setPosts] = useState([]);
-  const [loading, setLoading] = useState(true);
-
-  const loadPosts = async () => {
-    const { data: rows } = await supabase
-      .from("posts")
-      .select("id, text, created_at, author_id, profiles(display_name, flag, handle)")
-      .order("created_at", { ascending: false })
-      .limit(30);
-    const { data: likeRows } = await supabase.from("post_likes").select("post_id, user_id");
-    const counts = {};
-    const likedByMe = {};
-    (likeRows || []).forEach((l) => {
-      counts[l.post_id] = (counts[l.post_id] || 0) + 1;
-      if (l.user_id === userId) likedByMe[l.post_id] = true;
-    });
-    setPosts(
-      (rows || []).map((r) => ({
-        id: r.id,
-        name: r.profiles?.display_name || "Membre BAARO",
-        flag: r.profiles?.flag || "🌍",
-        handle: r.profiles?.handle || "",
-        text: r.text,
-        likes: counts[r.id] || 0,
-        comments: 0,
-        liked: !!likedByMe[r.id],
-        earned: 0,
-      }))
-    );
-    setLoading(false);
-  };
-
-  useEffect(() => {
-    if (!userId) return;
-    (async () => {
-      await supabase.from("profiles").upsert({ user_id: userId, display_name: "Vous", flag: "🌍", handle: "Membre BAARO" });
-      const { count } = await supabase.from("posts").select("id", { count: "exact", head: true });
-      if (!count) {
-        for (const seed of SEED_POSTS) {
-          await supabase.from("posts").insert({ author_id: userId, text: seed.text });
-        }
-      }
-      await loadPosts();
-    })();
-  }, [userId]);
-
-  const likePost = async (id) => {
-    setPosts((prev) => prev.map((p) => (p.id === id && !p.liked ? { ...p, liked: true, likes: p.likes + 1, earned: p.earned + 2 } : p)));
-    if (userId) await supabase.from("post_likes").insert({ post_id: id, user_id: userId });
-  };
-
-  return { posts, likePost, loading };
-}
-
-function useVideos(userId) {
-  const [videos, setVideos] = useState([]);
-
-  const load = async () => {
-    const { data: rows } = await supabase
-      .from("videos")
-      .select("id, title, duration, views, author_id, profiles(display_name, flag)")
-      .order("created_at", { ascending: false })
-      .limit(30);
-    setVideos(
-      (rows || []).map((r, i) => ({
-        id: r.id,
-        title: r.title,
-        author: r.profiles?.display_name || "Membre BAARO",
-        flag: r.profiles?.flag || "🌍",
-        views: `${r.views}`,
-        likes: 0,
-        duration: r.duration || "—",
-        earned: 0,
-        color: [COLORS.teal, COLORS.gold, "#6C7FD1", "#E27D60"][i % 4],
-      }))
-    );
-  };
-
-  useEffect(() => {
-    if (!userId) return;
-    (async () => {
-      const { count } = await supabase.from("videos").select("id", { count: "exact", head: true });
-      if (!count) {
-        for (const seed of SEED_VIDEOS) {
-          await supabase.from("videos").insert({ author_id: userId, title: seed.title, duration: seed.duration, views: 0 });
-        }
-      }
-      await load();
-    })();
-  }, [userId]);
-
-  const watchVideo = async (v) => {
-    setVideos((prev) => prev.map((x) => (x.id === v.id ? { ...x, views: `${Number(x.views) + 1}` } : x)));
-    if (userId) await supabase.from("videos").update({ views: Number(v.views) + 1 }).eq("id", v.id);
-  };
-
-  return { videos, watchVideo };
-}
-
-function useFollowers(userId) {
-  const [followers, setFollowers] = useState([]);
-  const [counts, setCounts] = useState({ followers: 0, following: 0 });
-
-  useEffect(() => {
-    if (!userId) return;
-    (async () => {
-      const { data: rows } = await supabase
-        .from("follows")
-        .select("follower_id, created_at, profiles:follower_id(display_name, flag, handle)")
-        .eq("followed_id", userId)
-        .order("created_at", { ascending: false })
-        .limit(20);
-      setFollowers(
-        (rows || []).map((r) => ({
-          id: r.follower_id,
-          name: r.profiles?.display_name || "Membre BAARO",
-          flag: r.profiles?.flag || "🌍",
-          handle: r.profiles?.handle || "",
-          since: new Date(r.created_at).toLocaleDateString("fr-FR"),
-        }))
-      );
-      const { count: followerCount } = await supabase.from("follows").select("*", { count: "exact", head: true }).eq("followed_id", userId);
-      const { count: followingCount } = await supabase.from("follows").select("*", { count: "exact", head: true }).eq("follower_id", userId);
-      setCounts({ followers: followerCount || 0, following: followingCount || 0 });
-    })();
-  }, [userId]);
-
-  return { followers, counts };
-}
-
-const PROPOSALS = [
-  { id: "p1", title: "Plafonner la publicité à 1 post sur 15 dans le fil", description: "Réduit les revenus pub à court terme, mais protège l'expérience des membres." },
-  { id: "p2", title: "Reverser 60% (au lieu de 50%) des revenus pub aux créateurs", description: "Plus généreux pour les créateurs, plus lent pour financer la plateforme." },
-  { id: "p3", title: "Ajouter un mode « lecture seule sans algorithme »", description: "Fil strictement chronologique, sans recommandation automatique." },
-];
-
-function useGovernance(userId) {
-  const [votes, setVotes] = useState([]);
-  const [myVotes, setMyVotes] = useState({});
-
-  const load = async () => {
-    const { data } = await supabase.from("votes").select("proposal_id, choice, user_id");
-    setVotes(data || []);
-    if (userId) {
-      const mine = {};
-      (data || []).forEach((v) => { if (v.user_id === userId) mine[v.proposal_id] = v.choice; });
-      setMyVotes(mine);
-    }
-  };
-
-  useEffect(() => {
-    if (!userId) return;
-    load();
-  }, [userId]);
-
-  const castVote = async (proposalId, choice) => {
-    if (!userId || myVotes[proposalId]) return;
-    setMyVotes((prev) => ({ ...prev, [proposalId]: choice }));
-    setVotes((prev) => [...prev, { proposal_id: proposalId, choice, user_id: userId }]);
-    await supabase.from("votes").upsert({ proposal_id: proposalId, user_id: userId, choice });
-  };
-
-  return { votes, myVotes, castVote };
-}
-
 function Ticker() {
   return (
     <div className="overflow-hidden border-y" style={{ borderColor: "rgba(212,169,62,0.2)", background: COLORS.surface }}>
@@ -412,11 +126,326 @@ function Ticker() {
   );
 }
 
-function FeedTab({ posts, onLike, lang, loading }) {
+function ProfileModal({ authorId, userId, onClose }) {
+  const [profile, setProfile] = useState(null);
+  const [authorPosts, setAuthorPosts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [actionDone, setActionDone] = useState(null);
+
+  useEffect(() => {
+    if (!authorId) return;
+    (async () => {
+      setLoading(true);
+      const [{ data: p }, { data: posts }] = await Promise.all([
+        supabase.from("profiles").select("display_name, flag, handle, bio, created_at").eq("user_id", authorId).single(),
+        supabase.from("posts").select("id, text, created_at").eq("author_id", authorId).order("created_at", { ascending: false }).limit(10),
+      ]);
+      setProfile(p);
+      setAuthorPosts(posts || []);
+      setLoading(false);
+    })();
+  }, [authorId]);
+
+  const report = async () => {
+    if (!userId) return;
+    await supabase.from("reports").insert({ reporter_id: userId, target_type: "user", target_id: authorId, reason: "Signalement depuis le profil" });
+    setActionDone("Signalement envoyé. Merci, notre équipe va l'examiner.");
+  };
+  const block = async () => {
+    if (!userId) return;
+    await supabase.from("blocks").insert({ blocker_id: userId, blocked_id: authorId });
+    setActionDone("Ce membre a été bloqué. Vous ne verrez plus son contenu.");
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center" style={{ background: "rgba(0,0,0,0.6)" }} onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()} className="w-full max-w-xl rounded-t-2xl p-6 max-h-[85%] overflow-y-auto" style={{ background: COLORS.surface2 }}>
+        <div className="w-10 h-1 rounded-full mx-auto mb-5" style={{ background: "rgba(255,255,255,0.15)" }} />
+        {loading ? (
+          <div className="text-sm text-center py-8" style={{ color: COLORS.muted }}>Chargement du profil…</div>
+        ) : !profile ? (
+          <div className="text-sm text-center py-8" style={{ color: COLORS.muted }}>Profil introuvable.</div>
+        ) : (
+          <>
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-14 h-14 rounded-full flex items-center justify-center font-semibold text-lg" style={{ background: COLORS.surface, color: COLORS.gold, fontFamily: "'Fraunces', serif" }}>
+                {(profile.display_name || "?").charAt(0)}
+              </div>
+              <div className="flex-1">
+                <div className="text-base font-medium" style={{ color: COLORS.ivory }}>{profile.display_name} {profile.flag}</div>
+                <div className="text-xs" style={{ color: COLORS.muted }}>{profile.handle}</div>
+              </div>
+              <button onClick={report} title="Signaler" className="p-2 rounded-md" style={{ background: COLORS.surface, color: COLORS.muted }}><Flag size={15} /></button>
+              <button onClick={block} title="Bloquer" className="p-2 rounded-md" style={{ background: COLORS.surface, color: "#E27D60" }}><UserX size={15} /></button>
+            </div>
+            {actionDone && (
+              <div className="text-xs px-3 py-2 rounded-md mb-4" style={{ background: "rgba(212,169,62,0.12)", color: COLORS.gold }}>{actionDone}</div>
+            )}
+            {profile.bio ? (
+              <p className="text-sm mb-4" style={{ color: COLORS.ivory }}>{profile.bio}</p>
+            ) : (
+              <p className="text-sm mb-4 italic" style={{ color: COLORS.muted }}>Aucune bio pour l'instant.</p>
+            )}
+            <div className="text-xs mb-5" style={{ color: COLORS.muted }}>
+              Membre depuis {profile.created_at ? new Date(profile.created_at).toLocaleDateString("fr-FR", { month: "long", year: "numeric" }) : "récemment"}
+            </div>
+
+            <div className="flex gap-2 mb-6">
+              <button className="flex-1 py-2 rounded-md text-sm font-medium" style={{ background: COLORS.teal, color: COLORS.bg }}>Suivre</button>
+              <button className="flex-1 py-2 rounded-md text-sm" style={{ background: COLORS.surface, color: COLORS.ivory }}>Message</button>
+            </div>
+
+            <div className="text-xs uppercase tracking-[0.15em] mb-3" style={{ color: COLORS.muted }}>Publications récentes</div>
+            {authorPosts.length === 0 ? (
+              <div className="text-xs" style={{ color: COLORS.muted }}>Aucune publication pour l'instant.</div>
+            ) : (
+              <div className="space-y-2">
+                {authorPosts.map((p) => (
+                  <div key={p.id} className="px-4 py-3 rounded-md text-sm" style={{ background: COLORS.surface, color: COLORS.ivory }}>{p.text}</div>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+        <button onClick={onClose} className="text-xs mt-5" style={{ color: COLORS.muted }}>Fermer</button>
+      </div>
+    </div>
+  );
+}
+
+function NotificationsPanel({ notifications, onClose, onMarkRead }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-end" style={{ background: "rgba(0,0,0,0.4)" }} onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()} className="w-full max-w-sm m-4 rounded-lg p-4 max-h-[70vh] overflow-y-auto" style={{ background: COLORS.surface2 }}>
+        <div className="flex items-center justify-between mb-3">
+          <div className="text-sm font-medium" style={{ color: COLORS.ivory }}>Notifications</div>
+          <button onClick={onMarkRead} className="text-xs" style={{ color: COLORS.teal }}>Tout marquer lu</button>
+        </div>
+        {notifications.length === 0 ? (
+          <div className="text-xs py-6 text-center" style={{ color: COLORS.muted }}>Rien de nouveau pour l'instant.</div>
+        ) : (
+          <div className="space-y-2">
+            {notifications.map((n) => (
+              <div key={n.id} className="px-3 py-2.5 rounded-md text-sm" style={{ background: n.read ? COLORS.surface : "rgba(212,169,62,0.1)", color: COLORS.ivory }}>
+                {n.message}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function StoriesBar({ stories, onAdd }) {
+  const [composing, setComposing] = useState(false);
+  const [viewing, setViewing] = useState(null);
+  const [text, setText] = useState("");
+
+  const submit = async () => {
+    if (!text.trim()) return;
+    await onAdd(text);
+    setText("");
+    setComposing(false);
+  };
+
+  return (
+    <div className="max-w-xl mx-auto px-4 pt-4 flex gap-3 overflow-x-auto" style={{ scrollbarWidth: "none" }}>
+      <button onClick={() => setComposing(true)} className="flex flex-col items-center gap-1 flex-shrink-0">
+        <div className="w-14 h-14 rounded-full flex items-center justify-center" style={{ background: COLORS.surface, border: `2px dashed rgba(212,169,62,0.4)` }}>
+          <PlusCircle size={20} style={{ color: COLORS.gold }} />
+        </div>
+        <span className="text-[10px]" style={{ color: COLORS.muted }}>Ajouter</span>
+      </button>
+      {stories.map((s) => (
+        <button key={s.id} onClick={() => setViewing(s)} className="flex flex-col items-center gap-1 flex-shrink-0">
+          <div className="w-14 h-14 rounded-full flex items-center justify-center font-semibold" style={{ background: COLORS.surface2, color: COLORS.gold, border: `2px solid ${COLORS.gold}`, fontFamily: "'Fraunces', serif" }}>
+            {(s.profiles?.display_name || "?").charAt(0)}
+          </div>
+          <span className="text-[10px] truncate w-14 text-center" style={{ color: COLORS.muted }}>{s.profiles?.display_name || "Membre"}</span>
+        </button>
+      ))}
+
+      {composing && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center px-6" style={{ background: "rgba(0,0,0,0.6)" }} onClick={() => setComposing(false)}>
+          <div onClick={(e) => e.stopPropagation()} className="w-full max-w-sm rounded-lg p-5" style={{ background: COLORS.surface2 }}>
+            <div className="text-sm font-medium mb-3" style={{ color: COLORS.ivory }}>Nouvelle story (24h)</div>
+            <textarea value={text} onChange={(e) => setText(e.target.value)} rows={3} autoFocus className="w-full bg-transparent text-sm outline-none resize-none mb-3 p-2 rounded-md" style={{ color: COLORS.ivory, background: COLORS.surface }} placeholder="Un mot, une pensée…" />
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setComposing(false)} className="text-xs px-3 py-2" style={{ color: COLORS.muted }}>Annuler</button>
+              <button onClick={submit} className="text-xs px-4 py-2 rounded-md font-medium" style={{ background: COLORS.gold, color: COLORS.bg }}>Publier</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {viewing && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center px-6" style={{ background: "rgba(0,0,0,0.85)" }} onClick={() => setViewing(null)}>
+          <div className="w-full max-w-sm rounded-lg p-6 text-center" style={{ background: `linear-gradient(160deg, ${COLORS.surface2}, ${COLORS.bg})`, border: "1px solid rgba(212,169,62,0.25)" }}>
+            <div className="text-sm font-medium mb-3" style={{ color: COLORS.gold }}>{viewing.profiles?.display_name || "Membre"} {viewing.profiles?.flag}</div>
+            <div className="text-lg" style={{ color: COLORS.ivory }}>{viewing.text}</div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PostComposer({ onPost }) {
+  const [text, setText] = useState("");
+  const [open, setOpen] = useState(false);
+  const [file, setFile] = useState(null);
+  const [preview, setPreview] = useState(null);
+  const [posting, setPosting] = useState(false);
+  const fileRef = useRef(null);
+
+  const pickFile = (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    setFile(f);
+    setPreview(URL.createObjectURL(f));
+  };
+
+  const removeFile = () => {
+    setFile(null);
+    if (preview) URL.revokeObjectURL(preview);
+    setPreview(null);
+    if (fileRef.current) fileRef.current.value = "";
+  };
+
+  const submit = async () => {
+    if (!text.trim() && !file) return;
+    setPosting(true);
+    try {
+      await onPost(text, file);
+      setText("");
+      removeFile();
+      setOpen(false);
+    } finally {
+      setPosting(false);
+    }
+  };
+
+  if (!open) {
+    return (
+      <button onClick={() => setOpen(true)} className="w-full flex items-center gap-2 px-4 py-3 rounded-lg text-sm mb-1" style={{ background: COLORS.surface, color: COLORS.muted, border: "1px solid rgba(255,255,255,0.06)" }}>
+        <PlusCircle size={16} /> Partager quelque chose…
+      </button>
+    );
+  }
+  return (
+    <div className="rounded-lg p-4 mb-1" style={{ background: COLORS.surface, border: "1px solid rgba(212,169,62,0.2)" }}>
+      <textarea
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        autoFocus
+        rows={3}
+        placeholder="Quoi de neuf ?"
+        className="w-full bg-transparent text-sm outline-none resize-none mb-3"
+        style={{ color: COLORS.ivory }}
+      />
+      {preview && (
+        <div className="relative mb-3 rounded-md overflow-hidden" style={{ background: COLORS.surface2 }}>
+          {file?.type.startsWith("video") ? (
+            <video src={preview} controls className="w-full max-h-56 object-contain" />
+          ) : (
+            <img src={preview} alt="Aperçu" className="w-full max-h-56 object-contain" />
+          )}
+          <button onClick={removeFile} className="absolute top-2 right-2 p-1.5 rounded-full" style={{ background: "rgba(0,0,0,0.6)", color: COLORS.ivory }}>
+            <X size={14} />
+          </button>
+        </div>
+      )}
+      <div className="flex items-center justify-between">
+        <label className="flex items-center gap-1.5 text-xs cursor-pointer" style={{ color: COLORS.teal }}>
+          <input ref={fileRef} type="file" accept="image/*,video/*" onChange={pickFile} className="hidden" />
+          <Play size={14} /> Photo / vidéo
+        </label>
+        <div className="flex gap-2">
+          <button onClick={() => setOpen(false)} className="text-xs px-3 py-2 rounded-md" style={{ color: COLORS.muted }}>Annuler</button>
+          <button onClick={submit} disabled={posting} className="text-xs px-4 py-2 rounded-md font-medium disabled:opacity-50" style={{ background: COLORS.gold, color: COLORS.bg }}>
+            {posting ? "Envoi…" : "Publier"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CommentsSheet({ postId, onClose }) {
+  const [comments, setComments] = useState([]);
+  const [draft, setDraft] = useState("");
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase
+        .from("comments")
+        .select("id, text, created_at, profiles(display_name, flag)")
+        .eq("post_id", postId)
+        .order("created_at", { ascending: true });
+      setComments(data || []);
+      setLoading(false);
+    })();
+  }, [postId]);
+
+  const send = async () => {
+    if (!draft.trim()) return;
+    const { data: { session } } = await supabase.auth.getSession();
+    const uid = session?.user?.id;
+    if (!uid) return;
+    const { data } = await supabase.from("comments").insert({ post_id: postId, author_id: uid, text: draft.trim() }).select("id, text, created_at").single();
+    setComments((prev) => [...prev, { ...data, profiles: { display_name: "Vous", flag: "🌍" } }]);
+    setDraft("");
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center" style={{ background: "rgba(0,0,0,0.55)" }} onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()} className="w-full max-w-xl rounded-t-2xl p-5 max-h-[75%] flex flex-col" style={{ background: COLORS.surface2 }}>
+        <div className="w-10 h-1 rounded-full mx-auto mb-4" style={{ background: "rgba(255,255,255,0.15)" }} />
+        <div className="text-sm font-medium mb-3" style={{ color: COLORS.ivory }}>Commentaires</div>
+        <div className="flex-1 overflow-y-auto space-y-3 mb-3">
+          {loading ? (
+            <div className="text-xs" style={{ color: COLORS.muted }}>Chargement…</div>
+          ) : comments.length === 0 ? (
+            <div className="text-xs" style={{ color: COLORS.muted }}>Aucun commentaire pour l'instant. Soyez le premier !</div>
+          ) : (
+            comments.map((c) => (
+              <div key={c.id} className="flex gap-2">
+                <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-semibold flex-shrink-0" style={{ background: COLORS.surface, color: COLORS.gold }}>
+                  {(c.profiles?.display_name || "?").charAt(0)}
+                </div>
+                <div>
+                  <div className="text-xs font-medium" style={{ color: COLORS.ivory }}>{c.profiles?.display_name || "Membre BAARO"} {c.profiles?.flag}</div>
+                  <div className="text-sm" style={{ color: COLORS.muted }}>{c.text}</div>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+        <div className="flex gap-2">
+          <input
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && send()}
+            placeholder="Ajouter un commentaire…"
+            className="flex-1 px-4 py-2.5 rounded-md text-sm outline-none"
+            style={{ background: COLORS.surface, color: COLORS.ivory, border: "1px solid rgba(255,255,255,0.08)" }}
+          />
+          <button onClick={send} className="p-2.5 rounded-md" style={{ background: COLORS.gold, color: COLORS.bg }}><Send size={16} /></button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FeedTab({ posts, onLike, onPost, lang, loading, userId }) {
   const [translations, setTranslations] = useState({});
   const [loadingId, setLoadingId] = useState(null);
   const [verifications, setVerifications] = useState({});
   const [verifyingId, setVerifyingId] = useState(null);
+  const [openProfileId, setOpenProfileId] = useState(null);
+  const [openCommentsId, setOpenCommentsId] = useState(null);
 
   const translatePost = async (post) => {
     const targetLabel = LANGUAGES.find((l) => l.code === lang)?.label || lang;
@@ -475,6 +504,7 @@ function FeedTab({ posts, onLike, lang, loading }) {
 
   return (
     <div className="max-w-xl mx-auto px-4 py-6 space-y-5">
+      <PostComposer onPost={onPost} />
       {posts.map((p) => (
         <article key={p.id} className="rounded-lg p-5" style={{ background: COLORS.surface, border: "1px solid rgba(255,255,255,0.06)" }}>
           <div className="flex items-center gap-3 mb-3">
@@ -482,11 +512,20 @@ function FeedTab({ posts, onLike, lang, loading }) {
               {p.name.charAt(0)}
             </div>
             <div>
-              <div className="font-medium" style={{ color: COLORS.ivory }}>{p.name} <span className="ml-1">{p.flag}</span></div>
+              <button onClick={() => setOpenProfileId(p.authorId)} className="font-medium text-left hover:opacity-80" style={{ color: COLORS.ivory }}>{p.name} <span className="ml-1">{p.flag}</span></button>
               <div className="text-xs" style={{ color: COLORS.muted }}>{p.handle}</div>
             </div>
           </div>
           <p className="text-sm leading-relaxed mb-2" style={{ color: COLORS.ivory }}>{p.text}</p>
+          {p.mediaUrl && (
+            <div className="mb-3 rounded-md overflow-hidden" style={{ background: COLORS.surface2 }}>
+              {p.mediaType === "video" ? (
+                <video src={p.mediaUrl} controls className="w-full max-h-96 object-contain" />
+              ) : (
+                <img src={p.mediaUrl} alt="" className="w-full max-h-96 object-contain" />
+              )}
+            </div>
+          )}
           {translations[p.id] && (
             <p className="text-sm leading-relaxed mb-2 pl-3" style={{ color: COLORS.teal, borderLeft: `2px solid ${COLORS.teal}` }}>{translations[p.id]}</p>
           )}
@@ -512,7 +551,7 @@ function FeedTab({ posts, onLike, lang, loading }) {
               <Heart size={16} className={p.liked ? "fill-current" : ""} style={{ color: p.liked ? COLORS.teal : COLORS.muted }} />
               {p.likes}
             </button>
-            <span className="flex items-center gap-1.5"><MessageCircle size={16} /> {p.comments}</span>
+            <button onClick={() => setOpenCommentsId(p.id)} className="flex items-center gap-1.5 hover:opacity-80"><MessageCircle size={16} /> {p.comments}</button>
             <span className="flex items-center gap-1.5"><Share2 size={16} /></span>
             {p.earned > 0 && (
               <span className="ml-auto text-xs font-medium" style={{ color: COLORS.gold, fontFamily: "'IBM Plex Mono', monospace" }}>
@@ -522,6 +561,8 @@ function FeedTab({ posts, onLike, lang, loading }) {
           </div>
         </article>
       ))}
+      {openProfileId && <ProfileModal authorId={openProfileId} userId={userId} onClose={() => setOpenProfileId(null)} />}
+      {openCommentsId && <CommentsSheet postId={openCommentsId} onClose={() => setOpenCommentsId(null)} />}
     </div>
   );
 }
@@ -538,7 +579,7 @@ function WalletTab({ balance, history, onRedeem }) {
   const [notice, setNotice] = useState(null);
 
   const handleRedeem = async (opt) => {
-    const success = await onRedeem(opt.cost, opt.label);
+    const success = await onRedeem(opt.id);
     setNotice(success
       ? { ok: true, text: `${opt.label} — rachat confirmé.` }
       : { ok: false, text: "Solde insuffisant pour cette récompense." });
@@ -851,108 +892,58 @@ function SubscriptionTab({ current, onSubscribe }) {
   );
 }
 
-const SEED_CONVERSATIONS = [
-  {
-    id: "c1", name: "Sofia N.", flag: "🇮🇹", online: true,
-    messages: [
-      { from: "them", text: "Salut ! J'ai adoré ta vidéo sur l'IA et la traduction 🎬", ts: "10:12" },
-      { from: "me", text: "Merci beaucoup ! Ça t'a aidée pour tes propres publications ?", ts: "10:15" },
-      { from: "them", text: "Oui carrément, je vais essayer ce soir.", ts: "10:16" },
-    ],
-  },
-  {
-    id: "c2", name: "Kwame A.", flag: "🇬🇭", online: false,
-    messages: [
-      { from: "them", text: "On peut collaborer sur un live la semaine prochaine ?", ts: "Hier" },
-    ],
-  },
-  {
-    id: "c3", name: "Yuki S.", flag: "🇯🇵", online: true,
-    messages: [
-      { from: "me", text: "Ton dernier post a super bien marché !", ts: "Lun" },
-      { from: "them", text: "Merci, l'assistant m'a aidée à le traduire en 4 langues.", ts: "Lun" },
-    ],
-  },
-];
-
-function MessagesTab() {
-  const [conversations] = useState(SEED_CONVERSATIONS);
-  const [activeId, setActiveId] = useState(null);
-  const [drafts, setDrafts] = useState({});
-  const [threads, setThreads] = useState(() => Object.fromEntries(SEED_CONVERSATIONS.map((c) => [c.id, c.messages])));
+// Messagerie réelle : contacts, conversation et envoi viennent de
+// useMessaging (Supabase + chiffrement de bout en bout, voir
+// src/hooks/useMessaging.js et src/lib/crypto.js). Le serveur ne voit
+// jamais le texte en clair.
+function ActiveConversation({ contact, userId, messaging, onBack }) {
+  const { messages, loading } = messaging.useConversation(contact.id);
+  const [draft, setDraft] = useState("");
+  const [sendError, setSendError] = useState(null);
   const endRef = useRef(null);
 
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [activeId, threads]);
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages.length]);
 
-  const active = conversations.find((c) => c.id === activeId);
-
-  const send = () => {
-    const text = (drafts[activeId] || "").trim();
+  const send = async () => {
+    const text = draft.trim();
     if (!text) return;
-    setThreads((prev) => ({
-      ...prev,
-      [activeId]: [...prev[activeId], { from: "me", text, ts: "À l'instant" }],
-    }));
-    setDrafts((d) => ({ ...d, [activeId]: "" }));
+    setDraft("");
+    setSendError(null);
+    const result = await messaging.send(contact.id, text);
+    if (!result.ok) setSendError(result.reason || "Envoi impossible");
   };
-
-  if (!active) {
-    return (
-      <div className="max-w-xl mx-auto px-4 py-6">
-        <div className="flex items-center gap-2 mb-4 text-xs px-3 py-2 rounded-md" style={{ background: COLORS.surface, color: COLORS.teal }}>
-          <ShieldCheck size={14} /> Messages chiffrés de bout en bout — seuls vous et votre correspondant pouvez les lire
-        </div>
-        <div className="space-y-2">
-          {conversations.map((c) => {
-            const last = threads[c.id][threads[c.id].length - 1];
-            return (
-              <button key={c.id} onClick={() => setActiveId(c.id)} className="w-full flex items-center gap-3 px-4 py-3 rounded-md text-left transition hover:opacity-90" style={{ background: COLORS.surface }}>
-                <div className="relative">
-                  <div className="w-10 h-10 rounded-full flex items-center justify-center font-semibold" style={{ background: COLORS.surface2, color: COLORS.gold, fontFamily: "'Fraunces', serif" }}>
-                    {c.name.charAt(0)}
-                  </div>
-                  {c.online && <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full" style={{ background: COLORS.teal, border: `2px solid ${COLORS.surface}` }} />}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm" style={{ color: COLORS.ivory }}>{c.name} {c.flag}</div>
-                  <div className="text-xs truncate" style={{ color: COLORS.muted }}>{last.from === "me" ? "Vous : " : ""}{last.text}</div>
-                </div>
-                <Lock size={13} style={{ color: COLORS.muted }} />
-              </button>
-            );
-          })}
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="max-w-xl mx-auto px-4 py-6 flex flex-col" style={{ height: "72vh" }}>
       <div className="flex items-center gap-3 mb-3 pb-3" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-        <button onClick={() => setActiveId(null)} className="text-sm" style={{ color: COLORS.muted }}>←</button>
+        <button onClick={onBack} className="text-sm" style={{ color: COLORS.muted }}>←</button>
         <div className="w-9 h-9 rounded-full flex items-center justify-center font-semibold" style={{ background: COLORS.surface2, color: COLORS.gold, fontFamily: "'Fraunces', serif" }}>
-          {active.name.charAt(0)}
+          {(contact.display_name || "?").charAt(0)}
         </div>
         <div className="flex-1">
-          <div className="text-sm" style={{ color: COLORS.ivory }}>{active.name} {active.flag}</div>
-          <div className="text-xs flex items-center gap-1" style={{ color: COLORS.teal }}><ShieldCheck size={11} /> Conversation chiffrée</div>
+          <div className="text-sm" style={{ color: COLORS.ivory }}>{contact.display_name} {contact.flag}</div>
+          <div className="text-xs flex items-center gap-1" style={{ color: COLORS.teal }}><ShieldCheck size={11} /> Conversation chiffrée de bout en bout</div>
         </div>
       </div>
       <div className="flex-1 overflow-y-auto space-y-2 mb-3 pr-1">
-        {threads[active.id].map((m, i) => (
-          <div key={i} className={`flex ${m.from === "me" ? "justify-end" : "justify-start"}`}>
+        {loading && <div className="text-xs text-center py-4" style={{ color: COLORS.muted }}>Déchiffrement des messages…</div>}
+        {messages.map((m) => (
+          <div key={m.id} className={`flex ${m.from === "me" ? "justify-end" : "justify-start"}`}>
             <div className="max-w-[75%] px-4 py-2.5 rounded-lg text-sm" style={{ background: m.from === "me" ? COLORS.teal : COLORS.surface, color: m.from === "me" ? COLORS.bg : COLORS.ivory }}>
               {m.text}
-              <div className="text-[10px] mt-1 opacity-60">{m.ts}</div>
+              <div className="text-[10px] mt-1 opacity-60">{new Date(m.ts).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}</div>
             </div>
           </div>
         ))}
         <div ref={endRef} />
       </div>
+      {sendError && <div className="text-xs mb-2" style={{ color: "#E27D60" }}>{sendError}</div>}
       <div className="flex items-center gap-2">
         <input
-          value={drafts[activeId] || ""}
-          onChange={(e) => setDrafts((d) => ({ ...d, [activeId]: e.target.value }))}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && send()}
           placeholder="Écrire un message chiffré…"
           className="flex-1 px-4 py-2.5 rounded-md text-sm outline-none"
@@ -961,6 +952,638 @@ function MessagesTab() {
         <button onClick={send} className="p-2.5 rounded-md transition hover:opacity-90" style={{ background: COLORS.gold, color: COLORS.bg }}>
           <Send size={18} />
         </button>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// Live BAARO (texte / vocal / vidéo + IA en co-animatrice), façon
+// TikTok LIVE : un·e hôte diffuse, des spectateur·ices regardent,
+// commentent et envoient des cœurs. Logique de données dans
+// src/hooks/useDebates.js, diffusion WebRTC en étoile dans
+// src/lib/webrtc.js — voir ces fichiers pour le détail du fonctionnement.
+//
+// Ce n'est pas l'infrastructure de TikTok (pas de CDN/serveur média) :
+// l'hôte diffuse en direct, en pair-à-pair, à chaque spectateur·ice.
+// Ça tient bien jusqu'à une vingtaine de spectateurs simultanés environ,
+// selon le débit montant de l'hôte — voir le commentaire en tête de
+// src/lib/webrtc.js pour l'évolution possible vers un vrai service de
+// diffusion à grande échelle (LiveKit, Agora, Daily.co...).
+// ---------------------------------------------------------------------
+
+function ControlButton({ onClick, active, activeColor, icon: Icon, label, disabled }) {
+  return (
+    <button onClick={onClick} disabled={disabled} className="flex flex-col items-center gap-1">
+      <span className="p-3 rounded-full transition" style={{ background: active ? COLORS.surface : activeColor, color: active ? COLORS.ivory : COLORS.bg, opacity: disabled ? 0.5 : 1 }}>
+        <Icon size={17} />
+      </span>
+      <span className="text-[10px]" style={{ color: COLORS.muted }}>{label}</span>
+    </button>
+  );
+}
+
+function DebateVideoTile({ stream, label, muted, isSelf, camOff, fullBleed }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    if (ref.current) ref.current.srcObject = stream || null;
+  }, [stream]);
+  return (
+    <div className={`relative flex items-center justify-center ${fullBleed ? "w-full h-full" : "rounded-lg overflow-hidden aspect-video"}`} style={{ background: COLORS.surface2 }}>
+      {stream && !camOff ? (
+        <video ref={ref} autoPlay playsInline muted={muted} className="w-full h-full object-cover" style={{ transform: isSelf ? "scaleX(-1)" : "none" }} />
+      ) : (
+        <div className="w-12 h-12 rounded-full flex items-center justify-center font-semibold" style={{ background: COLORS.surface, color: COLORS.gold, fontFamily: "'Fraunces', serif" }}>
+          {(label || "?").charAt(0).toUpperCase()}
+        </div>
+      )}
+      <div className="absolute bottom-1.5 left-1.5 text-[10px] px-1.5 py-0.5 rounded" style={{ background: "rgba(0,0,0,0.55)", color: COLORS.ivory }}>
+        {label}
+      </div>
+    </div>
+  );
+}
+
+// Cœurs flottants façon TikTok, purement visuels (rien n'est stocké en
+// base — chaque appareil les rejoue localement à réception de l'événement
+// "reaction" diffusé par le salon).
+function FloatingHearts({ hearts }) {
+  return (
+    <div className="pointer-events-none absolute inset-0 overflow-hidden">
+      {hearts.map((h) => (
+        <Heart
+          key={h.id}
+          size={20}
+          fill="#E27D60"
+          style={{ position: "absolute", right: `${h.offset}%`, bottom: 70, color: "#E27D60", animation: "baaroFloatHeart 2.2s ease-out forwards" }}
+        />
+      ))}
+    </div>
+  );
+}
+
+// Salon Live actif : un·e hôte diffuse (ou anime, en mode écrit), les
+// spectateur·ices regardent, commentent en direct et envoient des cœurs.
+// `debates` = objet retourné par useDebates(userId).
+function DebateRoom({ room, userId, displayName, debates, onLeave }) {
+  const isHost = room.host_id === userId;
+  const chat = debates.useRoomChat(room.id);
+  const [text, setText] = useState("");
+  const [micOn, setMicOn] = useState(room.mode !== "text");
+  const [camOn, setCamOn] = useState(room.mode === "video");
+  const [stageStream, setStageStream] = useState(null); // mon propre flux si hôte, celui de l'hôte si spectateur·ice
+  const [mediaError, setMediaError] = useState(null);
+  const [copied, setCopied] = useState(false);
+  const [hintOpen, setHintOpen] = useState(() => !localStorage.getItem("baaro:debate_hint_seen"));
+  const [viewerCount, setViewerCount] = useState(0);
+  const [hearts, setHearts] = useState([]);
+  const [liveEnded, setLiveEnded] = useState(false);
+  const sessionRef = useRef(null);
+  const endRef = useRef(null);
+
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [chat.messages]);
+
+  const pushHeart = useCallback(() => {
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    setHearts((prev) => [...prev, { id, offset: 8 + Math.random() * 55 }]);
+    setTimeout(() => setHearts((prev) => prev.filter((h) => h.id !== id)), 2200);
+  }, []);
+
+  // Établit la diffusion (étoile WebRTC, hôte -> chaque spectateur·ice) et
+  // le suivi du nombre de spectateur·ices en direct (Presence Supabase).
+  useEffect(() => {
+    let localMedia = null;
+    const session = createLiveSession({
+      supabase,
+      roomId: room.id,
+      selfId: userId,
+      hostId: room.host_id,
+      onRemoteStream: (stream) => setStageStream(stream),
+      onViewerCountChange: setViewerCount,
+      onHostLeft: () => setLiveEnded(true),
+      onReaction: () => pushHeart(),
+    });
+    sessionRef.current = session;
+
+    (async () => {
+      if (!isHost || room.mode === "text") return;
+      try {
+        localMedia = await getLocalMedia(room.mode);
+        localMedia.getAudioTracks().forEach((t) => (t.enabled = micOn));
+        localMedia.getVideoTracks().forEach((t) => (t.enabled = camOn));
+        setStageStream(localMedia);
+        await session.setLocalStream(localMedia);
+      } catch {
+        setMediaError("Micro/caméra inaccessible — vérifiez les autorisations du navigateur. Le direct continue en mode dégradé.");
+      }
+    })();
+
+    return () => {
+      sessionRef.current = null;
+      session.leave();
+      localMedia?.getTracks().forEach((t) => t.stop());
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [room.id, room.host_id, isHost, room.mode]);
+
+  const react = () => {
+    pushHeart();
+    sessionRef.current?.sendReaction();
+  };
+
+  const toggleMic = () => {
+    setMicOn((on) => {
+      stageStream?.getAudioTracks().forEach((t) => (t.enabled = !on));
+      return !on;
+    });
+  };
+  const toggleCam = () => {
+    setCamOn((on) => {
+      stageStream?.getVideoTracks().forEach((t) => (t.enabled = !on));
+      return !on;
+    });
+  };
+
+  const leave = async () => {
+    await debates.leaveRoom(room.id);
+    onLeave();
+  };
+
+  const endLive = async () => {
+    await debates.endRoom(room.id);
+    await debates.leaveRoom(room.id);
+    onLeave();
+  };
+
+  const send = () => {
+    if (!text.trim()) return;
+    chat.sendText(text);
+    setText("");
+  };
+
+  const copyCode = async () => {
+    try {
+      await navigator.clipboard.writeText(room.invite_code);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* presse-papiers indisponible, sans conséquence */
+    }
+  };
+
+  const shareInvite = async () => {
+    const message = `Rejoins mon live « ${room.title} » sur BAARO ! Code : ${room.invite_code}`;
+    if (navigator.share) {
+      try {
+        await navigator.share({ text: message });
+        return;
+      } catch {
+        /* partage annulé par l'utilisateur, sans conséquence */
+      }
+    }
+    copyCode();
+  };
+
+  const dismissHint = () => {
+    localStorage.setItem("baaro:debate_hint_seen", "1");
+    setHintOpen(false);
+  };
+
+  const showVideo = room.mode !== "text";
+
+  if (liveEnded && !isHost) {
+    return (
+      <div className="max-w-xl mx-auto px-4 py-10 text-center">
+        <Radio size={22} style={{ color: COLORS.muted, margin: "0 auto 10px" }} />
+        <div className="text-sm mb-1" style={{ color: COLORS.ivory }}>Ce live est terminé</div>
+        <div className="text-xs mb-5" style={{ color: COLORS.muted }}>L'hôte a quitté le direct.</div>
+        <button onClick={onLeave} className="px-5 py-2.5 rounded-md text-sm font-medium" style={{ background: COLORS.gold, color: COLORS.bg }}>
+          Retour
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-xl mx-auto px-4 py-6 flex flex-col" style={{ height: "82vh" }}>
+      <style>{`@keyframes baaroFloatHeart { 0% { transform: translateY(0) scale(0.6); opacity: 0; } 15% { opacity: 1; } 100% { transform: translateY(-240px) scale(1.1); opacity: 0; } }`}</style>
+
+      <div className="flex items-center justify-between mb-3 gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="flex items-center gap-1 text-[10px] font-semibold px-2 py-1 rounded-full flex-shrink-0" style={{ background: "#B84A3E", color: "#fff" }}>
+            <Radio size={10} /> LIVE
+          </span>
+          <span className="flex items-center gap-1 text-xs px-2 py-1 rounded-full flex-shrink-0" style={{ background: COLORS.surface, color: COLORS.ivory }}>
+            <Users size={11} /> {viewerCount}
+          </span>
+          <div className="text-sm font-medium truncate" style={{ color: COLORS.ivory }}>{room.title}</div>
+        </div>
+        <div className="flex items-center gap-1.5 flex-shrink-0">
+          <button onClick={copyCode} className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-full" style={{ background: COLORS.surface, color: COLORS.gold }}>
+            <Copy size={12} /> {copied ? "Copié !" : room.invite_code}
+          </button>
+          <button onClick={shareInvite} className="p-1.5 rounded-full" style={{ background: COLORS.surface, color: COLORS.teal }} aria-label="Inviter">
+            <Share2 size={14} />
+          </button>
+        </div>
+      </div>
+
+      {hintOpen && (
+        <div className="flex items-start gap-2 mb-3 text-xs px-3 py-2.5 rounded-md" style={{ background: "rgba(212,169,62,0.12)", color: COLORS.gold }}>
+          <div className="flex-1">Touchez <Heart size={11} style={{ display: "inline", verticalAlign: -1 }} /> pour envoyer un cœur, <Share2 size={11} style={{ display: "inline", verticalAlign: -1 }} /> pour inviter, ou <Sparkles size={11} style={{ display: "inline", verticalAlign: -1 }} /> pour faire intervenir l'IA (hôte).</div>
+          <button onClick={dismissHint} aria-label="Fermer"><X size={13} /></button>
+        </div>
+      )}
+
+      {mediaError && (
+        <div className="flex items-center gap-2 mb-3 text-xs px-3 py-2 rounded-md" style={{ background: "rgba(226,125,96,0.12)", color: "#E27D60" }}>
+          <ShieldAlert size={14} /> {mediaError}
+        </div>
+      )}
+
+      {showVideo ? (
+        <div className="relative rounded-lg overflow-hidden mb-3" style={{ background: COLORS.surface2, aspectRatio: "3 / 4" }}>
+          {stageStream ? (
+            <DebateVideoTile stream={stageStream} label={isHost ? `${displayName || "Vous"} (en direct)` : "Hôte"} muted={isHost} isSelf={isHost} camOff={isHost && !camOn} fullBleed />
+          ) : (
+            <div className="w-full h-full flex items-center justify-center text-xs text-center px-6" style={{ color: COLORS.muted }}>
+              {isHost ? "Activation de la caméra…" : "En attente du flux de l'hôte…"}
+            </div>
+          )}
+          <FloatingHearts hearts={hearts} />
+        </div>
+      ) : (
+        <div className="relative flex-1 mb-3 rounded-lg flex items-center justify-center" style={{ background: COLORS.surface2, minHeight: 160 }}>
+          <div className="text-center">
+            <div className="w-16 h-16 mx-auto mb-2 rounded-full flex items-center justify-center font-semibold text-lg" style={{ background: COLORS.surface, color: COLORS.gold, fontFamily: "'Fraunces', serif" }}>
+              {(room.title || "?").charAt(0).toUpperCase()}
+            </div>
+            <div className="text-xs" style={{ color: COLORS.muted }}>Live à l'écrit</div>
+          </div>
+          <FloatingHearts hearts={hearts} />
+        </div>
+      )}
+
+      <div className="flex items-center justify-center gap-4 mb-3">
+        {isHost && room.mode !== "text" && (
+          <ControlButton onClick={toggleMic} active={micOn} activeColor="#E27D60" icon={micOn ? Mic : MicOff} label={micOn ? "Micro" : "Coupé"} />
+        )}
+        {isHost && room.mode === "video" && (
+          <ControlButton onClick={toggleCam} active={camOn} activeColor="#E27D60" icon={camOn ? Video : VideoOff} label={camOn ? "Caméra" : "Coupée"} />
+        )}
+        {isHost && room.ai_enabled && (
+          <ControlButton onClick={() => chat.askAI(room.topic)} active={false} activeColor={COLORS.gold} icon={Sparkles} label={chat.aiThinking ? "…" : "IA"} disabled={chat.aiThinking} />
+        )}
+        <ControlButton onClick={react} active={false} activeColor="#E27D60" icon={Heart} label="J'aime" />
+        <ControlButton onClick={isHost ? endLive : leave} active={false} activeColor="#B84A3E" icon={PhoneOff} label={isHost ? "Terminer" : "Quitter"} />
+      </div>
+
+      <div className="flex-1 overflow-y-auto space-y-2.5 mb-3 pr-1 rounded-md p-3" style={{ background: COLORS.surface }}>
+        {chat.loading && <div className="text-xs text-center py-4" style={{ color: COLORS.muted }}>Chargement du live…</div>}
+        {chat.messages.map((m) => {
+          const isMe = m.sender_type === "user" && m.sender_id === userId;
+          const isAI = m.sender_type === "ai";
+          return (
+            <div key={m.id} className={`flex ${isMe ? "justify-end" : "justify-start"}`}>
+              <div className="max-w-[85%] px-3.5 py-2 rounded-lg text-sm leading-relaxed" style={{ background: isMe ? COLORS.teal : isAI ? "rgba(212,169,62,0.15)" : COLORS.surface2, color: isMe ? COLORS.bg : COLORS.ivory, border: isAI ? `1px solid ${COLORS.gold}` : "none" }}>
+                {isAI && (
+                  <div className="flex items-center gap-1.5 mb-1 text-xs font-medium" style={{ color: COLORS.gold }}>
+                    <Sparkles size={11} /> IA du live
+                  </div>
+                )}
+                {m.text}
+              </div>
+            </div>
+          );
+        })}
+        {chat.aiThinking && <div className="text-xs" style={{ color: COLORS.muted }}>L'IA réfléchit…</div>}
+        <div ref={endRef} />
+      </div>
+
+      <div className="flex items-center gap-2">
+        <input
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && send()}
+          placeholder="Commentez en direct…"
+          className="flex-1 px-4 py-2.5 rounded-md text-sm outline-none"
+          style={{ background: COLORS.surface, color: COLORS.ivory, border: "1px solid rgba(255,255,255,0.08)" }}
+        />
+        <button onClick={send} className="p-2.5 rounded-md transition hover:opacity-90" style={{ background: COLORS.gold, color: COLORS.bg }}>
+          <Send size={18} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+const DEBATE_MODES = [
+  { id: "video", label: "Vidéo", icon: Video, hint: "Vous diffusez caméra + micro, les spectateur·ices regardent et commentent" },
+  { id: "audio", label: "Vocal", icon: Mic, hint: "Vous diffusez le micro seul, comme un talk audio en direct" },
+  { id: "text", label: "Écrit", icon: MessageSquare, hint: "Live à l'écrit uniquement, sans caméra ni micro" },
+];
+
+const DEBATE_TOPIC_IDEAS = [
+  "Le télétravail devrait-il être la norme ?",
+  "L'IA va-t-elle créer plus d'emplois qu'elle n'en supprime ?",
+  "Faut-il interdire les réseaux sociaux aux moins de 16 ans ?",
+  "La voiture électrique est-elle vraiment écologique ?",
+];
+
+function CreateDebateModal({ onClose, onCreate }) {
+  const [title, setTitle] = useState("");
+  const [topic, setTopic] = useState("");
+  const [mode, setMode] = useState("video");
+  const [maxParticipants, setMaxParticipants] = useState(20);
+  const [aiEnabled, setAiEnabled] = useState(true);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  const submit = async () => {
+    const finalTitle = title.trim() || topic.trim() || "Nouveau live";
+    setBusy(true);
+    const res = await onCreate({ title: finalTitle, topic: topic.trim(), mode, maxParticipants, aiEnabled });
+    setBusy(false);
+    if (!res.ok) setError(res.reason || "Impossible de démarrer le live.");
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center" style={{ background: "rgba(0,0,0,0.55)" }} onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()} className="w-full max-w-xl rounded-t-2xl p-5 pb-8 max-h-[85vh] overflow-y-auto" style={{ background: COLORS.surface2 }}>
+        <div className="w-10 h-1 rounded-full mx-auto mb-5" style={{ background: "rgba(255,255,255,0.15)" }} />
+        <div className="text-sm font-medium mb-1" style={{ color: COLORS.ivory }}>Nouveau live</div>
+        <div className="text-xs mb-4" style={{ color: COLORS.muted }}>Choisissez un sujet, le format, puis démarrez — c'est prêt en 10 secondes.</div>
+
+        <input
+          value={topic}
+          onChange={(e) => setTopic(e.target.value)}
+          placeholder="De quoi va parler votre live ?"
+          className="w-full px-4 py-2.5 rounded-md text-sm outline-none mb-2.5"
+          style={{ background: COLORS.surface, color: COLORS.ivory, border: "1px solid rgba(255,255,255,0.08)" }}
+        />
+        <div className="flex flex-wrap gap-1.5 mb-4">
+          {DEBATE_TOPIC_IDEAS.map((idea) => (
+            <button
+              key={idea}
+              onClick={() => setTopic(idea)}
+              className="text-xs px-2.5 py-1.5 rounded-full text-left transition hover:opacity-90"
+              style={{ background: COLORS.surface, color: COLORS.muted, border: "1px solid rgba(255,255,255,0.06)" }}
+            >
+              {idea}
+            </button>
+          ))}
+        </div>
+
+        <div className="text-xs uppercase tracking-[0.15em] mb-2" style={{ color: COLORS.muted }}>Format</div>
+        <div className="grid grid-cols-3 gap-2 mb-2">
+          {DEBATE_MODES.map((m) => {
+            const Icon = m.icon;
+            const active = mode === m.id;
+            return (
+              <button key={m.id} onClick={() => setMode(m.id)} className="flex flex-col items-center gap-1 py-3 rounded-lg text-xs transition" style={{ background: active ? COLORS.gold : COLORS.surface, color: active ? COLORS.bg : COLORS.ivory }}>
+                <Icon size={16} />
+                {m.label}
+              </button>
+            );
+          })}
+        </div>
+        <div className="text-xs mb-4" style={{ color: COLORS.muted }}>{DEBATE_MODES.find((m) => m.id === mode)?.hint}</div>
+
+        <button
+          onClick={() => setAiEnabled((v) => !v)}
+          className="w-full flex items-center justify-between px-4 py-3 rounded-md mb-3"
+          style={{ background: COLORS.surface }}
+        >
+          <div className="flex items-center gap-2 text-sm" style={{ color: COLORS.ivory }}>
+            <Sparkles size={15} style={{ color: COLORS.gold }} /> IA en co-animatrice du live
+          </div>
+          <div className="w-11 h-6 rounded-full relative" style={{ background: aiEnabled ? COLORS.teal : "rgba(255,255,255,0.12)" }}>
+            <span className="absolute top-0.5 w-5 h-5 rounded-full transition" style={{ left: aiEnabled ? "22px" : "2px", background: COLORS.ivory }} />
+          </div>
+        </button>
+
+        <button onClick={() => setAdvancedOpen((v) => !v)} className="w-full flex items-center justify-between px-1 py-2 mb-2 text-xs" style={{ color: COLORS.muted }}>
+          <span>Options avancées (titre, nombre de spectateur·ices)</span>
+          <ChevronDown size={14} style={{ transform: advancedOpen ? "rotate(180deg)" : "none", transition: "transform 0.15s" }} />
+        </button>
+        {advancedOpen && (
+          <div className="mb-4 space-y-3">
+            <input
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="Titre personnalisé (sinon, le sujet sert de titre)"
+              className="w-full px-4 py-2.5 rounded-md text-sm outline-none"
+              style={{ background: COLORS.surface, color: COLORS.ivory, border: "1px solid rgba(255,255,255,0.08)" }}
+            />
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-sm" style={{ color: COLORS.ivory }}>Spectateur·ices max</div>
+                <div className="text-xs" style={{ color: COLORS.muted }}>Au-delà d'une vingtaine, la qualité dépend surtout de votre débit montant</div>
+              </div>
+              <input
+                type="number"
+                min={2}
+                max={50}
+                value={maxParticipants}
+                onChange={(e) => setMaxParticipants(Number(e.target.value))}
+                className="w-16 text-center px-2 py-2 rounded-md text-sm outline-none"
+                style={{ background: COLORS.surface, color: COLORS.ivory, border: "1px solid rgba(255,255,255,0.08)" }}
+              />
+            </div>
+          </div>
+        )}
+
+        {error && <div className="text-xs mb-3" style={{ color: "#E27D60" }}>{error}</div>}
+
+        <button onClick={submit} disabled={busy} className="w-full py-2.5 rounded-md text-sm font-medium transition hover:opacity-90" style={{ background: COLORS.gold, color: COLORS.bg }}>
+          {busy ? "Démarrage…" : "Démarrer le live"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function JoinDebateByCodeRow({ onJoin }) {
+  const [code, setCode] = useState("");
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    if (!code.trim()) return;
+    setBusy(true);
+    const res = await onJoin(code);
+    setBusy(false);
+    if (!res.ok) setError(res.reason);
+    else setCode("");
+  };
+
+  return (
+    <div className="mb-6">
+      <div className="flex items-center gap-2">
+        <input
+          value={code}
+          onChange={(e) => { setCode(e.target.value); setError(null); }}
+          onKeyDown={(e) => e.key === "Enter" && submit()}
+          placeholder="Rejoindre un live avec un code (ex. a1b2c3d4)"
+          className="flex-1 px-4 py-2.5 rounded-md text-sm outline-none"
+          style={{ background: COLORS.surface, color: COLORS.ivory, border: "1px solid rgba(255,255,255,0.08)" }}
+        />
+        <button onClick={submit} disabled={busy} className="p-2.5 rounded-md transition hover:opacity-90" style={{ background: COLORS.surface2, color: COLORS.teal }}>
+          <LogIn size={18} />
+        </button>
+      </div>
+      {error && <div className="text-xs mt-1.5" style={{ color: "#E27D60" }}>{error}</div>}
+    </div>
+  );
+}
+
+const DEBATE_MODE_ICON = { video: Video, audio: Mic, text: MessageSquare };
+
+// Onglet "Live" : liste des lives auxquels je participe (les miens et
+// ceux que j'ai rejoints), démarrer un live, rejoindre par code.
+function DebatesTab({ userId }) {
+  const debates = useDebates(userId);
+  const [creating, setCreating] = useState(false);
+  const [activeRoom, setActiveRoom] = useState(null);
+  const [starting, setStarting] = useState(false);
+  const [displayName, setDisplayName] = useState("");
+
+  // Nom affiché sur ma propre vignette quand je suis hôte (récupéré une
+  // fois ici plutôt que de dépendre d'un état déjà présent ailleurs dans
+  // l'app, pour garder ce composant autonome).
+  useEffect(() => {
+    if (!userId) return;
+    let cancelled = false;
+    supabase
+      .from("profiles")
+      .select("display_name")
+      .eq("user_id", userId)
+      .single()
+      .then(({ data }) => {
+        if (!cancelled) setDisplayName(data?.display_name || "");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [userId]);
+
+  if (activeRoom) {
+    return <DebateRoom room={activeRoom} userId={userId} displayName={displayName} debates={debates} onLeave={() => { setActiveRoom(null); debates.refreshRooms(); }} />;
+  }
+
+  const quickStart = async () => {
+    setStarting(true);
+    const res = await debates.createRoom({ title: "Live rapide", topic: "", mode: "video", maxParticipants: 20, aiEnabled: true });
+    setStarting(false);
+    if (res.ok) setActiveRoom(res.room);
+  };
+
+  return (
+    <div className="max-w-xl mx-auto px-4 py-6">
+      <div className="flex items-center gap-2 mb-4 text-xs px-3 py-2 rounded-md" style={{ background: COLORS.surface, color: COLORS.teal }}>
+        <Radio size={14} /> Passez en live à l'écrit, en vocal ou en vidéo — les spectateur·ices regardent, commentent et envoient des cœurs, avec ou sans l'IA en co-animatrice.
+      </div>
+
+      <div className="grid grid-cols-2 gap-2 mb-5">
+        <button onClick={() => setCreating(true)} className="flex items-center justify-center gap-2 py-3 rounded-md text-sm font-medium transition hover:opacity-90" style={{ background: COLORS.gold, color: COLORS.bg }}>
+          <Plus size={16} /> Créer
+        </button>
+        <button onClick={quickStart} disabled={starting} className="flex items-center justify-center gap-2 py-3 rounded-md text-sm font-medium transition hover:opacity-90" style={{ background: COLORS.surface2, color: COLORS.ivory, border: `1px solid ${COLORS.gold}` }}>
+          <Zap size={15} style={{ color: COLORS.gold }} /> {starting ? "Démarrage…" : "Live rapide"}
+        </button>
+      </div>
+
+      <JoinDebateByCodeRow onJoin={debates.joinByCode} />
+
+      {debates.loadingRooms && <div className="text-xs text-center py-6" style={{ color: COLORS.muted }}>Chargement…</div>}
+      {!debates.loadingRooms && debates.rooms.length === 0 && (
+        <div className="text-center py-8 px-4 rounded-md" style={{ background: COLORS.surface }}>
+          <Radio size={22} style={{ color: COLORS.muted, margin: "0 auto 10px" }} />
+          <div className="text-sm mb-1" style={{ color: COLORS.ivory }}>Aucun live pour l'instant</div>
+          <div className="text-xs" style={{ color: COLORS.muted }}>Touchez « Live rapide » pour démarrer en un geste, ou « Créer » pour choisir le sujet et le format.</div>
+        </div>
+      )}
+
+      <div className="space-y-2">
+        {debates.rooms.map((room) => {
+          const Icon = DEBATE_MODE_ICON[room.mode] || MessageSquare;
+          return (
+            <button key={room.id} onClick={() => setActiveRoom(room)} className="w-full flex items-center gap-3 px-4 py-3 rounded-md text-left transition hover:opacity-90" style={{ background: COLORS.surface }}>
+              <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ background: COLORS.surface2, color: COLORS.gold }}>
+                <Icon size={16} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-sm truncate" style={{ color: COLORS.ivory }}>{room.title}</div>
+                <div className="text-xs flex items-center gap-2" style={{ color: COLORS.muted }}>
+                  {room.status === "active" ? (
+                    <span className="flex items-center gap-1" style={{ color: "#E27D60" }}><Radio size={10} /> En direct</span>
+                  ) : (
+                    <span>Terminé</span>
+                  )}
+                  {room.ai_enabled && <span className="flex items-center gap-1"><Sparkles size={11} /> IA</span>}
+                  {room.host_id === userId && <span>Vous hébergez</span>}
+                </div>
+              </div>
+              <ArrowRight size={15} style={{ color: COLORS.muted }} />
+            </button>
+          );
+        })}
+      </div>
+
+      {creating && (
+        <CreateDebateModal
+          onClose={() => setCreating(false)}
+          onCreate={async (params) => {
+            const res = await debates.createRoom(params);
+            if (res.ok) {
+              setCreating(false);
+              setActiveRoom(res.room);
+            }
+            return res;
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function MessagesTab({ userId }) {
+  const messaging = useMessaging(userId);
+  const [activeId, setActiveId] = useState(null);
+
+  const active = messaging.contacts.find((c) => c.id === activeId);
+
+  if (active) {
+    return <ActiveConversation contact={active} userId={userId} messaging={messaging} onBack={() => setActiveId(null)} />;
+  }
+
+  return (
+    <div className="max-w-xl mx-auto px-4 py-6">
+      <div className="flex items-center gap-2 mb-4 text-xs px-3 py-2 rounded-md" style={{ background: COLORS.surface, color: COLORS.teal }}>
+        <ShieldCheck size={14} /> Messages chiffrés de bout en bout — seuls vous et votre correspondant pouvez les lire
+      </div>
+      {messaging.loadingContacts && <div className="text-xs text-center py-6" style={{ color: COLORS.muted }}>Chargement des contacts…</div>}
+      {!messaging.loadingContacts && messaging.contacts.length === 0 && (
+        <div className="text-xs text-center py-6" style={{ color: COLORS.muted }}>
+          Aucune conversation pour l'instant — suivez quelqu'un pour pouvoir lui écrire.
+        </div>
+      )}
+      <div className="space-y-2">
+        {messaging.contacts.map((c) => (
+          <button key={c.id} onClick={() => setActiveId(c.id)} className="w-full flex items-center gap-3 px-4 py-3 rounded-md text-left transition hover:opacity-90" style={{ background: COLORS.surface }}>
+            <div className="w-10 h-10 rounded-full flex items-center justify-center font-semibold" style={{ background: COLORS.surface2, color: COLORS.gold, fontFamily: "'Fraunces', serif" }}>
+              {(c.display_name || "?").charAt(0)}
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="text-sm" style={{ color: COLORS.ivory }}>{c.display_name} {c.flag}</div>
+              <div className="text-xs truncate" style={{ color: COLORS.muted }}>{c.handle}</div>
+            </div>
+            <Lock size={13} style={{ color: COLORS.muted }} />
+          </button>
+        ))}
       </div>
     </div>
   );
@@ -979,7 +1602,7 @@ function CryptoTab({ balance, holdings, onConvert }) {
       return;
     }
     if (amountPts <= 0) return;
-    const success = await onConvert(amountPts, Number(baroFromPts));
+    const success = await onConvert(amountPts);
     setNotice(success
       ? { ok: true, text: `${baroFromPts} BARO ajoutés à votre portefeuille crypto.` }
       : { ok: false, text: "La conversion a échoué, réessayez." });
@@ -1063,13 +1686,73 @@ function SettingsRow({ label, sub, right }) {
   );
 }
 
-function SettingsTab({ subscription, lang, setLang }) {
+const LEGAL_TEXT = {
+  terms: "Conditions d'utilisation (résumé) — En utilisant BAARO, vous acceptez de respecter la communauté : pas de contenu haineux, illégal ou trompeur. Le système de points et de conversion en récompenses peut évoluer. Ce texte est un exemple simplifié à faire relire par un professionnel du droit avant tout lancement public réel.",
+  privacy: "Politique de confidentialité (résumé) — BAARO collecte les données nécessaires au fonctionnement du service (publications, interactions, portefeuille de points). Vous pouvez exporter ou supprimer vos données à tout moment depuis Paramètres. Ce texte est un exemple simplifié, à faire rédiger par un professionnel avant un vrai lancement.",
+};
+
+function LegalModal({ type, onClose }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center px-6" style={{ background: "rgba(0,0,0,0.6)" }} onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()} className="w-full max-w-sm rounded-lg p-6" style={{ background: COLORS.surface2 }}>
+        <div className="text-sm font-medium mb-3" style={{ color: COLORS.ivory }}>{type === "terms" ? "Conditions d'utilisation" : "Politique de confidentialité"}</div>
+        <p className="text-xs leading-relaxed mb-5" style={{ color: COLORS.muted }}>{LEGAL_TEXT[type]}</p>
+        <button onClick={onClose} className="w-full py-2.5 rounded-md text-sm font-medium" style={{ background: COLORS.gold, color: COLORS.bg }}>Fermer</button>
+      </div>
+    </div>
+  );
+}
+
+function SettingsTab({ subscription, lang, setLang, userId }) {
   const [notifPush, setNotifPush] = useState(true);
   const [notifEmail, setNotifEmail] = useState(false);
   const [privateAccount, setPrivateAccount] = useState(false);
   const [twoFactor, setTwoFactor] = useState(true);
-  const [darkMode, setDarkMode] = useState(true);
   const [langOpen, setLangOpen] = useState(false);
+  const [legalOpen, setLegalOpen] = useState(null);
+  const [deleteConfirm, setDeleteConfirm] = useState(false);
+  const [exporting, setExporting] = useState(false);
+
+  const exportData = async () => {
+    if (!userId) return;
+    setExporting(true);
+    const [wallet, transactions, holdings, myPosts] = await Promise.all([
+      supabase.from("wallets").select("*").eq("user_id", userId).single(),
+      supabase.from("transactions").select("*").eq("user_id", userId),
+      supabase.from("crypto_holdings").select("*").eq("user_id", userId).single(),
+      supabase.from("posts").select("*").eq("author_id", userId),
+    ]);
+    const bundle = {
+      exported_at: new Date().toISOString(),
+      wallet: wallet.data,
+      transactions: transactions.data,
+      crypto_holdings: holdings.data,
+      posts: myPosts.data,
+    };
+    const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "baaro-mes-donnees.json";
+    a.click();
+    URL.revokeObjectURL(url);
+    setExporting(false);
+  };
+
+  const deleteAccountData = async () => {
+    if (!userId) return;
+    await Promise.all([
+      supabase.from("posts").delete().eq("author_id", userId),
+      supabase.from("post_likes").delete().eq("user_id", userId),
+      supabase.from("comments").delete().eq("author_id", userId),
+      supabase.from("transactions").delete().eq("user_id", userId),
+      supabase.from("wallets").delete().eq("user_id", userId),
+      supabase.from("crypto_holdings").delete().eq("user_id", userId),
+      supabase.from("profiles").delete().eq("user_id", userId),
+    ]);
+    await supabase.auth.signOut();
+    window.location.reload();
+  };
 
   return (
     <div className="max-w-xl mx-auto px-4 py-6">
@@ -1103,9 +1786,19 @@ function SettingsTab({ subscription, lang, setLang }) {
         <SettingsRow label="Historique de conversion" sub="Points, BARO Coin, récompenses" right={<ChevronRight size={16} style={{ color: COLORS.muted }} />} />
       </div>
 
+      <h3 className="text-sm uppercase tracking-[0.15em] mb-3" style={{ color: COLORS.muted }}>Vos données</h3>
+      <div className="rounded-lg mb-6 overflow-hidden" style={{ background: COLORS.surface }}>
+        <button onClick={exportData} disabled={exporting} className="w-full">
+          <SettingsRow label="Exporter mes données" sub={exporting ? "Préparation…" : "Télécharger un fichier avec vos points, publications, etc."} right={<Download size={16} style={{ color: COLORS.teal }} />} />
+        </button>
+        <button onClick={() => setDeleteConfirm(true)} className="w-full">
+          <SettingsRow label="Supprimer mon compte" sub="Efface vos données de l'application" right={<Trash2 size={16} style={{ color: "#E27D60" }} />} />
+        </button>
+      </div>
+
       <h3 className="text-sm uppercase tracking-[0.15em] mb-3" style={{ color: COLORS.muted }}>Application</h3>
       <div className="rounded-lg mb-2 overflow-hidden" style={{ background: COLORS.surface }}>
-        <SettingsRow label="Mode sombre" right={<Toggle checked={darkMode} onChange={setDarkMode} />} />
+        <SettingsRow label="Mode sombre" sub="Bientôt disponible — BAARO est en thème sombre fixe pour l'instant" right={<span className="text-[10px] px-2 py-1 rounded-full" style={{ background: COLORS.surface2, color: COLORS.muted }}>Bientôt</span>} />
         <button onClick={() => setLangOpen((o) => !o)} className="w-full">
           <SettingsRow label={t(lang, "language")} sub={LANGUAGES.find((l) => l.code === lang)?.label} right={<ChevronRight size={16} style={{ color: COLORS.muted, transform: langOpen ? "rotate(90deg)" : "none" }} />} />
         </button>
@@ -1122,7 +1815,36 @@ function SettingsTab({ subscription, lang, setLang }) {
       )}
       {!langOpen && <div className="mb-6" />}
 
-      <button className="w-full flex items-center justify-center gap-2 py-3 rounded-lg text-sm font-medium transition hover:opacity-90" style={{ background: "rgba(226,125,96,0.12)", color: "#E27D60" }}>
+      <h3 className="text-sm uppercase tracking-[0.15em] mb-3" style={{ color: COLORS.muted }}>Légal</h3>
+      <div className="rounded-lg mb-6 overflow-hidden" style={{ background: COLORS.surface }}>
+        <button onClick={() => setLegalOpen("terms")} className="w-full">
+          <SettingsRow label="Conditions d'utilisation" right={<FileText size={16} style={{ color: COLORS.muted }} />} />
+        </button>
+        <button onClick={() => setLegalOpen("privacy")} className="w-full">
+          <SettingsRow label="Politique de confidentialité" right={<FileText size={16} style={{ color: COLORS.muted }} />} />
+        </button>
+      </div>
+      {legalOpen && <LegalModal type={legalOpen} onClose={() => setLegalOpen(null)} />}
+
+      {deleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center px-6" style={{ background: "rgba(0,0,0,0.6)" }} onClick={() => setDeleteConfirm(false)}>
+          <div onClick={(e) => e.stopPropagation()} className="w-full max-w-sm rounded-lg p-6" style={{ background: COLORS.surface2 }}>
+            <div className="flex items-center gap-2 mb-3" style={{ color: "#E27D60" }}>
+              <ShieldAlert size={18} /> <span className="text-sm font-medium">Supprimer votre compte ?</span>
+            </div>
+            <p className="text-xs leading-relaxed mb-5" style={{ color: COLORS.muted }}>
+              Vos publications, points et données seront effacés de l'application. Cette action est irréversible.
+              Note technique : la suppression complète de votre identifiant d'authentification nécessite une fonction serveur dédiée (à ajouter plus tard) ; ceci efface déjà toutes vos données visibles.
+            </p>
+            <div className="flex gap-2">
+              <button onClick={() => setDeleteConfirm(false)} className="flex-1 py-2.5 rounded-md text-sm" style={{ background: COLORS.surface, color: COLORS.muted }}>Annuler</button>
+              <button onClick={deleteAccountData} className="flex-1 py-2.5 rounded-md text-sm font-medium" style={{ background: "#E27D60", color: COLORS.bg }}>Supprimer</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <button onClick={() => supabase.auth.signOut().then(() => window.location.reload())} className="w-full flex items-center justify-center gap-2 py-3 rounded-lg text-sm font-medium transition hover:opacity-90" style={{ background: "rgba(226,125,96,0.12)", color: "#E27D60" }}>
         <LogOut size={15} /> Se déconnecter
       </button>
     </div>
@@ -1151,6 +1873,78 @@ const BRAND_DEALS = [
   { id: "b2", brand: "Wovin Studio", flag: "🇳🇬", offer: "Vidéo intégration app mobile", pay: "320 €", tag: "Tech" },
   { id: "b3", brand: "Lumé Skincare", flag: "🇫🇷", offer: "3 stories + 1 post dédié", pay: "250 €", tag: "Beauté" },
 ];
+
+function SearchTab({ userId }) {
+  const [query, setQuery] = useState("");
+  const [profiles, setProfiles] = useState([]);
+  const [posts, setPosts] = useState([]);
+  const [searching, setSearching] = useState(false);
+  const [openProfileId, setOpenProfileId] = useState(null);
+
+  const runSearch = async (q) => {
+    if (!q.trim()) { setProfiles([]); setPosts([]); return; }
+    setSearching(true);
+    const [{ data: pRows }, { data: postRows }] = await Promise.all([
+      supabase.from("profiles").select("user_id, display_name, flag, handle").ilike("display_name", `%${q}%`).limit(10),
+      supabase.from("posts").select("id, text, author_id, profiles(display_name, flag)").ilike("text", `%${q}%`).limit(10),
+    ]);
+    setProfiles(pRows || []);
+    setPosts(postRows || []);
+    setSearching(false);
+  };
+
+  return (
+    <div className="max-w-xl mx-auto px-4 py-6">
+      <div className="flex items-center gap-2 px-4 py-2.5 rounded-md mb-5" style={{ background: COLORS.surface, border: "1px solid rgba(255,255,255,0.08)" }}>
+        <Search size={16} style={{ color: COLORS.muted }} />
+        <input
+          value={query}
+          onChange={(e) => { setQuery(e.target.value); runSearch(e.target.value); }}
+          placeholder="Rechercher une personne, un mot, un hashtag…"
+          className="flex-1 bg-transparent text-sm outline-none"
+          style={{ color: COLORS.ivory }}
+        />
+      </div>
+
+      {searching && <div className="text-xs" style={{ color: COLORS.muted }}>Recherche…</div>}
+
+      {profiles.length > 0 && (
+        <>
+          <div className="text-xs uppercase tracking-[0.15em] mb-2" style={{ color: COLORS.muted }}>Personnes</div>
+          <div className="space-y-2 mb-5">
+            {profiles.map((p) => (
+              <button key={p.user_id} onClick={() => setOpenProfileId(p.user_id)} className="w-full flex items-center gap-3 px-4 py-3 rounded-md text-left" style={{ background: COLORS.surface }}>
+                <div className="w-9 h-9 rounded-full flex items-center justify-center font-semibold text-sm" style={{ background: COLORS.surface2, color: COLORS.gold }}>{(p.display_name || "?").charAt(0)}</div>
+                <div>
+                  <div className="text-sm" style={{ color: COLORS.ivory }}>{p.display_name} {p.flag}</div>
+                  <div className="text-xs" style={{ color: COLORS.muted }}>{p.handle}</div>
+                </div>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+
+      {posts.length > 0 && (
+        <>
+          <div className="text-xs uppercase tracking-[0.15em] mb-2" style={{ color: COLORS.muted }}>Publications</div>
+          <div className="space-y-2">
+            {posts.map((p) => (
+              <div key={p.id} className="px-4 py-3 rounded-md text-sm" style={{ background: COLORS.surface, color: COLORS.ivory }}>
+                <span className="font-medium">{p.profiles?.display_name}</span> — {p.text}
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {!searching && query && profiles.length === 0 && posts.length === 0 && (
+        <div className="text-xs text-center py-8" style={{ color: COLORS.muted }}>Aucun résultat pour "{query}".</div>
+      )}
+      {openProfileId && <ProfileModal authorId={openProfileId} userId={userId} onClose={() => setOpenProfileId(null)} />}
+    </div>
+  );
+}
 
 function CreatorStudioTab({ followers, balance }) {
   const [section, setSection] = useState("analytics");
@@ -1539,6 +2333,7 @@ const ONBOARDING_STEPS = [
 
 function OnboardingModal({ onFinish }) {
   const [step, setStep] = useState(0);
+  const [ageConfirmed, setAgeConfirmed] = useState(false);
   const current = ONBOARDING_STEPS[step];
   const Icon = current.icon;
   const isLast = step === ONBOARDING_STEPS.length - 1;
@@ -1551,6 +2346,13 @@ function OnboardingModal({ onFinish }) {
         </div>
         <div className="text-lg font-semibold mb-2" style={{ color: COLORS.ivory, fontFamily: "'Fraunces', serif" }}>{current.title}</div>
         <div className="text-sm leading-relaxed mb-6" style={{ color: COLORS.muted }}>{current.text}</div>
+
+        {isLast && (
+          <label className="flex items-start gap-2 text-left text-xs mb-5 px-1" style={{ color: COLORS.muted }}>
+            <input type="checkbox" checked={ageConfirmed} onChange={(e) => setAgeConfirmed(e.target.checked)} className="mt-0.5" />
+            J'ai au moins 13 ans et j'accepte les Conditions d'utilisation et la Politique de confidentialité de BAARO.
+          </label>
+        )}
 
         <div className="flex items-center justify-center gap-1.5 mb-6">
           {ONBOARDING_STEPS.map((_, i) => (
@@ -1565,8 +2367,9 @@ function OnboardingModal({ onFinish }) {
             </button>
           )}
           <button
-            onClick={() => (isLast ? onFinish() : setStep((s) => s + 1))}
-            className="flex-1 py-2.5 rounded-md text-sm font-medium"
+            onClick={() => (isLast ? (ageConfirmed && onFinish()) : setStep((s) => s + 1))}
+            disabled={isLast && !ageConfirmed}
+            className="flex-1 py-2.5 rounded-md text-sm font-medium disabled:opacity-40"
             style={{ background: COLORS.gold, color: COLORS.bg }}
           >
             {isLast ? "Commencer" : "Suivant"}
@@ -1578,6 +2381,20 @@ function OnboardingModal({ onFinish }) {
           </button>
         )}
       </div>
+    </div>
+  );
+}
+
+function CaptchaGate({ onVerify, error }) {
+  return (
+    <div className="min-h-screen flex flex-col items-center justify-center gap-5 px-6 text-center" style={{ background: COLORS.bg }}>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Fraunces:wght@600&display=swap');`}</style>
+      <div className="text-2xl font-semibold" style={{ color: COLORS.gold, fontFamily: "'Fraunces', serif" }}>BAARO</div>
+      <div className="text-sm max-w-xs" style={{ color: COLORS.muted }}>
+        Une vérification rapide avant d'entrer — ça protège la communauté contre les faux comptes.
+      </div>
+      <TurnstileWidget onVerify={(token) => token && onVerify(token)} />
+      {error && <div className="text-xs" style={{ color: "#E27D60" }}>{error}</div>}
     </div>
   );
 }
@@ -1638,34 +2455,42 @@ export default function BaaroApp() {
     localStorage.setItem("baaro:onboarding_seen", "1");
     setShowOnboarding(false);
   };
-  const { userId, ready } = useSession();
-  const { balance, history, earn, redeem } = useWallet(userId);
-  const { holdings, addHoldings } = useCrypto(userId);
-  const { posts, likePost: likePostDb, loading: postsLoading } = usePosts(userId);
+  const { userId, ready, needsCaptcha, authError, completeCaptcha } = useSession();
+  const { balance, history, earn, redeem, setBalanceDirect } = useWallet(userId);
+  const { holdings, convert } = useCrypto(userId);
+  const { posts, likePost: likePostDb, createPost, loading: postsLoading } = usePosts(userId);
+  const { stories, addStory } = useStories(userId);
+  const { notifications, unreadCount, markAllRead } = useNotifications(userId);
+  const [notifOpen, setNotifOpen] = useState(false);
   const { videos, watchVideo: watchVideoDb } = useVideos(userId);
   const { followers, counts: followerCounts } = useFollowers(userId);
   const { votes, myVotes, castVote } = useGovernance(userId);
 
-  const convertToCrypto = async (pts, baro) => {
-    const success = await redeem(pts, `Conversion en ${baro} BARO`);
-    if (success) await addHoldings(baro);
-    return success;
+  const convertToCrypto = async (pts) => {
+    const result = await convert(pts);
+    if (result.success) setBalanceDirect(result.balance);
+    return result.success;
   };
 
   const likePost = async (id) => {
     await likePostDb(id);
-    earn(2, "Interaction sur une publication");
+    earn("like_post");
+  };
+
+  const publishPost = async (text, file) => {
+    await createPost(text, file);
+    earn(file ? "publish_post_media" : "publish_post");
   };
 
   const watchVideo = async (v) => {
     await watchVideoDb(v);
-    earn(1, `Vue générée sur "${v.title}"`);
+    earn("watch_video", v.title);
   };
 
   const subscribe = (tierId) => {
     setSubscription(tierId);
     const tier = SUBSCRIPTION_TIERS.find((tr) => tr.id === tierId);
-    if (tier && tierId !== "free") earn(5, `Abonnement ${tier.name} activé`);
+    if (tier && tierId !== "free") earn("subscribe", tier.name);
   };
 
   const primaryTabs = [
@@ -1676,6 +2501,8 @@ export default function BaaroApp() {
     { id: "assistant", label: t(lang, "assistant"), icon: Sparkles },
   ];
   const moreTabs = [
+    { id: "debates", label: "Débats", icon: Swords },
+    { id: "search", label: "Recherche", icon: Search },
     { id: "studio", label: "Studio", icon: Briefcase },
     { id: "nearby", label: "Hors-ligne", icon: Radio },
     { id: "crypto", label: t(lang, "crypto"), icon: Coins },
@@ -1687,7 +2514,13 @@ export default function BaaroApp() {
   ];
   const tabs = [...primaryTabs, ...moreTabs];
 
-  if (!ready) return <SplashScreen />;
+  if (!ready) {
+    return needsCaptcha ? (
+      <CaptchaGate onVerify={completeCaptcha} error={authError} />
+    ) : (
+      <SplashScreen />
+    );
+  }
 
   return (
     <div className="min-h-screen" style={{ background: COLORS.bg, fontFamily: "'Inter', sans-serif" }}>
@@ -1697,6 +2530,7 @@ export default function BaaroApp() {
       `}</style>
 
       {showOnboarding && <OnboardingModal onFinish={finishOnboarding} />}
+      {notifOpen && <NotificationsPanel notifications={notifications} onClose={() => setNotifOpen(false)} onMarkRead={markAllRead} />}
 
       <div className="pointer-events-none fixed top-0 left-0 right-0 h-64 -z-10" style={{ background: `radial-gradient(ellipse at top, rgba(212,169,62,0.08), transparent 70%)` }} />
 
@@ -1705,6 +2539,10 @@ export default function BaaroApp() {
           BAARO
         </div>
         <div className="flex items-center gap-2">
+          <button onClick={() => setNotifOpen(true)} className="relative p-1.5 rounded-full" style={{ background: COLORS.surface, color: COLORS.muted }} aria-label="Notifications">
+            <Bell size={15} />
+            {unreadCount > 0 && <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full" style={{ background: COLORS.gold }} />}
+          </button>
           <button onClick={() => setShowOnboarding(true)} className="p-1.5 rounded-full" style={{ background: COLORS.surface, color: COLORS.muted }} aria-label="Aide">
             <HelpCircle size={15} />
           </button>
@@ -1731,6 +2569,7 @@ export default function BaaroApp() {
       </header>
 
       <Ticker />
+      {tab === "feed" && <StoriesBar stories={stories} onAdd={addStory} />}
 
 
       <nav className="flex gap-1 py-3 max-w-xl mx-auto px-4">
@@ -1787,10 +2626,12 @@ export default function BaaroApp() {
         </div>
       )}
 
-      {tab === "feed" && <FeedTab posts={posts} onLike={likePost} lang={lang} loading={postsLoading} />}
+      {tab === "feed" && <FeedTab posts={posts} onLike={likePost} onPost={publishPost} lang={lang} loading={postsLoading} userId={userId} />}
       {tab === "videos" && <VideosTab videos={videos} onWatch={watchVideo} />}
-      {tab === "messages" && <MessagesTab />}
+      {tab === "messages" && <MessagesTab userId={userId} />}
+      {tab === "debates" && <DebatesTab userId={userId} />}
       {tab === "wallet" && <WalletTab balance={balance} history={history} onRedeem={redeem} />}
+      {tab === "search" && <SearchTab userId={userId} />}
       {tab === "studio" && <CreatorStudioTab followers={followerCounts.followers} balance={balance} />}
       {tab === "nearby" && <NearbyTab />}
       {tab === "crypto" && <CryptoTab balance={balance} holdings={holdings} onConvert={convertToCrypto} />}
@@ -1799,7 +2640,7 @@ export default function BaaroApp() {
       {tab === "governance" && <GovernanceTab votes={votes} myVotes={myVotes} castVote={castVote} />}
       {tab === "subscription" && <SubscriptionTab current={subscription} onSubscribe={subscribe} />}
       {tab === "assistant" && <AssistantTab onEarn={earn} />}
-      {tab === "settings" && <SettingsTab subscription={subscription} lang={lang} setLang={setLang} />}
+      {tab === "settings" && <SettingsTab subscription={subscription} lang={lang} setLang={setLang} userId={userId} />}
     </div>
   );
 }
