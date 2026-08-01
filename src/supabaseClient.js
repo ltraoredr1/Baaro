@@ -164,3 +164,26 @@ export const getPendingRequests = async () => {
 
   return { data: data || [], error };
 };
+
+// ========== RÉCUPÉRATION DES UTILISATEURS ==========
+
+// Récupérer tous les utilisateurs de la table users
+export const getAllUsers = async () => {
+  const { data, error } = await supabase
+    .from('users')
+    .select('*')
+    .order('created_at', { ascending: false });
+
+  return { data, error };
+};
+
+// Récupérer un utilisateur par son ID
+export const getUserById = async (userId) => {
+  const { data, error } = await supabase
+    .from('users')
+    .select('*')
+    .eq('id', userId)
+    .single();
+
+  return { data, error };
+};
