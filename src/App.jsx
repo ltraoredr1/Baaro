@@ -17,7 +17,7 @@ import { NotificationDrawer } from "./components/NotificationDrawer.jsx";
 import { GlobalSearchModal } from "./components/GlobalSearchModal.jsx";
 import { COLORS } from "./theme.js";
 import AuthScreen from "./components/AuthScreen.jsx";
-import { FriendsTab } from './components/FriendsTab.jsx'; // ← AJOUT
+import { FriendsTab } from './components/FriendsTab.jsx';
 
 const THEME_BG_MAP = {
   midnight: "#0B1220",
@@ -75,7 +75,7 @@ function MainAppContent() {
             />
           )}
 
-          {activeTab === "friends" && <FriendsTab />} {/* ← AJOUT */}
+          {activeTab === "friends" && <FriendsTab />}
 
           {activeTab === "videos" && (
             <VideosTab onRewardPoints={handleRewardPoints} />
@@ -189,4 +189,4 @@ export default function App() {
       <MainAppContent />
     </ToastProvider>
   );
-}
+      }
