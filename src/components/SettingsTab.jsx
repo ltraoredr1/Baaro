@@ -14,19 +14,41 @@ export function SettingsTab({ userProfile, setUserProfile, currentTheme, onSelec
   const { showToast } = useToast();
   
   const [displayName, setDisplayName] = useState(userProfile?.display_name || "Membre BAARO");
-  const [bio, setBio] = useState(userProfile?.bio || "Passionné de Web3, de réseaux décentralisés et d'impact social.");
+  const [bio, setBio] = useState(userProfile?.bio || "");
   const [flag, setFlag] = useState(userProfile?.flag || "🌍");
   const [activeTier, setActiveTier] = useState("plus");
   const [blockedUsers, setBlockedUsers] = useState([]);
   const [isEditing, setIsEditing] = useState(false);
   const [editDisplayName, setEditDisplayName] = useState(userProfile?.display_name || "Membre BAARO");
-  const [editBio, setEditBio] = useState(userProfile?.bio || "Passionné de Web3, de réseaux décentralisés et d'impact social.");
+  const [editBio, setEditBio] = useState(userProfile?.bio || "");
   const [editFlag, setEditFlag] = useState(userProfile?.flag || "🌍");
   const [loading, setLoading] = useState(false);
+
+  // Calcul du temps restant
+  const getTimeUntilNextUpdate = () => {
+    const lastUpdate = localStorage.getItem('profile_last_update');
+    if (!lastUpdate) return null;
+    
+    const lastDate = new Date(lastUpdate);
+    const nextDate = new Date(lastDate);
+    nextDate.setDate(nextDate.getDate() + 7);
+    
+    const now = new Date();
+    const diff = nextDate - now;
+    
+    if (diff <= 0) return null;
+    
+    const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+    const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+    const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+    
+    return { days, hours, minutes };
+  };
 
   const lastUpdate = localStorage.getItem('profile_last_update');
   const today = new Date().toDateString();
   const canEdit = !lastUpdate || lastUpdate !== today;
+  const timeLeft = getTimeUntilNextUpdate();
 
   const handleSaveProfile = async (e) => {
     e.preventDefault();
@@ -40,7 +62,6 @@ export function SettingsTab({ userProfile, setUserProfile, currentTheme, onSelec
       const { error: authError } = await supabase.auth.updateUser({
         data: {
           display_name: editDisplayName,
-          handle: userProfile?.handle || '@membre_' + user.id.substring(0, 8),
           flag: editFlag,
           bio: editBio
         }
@@ -53,22 +74,20 @@ export function SettingsTab({ userProfile, setUserProfile, currentTheme, onSelec
         .upsert({
           id: user.id,
           display_name: editDisplayName,
-          handle: userProfile?.handle || '@membre_' + user.id.substring(0, 8),
           flag: editFlag,
           bio: editBio,
-          email: user.email,
           updated_at: new Date().toISOString()
         });
 
       if (dbError) throw dbError;
 
       // 3. Mettre à jour le state local
-      setUserProfile((prev) => ({
-        ...prev,
+      setUserProfile({
+        ...userProfile,
         display_name: editDisplayName,
         flag: editFlag,
         bio: editBio
-      }));
+      });
 
       setDisplayName(editDisplayName);
       setBio(editBio);
@@ -79,6 +98,7 @@ export function SettingsTab({ userProfile, setUserProfile, currentTheme, onSelec
       setIsEditing(false);
       showToast("✅ Profil mis à jour avec succès !", "success");
     } catch (error) {
+      console.error(error);
       showToast("❌ Erreur : " + error.message, "error");
     } finally {
       setLoading(false);
@@ -132,25 +152,34 @@ export function SettingsTab({ userProfile, setUserProfile, currentTheme, onSelec
               </div>
             </div>
             <p className="text-gray-300 text-sm">{bio}</p>
-            <button
-              onClick={() => {
-                setEditDisplayName(displayName);
-                setEditBio(bio);
-                setEditFlag(flag);
-                setIsEditing(true);
-              }}
-              disabled={!canEdit}
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition ${
-                canEdit 
-                  ? 'bg-gold-500 text-black hover:bg-gold-400' 
-                  : 'bg-gray-700 text-gray-400 cursor-not-allowed'
-              }`}
-            >
-              {canEdit ? '✏️ Modifier le profil' : '⏳ Modifiable la semaine prochaine'}
-            </button>
-            {!canEdit && (
-              <p className="text-xs text-gray-500">Vous ne pouvez modifier votre profil qu'une fois par semaine.</p>
-            )}
+            
+            <div className="flex flex-col gap-2">
+              <button
+                onClick={() => {
+                  setEditDisplayName(displayName);
+                  setEditBio(bio);
+                  setEditFlag(flag);
+                  setIsEditing(true);
+                }}
+                disabled={!canEdit}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition ${
+                  canEdit 
+                    ? 'bg-gold-500 text-black hover:bg-gold-400' 
+                    : 'bg-gray-700 text-gray-400 cursor-not-allowed'
+                }`}
+              >
+                {canEdit ? '✏️ Modifier le profil' : '⏳ Modifiable la semaine prochaine'}
+              </button>
+              
+              {!canEdit && timeLeft && (
+                <p className="text-xs text-gray-400">
+                  ⏰ Prochaine modification disponible dans : {' '}
+                  <span className="text-gold-500 font-medium">
+                    {timeLeft.days}j {timeLeft.hours}h {timeLeft.minutes}min
+                  </span>
+                </p>
+              )}
+            </div>
           </div>
         ) : (
           <form onSubmit={handleSaveProfile} className="space-y-4">
@@ -306,4 +335,4 @@ export function SettingsTab({ userProfile, setUserProfile, currentTheme, onSelec
       </div>
     </div>
   );
-                                                                                              }
+                    }
