@@ -7,12 +7,14 @@ import {
   Wallet,
   WifiOff,
   Sparkles,
-  Settings
+  Settings,
+  Users // ← AJOUT
 } from "lucide-react";
 import { COLORS } from "../theme.js";
 
 const NAV_ITEMS = [
   { id: "feed", label: "Fil", icon: Rss, badge: null },
+  { id: "friends", label: "Communauté", icon: Users, badge: null }, // ← AJOUT
   { id: "videos", label: "Vidéos", icon: Play, badge: "HOT" },
   { id: "messages", label: "Messages", icon: MessageSquare, badge: "3" },
   { id: "debates", label: "Débats", icon: Swords, badge: null },
