@@ -1,4 +1,5 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
+import { supabase } from "./supabaseClient";
 import { ToastProvider, useToast } from "./components/ToastContext.jsx";
 import { Header } from "./components/Header.jsx";
 import { Navigation } from "./components/Navigation.jsx";
@@ -15,6 +16,7 @@ import { ProfileModal } from "./components/ProfileModal.jsx";
 import { NotificationDrawer } from "./components/NotificationDrawer.jsx";
 import { GlobalSearchModal } from "./components/GlobalSearchModal.jsx";
 import { COLORS } from "./theme.js";
+import AuthScreen from "./components/AuthScreen.jsx";
 
 const THEME_BG_MAP = {
   midnight: "#0B1220",
@@ -47,7 +49,6 @@ function MainAppContent() {
 
   return (
     <div className="min-h-screen flex flex-col transition-colors duration-500" style={{ background: themeBg, color: COLORS.ivory }}>
-      {/* Top Header */}
       <Header
         lang={lang}
         setLang={setLang}
@@ -59,14 +60,11 @@ function MainAppContent() {
         onOpenSearch={() => setSearchModalOpen(true)}
       />
 
-      {/* Main Layout Body */}
       <div className="max-w-7xl mx-auto w-full px-3 sm:px-6 pt-4 sm:pt-6 flex-1 grid grid-cols-1 md:grid-cols-4 gap-6">
-        {/* Navigation Sidebar (Desktop) */}
         <div className="md:col-span-1">
           <Navigation activeTab={activeTab} setActiveTab={setActiveTab} />
         </div>
 
-        {/* Dynamic Tab View Area */}
         <main className="md:col-span-3">
           {activeTab === "feed" && (
             <FeedTab
@@ -126,7 +124,6 @@ function MainAppContent() {
         </main>
       </div>
 
-      {/* User Profile Modal Inspector */}
       {inspectingProfileId && (
         <ProfileModal
           authorId={inspectingProfileId}
@@ -135,13 +132,11 @@ function MainAppContent() {
         />
       )}
 
-      {/* Notification Drawer */}
       <NotificationDrawer
         isOpen={notifDrawerOpen}
         onClose={() => setNotifDrawerOpen(false)}
       />
 
-      {/* Global Search Modal */}
       <GlobalSearchModal
         isOpen={searchModalOpen}
         onClose={() => setSearchModalOpen(false)}
@@ -153,6 +148,39 @@ function MainAppContent() {
 }
 
 export default function App() {
+  const [session, setSession] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      setLoading(false);
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      (_event, session) => {
+        setSession(session);
+      }
+    );
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center" style={{ background: "#0B1220", color: "white" }}>
+        <div className="text-center">
+          <div className="text-4xl mb-4">⏳</div>
+          <p>Chargement de BAARO...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!session) {
+    return <AuthScreen />;
+  }
+
   return (
     <ToastProvider>
       <MainAppContent />
