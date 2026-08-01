@@ -42,6 +42,34 @@ function MainAppContent() {
     bio: "Passionné de Web3, de réseaux décentralisés et d'impact social."
   });
 
+  // 🔥 Charger le profil depuis Supabase au démarrage
+  useEffect(() => {
+    const loadProfile = async () => {
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) {
+          const { data, error } = await supabase
+            .from('users')
+            .select('*')
+            .eq('id', user.id)
+            .single();
+
+          if (data) {
+            setUserProfile({
+              display_name: data.display_name || 'Membre BAARO',
+              handle: data.handle || '@mon_compte',
+              flag: data.flag || '🌍',
+              bio: data.bio || ''
+            });
+          }
+        }
+      } catch (error) {
+        console.error('Erreur chargement profil:', error);
+      }
+    };
+    loadProfile();
+  }, []);
+
   const handleRewardPoints = useCallback((pts) => {
     setPointsBalance((prev) => prev + pts);
   }, []);
@@ -189,4 +217,4 @@ export default function App() {
       <MainAppContent />
     </ToastProvider>
   );
-      }
+}
