@@ -1,19 +1,66 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Search, X, User, Hash, Swords, ArrowRight, BadgeCheck } from "lucide-react";
 import { COLORS } from "../theme.js";
 import { STABLE_USERS } from "../data/users.js";
+import { supabase } from "../supabaseClient.js";
 
 const POPULAR_HASHTAGS = ["#GreenTech", "#BaroCoin", "#AfricaTech", "#Web3", "#P2PMesh", "#Gouvernance"];
 
 export function GlobalSearchModal({ isOpen, onClose, onSelectUser, onSelectTab }) {
   const [query, setQuery] = useState("");
+  const [supabaseUsers, setSupabaseUsers] = useState([]);
+  const [loading, setLoading] = useState(false);
+
+  // Charger les utilisateurs Supabase au montage
+  useEffect(() => {
+    if (isOpen) {
+      loadSupabaseUsers();
+    }
+  }, [isOpen]);
+
+  const loadSupabaseUsers = async () => {
+    setLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from('users')
+        .select('*');
+      
+      if (error) throw error;
+      setSupabaseUsers(data || []);
+    } catch (error) {
+      console.error("Erreur chargement utilisateurs:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   if (!isOpen) return null;
 
-  const filteredUsers = STABLE_USERS.filter((u) =>
-    u.display_name.toLowerCase().includes(query.toLowerCase()) ||
-    u.handle.toLowerCase().includes(query.toLowerCase()) ||
-    u.country.toLowerCase().includes(query.toLowerCase())
+  // Fusionner les utilisateurs stables + Supabase (sans doublons)
+  const allUsers = [...STABLE_USERS];
+  supabaseUsers.forEach((u) => {
+    const exists = allUsers.some((su) => su.id === u.id);
+    if (!exists) {
+      allUsers.push({
+        id: u.id,
+        display_name: u.display_name || "Membre BAARO",
+        handle: u.handle || "@utilisateur",
+        flag: u.flag || "🌍",
+        country: u.country || "🌍",
+        avatar: u.avatar_url || "",
+        bio: u.bio || "",
+        points: u.points || 0,
+        isVerified: u.is_verified || false,
+        isSupabase: true // Marquer comme utilisateur Supabase
+      });
+    }
+  });
+
+  const filteredUsers = allUsers.filter((u) =>
+    u.display_name?.toLowerCase().includes(query.toLowerCase()) ||
+    u.handle?.toLowerCase().includes(query.toLowerCase()) ||
+    u.country?.toLowerCase().includes(query.toLowerCase()) ||
+    u.bio?.toLowerCase().includes(query.toLowerCase())
   );
 
   return (
@@ -60,10 +107,10 @@ export function GlobalSearchModal({ isOpen, onClose, onSelectUser, onSelectTab }
         {/* Results */}
         <div className="flex flex-col gap-2 max-h-[380px] overflow-y-auto pr-1">
           <span className="text-xs font-bold uppercase tracking-wider text-slate-400">
-            Résultats Membres ({filteredUsers.length})
+            {loading ? "⏳ Chargement..." : `Résultats Membres (${filteredUsers.length})`}
           </span>
 
-          {filteredUsers.length === 0 ? (
+          {filteredUsers.length === 0 && !loading ? (
             <div className="text-xs text-center py-6 text-slate-400">
               Aucun résultat pour "{query}"
             </div>
@@ -80,19 +127,28 @@ export function GlobalSearchModal({ isOpen, onClose, onSelectUser, onSelectTab }
               >
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-full overflow-hidden border flex items-center justify-center font-bold text-xs" style={{ borderColor: COLORS.borderGold, background: COLORS.surface2 }}>
-                    <img src={u.avatar} alt={u.display_name} className="w-full h-full object-cover" />
+                    {u.avatar ? (
+                      <img src={u.avatar} alt={u.display_name} className="w-full h-full object-cover" />
+                    ) : (
+                      <span className="text-lg">{u.flag || "🌍"}</span>
+                    )}
                   </div>
                   <div>
                     <div className="text-xs font-bold flex items-center gap-1" style={{ color: COLORS.ivory }}>
                       {u.display_name} {u.flag}
                       {u.isVerified && <BadgeCheck size={14} style={{ color: COLORS.teal }} />}
+                      {u.isSupabase && (
+                        <span className="text-[8px] px-1.5 py-0.5 rounded-full bg-blue-500/20 text-blue-400 font-normal">
+                          LIVE
+                        </span>
+                      )}
                     </div>
-                    <div className="text-[11px]" style={{ color: COLORS.muted }}>{u.handle} • {u.country}</div>
+                    <div className="text-[11px]" style={{ color: COLORS.muted }}>{u.handle} • {u.country || "🌍"}</div>
                   </div>
                 </div>
 
                 <div className="flex items-center gap-2">
-                  <span className="text-xs font-mono font-bold" style={{ color: COLORS.gold }}>{u.points} pts</span>
+                  <span className="text-xs font-mono font-bold" style={{ color: COLORS.gold }}>{u.points || 0} pts</span>
                   <ArrowRight size={14} style={{ color: COLORS.muted }} />
                 </div>
               </div>
@@ -102,4 +158,4 @@ export function GlobalSearchModal({ isOpen, onClose, onSelectUser, onSelectTab }
       </div>
     </div>
   );
-}
+            }
