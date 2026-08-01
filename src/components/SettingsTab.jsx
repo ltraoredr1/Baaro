@@ -13,21 +13,90 @@ const SUBSCRIPTION_TIERS = [
 
 export function SettingsTab({ userProfile, setUserProfile, currentTheme, onSelectTheme }) {
   const { showToast } = useToast();
+  
+  // État local du profil
   const [displayName, setDisplayName] = useState(userProfile?.display_name || "Membre BAARO");
   const [bio, setBio] = useState(userProfile?.bio || "Passionné de Web3, de réseaux décentralisés et d'impact social.");
   const [flag, setFlag] = useState(userProfile?.flag || "🌍");
   const [activeTier, setActiveTier] = useState("plus");
   const [blockedUsers, setBlockedUsers] = useState([STABLE_USERS[2]]);
+  
+  // États pour la modification
+  const [isEditing, setIsEditing] = useState(false);
+  const [editDisplayName, setEditDisplayName] = useState(userProfile?.display_name || "Membre BAARO");
+  const [editBio, setEditBio] = useState(userProfile?.bio || "Passionné de Web3, de réseaux décentralisés et d'impact social.");
+  const [editFlag, setEditFlag] = useState(userProfile?.flag || "🌍");
+  const [loading, setLoading] = useState(false);
 
-  const handleSaveProfile = (e) => {
+  // Vérifier si l'utilisateur peut modifier son profil (1 fois par semaine)
+  const lastUpdate = localStorage.getItem('profile_last_update');
+  const today = new Date().toDateString();
+  const canEdit = !lastUpdate || lastUpdate !== today;
+
+  // Sauvegarder le profil dans Supabase
+  const handleSaveProfile = async (e) => {
     e.preventDefault();
-    setUserProfile((prev) => ({
-      ...prev,
-      display_name: displayName,
-      bio: bio,
-      flag: flag
-    }));
-    showToast("Profil mis à jour avec succès !", "success");
+    setLoading(true);
+    
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error('Non connecté');
+
+      // 1. Mettre à jour dans auth.users
+      const { error: authError } = await supabase.auth.updateUser({
+        data: {
+          display_name: editDisplayName,
+          handle: userProfile?.handle || '@membre_' + user.id.substring(0, 8),
+          flag: editFlag,
+          bio: editBio
+        }
+      });
+      if (authError) throw authError;
+
+      // 2. Mettre à jour dans la table users
+      const { error: dbError } = await supabase
+        .from('users')
+        .update({
+          display_name: editDisplayName,
+          flag: editFlag,
+          bio: editBio,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', user.id);
+
+      if (dbError) throw dbError;
+
+      // 3. Mettre à jour le state local
+      setUserProfile({
+        ...userProfile,
+        display_name: editDisplayName,
+        flag: editFlag,
+        bio: editBio
+      });
+
+      // 4. Mettre à jour les états locaux
+      setDisplayName(editDisplayName);
+      setBio(editBio);
+      setFlag(editFlag);
+
+      // 5. Enregistrer la date de modification
+      localStorage.setItem('profile_last_update', today);
+
+      setIsEditing(false);
+      showToast("✅ Profil mis à jour avec succès !", "success");
+    } catch (error) {
+      showToast("❌ Erreur : " + error.message, "error");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Annuler les modifications
+  const handleCancelEdit = () => {
+    setEditDisplayName(displayName);
+    setEditBio(bio);
+    setEditFlag(flag);
+    setIsEditing(false);
   };
 
   const handleSelectTier = (tierId, tierName) => {
@@ -57,7 +126,7 @@ export function SettingsTab({ userProfile, setUserProfile, currentTheme, onSelec
   return (
     <div className="flex flex-col gap-6 max-w-3xl mx-auto w-full pb-20">
       {/* Profile Edition */}
-      <form onSubmit={handleSaveProfile} className="glass-card rounded-2xl p-5 border flex flex-col gap-4" style={{ borderColor: COLORS.borderGold }}>
+      <div className="glass-card rounded-2xl p-5 border flex flex-col gap-4" style={{ borderColor: COLORS.borderGold }}>
         <div className="flex items-center justify-between border-b pb-3" style={{ borderColor: COLORS.border }}>
           <h3 className="text-base font-bold text-gradient-gold flex items-center gap-2">
             <User size={18} />
@@ -66,49 +135,96 @@ export function SettingsTab({ userProfile, setUserProfile, currentTheme, onSelec
           <span className="text-xs px-2.5 py-0.5 rounded-full font-mono" style={{ background: COLORS.tealGlow, color: COLORS.teal }}>Compte Vérifié</span>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div>
-            <label className="text-xs font-semibold block mb-1" style={{ color: COLORS.muted }}>Nom d'affichage</label>
-            <input
-              type="text"
-              value={displayName}
-              onChange={(e) => setDisplayName(e.target.value)}
-              className="w-full bg-transparent border rounded-xl p-2.5 text-xs outline-none"
-              style={{ borderColor: COLORS.border, color: COLORS.ivory }}
-            />
+        {/* Affichage du profil */}
+        {!isEditing ? (
+          <div className="space-y-3">
+            <div className="flex items-center gap-3">
+              <span className="text-3xl">{flag}</span>
+              <div>
+                <p className="text-xl font-bold text-white">{displayName}</p>
+                <p className="text-sm text-gray-400">{userProfile?.handle || '@utilisateur'}</p>
+              </div>
+            </div>
+            <p className="text-gray-300 text-sm">{bio}</p>
+            <button
+              onClick={() => {
+                setEditDisplayName(displayName);
+                setEditBio(bio);
+                setEditFlag(flag);
+                setIsEditing(true);
+              }}
+              disabled={!canEdit}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition ${
+                canEdit 
+                  ? 'bg-gold-500 text-black hover:bg-gold-400' 
+                  : 'bg-gray-700 text-gray-400 cursor-not-allowed'
+              }`}
+            >
+              {canEdit ? '✏️ Modifier le profil' : '⏳ Modifiable la semaine prochaine'}
+            </button>
+            {!canEdit && (
+              <p className="text-xs text-gray-500">Vous ne pouvez modifier votre profil qu'une fois par semaine.</p>
+            )}
           </div>
+        ) : (
+          /* Formulaire d'édition */
+          <form onSubmit={handleSaveProfile} className="space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="text-xs font-semibold block mb-1" style={{ color: COLORS.muted }}>Nom d'affichage</label>
+                <input
+                  type="text"
+                  value={editDisplayName}
+                  onChange={(e) => setEditDisplayName(e.target.value)}
+                  className="w-full bg-transparent border rounded-xl p-2.5 text-xs outline-none"
+                  style={{ borderColor: COLORS.border, color: COLORS.ivory }}
+                />
+              </div>
 
-          <div>
-            <label className="text-xs font-semibold block mb-1" style={{ color: COLORS.muted }}>Drapeau / Pays</label>
-            <input
-              type="text"
-              value={flag}
-              onChange={(e) => setFlag(e.target.value)}
-              className="w-full bg-transparent border rounded-xl p-2.5 text-xs outline-none"
-              style={{ borderColor: COLORS.border, color: COLORS.ivory }}
-            />
-          </div>
-        </div>
+              <div>
+                <label className="text-xs font-semibold block mb-1" style={{ color: COLORS.muted }}>Drapeau / Pays</label>
+                <input
+                  type="text"
+                  value={editFlag}
+                  onChange={(e) => setEditFlag(e.target.value)}
+                  className="w-full bg-transparent border rounded-xl p-2.5 text-xs outline-none"
+                  style={{ borderColor: COLORS.border, color: COLORS.ivory }}
+                />
+              </div>
+            </div>
 
-        <div>
-          <label className="text-xs font-semibold block mb-1" style={{ color: COLORS.muted }}>Bio / Présentation</label>
-          <textarea
-            value={bio}
-            onChange={(e) => setBio(e.target.value)}
-            rows={2}
-            className="w-full bg-transparent border rounded-xl p-2.5 text-xs outline-none resize-none"
-            style={{ borderColor: COLORS.border, color: COLORS.ivory }}
-          />
-        </div>
+            <div>
+              <label className="text-xs font-semibold block mb-1" style={{ color: COLORS.muted }}>Bio / Présentation</label>
+              <textarea
+                value={editBio}
+                onChange={(e) => setEditBio(e.target.value)}
+                rows={2}
+                className="w-full bg-transparent border rounded-xl p-2.5 text-xs outline-none resize-none"
+                style={{ borderColor: COLORS.border, color: COLORS.ivory }}
+              />
+            </div>
 
-        <button
-          type="submit"
-          className="self-end px-5 py-2 rounded-xl text-xs font-bold shadow-lg transition gold-glow"
-          style={{ background: COLORS.gold, color: COLORS.bg }}
-        >
-          Enregistrer les modifications
-        </button>
-      </form>
+            <div className="flex gap-2">
+              <button
+                type="submit"
+                disabled={loading}
+                className="px-5 py-2 rounded-xl text-xs font-bold shadow-lg transition gold-glow"
+                style={{ background: COLORS.gold, color: COLORS.bg }}
+              >
+                {loading ? '⏳ Enregistrement...' : '💾 Enregistrer'}
+              </button>
+              <button
+                type="button"
+                onClick={handleCancelEdit}
+                className="px-5 py-2 rounded-xl text-xs font-bold transition"
+                style={{ background: COLORS.surface2, color: COLORS.muted }}
+              >
+                Annuler
+              </button>
+            </div>
+          </form>
+        )}
+      </div>
 
       {/* Theme Selector Section */}
       <div className="glass-card rounded-2xl p-5 border flex flex-col gap-4" style={{ borderColor: COLORS.borderTeal }}>
