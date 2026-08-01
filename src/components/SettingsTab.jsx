@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { User, ShieldCheck, Moon, Sun, Lock, Award, Check, Smartphone, Download, Sparkles, UserX, ShieldAlert, Palette } from "lucide-react";
+import { supabase } from "../supabaseClient";
+import { User, ShieldCheck, Moon, Sun, Lock, Award, Check, Smartphone, Download, Sparkles, UserX, ShieldAlert, Palette, LogOut } from "lucide-react";
 import { COLORS } from "../theme.js";
 import { useToast } from "./ToastContext.jsx";
 import { STABLE_USERS } from "../data/users.js";
@@ -37,6 +38,20 @@ export function SettingsTab({ userProfile, setUserProfile, currentTheme, onSelec
   const handleUnblock = (userId, name) => {
     setBlockedUsers((prev) => prev.filter((u) => u.id !== userId));
     showToast(`${name} a été débloqué`, "info");
+  };
+
+  const handleLogout = async () => {
+    if (window.confirm("Voulez-vous vraiment vous déconnecter ?")) {
+      try {
+        await supabase.auth.signOut();
+        showToast("Déconnexion réussie !", "success");
+        setTimeout(() => {
+          window.location.reload();
+        }, 500);
+      } catch (error) {
+        showToast("Erreur lors de la déconnexion", "error");
+      }
+    }
   };
 
   return (
@@ -237,6 +252,31 @@ export function SettingsTab({ userProfile, setUserProfile, currentTheme, onSelec
             );
           })}
         </div>
+      </div>
+
+      {/* 🚪 BOUTON DE DÉCONNEXION */}
+      <div className="glass-card rounded-2xl p-5 border" style={{ borderColor: COLORS.border }}>
+        <button
+          onClick={handleLogout}
+          className="w-full flex items-center justify-center gap-2 py-3 rounded-xl text-sm font-bold transition-all duration-300"
+          style={{
+            background: "rgba(239, 68, 68, 0.15)",
+            border: "1px solid rgba(239, 68, 68, 0.3)",
+            color: "#f87171"
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = "rgba(239, 68, 68, 0.25)";
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = "rgba(239, 68, 68, 0.15)";
+          }}
+        >
+          <LogOut size={18} />
+          Se déconnecter
+        </button>
+        <p className="text-[10px] text-center mt-2" style={{ color: COLORS.muted }}>
+          Vous serez redirigé vers l'écran de connexion
+        </p>
       </div>
     </div>
   );
