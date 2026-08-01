@@ -1,9 +1,8 @@
 import { useState } from "react";
 import { supabase } from "../supabaseClient";
-import { User, ShieldCheck, Moon, Sun, Lock, Award, Check, Smartphone, Download, Sparkles, UserX, ShieldAlert, Palette, LogOut } from "lucide-react";
+import { User, Award, Check, UserX, ShieldAlert, Palette, LogOut } from "lucide-react";
 import { COLORS } from "../theme.js";
 import { useToast } from "./ToastContext.jsx";
-import { STABLE_USERS } from "../data/users.js";
 
 const SUBSCRIPTION_TIERS = [
   { id: "free", name: "Découverte", price: "Gratuit", features: ["Fil et interactions de base", "Gain de points standard", "Accès limité à l'assistant IA"] },
@@ -14,26 +13,21 @@ const SUBSCRIPTION_TIERS = [
 export function SettingsTab({ userProfile, setUserProfile, currentTheme, onSelectTheme }) {
   const { showToast } = useToast();
   
-  // État local du profil
   const [displayName, setDisplayName] = useState(userProfile?.display_name || "Membre BAARO");
   const [bio, setBio] = useState(userProfile?.bio || "Passionné de Web3, de réseaux décentralisés et d'impact social.");
   const [flag, setFlag] = useState(userProfile?.flag || "🌍");
   const [activeTier, setActiveTier] = useState("plus");
-  const [blockedUsers, setBlockedUsers] = useState([STABLE_USERS[2]]);
-  
-  // États pour la modification
+  const [blockedUsers, setBlockedUsers] = useState([]);
   const [isEditing, setIsEditing] = useState(false);
   const [editDisplayName, setEditDisplayName] = useState(userProfile?.display_name || "Membre BAARO");
   const [editBio, setEditBio] = useState(userProfile?.bio || "Passionné de Web3, de réseaux décentralisés et d'impact social.");
   const [editFlag, setEditFlag] = useState(userProfile?.flag || "🌍");
   const [loading, setLoading] = useState(false);
 
-  // Vérifier si l'utilisateur peut modifier son profil (1 fois par semaine)
   const lastUpdate = localStorage.getItem('profile_last_update');
   const today = new Date().toDateString();
   const canEdit = !lastUpdate || lastUpdate !== today;
 
-  // Sauvegarder le profil dans Supabase
   const handleSaveProfile = async (e) => {
     e.preventDefault();
     setLoading(true);
@@ -56,30 +50,30 @@ export function SettingsTab({ userProfile, setUserProfile, currentTheme, onSelec
       // 2. Mettre à jour dans la table users
       const { error: dbError } = await supabase
         .from('users')
-        .update({
+        .upsert({
+          id: user.id,
           display_name: editDisplayName,
+          handle: userProfile?.handle || '@membre_' + user.id.substring(0, 8),
           flag: editFlag,
           bio: editBio,
+          email: user.email,
           updated_at: new Date().toISOString()
-        })
-        .eq('id', user.id);
+        });
 
       if (dbError) throw dbError;
 
       // 3. Mettre à jour le state local
-      setUserProfile({
-        ...userProfile,
+      setUserProfile((prev) => ({
+        ...prev,
         display_name: editDisplayName,
         flag: editFlag,
         bio: editBio
-      });
+      }));
 
-      // 4. Mettre à jour les états locaux
       setDisplayName(editDisplayName);
       setBio(editBio);
       setFlag(editFlag);
 
-      // 5. Enregistrer la date de modification
       localStorage.setItem('profile_last_update', today);
 
       setIsEditing(false);
@@ -91,7 +85,6 @@ export function SettingsTab({ userProfile, setUserProfile, currentTheme, onSelec
     }
   };
 
-  // Annuler les modifications
   const handleCancelEdit = () => {
     setEditDisplayName(displayName);
     setEditBio(bio);
@@ -102,11 +95,6 @@ export function SettingsTab({ userProfile, setUserProfile, currentTheme, onSelec
   const handleSelectTier = (tierId, tierName) => {
     setActiveTier(tierId);
     showToast(`Abonnement ${tierName} activé !`, "success");
-  };
-
-  const handleUnblock = (userId, name) => {
-    setBlockedUsers((prev) => prev.filter((u) => u.id !== userId));
-    showToast(`${name} a été débloqué`, "info");
   };
 
   const handleLogout = async () => {
@@ -125,17 +113,15 @@ export function SettingsTab({ userProfile, setUserProfile, currentTheme, onSelec
 
   return (
     <div className="flex flex-col gap-6 max-w-3xl mx-auto w-full pb-20">
-      {/* Profile Edition */}
+      {/* Profil */}
       <div className="glass-card rounded-2xl p-5 border flex flex-col gap-4" style={{ borderColor: COLORS.borderGold }}>
         <div className="flex items-center justify-between border-b pb-3" style={{ borderColor: COLORS.border }}>
           <h3 className="text-base font-bold text-gradient-gold flex items-center gap-2">
             <User size={18} />
             Profil Utilisateur
           </h3>
-          <span className="text-xs px-2.5 py-0.5 rounded-full font-mono" style={{ background: COLORS.tealGlow, color: COLORS.teal }}>Compte Vérifié</span>
         </div>
 
-        {/* Affichage du profil */}
         {!isEditing ? (
           <div className="space-y-3">
             <div className="flex items-center gap-3">
@@ -167,7 +153,6 @@ export function SettingsTab({ userProfile, setUserProfile, currentTheme, onSelec
             )}
           </div>
         ) : (
-          /* Formulaire d'édition */
           <form onSubmit={handleSaveProfile} className="space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
@@ -180,7 +165,6 @@ export function SettingsTab({ userProfile, setUserProfile, currentTheme, onSelec
                   style={{ borderColor: COLORS.border, color: COLORS.ivory }}
                 />
               </div>
-
               <div>
                 <label className="text-xs font-semibold block mb-1" style={{ color: COLORS.muted }}>Drapeau / Pays</label>
                 <input
@@ -192,9 +176,8 @@ export function SettingsTab({ userProfile, setUserProfile, currentTheme, onSelec
                 />
               </div>
             </div>
-
             <div>
-              <label className="text-xs font-semibold block mb-1" style={{ color: COLORS.muted }}>Bio / Présentation</label>
+              <label className="text-xs font-semibold block mb-1" style={{ color: COLORS.muted }}>Bio</label>
               <textarea
                 value={editBio}
                 onChange={(e) => setEditBio(e.target.value)}
@@ -203,7 +186,6 @@ export function SettingsTab({ userProfile, setUserProfile, currentTheme, onSelec
                 style={{ borderColor: COLORS.border, color: COLORS.ivory }}
               />
             </div>
-
             <div className="flex gap-2">
               <button
                 type="submit"
@@ -226,102 +208,43 @@ export function SettingsTab({ userProfile, setUserProfile, currentTheme, onSelec
         )}
       </div>
 
-      {/* Theme Selector Section */}
+      {/* Thèmes */}
       <div className="glass-card rounded-2xl p-5 border flex flex-col gap-4" style={{ borderColor: COLORS.borderTeal }}>
         <h3 className="text-base font-bold text-gradient-teal flex items-center gap-2">
           <Palette size={18} />
-          Thème Visuel & Apparence
+          Thème Visuel
         </h3>
-
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <button
-            type="button"
-            onClick={() => onSelectTheme("midnight")}
-            className={`p-3.5 rounded-2xl border text-left flex flex-col gap-2 transition ${currentTheme === "midnight" ? "gold-glow" : ""}`}
-            style={{
-              background: "#0B1220",
-              borderColor: currentTheme === "midnight" ? COLORS.gold : COLORS.border
-            }}
-          >
-            <div className="flex justify-between items-center">
-              <span className="text-xs font-bold" style={{ color: "#F4EFE3" }}>Midnight Gold</span>
-              {currentTheme === "midnight" && <Check size={14} style={{ color: COLORS.gold }} />}
-            </div>
-            <span className="text-[10px]" style={{ color: COLORS.muted }}>Marine sombre classique</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => onSelectTheme("oled")}
-            className={`p-3.5 rounded-2xl border text-left flex flex-col gap-2 transition ${currentTheme === "oled" ? "gold-glow" : ""}`}
-            style={{
-              background: "#000000",
-              borderColor: currentTheme === "oled" ? COLORS.gold : COLORS.border
-            }}
-          >
-            <div className="flex justify-between items-center">
-              <span className="text-xs font-bold" style={{ color: "#FFFFFF" }}>OLED Black</span>
-              {currentTheme === "oled" && <Check size={14} style={{ color: COLORS.gold }} />}
-            </div>
-            <span className="text-[10px]" style={{ color: COLORS.muted }}>Noir pur économie batterie</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => onSelectTheme("emerald")}
-            className={`p-3.5 rounded-2xl border text-left flex flex-col gap-2 transition ${currentTheme === "emerald" ? "gold-glow" : ""}`}
-            style={{
-              background: "#061A14",
-              borderColor: currentTheme === "emerald" ? COLORS.teal : COLORS.border
-            }}
-          >
-            <div className="flex justify-between items-center">
-              <span className="text-xs font-bold" style={{ color: "#4EE1C8" }}>Deep Emerald</span>
-              {currentTheme === "emerald" && <Check size={14} style={{ color: COLORS.teal }} />}
-            </div>
-            <span className="text-[10px]" style={{ color: COLORS.muted }}>Vert émeraude décentralisé</span>
-          </button>
-        </div>
-      </div>
-
-      {/* Blocked Accounts & Community Moderation */}
-      <div className="glass-card rounded-2xl p-5 border flex flex-col gap-4" style={{ borderColor: COLORS.border }}>
-        <h3 className="text-base font-bold text-gradient-gold flex items-center gap-2">
-          <ShieldAlert size={18} />
-          Sécurité & Modération des Comptes
-        </h3>
-
-        <div className="flex flex-col gap-2">
-          <span className="text-xs font-semibold" style={{ color: COLORS.muted }}>Comptes Bloqués ({blockedUsers.length})</span>
-          {blockedUsers.length === 0 ? (
-            <div className="text-xs text-center py-4" style={{ color: COLORS.muted }}>Aucun compte bloqué.</div>
-          ) : (
-            blockedUsers.map((u) => (
-              <div key={u.id} className="p-3 rounded-xl border flex items-center justify-between text-xs" style={{ background: COLORS.surface, borderColor: COLORS.border }}>
-                <div className="flex items-center gap-2">
-                  <UserX size={16} className="text-rose-400" />
-                  <span style={{ color: COLORS.ivory }}>{u.display_name} {u.flag} ({u.handle})</span>
-                </div>
-                <button
-                  onClick={() => handleUnblock(u.id, u.display_name)}
-                  className="px-3 py-1 rounded-lg text-xs font-bold border hover:border-amber-400"
-                  style={{ background: COLORS.surface2, borderColor: COLORS.border, color: COLORS.gold }}
-                >
-                  Débloquer
-                </button>
+          {['midnight', 'oled', 'emerald'].map((theme) => (
+            <button
+              key={theme}
+              onClick={() => onSelectTheme(theme)}
+              className={`p-3.5 rounded-2xl border text-left flex flex-col gap-2 transition ${currentTheme === theme ? "gold-glow" : ""}`}
+              style={{
+                background: theme === 'midnight' ? '#0B1220' : theme === 'oled' ? '#000000' : '#061A14',
+                borderColor: currentTheme === theme ? COLORS.gold : COLORS.border
+              }}
+            >
+              <div className="flex justify-between items-center">
+                <span className="text-xs font-bold" style={{ color: theme === 'midnight' ? '#F4EFE3' : theme === 'oled' ? '#FFFFFF' : '#4EE1C8' }}>
+                  {theme === 'midnight' ? '🌙 Nuit' : theme === 'oled' ? '🖤 OLED' : '🌿 Émeraude'}
+                </span>
+                {currentTheme === theme && <Check size={14} style={{ color: COLORS.gold }} />}
               </div>
-            ))
-          )}
+              <span className="text-[10px]" style={{ color: COLORS.muted }}>
+                {theme === 'midnight' ? 'Marine sombre classique' : theme === 'oled' ? 'Noir pur économie batterie' : 'Vert émeraude décentralisé'}
+              </span>
+            </button>
+          ))}
         </div>
       </div>
 
-      {/* Subscriptions Tiers Cards */}
+      {/* Abonnements */}
       <div className="glass-card rounded-2xl p-5 border flex flex-col gap-4" style={{ borderColor: COLORS.border }}>
         <h3 className="text-base font-bold text-gradient-gold flex items-center gap-2">
           <Award size={18} />
-          Niveaux d'Abonnement BAARO
+          Niveaux d'Abonnement
         </h3>
-
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {SUBSCRIPTION_TIERS.map((tier) => {
             const isSelected = activeTier === tier.id;
@@ -337,12 +260,9 @@ export function SettingsTab({ userProfile, setUserProfile, currentTheme, onSelec
                 <div>
                   <div className="flex justify-between items-center">
                     <span className="text-xs font-bold" style={{ color: isSelected ? COLORS.gold : COLORS.ivory }}>{tier.name}</span>
-                    {isSelected && (
-                      <span className="w-2 h-2 rounded-full" style={{ background: COLORS.gold }} />
-                    )}
+                    {isSelected && <span className="w-2 h-2 rounded-full" style={{ background: COLORS.gold }} />}
                   </div>
                   <div className="text-lg font-bold font-mono mt-1" style={{ color: COLORS.gold }}>{tier.price}</div>
-
                   <ul className="mt-3 flex flex-col gap-1.5 text-[11px]" style={{ color: COLORS.muted }}>
                     {tier.features.map((feat, idx) => (
                       <li key={idx} className="flex items-center gap-1.5">
@@ -352,7 +272,6 @@ export function SettingsTab({ userProfile, setUserProfile, currentTheme, onSelec
                     ))}
                   </ul>
                 </div>
-
                 <button
                   onClick={() => handleSelectTier(tier.id, tier.name)}
                   className="w-full mt-4 py-2 rounded-xl text-xs font-bold border transition"
@@ -370,7 +289,7 @@ export function SettingsTab({ userProfile, setUserProfile, currentTheme, onSelec
         </div>
       </div>
 
-      {/* 🚪 BOUTON DE DÉCONNEXION */}
+      {/* Déconnexion */}
       <div className="glass-card rounded-2xl p-5 border" style={{ borderColor: COLORS.border }}>
         <button
           onClick={handleLogout}
@@ -380,20 +299,11 @@ export function SettingsTab({ userProfile, setUserProfile, currentTheme, onSelec
             border: "1px solid rgba(239, 68, 68, 0.3)",
             color: "#f87171"
           }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = "rgba(239, 68, 68, 0.25)";
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = "rgba(239, 68, 68, 0.15)";
-          }}
         >
           <LogOut size={18} />
           Se déconnecter
         </button>
-        <p className="text-[10px] text-center mt-2" style={{ color: COLORS.muted }}>
-          Vous serez redirigé vers l'écran de connexion
-        </p>
       </div>
     </div>
   );
-}
+                                                                                              }
