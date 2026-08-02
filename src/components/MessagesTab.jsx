@@ -1,8 +1,11 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { supabase } from "../supabaseClient";
 import { COLORS } from "../theme.js";
 import { useToast } from "./ToastContext.jsx";
-import { Send, Search, CheckCheck, ArrowLeft, UserPlus } from "lucide-react";
+import { 
+  Send, Search, CheckCheck, UserPlus, 
+  Mic, MicOff, Volume2, X, Trash2 
+} from "lucide-react";
 
 export function MessagesTab({ onRewardPoints }) {
   const { showToast, showPointsReward } = useToast();
@@ -15,6 +18,16 @@ export function MessagesTab({ onRewardPoints }) {
   const [searchQuery, setSearchQuery] = useState("");
   const [allUsers, setAllUsers] = useState([]);
   const [showNewChat, setShowNewChat] = useState(false);
+
+  // États pour l'enregistrement audio
+  const [isRecording, setIsRecording] = useState(false);
+  const [audioBlob, setAudioBlob] = useState(null);
+  const [audioUrl, setAudioUrl] = useState(null);
+  const [recordingTime, setRecordingTime] = useState(0);
+  const [audioChunks, setAudioChunks] = useState([]);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const mediaRecorderRef = useRef(null);
+  const timerRef = useRef(null);
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => setUser(data.user));
@@ -31,6 +44,13 @@ export function MessagesTab({ onRewardPoints }) {
   useEffect(() => {
     if (user) loadConversations();
   }, [user]);
+
+  // Nettoyer les timers
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, []);
 
   const loadConversations = async () => {
     setLoading(true);
@@ -108,6 +128,137 @@ export function MessagesTab({ onRewardPoints }) {
       console.error('Erreur chargement messages:', error);
     }
   };
+
+  // ========== FONCTIONS AUDIO ==========
+
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      const chunks = [];
+
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunks.push(e.data);
+      };
+
+      recorder.onstop = () => {
+        const blob = new Blob(chunks, { type: 'audio/webm' });
+        setAudioBlob(blob);
+        setAudioUrl(URL.createObjectURL(blob));
+        setAudioChunks(chunks);
+        if (timerRef.current) {
+          clearInterval(timerRef.current);
+          timerRef.current = null;
+        }
+      };
+
+      recorder.start();
+      mediaRecorderRef.current = recorder;
+      setIsRecording(true);
+      setAudioChunks(chunks);
+      setRecordingTime(0);
+
+      timerRef.current = setInterval(() => {
+        setRecordingTime(prev => {
+          if (prev >= 60) {
+            stopRecording();
+            return prev;
+          }
+          return prev + 1;
+        });
+      }, 1000);
+
+    } catch (error) {
+      console.error('Erreur microphone:', error);
+      showToast('Accès au microphone refusé', 'error');
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
+      setIsRecording(false);
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+    }
+  };
+
+  const cancelRecording = () => {
+    stopRecording();
+    setAudioBlob(null);
+    setAudioUrl(null);
+    setAudioChunks([]);
+    setRecordingTime(0);
+    if (mediaRecorderRef.current) {
+      mediaRecorderRef.current = null;
+    }
+  };
+
+  const uploadAudio = async (blob) => {
+    const fileName = `audio_${Date.now()}.webm`;
+    const filePath = `messages/${fileName}`;
+
+    const { data, error } = await supabase.storage
+      .from('audio')
+      .upload(filePath, blob);
+
+    if (error) throw error;
+
+    const { data: { publicUrl } } = supabase.storage
+      .from('audio')
+      .getPublicUrl(filePath);
+
+    return publicUrl;
+  };
+
+  const sendVoiceMessage = async () => {
+    if (!audioBlob || !selectedConvId) return;
+
+    try {
+      const conv = conversations.find(c => c.id === selectedConvId);
+      if (!conv) return;
+
+      const audioUrlUploaded = await uploadAudio(audioBlob);
+
+      const { data, error } = await supabase
+        .from('messages')
+        .insert({
+          conversation_id: selectedConvId,
+          sender_id: user.id,
+          receiver_id: conv.otherId,
+          text: '🎙️ Message vocal',
+          audio_url: audioUrlUploaded,
+          audio_duration: recordingTime,
+          read: false
+        })
+        .select();
+
+      if (error) throw error;
+
+      setMessages(prev => [...prev, data[0]]);
+      setAudioBlob(null);
+      setAudioUrl(null);
+      setAudioChunks([]);
+      setRecordingTime(0);
+      onRewardPoints?.(2);
+      showPointsReward(2, "Message vocal envoyé");
+      loadConversations();
+    } catch (error) {
+      console.error('Erreur envoi audio:', error);
+      showToast('Erreur: ' + error.message, 'error');
+    }
+  };
+
+  const formatDuration = (seconds) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  };
+
+  // ========== FIN FONCTIONS AUDIO ==========
 
   const sendMessage = async () => {
     if (!inputMsg.trim() || !selectedConvId) return;
@@ -337,6 +488,23 @@ export function MessagesTab({ onRewardPoints }) {
                           color: COLORS.ivory
                         }}>
                           {m.text}
+                          {m.audio_url && (
+                            <div className="mt-1 flex items-center gap-2 p-1.5 rounded-lg" style={{ background: COLORS.surface2 }}>
+                              <button
+                                onClick={() => {
+                                  const audio = new Audio(m.audio_url);
+                                  audio.play();
+                                }}
+                                className="p-1.5 rounded-full"
+                                style={{ background: COLORS.gold, color: COLORS.bg }}
+                              >
+                                <Volume2 size={12} />
+                              </button>
+                              <span className="text-xs text-gray-400">
+                                🎙️ {m.audio_duration ? formatDuration(m.audio_duration) : '00:00'}
+                              </span>
+                            </div>
+                          )}
                         </div>
                         <span className="text-[9px] px-1 mt-0.5" style={{ color: COLORS.muted }}>
                           {formatTime(m.created_at)}
@@ -348,35 +516,94 @@ export function MessagesTab({ onRewardPoints }) {
                 )}
               </div>
 
-              {/* ✅ ZONE DE SAISIE - TOUJOURS VISIBLE */}
+              {/* Zone de saisie avec audio */}
               <div className="pt-3 border-t flex-shrink-0" style={{ borderColor: COLORS.border }}>
-                <form onSubmit={(e) => { e.preventDefault(); sendMessage(); }} className="flex gap-2">
-                  <input
-                    type="text"
-                    placeholder="Écrivez un message..."
-                    value={inputMsg}
-                    onChange={(e) => setInputMsg(e.target.value)}
-                    className="flex-1 bg-gray-800/50 rounded-xl px-4 py-2.5 text-sm outline-none focus:ring-1"
-                    style={{ 
-                      border: `1px solid ${COLORS.border}`,
-                      color: COLORS.ivory,
-                      backgroundColor: 'rgba(0,0,0,0.3)'
-                    }}
-                  />
-                  <button
-                    type="submit"
-                    disabled={!inputMsg.trim()}
-                    className="px-5 py-2.5 rounded-xl text-sm font-bold transition disabled:opacity-40 flex items-center gap-1"
-                    style={{ 
-                      background: COLORS.gold, 
-                      color: COLORS.bg,
-                      minWidth: '60px'
-                    }}
-                  >
-                    <Send size={16} />
-                    Envoyer
-                  </button>
-                </form>
+                {!audioBlob && !isRecording ? (
+                  <form onSubmit={(e) => { e.preventDefault(); sendMessage(); }} className="flex gap-2">
+                    <input
+                      type="text"
+                      placeholder="Écrivez un message..."
+                      value={inputMsg}
+                      onChange={(e) => setInputMsg(e.target.value)}
+                      className="flex-1 bg-gray-800/50 rounded-xl px-4 py-2.5 text-sm outline-none focus:ring-1"
+                      style={{ 
+                        border: `1px solid ${COLORS.border}`,
+                        color: COLORS.ivory,
+                        backgroundColor: 'rgba(0,0,0,0.3)'
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={startRecording}
+                      className="p-2.5 rounded-xl transition"
+                      style={{ background: COLORS.surface2, color: COLORS.gold }}
+                      title="Message vocal"
+                    >
+                      <Mic size={18} />
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={!inputMsg.trim()}
+                      className="px-5 py-2.5 rounded-xl text-sm font-bold transition disabled:opacity-40 flex items-center gap-1"
+                      style={{ 
+                        background: COLORS.gold, 
+                        color: COLORS.bg,
+                        minWidth: '60px'
+                      }}
+                    >
+                      <Send size={16} />
+                      Envoyer
+                    </button>
+                  </form>
+                ) : isRecording ? (
+                  <div className="flex items-center gap-2 px-3 py-2 rounded-xl" style={{ background: 'rgba(239, 68, 68, 0.15)' }}>
+                    <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                    <span className="text-xs font-mono" style={{ color: '#ef4444' }}>
+                      {formatDuration(recordingTime)}
+                    </span>
+                    <span className="text-xs text-gray-400">Enregistrement...</span>
+                    <button
+                      type="button"
+                      onClick={stopRecording}
+                      className="ml-auto p-1.5 rounded-full bg-red-500 text-white"
+                    >
+                      <MicOff size={16} />
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 px-3 py-2 rounded-xl" style={{ background: COLORS.surface2 }}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const audio = new Audio(audioUrl);
+                        audio.play();
+                      }}
+                      className="p-1.5 rounded-full"
+                      style={{ background: COLORS.gold, color: COLORS.bg }}
+                    >
+                      <Volume2 size={14} />
+                    </button>
+                    <span className="text-xs text-gray-400">
+                      {formatDuration(recordingTime)}
+                    </span>
+                    <span className="text-xs text-gray-400">🎙️ Prêt</span>
+                    <button
+                      type="button"
+                      onClick={sendVoiceMessage}
+                      className="ml-auto p-1.5 rounded-full"
+                      style={{ background: COLORS.teal, color: COLORS.bg }}
+                    >
+                      <Send size={14} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={cancelRecording}
+                      className="p-1.5 rounded-full text-gray-400 hover:text-white"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                )}
               </div>
             </>
           ) : (
