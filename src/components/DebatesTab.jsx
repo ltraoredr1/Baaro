@@ -85,4 +85,229 @@ export function DebatesTab({ onRewardPoints, userName = "Vous" }) {
       prev.map((d) =>
         d.id === activeDebateId
           ? { ...d, comments: [...d.comments, newArg] }
-          :
+          : d
+      )
+    );
+
+    setArgumentText("");
+    onRewardPoints(10);
+    showPointsReward(10, "Argument publié dans le débat");
+  };
+
+  const handleStartVideoDebate = () => {
+    setCallSession({ mode: "host", debate: activeDebate });
+  };
+
+  const handleJoinByCode = (e) => {
+    e.preventDefault();
+    const code = joinCodeInput.trim().toUpperCase();
+    if (code.length !== 6) {
+      showToast("Le code doit contenir 6 caractères", "error");
+      return;
+    }
+    setCallSession({ mode: "guest", inviteCode: code });
+  };
+
+  // Pendant un appel vidéo actif, on remplace toute la vue par la room
+  if (callSession) {
+    return (
+      <DebateRoom
+        mode={callSession.mode}
+        debate={callSession.debate}
+        inviteCode={callSession.inviteCode}
+        userName={userName}
+        onLeave={() => {
+          setCallSession(null);
+          setJoinCodeInput("");
+        }}
+      />
+    );
+  }
+
+  const totalVotes = activeDebate.forVotes + activeDebate.againstVotes;
+  const forPct = totalVotes > 0 ? Math.round((activeDebate.forVotes / totalVotes) * 100) : 50;
+
+  return (
+    <div className="flex flex-col gap-6 max-w-4xl mx-auto w-full pb-20">
+      <div className="flex justify-between items-center">
+        <div>
+          <h2 className="text-xl font-bold text-gradient-gold flex items-center gap-2">
+            <Swords size={22} style={{ color: COLORS.gold }} />
+            Arènes de Débats Publiques
+          </h2>
+          <p className="text-xs" style={{ color: COLORS.muted }}>Exprimez votre opinion et gagnez des points de gouvernance</p>
+        </div>
+      </div>
+
+      {/* Actions débat vidéo en direct */}
+      <div className="flex flex-col sm:flex-row gap-2">
+        <button
+          onClick={handleStartVideoDebate}
+          className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-bold gold-glow"
+          style={{ background: COLORS.gold, color: COLORS.bg }}
+        >
+          <Video size={15} />
+          Démarrer un débat vidéo
+        </button>
+
+        <button
+          onClick={() => setShowJoinField((v) => !v)}
+          className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-bold border"
+          style={{ borderColor: COLORS.borderTeal, color: COLORS.teal, background: COLORS.surface }}
+        >
+          <LogIn size={15} />
+          Rejoindre avec un code
+        </button>
+      </div>
+
+      {showJoinField && (
+        <form onSubmit={handleJoinByCode} className="flex gap-2">
+          <input
+            type="text"
+            placeholder="Code à 6 caractères"
+            value={joinCodeInput}
+            onChange={(e) => setJoinCodeInput(e.target.value.toUpperCase().slice(0, 6))}
+            maxLength={6}
+            className="flex-1 bg-transparent border rounded-xl px-3 py-2 text-sm font-mono tracking-widest uppercase outline-none"
+            style={{ borderColor: COLORS.borderTeal, color: COLORS.ivory }}
+          />
+          <button
+            type="submit"
+            className="px-4 py-2 rounded-xl text-xs font-bold"
+            style={{ background: COLORS.teal, color: COLORS.bg }}
+          >
+            Rejoindre
+          </button>
+        </form>
+      )}
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {/* Debate List Column */}
+        <div className="glass-card rounded-2xl p-4 border flex flex-col gap-3" style={{ borderColor: COLORS.border }}>
+          <span className="text-xs font-bold uppercase tracking-wider" style={{ color: COLORS.muted }}>Débats Récents</span>
+
+          <div className="flex flex-col gap-2">
+            {debates.map((d) => {
+              const isActive = d.id === activeDebateId;
+              return (
+                <button
+                  key={d.id}
+                  onClick={() => setActiveDebateId(d.id)}
+                  className={`p-3 rounded-xl text-left transition border ${isActive ? "gold-glow" : "hover:bg-white/5"}`}
+                  style={{
+                    background: isActive ? COLORS.surface2 : COLORS.surface,
+                    borderColor: isActive ? COLORS.borderGold : COLORS.border
+                  }}
+                >
+                  <div className="text-[10px] font-bold uppercase tracking-wider" style={{ color: COLORS.teal }}>{d.category}</div>
+                  <div className="text-xs font-bold mt-1 leading-snug line-clamp-2" style={{ color: COLORS.ivory }}>{d.title}</div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Selected Debate Arena View */}
+        <div className="md:col-span-2 glass-card rounded-2xl p-5 border flex flex-col gap-5" style={{ borderColor: COLORS.borderGold }}>
+          <div>
+            <span className="text-xs font-mono px-2.5 py-0.5 rounded-full" style={{ background: COLORS.tealGlow, color: COLORS.teal }}>
+              {activeDebate.category}
+            </span>
+            <h3 className="text-lg font-bold mt-2" style={{ color: COLORS.ivory }}>{activeDebate.title}</h3>
+            <div className="text-xs mt-1" style={{ color: COLORS.muted }}>Proposé par {activeDebate.creator} {activeDebate.flag}</div>
+          </div>
+
+          {/* Voting Gauge */}
+          <div className="p-4 rounded-xl border flex flex-col gap-3" style={{ background: COLORS.surface, borderColor: COLORS.border }}>
+            <div className="flex justify-between text-xs font-bold">
+              <span style={{ color: COLORS.teal }}>POUR : {forPct}% ({activeDebate.forVotes} votes)</span>
+              <span style={{ color: "#EC4899" }}>CONTRE : {100 - forPct}% ({activeDebate.againstVotes} votes)</span>
+            </div>
+
+            <div className="w-full h-3 rounded-full overflow-hidden flex" style={{ background: COLORS.surface2 }}>
+              <div className="h-full transition-all duration-500" style={{ width: `${forPct}%`, background: COLORS.teal }} />
+              <div className="h-full transition-all duration-500" style={{ width: `${100 - forPct}%`, background: "#EC4899" }} />
+            </div>
+
+            {/* Vote Action Buttons */}
+            <div className="flex gap-3 mt-1">
+              <button
+                onClick={() => handleVote(activeDebate.id, "pour")}
+                className="flex-1 py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 border hover:border-teal-400 transition"
+                style={{ background: COLORS.surface2, borderColor: COLORS.borderTeal, color: COLORS.teal }}
+              >
+                <ThumbsUp size={14} />
+                <span>Voter POUR (+5 pts)</span>
+              </button>
+
+              <button
+                onClick={() => handleVote(activeDebate.id, "contre")}
+                className="flex-1 py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 border hover:border-rose-400 transition"
+                style={{ background: COLORS.surface2, borderColor: "rgba(236,72,153,0.3)", color: "#EC4899" }}
+              >
+                <ThumbsDown size={14} />
+                <span>Voter CONTRE (+5 pts)</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Arguments Feed */}
+          <div className="flex flex-col gap-3">
+            <span className="text-xs font-bold uppercase tracking-wider" style={{ color: COLORS.muted }}>Arguments des Membres</span>
+            {activeDebate.comments.map((c) => (
+              <div key={c.id} className="p-3 rounded-xl text-xs border flex flex-col gap-1" style={{ background: COLORS.surface, borderColor: c.side === "pour" ? COLORS.borderTeal : "rgba(236,72,153,0.3)" }}>
+                <div className="flex justify-between font-bold">
+                  <span style={{ color: COLORS.gold }}>{c.author}</span>
+                  <span className="uppercase text-[10px]" style={{ color: c.side === "pour" ? COLORS.teal : "#EC4899" }}>
+                    Avis: {c.side}
+                  </span>
+                </div>
+                <p style={{ color: COLORS.ivory }}>{c.text}</p>
+              </div>
+            ))}
+          </div>
+
+          {/* Add Argument Form */}
+          <form onSubmit={handleAddArgument} className="flex flex-col gap-2 pt-3 border-t" style={{ borderColor: COLORS.border }}>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setArgumentSide("pour")}
+                className={`px-3 py-1 text-xs font-bold rounded-lg border ${argumentSide === "pour" ? "bg-teal-500/20 text-teal-400 border-teal-500" : ""}`}
+                style={{ borderColor: COLORS.border, color: argumentSide === "pour" ? COLORS.teal : COLORS.muted }}
+              >
+                Position: POUR
+              </button>
+              <button
+                type="button"
+                onClick={() => setArgumentSide("contre")}
+                className={`px-3 py-1 text-xs font-bold rounded-lg border ${argumentSide === "contre" ? "bg-rose-500/20 text-rose-400 border-rose-500" : ""}`}
+                style={{ borderColor: COLORS.border, color: argumentSide === "contre" ? "#EC4899" : COLORS.muted }}
+              >
+                Position: CONTRE
+              </button>
+            </div>
+
+            <div className="flex gap-2">
+              <input
+                type="text"
+                placeholder="Rédigez votre argument réfléchi..."
+                value={argumentText}
+                onChange={(e) => setArgumentText(e.target.value)}
+                className="flex-1 bg-transparent border rounded-xl px-3 py-2 text-xs outline-none"
+                style={{ borderColor: COLORS.border, color: COLORS.ivory }}
+              />
+              <button
+                type="submit"
+                className="px-4 py-2 rounded-xl text-xs font-bold gold-glow"
+                style={{ background: COLORS.gold, color: COLORS.bg }}
+              >
+                Soumettre (+10 pts)
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  );
+    }
