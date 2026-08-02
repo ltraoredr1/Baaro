@@ -1,18 +1,20 @@
 import { useState, useEffect, useRef } from "react";
-import { ArrowLeft, Send, MessageCircle, Plus, Search } from "lucide-react";
+import { ArrowLeft, Send, MessageCircle, Plus, X } from "lucide-react";
 import { COLORS } from "../theme.js";
 import { supabase } from "../supabaseClient.js";
 
-export default function MessagesTab({ onRewardPoints }) {
+// ✅ EXPORT NOMMÉ (pour correspondre aux {} dans App.jsx)
+export function MessagesTab({ onRewardPoints }) {
   const [currentUserId, setCurrentUserId] = useState(null);
   const [conversations, setConversations] = useState([]);
-  const [activeChat, setActiveChat] = useState(null); // { id, otherUserId, otherUserName }
+  const [activeChat, setActiveChat] = useState(null);
   const [messages, setMessages] = useState([]);
   const [newMessage, setNewMessage] = useState("");
   const [loading, setLoading] = useState(true);
+  const [showUserSelector, setShowUserSelector] = useState(false);
+  const [availableUsers, setAvailableUsers] = useState([]);
   const messagesEndRef = useRef(null);
 
-  // 1. Récupérer l'utilisateur connecté
   useEffect(() => {
     const getUser = async () => {
       const { data: { user } } = await supabase.auth.getUser();
@@ -21,7 +23,6 @@ export default function MessagesTab({ onRewardPoints }) {
     getUser();
   }, []);
 
-  // 2. Charger la liste des conversations
   useEffect(() => {
     if (!currentUserId) return;
     
@@ -30,16 +31,11 @@ export default function MessagesTab({ onRewardPoints }) {
       try {
         const { data, error } = await supabase
           .from("conversations")
-          .select(`
-            id, user1_id, user2_id, created_at,
-            messages (text, created_at, sender_id)
-          `)
+          .select(`id, user1_id, user2_id, created_at, messages (text, created_at, sender_id)`)
           .or(`user1_id.eq.${currentUserId},user2_id.eq.${currentUserId}`)
           .order("created_at", { ascending: false });
 
-        if (!error) {
-          setConversations(data || []);
-        }
+        if (!error) setConversations(data || []);
       } catch (err) {
         console.error("Erreur conversations:", err);
       } finally {
@@ -49,7 +45,6 @@ export default function MessagesTab({ onRewardPoints }) {
 
     fetchConversations();
 
-    // Temps réel pour mettre à jour la liste si nouvelle conversation/message
     const channel = supabase.channel("public:conversations")
       .on("postgres_changes", { event: "*", schema: "public", table: "messages" }, () => {
         fetchConversations();
@@ -59,7 +54,6 @@ export default function MessagesTab({ onRewardPoints }) {
     return () => { supabase.removeChannel(channel); };
   }, [currentUserId]);
 
-  // 3. Charger les messages d'une conversation active
   useEffect(() => {
     if (!activeChat || !activeChat.id) return;
 
@@ -75,7 +69,6 @@ export default function MessagesTab({ onRewardPoints }) {
 
     fetchMessages();
 
-    // Temps réel pour les nouveaux messages
     const channel = supabase.channel(`room_${activeChat.id}`)
       .on("postgres_changes", { 
         event: "INSERT", schema: "public", table: "messages", 
@@ -88,12 +81,53 @@ export default function MessagesTab({ onRewardPoints }) {
     return () => { supabase.removeChannel(channel); };
   }, [activeChat]);
 
-  // Scroll automatique vers le bas
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // 4. Envoyer un message
+  useEffect(() => {
+    if (!showUserSelector || !currentUserId) return;
+
+    const fetchUsers = async () => {
+      const { data: users } = await supabase
+        .from("profiles")
+        .select("user_id, display_name, handle")
+        .neq("user_id", currentUserId);
+      
+      if (users) setAvailableUsers(users);
+    };
+
+    fetchUsers();
+  }, [showUserSelector, currentUserId]);
+
+  const createOrOpenConversation = async (otherUserId, otherUserName) => {
+    if (!currentUserId || otherUserId === currentUserId) return;
+    setShowUserSelector(false);
+    
+    const { data: existing } = await supabase
+      .from("conversations")
+      .select("id")
+      .or(`and(user1_id.eq.${currentUserId},user2_id.eq.${otherUserId}),and(user1_id.eq.${otherUserId},user2_id.eq.${currentUserId})`)
+      .single();
+
+    if (existing) {
+      setActiveChat({ id: existing.id, otherUserId, otherUserName });
+    } else {
+      const { data: newConv, error } = await supabase
+        .from("conversations")
+        .insert({ user1_id: currentUserId, user2_id: otherUserId })
+        .select()
+        .single();
+
+      if (!error) {
+        setActiveChat({ id: newConv.id, otherUserId, otherUserName });
+      } else {
+        console.error("Erreur création conversation:", error);
+        alert("Impossible de créer la conversation");
+      }
+    }
+  };
+
   const handleSendMessage = async (e) => {
     e.preventDefault();
     if (!newMessage.trim() || !activeChat || !currentUserId) return;
@@ -114,38 +148,42 @@ export default function MessagesTab({ onRewardPoints }) {
     }
   };
 
-  // 5. Démarrer une nouvelle conversation (Simulation simple pour le MVP)
-  const startNewChat = async (otherUserId) => {
-    if (!currentUserId || otherUserId === currentUserId) return;
-    
-    // Vérifier si la conversation existe déjà
-    const { data: existing } = await supabase
-      .from("conversations")
-      .select("id")
-      .or(`and(user1_id.eq.${currentUserId},user2_id.eq.${otherUserId}),and(user1_id.eq.${otherUserId},user2_id.eq.${currentUserId})`)
-      .single();
+  if (showUserSelector) {
+    return (
+      <div className="flex flex-col h-full p-4" style={{ background: COLORS.surface }}>
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-lg font-bold" style={{ color: COLORS.ivory }}>Nouvelle conversation</h2>
+          <button onClick={() => setShowUserSelector(false)} className="p-2 rounded-full hover:bg-white/10" style={{ color: COLORS.muted }}>
+            <X size={20} />
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto space-y-2">
+          {availableUsers.map((user) => (
+            <div
+              key={user.user_id}
+              onClick={() => createOrOpenConversation(user.user_id, user.display_name || user.handle)}
+              className="p-4 rounded-2xl border cursor-pointer hover:border-amber-400/50 transition-all"
+              style={{ background: COLORS.surface, borderColor: COLORS.border }}
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full flex items-center justify-center font-bold" style={{ background: COLORS.surface2, color: COLORS.ivory }}>
+                  {(user.display_name || user.handle || "?")[0].toUpperCase()}
+                </div>
+                <div>
+                  <p className="font-bold text-sm" style={{ color: COLORS.ivory }}>{user.display_name || user.handle}</p>
+                  <p className="text-xs" style={{ color: COLORS.muted }}>{user.handle}</p>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
 
-    if (existing) {
-      setActiveChat({ id: existing.id, otherUserId, otherUserName: "Utilisateur" });
-    } else {
-      // Créer la conversation
-      const { data: newConv, error } = await supabase
-        .from("conversations")
-        .insert({ user1_id: currentUserId, user2_id: otherUserId })
-        .select()
-        .single();
-
-      if (!error) {
-        setActiveChat({ id: newConv.id, otherUserId, otherUserName: "Utilisateur" });
-      }
-    }
-  };
-
-  // --- AFFICHAGE : FENÊTRE DE CHAT ---
   if (activeChat) {
     return (
       <div className="flex flex-col h-full" style={{ background: COLORS.surface }}>
-        {/* Header Chat */}
         <div className="flex items-center gap-3 p-4 border-b" style={{ borderColor: COLORS.border }}>
           <button onClick={() => setActiveChat(null)} className="p-2 rounded-full hover:bg-white/10" style={{ color: COLORS.ivory }}>
             <ArrowLeft size={20} />
@@ -156,12 +194,9 @@ export default function MessagesTab({ onRewardPoints }) {
           <h3 className="font-bold text-sm" style={{ color: COLORS.ivory }}>{activeChat.otherUserName}</h3>
         </div>
 
-        {/* Messages */}
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
           {messages.length === 0 ? (
-            <div className="text-center py-10" style={{ color: COLORS.muted }}>
-              <p className="text-sm">Dites bonjour ! 👋</p>
-            </div>
+            <div className="text-center py-10" style={{ color: COLORS.muted }}><p className="text-sm">Dites bonjour ! 👋</p></div>
           ) : (
             messages.map((msg) => {
               const isMe = msg.sender_id === currentUserId;
@@ -183,7 +218,6 @@ export default function MessagesTab({ onRewardPoints }) {
           <div ref={messagesEndRef} />
         </div>
 
-        {/* Input */}
         <form onSubmit={handleSendMessage} className="p-4 border-t flex gap-2" style={{ borderColor: COLORS.border }}>
           <input
             type="text"
@@ -201,7 +235,6 @@ export default function MessagesTab({ onRewardPoints }) {
     );
   }
 
-  // --- AFFICHAGE : LISTE DES CONVERSATIONS ---
   return (
     <div className="flex flex-col h-full p-4">
       <div className="flex items-center justify-between mb-6">
@@ -209,7 +242,11 @@ export default function MessagesTab({ onRewardPoints }) {
           <MessageCircle size={24} style={{ color: COLORS.gold }} />
           Messages
         </h2>
-        <button className="p-2 rounded-full hover:bg-white/10" style={{ color: COLORS.gold }}>
+        <button 
+          onClick={() => setShowUserSelector(true)}
+          className="p-2 rounded-full hover:bg-white/10 transition-colors" 
+          style={{ color: COLORS.gold }}
+        >
           <Plus size={20} />
         </button>
       </div>
@@ -226,9 +263,7 @@ export default function MessagesTab({ onRewardPoints }) {
               <MessageCircle size={40} style={{ color: COLORS.muted }} />
             </div>
             <p className="font-bold mb-2" style={{ color: COLORS.ivory }}>Aucune conversation</p>
-            <p className="text-sm mb-4" style={{ color: COLORS.muted }}>
-              Recherchez un membre pour lui écrire !
-            </p>
+            <p className="text-sm mb-4" style={{ color: COLORS.muted }}>Cliquez sur + pour commencer !</p>
           </div>
         ) : (
           conversations.map((conv) => {
