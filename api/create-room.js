@@ -93,7 +93,7 @@ export default async function handler(req, res) {
             exp: Math.floor(Date.now() / 1000) + 60 * 60 * 4,
             enable_chat: false,
             enable_screenshare: false,
-            max_participants: 200,
+            max_participants: 10,
             enable_recording: false,
             ...(streamingEndpoints ? { streaming_endpoints: streamingEndpoints } : {}),
           },
@@ -237,4 +237,4 @@ export default async function handler(req, res) {
     console.error('Erreur Daily API:', error);
     return res.status(500).json({ error: 'Erreur serveur' });
   }
-                                      }
+}
