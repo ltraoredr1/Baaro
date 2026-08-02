@@ -3,7 +3,6 @@ import { ArrowLeft, Send, MessageCircle, Plus, X } from "lucide-react";
 import { COLORS } from "../theme.js";
 import { supabase } from "../supabaseClient.js";
 
-// ✅ EXPORT NOMMÉ (pour correspondre aux {} dans App.jsx)
 export function MessagesTab({ onRewardPoints }) {
   const [currentUserId, setCurrentUserId] = useState(null);
   const [conversations, setConversations] = useState([]);
@@ -35,7 +34,32 @@ export function MessagesTab({ onRewardPoints }) {
           .or(`user1_id.eq.${currentUserId},user2_id.eq.${currentUserId}`)
           .order("created_at", { ascending: false });
 
-        if (!error) setConversations(data || []);
+        if (!error && data) {
+          // Récupérer les profils des interlocuteurs
+          const otherUserIds = [...new Set(data.map(c => c.user1_id === currentUserId ? c.user2_id : c.user1_id))];
+          const { data: profiles } = await supabase
+            .from("profiles")
+            .select("user_id, display_name, avatar_url, flag")
+            .in("user_id", otherUserIds);
+
+          const profileMap = {};
+          if (profiles) profiles.forEach(p => { profileMap[p.user_id] = p; });
+
+          const enrichedConversations = data.map(c => {
+            const otherId = c.user1_id === currentUserId ? c.user2_id : c.user1_id;
+            const profile = profileMap[otherId] || { display_name: "Utilisateur", flag: "🌍" };
+            return {
+              ...c,
+              otherUserId: otherId,
+              otherUserName: profile.display_name,
+              otherUserAvatar: profile.avatar_url,
+              otherUserFlag: profile.flag,
+              lastMsg: c.messages?.[c.messages.length - 1]
+            };
+          });
+
+          setConversations(enrichedConversations);
+        }
       } catch (err) {
         console.error("Erreur conversations:", err);
       } finally {
@@ -73,8 +97,17 @@ export function MessagesTab({ onRewardPoints }) {
       .on("postgres_changes", { 
         event: "INSERT", schema: "public", table: "messages", 
         filter: `conversation_id=eq.${activeChat.id}` 
-      }, (payload) => {
-        setMessages((prev) => [...prev, payload.new]);
+      }, async (payload) => {
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("display_name, avatar_url, flag")
+          .eq("user_id", payload.new.sender_id)
+          .single();
+        
+        setMessages((prev) => [
+          ...prev, 
+          { ...payload.new, profile: profile || { display_name: "Membre", flag: "🌍" } }
+        ]);
       })
       .subscribe();
 
@@ -87,20 +120,17 @@ export function MessagesTab({ onRewardPoints }) {
 
   useEffect(() => {
     if (!showUserSelector || !currentUserId) return;
-
     const fetchUsers = async () => {
       const { data: users } = await supabase
         .from("profiles")
-        .select("user_id, display_name, handle")
+        .select("user_id, display_name, handle, avatar_url, flag")
         .neq("user_id", currentUserId);
-      
       if (users) setAvailableUsers(users);
     };
-
     fetchUsers();
   }, [showUserSelector, currentUserId]);
 
-  const createOrOpenConversation = async (otherUserId, otherUserName) => {
+  const createOrOpenConversation = async (otherUserId, otherUserName, otherUserAvatar, otherUserFlag) => {
     if (!currentUserId || otherUserId === currentUserId) return;
     setShowUserSelector(false);
     
@@ -110,8 +140,15 @@ export function MessagesTab({ onRewardPoints }) {
       .or(`and(user1_id.eq.${currentUserId},user2_id.eq.${otherUserId}),and(user1_id.eq.${otherUserId},user2_id.eq.${currentUserId})`)
       .single();
 
+    const chatData = { 
+      otherUserId, 
+      otherUserName: otherUserName || "Utilisateur", 
+      otherUserAvatar, 
+      otherUserFlag: otherUserFlag || "🌍" 
+    };
+
     if (existing) {
-      setActiveChat({ id: existing.id, otherUserId, otherUserName });
+      setActiveChat({ id: existing.id, ...chatData });
     } else {
       const { data: newConv, error } = await supabase
         .from("conversations")
@@ -120,7 +157,7 @@ export function MessagesTab({ onRewardPoints }) {
         .single();
 
       if (!error) {
-        setActiveChat({ id: newConv.id, otherUserId, otherUserName });
+        setActiveChat({ id: newConv.id, ...chatData });
       } else {
         console.error("Erreur création conversation:", error);
         alert("Impossible de créer la conversation");
@@ -131,10 +168,8 @@ export function MessagesTab({ onRewardPoints }) {
   const handleSendMessage = async (e) => {
     e.preventDefault();
     if (!newMessage.trim() || !activeChat || !currentUserId) return;
-
     const text = newMessage.trim();
     setNewMessage("");
-
     try {
       const { error } = await supabase.from("messages").insert({
         conversation_id: activeChat.id,
@@ -148,6 +183,7 @@ export function MessagesTab({ onRewardPoints }) {
     }
   };
 
+  // --- AFFICHAGE: SÉLECTION D'UTILISATEUR ---
   if (showUserSelector) {
     return (
       <div className="flex flex-col h-full p-4" style={{ background: COLORS.surface }}>
@@ -161,14 +197,18 @@ export function MessagesTab({ onRewardPoints }) {
           {availableUsers.map((user) => (
             <div
               key={user.user_id}
-              onClick={() => createOrOpenConversation(user.user_id, user.display_name || user.handle)}
+              onClick={() => createOrOpenConversation(user.user_id, user.display_name, user.avatar_url, user.flag)}
               className="p-4 rounded-2xl border cursor-pointer hover:border-amber-400/50 transition-all"
               style={{ background: COLORS.surface, borderColor: COLORS.border }}
             >
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full flex items-center justify-center font-bold" style={{ background: COLORS.surface2, color: COLORS.ivory }}>
-                  {(user.display_name || user.handle || "?")[0].toUpperCase()}
-                </div>
+                {user.avatar_url ? (
+                  <img src={user.avatar_url} alt="" className="w-10 h-10 rounded-full object-cover border" style={{ borderColor: COLORS.borderGold }} />
+                ) : (
+                  <div className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-lg" style={{ background: COLORS.surface2, color: COLORS.ivory }}>
+                    {user.flag || "🌍"}
+                  </div>
+                )}
                 <div>
                   <p className="font-bold text-sm" style={{ color: COLORS.ivory }}>{user.display_name || user.handle}</p>
                   <p className="text-xs" style={{ color: COLORS.muted }}>{user.handle}</p>
@@ -181,6 +221,7 @@ export function MessagesTab({ onRewardPoints }) {
     );
   }
 
+  // --- AFFICHAGE: FENÊTRE DE CHAT ---
   if (activeChat) {
     return (
       <div className="flex flex-col h-full" style={{ background: COLORS.surface }}>
@@ -188,24 +229,36 @@ export function MessagesTab({ onRewardPoints }) {
           <button onClick={() => setActiveChat(null)} className="p-2 rounded-full hover:bg-white/10" style={{ color: COLORS.ivory }}>
             <ArrowLeft size={20} />
           </button>
-          <div className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs" style={{ background: COLORS.surface2, color: COLORS.ivory }}>
-            {activeChat.otherUserName?.[0] || "?"}
-          </div>
+          {activeChat.otherUserAvatar ? (
+            <img src={activeChat.otherUserAvatar} alt="" className="w-8 h-8 rounded-full object-cover border" style={{ borderColor: COLORS.borderGold }} />
+          ) : (
+            <div className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs" style={{ background: COLORS.surface2, color: COLORS.ivory }}>
+              {activeChat.otherUserFlag || "?"}
+            </div>
+          )}
           <h3 className="font-bold text-sm" style={{ color: COLORS.ivory }}>{activeChat.otherUserName}</h3>
         </div>
 
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
           {messages.length === 0 ? (
-            <div className="text-center py-10" style={{ color: COLORS.muted }}><p className="text-sm">Dites bonjour ! 👋</p></div>
+            <div className="text-center py-10" style={{ color: COLORS.muted }}><p className="text-sm">Dites bonjour à {activeChat.otherUserName} ! 👋</p></div>
           ) : (
             messages.map((msg) => {
               const isMe = msg.sender_id === currentUserId;
+              const profile = isMe ? { display_name: "Moi", flag: "🌍" } : (msg.profile || { display_name: activeChat.otherUserName, flag: activeChat.otherUserFlag });
+              
               return (
-                <div key={msg.id} className={`flex ${isMe ? "justify-end" : "justify-start"}`}>
+                <div key={msg.id} className={`flex gap-2 ${isMe ? "flex-row-reverse" : "flex-row"}`}>
+                  {!isMe && (
+                    <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs shrink-0 border overflow-hidden" style={{ borderColor: COLORS.borderGold, background: COLORS.surface2 }}>
+                      {profile.avatar_url ? <img src={profile.avatar_url} className="w-full h-full object-cover" /> : profile.flag}
+                    </div>
+                  )}
                   <div 
                     className={`max-w-[75%] px-4 py-2.5 rounded-2xl text-sm ${isMe ? "rounded-tr-sm" : "rounded-tl-sm"}`}
                     style={{ background: isMe ? COLORS.gold : COLORS.surface2, color: isMe ? "#000" : COLORS.ivory }}
                   >
+                    {!isMe && <p className="text-[10px] font-bold mb-1" style={{ color: COLORS.gold }}>{profile.display_name}</p>}
                     <p>{msg.text}</p>
                     <p className={`text-[10px] mt-1 ${isMe ? "text-black/60" : "text-gray-400"}`}>
                       {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
@@ -235,6 +288,7 @@ export function MessagesTab({ onRewardPoints }) {
     );
   }
 
+  // --- AFFICHAGE: LISTE DES CONVERSATIONS ---
   return (
     <div className="flex flex-col h-full p-4">
       <div className="flex items-center justify-between mb-6">
@@ -242,11 +296,7 @@ export function MessagesTab({ onRewardPoints }) {
           <MessageCircle size={24} style={{ color: COLORS.gold }} />
           Messages
         </h2>
-        <button 
-          onClick={() => setShowUserSelector(true)}
-          className="p-2 rounded-full hover:bg-white/10 transition-colors" 
-          style={{ color: COLORS.gold }}
-        >
+        <button onClick={() => setShowUserSelector(true)} className="p-2 rounded-full hover:bg-white/10 transition-colors" style={{ color: COLORS.gold }}>
           <Plus size={20} />
         </button>
       </div>
@@ -266,38 +316,35 @@ export function MessagesTab({ onRewardPoints }) {
             <p className="text-sm mb-4" style={{ color: COLORS.muted }}>Cliquez sur + pour commencer !</p>
           </div>
         ) : (
-          conversations.map((conv) => {
-            const otherUserId = conv.user1_id === currentUserId ? conv.user2_id : conv.user1_id;
-            const lastMsg = conv.messages?.[conv.messages.length - 1];
-            
-            return (
-              <div
-                key={conv.id}
-                onClick={() => setActiveChat({ id: conv.id, otherUserId, otherUserName: "Membre" })}
-                className="p-4 rounded-2xl border cursor-pointer hover:border-amber-400/50 transition-all flex items-center gap-3"
-                style={{ background: COLORS.surface, borderColor: COLORS.border }}
-              >
-                <div className="w-12 h-12 rounded-full flex items-center justify-center font-bold" style={{ background: COLORS.surface2, color: COLORS.ivory }}>
-                  ?
+          conversations.map((conv) => (
+            <div
+              key={conv.id}
+              onClick={() => setActiveChat({ id: conv.id, otherUserId: conv.otherUserId, otherUserName: conv.otherUserName, otherUserAvatar: conv.otherUserAvatar, otherUserFlag: conv.otherUserFlag })}
+              className="p-4 rounded-2xl border cursor-pointer hover:border-amber-400/50 transition-all flex items-center gap-3"
+              style={{ background: COLORS.surface, borderColor: COLORS.border }}
+            >
+              {conv.otherUserAvatar ? (
+                <img src={conv.otherUserAvatar} alt="" className="w-12 h-12 rounded-full object-cover border" style={{ borderColor: COLORS.borderGold }} />
+              ) : (
+                <div className="w-12 h-12 rounded-full flex items-center justify-center font-bold text-lg" style={{ background: COLORS.surface2, color: COLORS.ivory }}>
+                  {conv.otherUserFlag || "?"}
                 </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex justify-between items-center mb-1">
-                    <span className="font-bold text-sm truncate" style={{ color: COLORS.ivory }}>
-                      Membre {otherUserId.slice(0, 4)}...
+              )}
+              <div className="flex-1 min-w-0">
+                <div className="flex justify-between items-center mb-1">
+                  <span className="font-bold text-sm truncate" style={{ color: COLORS.ivory }}>{conv.otherUserName}</span>
+                  {conv.lastMsg && (
+                    <span className="text-[10px]" style={{ color: COLORS.muted }}>
+                      {new Date(conv.lastMsg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                     </span>
-                    {lastMsg && (
-                      <span className="text-[10px]" style={{ color: COLORS.muted }}>
-                        {new Date(lastMsg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-xs truncate" style={{ color: COLORS.muted }}>
-                    {lastMsg ? lastMsg.text : "Aucun message"}
-                  </p>
+                  )}
                 </div>
+                <p className="text-xs truncate" style={{ color: COLORS.muted }}>
+                  {conv.lastMsg ? conv.lastMsg.text : "Aucun message"}
+                </p>
               </div>
-            );
-          })
+            </div>
+          ))
         )}
       </div>
     </div>
