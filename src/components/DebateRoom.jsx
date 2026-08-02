@@ -171,7 +171,6 @@ export function DebateRoom({ mode, debate, inviteCode: joinCode, userName, userI
 
   // Filtrer les participants pour la sidebar
   const participantsForSidebar = participantList.filter(p => {
-    // Exclure l'utilisateur courant
     if (p.user_name === userName || p.local) return false;
     return true;
   });
@@ -404,4 +403,4 @@ export function DebateRoom({ mode, debate, inviteCode: joinCode, userName, userI
       />
     </div>
   );
-                                                  }
+}
