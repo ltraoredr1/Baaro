@@ -8,7 +8,7 @@ import { VideosTab } from "./components/VideosTab.jsx";
 import { MessagesTab } from "./components/MessagesTab.jsx";
 import { WalletTab } from "./components/WalletTab.jsx";
 import { CryptoTab } from "./components/CryptoTab.jsx";
-import DebatesTab from "./components/DebatesTab.jsx"; // ✅ CORRECTION : Suppression des {}
+import { DebatesTab } from "./components/DebatesTab.jsx"; // ✅ CORRECTION : Ajout des {}
 import { OfflineTab } from "./components/OfflineTab.jsx";
 import { AiAssistantTab } from "./components/AiAssistantTab.jsx";
 import { SettingsTab } from "./components/SettingsTab.jsx";
@@ -41,7 +41,7 @@ function MainAppContent() {
   const [userProfile, setUserProfile] = useState({
     display_name: "Membre BAARO",
     handle: "@mon_compte",
-    flag: "🌍",
+    flag: "",
     bio: "Passionné de Web3, de réseaux décentralisés et d'impact social."
   });
 
@@ -226,4 +226,4 @@ export default function App() {
       <MainAppContent />
     </ToastProvider>
   );
-          }
+}
