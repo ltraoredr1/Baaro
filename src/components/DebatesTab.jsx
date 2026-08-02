@@ -8,60 +8,58 @@ import { DebateRoom } from "./DebateRoom.jsx";
 export function DebatesTab({ currentUserId }) {
   const [debates, setDebates] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [activeDebateCode, setActiveDebateCode] = useState(null);
 
-  // Charger les débats au montage
-  useEffect(() => {
-    if (!currentUserId) return;
-    fetchDebates();
-
-    // Écouter les nouveaux débats en temps réel
-    const channel = supabase
-      .channel("public:debate_rooms")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "debate_rooms" },
-        () => fetchDebates()
-      )
-      .subscribe();
-
-    return () => { supabase.removeChannel(channel); };
-  }, [currentUserId]);
+  console.log("🔍 DebatesTab - currentUserId:", currentUserId);
 
   const fetchDebates = async () => {
     setLoading(true);
+    setError(null);
+    
     try {
+      console.log(" Chargement des débats...");
+      
+      // Requête SIMPLE sans jointure complexe
       const { data, error } = await supabase
         .from("debate_rooms")
-        .select(`
-          id, title, topic, mode, invite_code, status, created_at, creator_id,
-          debate_participants (user_id)
-        `)
+        .select("id, title, topic, mode, invite_code, status, created_at, creator_id")
         .eq("status", "active")
         .order("created_at", { ascending: false });
 
-      if (error) throw error;
-
-      const debatesWithCount = (data || []).map(debate => ({
-        ...debate,
-        participantsCount: debate.debate_participants?.length || 0
-      }));
-
-      setDebates(debatesWithCount);
-    } catch (error) {
-      console.error("Erreur chargement débats:", error);
+      if (error) {
+        console.error("❌ Erreur Supabase:", error);
+        setError(error.message);
+        setDebates([]);
+      } else {
+        console.log("✅ Débats trouvés:", data?.length || 0);
+        setDebates(data || []);
+      }
+    } catch (err) {
+      console.error("💥 Erreur critique:", err);
+      setError(err.message);
     } finally {
+      // TOUJOURS arrêter le chargement
       setLoading(false);
     }
   };
 
-  // Quand un débat est créé avec succès
-  const handleDebateCreated = (newRoom) => {
-    setIsCreateOpen(false);
-    setActiveDebateCode(newRoom.invite_code);
-    fetchDebates(); // Rafraîchir la liste
-  };
+  useEffect(() => {
+    // Toujours charger, même sans currentUserId
+    fetchDebates();
+
+    // Temps réel
+    const channel = supabase
+      .channel("debates_channel")
+      .on("postgres_changes", { event: "*", schema: "public", table: "debate_rooms" }, () => {
+        console.log("🔄 Changement détecté, rafraîchissement...");
+        fetchDebates();
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, []);
 
   // Si un débat est actif, afficher la salle
   if (activeDebateCode) {
@@ -74,11 +72,10 @@ export function DebatesTab({ currentUserId }) {
     );
   }
 
-  // Sinon afficher la liste
   return (
     <>
       <div className="flex flex-col h-full p-4">
-        {/* Header avec bouton Créer */}
+        {/* Header */}
         <div className="flex items-center justify-between mb-6">
           <h2 className="text-xl font-bold flex items-center gap-2" style={{ color: COLORS.ivory }}>
             <Swords size={24} style={{ color: COLORS.gold }} />
@@ -86,7 +83,7 @@ export function DebatesTab({ currentUserId }) {
           </h2>
           <button
             onClick={() => setIsCreateOpen(true)}
-            className="px-4 py-2 rounded-xl font-bold text-sm flex items-center gap-2 transition-all hover:scale-105 active:scale-95"
+            className="px-4 py-2 rounded-xl font-bold text-sm flex items-center gap-2"
             style={{ background: COLORS.gold, color: "#000" }}
           >
             <Plus size={16} />
@@ -94,12 +91,26 @@ export function DebatesTab({ currentUserId }) {
           </button>
         </div>
 
-        {/* Liste des débats */}
-        <div className="flex-1 overflow-y-auto custom-scrollbar space-y-3">
+        {/* Erreur */}
+        {error && (
+          <div className="bg-red-500/20 border border-red-500 p-4 rounded-xl mb-4">
+            <p className="text-red-400 font-bold text-sm mb-1">Erreur</p>
+            <p className="text-red-300 text-xs">{error}</p>
+            <button 
+              onClick={fetchDebates}
+              className="mt-2 px-3 py-1 bg-red-500 text-white text-xs rounded"
+            >
+              Réessayer
+            </button>
+          </div>
+        )}
+
+        {/* Contenu */}
+        <div className="flex-1 overflow-y-auto space-y-3">
           {loading ? (
             <div className="text-center py-10" style={{ color: COLORS.muted }}>
-              <div className="animate-spin inline-block w-6 h-6 border-2 border-current border-t-transparent rounded-full mb-2" />
-              <p className="text-sm">Chargement des débats...</p>
+              <div className="animate-spin inline-block w-8 h-8 border-2 border-current border-t-transparent rounded-full mb-3" />
+              <p className="text-sm">Chargement...</p>
             </div>
           ) : debates.length === 0 ? (
             <div className="text-center py-10">
@@ -115,10 +126,9 @@ export function DebatesTab({ currentUserId }) {
               </p>
               <button
                 onClick={() => setIsCreateOpen(true)}
-                className="px-6 py-3 rounded-xl font-bold text-sm flex items-center gap-2 mx-auto"
+                className="px-6 py-3 rounded-xl font-bold text-sm"
                 style={{ background: COLORS.gold, color: "#000" }}
               >
-                <Plus size={16} />
                 Créer un débat
               </button>
             </div>
@@ -127,7 +137,7 @@ export function DebatesTab({ currentUserId }) {
               <div
                 key={debate.id}
                 onClick={() => setActiveDebateCode(debate.invite_code)}
-                className="p-4 rounded-2xl border cursor-pointer hover:border-amber-400/50 transition-all group"
+                className="p-4 rounded-2xl border cursor-pointer hover:border-amber-400/50 transition-all"
                 style={{ background: COLORS.surface, borderColor: COLORS.border }}
               >
                 <div className="flex items-start justify-between mb-3">
@@ -143,13 +153,13 @@ export function DebatesTab({ currentUserId }) {
                         LIVE
                       </span>
                     </div>
-                    <div className="flex items-center gap-2 text-xs mb-3" style={{ color: COLORS.muted }}>
+                    <div className="flex items-center gap-2 text-xs" style={{ color: COLORS.muted }}>
                       <Hash size={12} />
                       {debate.topic}
                     </div>
                   </div>
                   <div 
-                    className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
+                    className="w-10 h-10 rounded-xl flex items-center justify-center"
                     style={{ background: COLORS.surface2 }}
                   >
                     {debate.mode === "video" ? (
@@ -161,27 +171,10 @@ export function DebatesTab({ currentUserId }) {
                     )}
                   </div>
                 </div>
-
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3 text-xs" style={{ color: COLORS.muted }}>
-                    <span className="flex items-center gap-1">
-                      <Users size={12} />
-                      {debate.participantsCount} participant{debate.participantsCount > 1 ? "s" : ""}
-                    </span>
-                    <span>•</span>
-                    <span>
-                      {new Date(debate.created_at).toLocaleDateString("fr-FR", {
-                        day: "numeric",
-                        month: "short"
-                      })}
-                    </span>
-                  </div>
-                  <span 
-                    className="text-[10px] font-bold px-2 py-1 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
-                    style={{ background: COLORS.gold, color: "#000" }}
-                  >
-                    REJOINDRE →
-                  </span>
+                <div className="text-xs" style={{ color: COLORS.muted }}>
+                  {new Date(debate.created_at).toLocaleDateString("fr-FR", {
+                    day: "numeric", month: "short", hour: "2-digit", minute: "2-digit"
+                  })}
                 </div>
               </div>
             ))
@@ -189,13 +182,15 @@ export function DebatesTab({ currentUserId }) {
         </div>
       </div>
 
-      {/* Modale de création */}
       <CreateDebateModal
         isOpen={isCreateOpen}
         onClose={() => setIsCreateOpen(false)}
         currentUserId={currentUserId}
-        onSuccess={handleDebateCreated}
+        onSuccess={(room) => {
+          setIsCreateOpen(false);
+          setActiveDebateCode(room.invite_code);
+        }}
       />
     </>
   );
-}
+            }
