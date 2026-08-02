@@ -4,16 +4,9 @@ import {
   MessageCircle,
   Share2,
   Send,
-  Sparkles,
-  PlusCircle,
   Languages,
   Image as ImageIcon,
-  Smile,
   BarChart2,
-  TrendingUp,
-  Award,
-  CheckCircle2,
-  Coins,
   BadgeCheck
 } from "lucide-react";
 import { COLORS } from "../theme.js";
@@ -50,42 +43,33 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
   const loadPosts = async () => {
     setLoading(true);
     try {
+      // Requête simplifiée SANS la relation profiles
       const { data, error } = await supabase
         .from('posts')
-        .select(`
-          *,
-          profiles:author_id (
-            display_name,
-            handle,
-            flag,
-            avatar_url,
-            is_verified
-          )
-        `)
+        .select('*')
         .order('created_at', { ascending: false });
 
       if (error) throw error;
       
-      // Transformer les données pour le format attendu
-      const formattedPosts = data.map(post => ({
-        id: post.id,
-        author_id: post.author_id,
-        display_name: post.profiles?.display_name || 'Membre',
-        handle: post.profiles?.handle || '@utilisateur',
-        flag: post.profiles?.flag || '🌍',
-        avatar: post.profiles?.avatar_url || '',
-        isVerified: post.profiles?.is_verified || false,
-        text: post.text,
-        likes: post.likes || 0,
-        comments_count: post.comments_count || 0,
-        created_at: post.created_at,
-        image: post.media_url,
-        media_type: post.media_type,
-        // S'il y a un sondage (si ta table a cette colonne)
-        poll: post.poll || null
+      // Enrichir avec les données utilisateur depuis users
+      const enrichedPosts = await Promise.all(data.map(async (post) => {
+        const { data: userData } = await supabase
+          .from('users')
+          .select('display_name, handle, flag, avatar_url')
+          .eq('id', post.author_id)
+          .single();
+        
+        return {
+          ...post,
+          display_name: userData?.display_name || 'Membre',
+          handle: userData?.handle || '@utilisateur',
+          flag: userData?.flag || '🌍',
+          avatar: userData?.avatar_url || '',
+          isVerified: false
+        };
       }));
 
-      setPosts(formattedPosts);
+      setPosts(enrichedPosts);
     } catch (error) {
       console.error('Erreur chargement posts:', error);
       showToast('Erreur chargement des publications', 'error');
@@ -128,9 +112,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
         .from('posts')
         .insert({
           author_id: user.id,
-          text: newText + (mood ? ` (Humeur: ${mood})` : ""),
-          media_type: null,
-          media_url: null
+          text: newText + (mood ? ` (Humeur: ${mood})` : "")
         })
         .select();
 
@@ -144,9 +126,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
       setPollOpt2("");
 
       onRewardPoints(15);
-      showPointsReward(15, "Publication engageante créée !");
-      
-      // Recharger les posts
+      showPointsReward(15, "Publication créée !");
       await loadPosts();
     } catch (error) {
       console.error('Erreur publication:', error);
@@ -157,18 +137,15 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
   const handleLike = async (postId) => {
     const isLiked = likedPosts[postId];
     setLikedPosts((prev) => ({ ...prev, [postId]: !isLiked }));
-    
-    // Mettre à jour localement
     setPosts((prev) =>
-      prev.map((p) => (p.id === postId ? { ...p, likes: p.likes + (isLiked ? -1 : 1) } : p))
+      prev.map((p) => (p.id === postId ? { ...p, likes: (p.likes || 0) + (isLiked ? -1 : 1) } : p))
     );
 
-    // Mettre à jour dans Supabase
     const post = posts.find(p => p.id === postId);
     if (post) {
       await supabase
         .from('posts')
-        .update({ likes: post.likes + (isLiked ? -1 : 1) })
+        .update({ likes: (post.likes || 0) + (isLiked ? -1 : 1) })
         .eq('id', postId);
     }
 
@@ -189,15 +166,14 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
     
     setCommentsMap((prev) => ({ ...prev, [postId]: [...(prev[postId] || []), newCmt] }));
     setPosts((prev) =>
-      prev.map((p) => (p.id === postId ? { ...p, comments_count: p.comments_count + 1 } : p))
+      prev.map((p) => (p.id === postId ? { ...p, comments_count: (p.comments_count || 0) + 1 } : p))
     );
     
-    // Mettre à jour dans Supabase
     const post = posts.find(p => p.id === postId);
     if (post) {
       await supabase
         .from('posts')
-        .update({ comments_count: post.comments_count + 1 })
+        .update({ comments_count: (post.comments_count || 0) + 1 })
         .eq('id', postId);
     }
     
@@ -221,7 +197,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
     return (
       <div className="text-center py-8 text-gray-400">
         <div className="animate-spin text-2xl mb-2">⏳</div>
-        Chargement des publications...
+        Chargement...
       </div>
     );
   }
@@ -237,20 +213,19 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
           <textarea
             value={newText}
             onChange={(e) => setNewText(e.target.value)}
-            placeholder="Quoi de neuf dans votre monde ? Partagez une pensée, une idée ou un projet..."
+            placeholder="Quoi de neuf ?"
             className="flex-1 bg-transparent resize-none outline-none text-sm leading-relaxed"
             style={{ color: COLORS.ivory }}
             rows={3}
           />
         </div>
 
-        {/* Poll fields toggle */}
         {showPoll && (
           <div className="mb-3 p-3 rounded-xl border flex flex-col gap-2" style={{ background: COLORS.surface, borderColor: COLORS.borderTeal }}>
-            <span className="text-xs font-semibold" style={{ color: COLORS.teal }}>Créer un Sondage</span>
+            <span className="text-xs font-semibold" style={{ color: COLORS.teal }}>Sondage</span>
             <input
               type="text"
-              placeholder="Question du sondage..."
+              placeholder="Question..."
               value={pollQ}
               onChange={(e) => setPollQ(e.target.value)}
               className="bg-transparent border-b text-xs py-1 outline-none"
@@ -277,7 +252,6 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
           </div>
         )}
 
-        {/* Toolbar & Submit */}
         <div className="flex items-center justify-between pt-2 border-t" style={{ borderColor: COLORS.border }}>
           <div className="flex items-center gap-2">
             <button
@@ -302,10 +276,10 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
               className="bg-transparent text-xs p-1 rounded border outline-none"
               style={{ borderColor: COLORS.border, color: COLORS.muted }}
             >
-              <option value="" className="bg-slate-900">Humeur ?</option>
-              <option value="🔥 Inspiré" className="bg-slate-900">🔥 Inspiré</option>
-              <option value="💡 Innovant" className="bg-slate-900">💡 Innovant</option>
-              <option value="🎉 Joyeux" className="bg-slate-900">🎉 Joyeux</option>
+              <option value="">Humeur ?</option>
+              <option value="🔥 Inspiré">🔥 Inspiré</option>
+              <option value="💡 Innovant">💡 Innovant</option>
+              <option value="🎉 Joyeux">🎉 Joyeux</option>
             </select>
           </div>
 
@@ -325,7 +299,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
       {posts.length === 0 ? (
         <div className="text-center py-8 text-gray-400">
           <p className="text-4xl mb-2">📭</p>
-          <p>Aucune publication pour le moment</p>
+          <p>Aucune publication</p>
           <p className="text-sm mt-2">Soyez le premier à publier !</p>
         </div>
       ) : (
@@ -337,7 +311,6 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
 
             return (
               <article key={post.id} className="glass-card rounded-2xl p-5 shadow-xl border flex flex-col gap-3" style={{ borderColor: COLORS.border }}>
-                {/* Post Header */}
                 <div className="flex items-center justify-between">
                   <div
                     className="flex items-center gap-3 cursor-pointer group"
@@ -351,9 +324,8 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
                       )}
                     </div>
                     <div>
-                      <div className="flex items-center gap-1.5 text-sm font-semibold group-hover:text-amber-400 transition" style={{ color: COLORS.ivory }}>
+                      <div className="flex items-center gap-1.5 text-sm font-semibold" style={{ color: COLORS.ivory }}>
                         {post.display_name} {post.flag}
-                        {post.isVerified && <BadgeCheck size={15} style={{ color: COLORS.teal }} />}
                       </div>
                       <div className="text-xs" style={{ color: COLORS.muted }}>
                         {post.handle} • {new Date(post.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
@@ -363,7 +335,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
 
                   <button
                     onClick={() => handleTranslate(post.id, post.text)}
-                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs border hover:border-amber-400/50 transition"
+                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs border"
                     style={{ background: COLORS.surface, borderColor: COLORS.border, color: COLORS.muted }}
                   >
                     <Languages size={13} style={{ color: COLORS.teal }} />
@@ -371,19 +343,10 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
                   </button>
                 </div>
 
-                {/* Post Content */}
                 <p className="text-sm leading-relaxed" style={{ color: COLORS.ivory }}>
                   {isTranslated ? translatedMap[post.id] : post.text}
                 </p>
 
-                {/* Optional Post Image */}
-                {post.image && (
-                  <div className="rounded-xl overflow-hidden max-h-72 border" style={{ borderColor: COLORS.border }}>
-                    <img src={post.image} alt="Post content" className="w-full h-full object-cover hover:scale-105 transition duration-500" />
-                  </div>
-                )}
-
-                {/* Actions Footer */}
                 <div className="flex items-center justify-between pt-3 border-t text-xs font-medium" style={{ borderColor: COLORS.border }}>
                   <button
                     onClick={() => handleLike(post.id)}
@@ -415,9 +378,8 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
                   </button>
                 </div>
 
-                {/* Comments Section */}
                 {commentOpen[post.id] && (
-                  <div className="flex flex-col gap-2 pt-3 border-t mt-1" style={{ borderColor: COLORS.border }}>
+                  <div className="flex flex-col gap-2 pt-3 border-t" style={{ borderColor: COLORS.border }}>
                     <div className="text-xs font-semibold" style={{ color: COLORS.muted }}>Commentaires</div>
                     {comments.length > 0 ? (
                       comments.map((c) => (
@@ -456,4 +418,4 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
       )}
     </div>
   );
-                }
+}
