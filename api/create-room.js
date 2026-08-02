@@ -102,4 +102,139 @@ export default async function handler(req, res) {
 
       if (!room.ok) {
         const err = await room.text();
-        return res.status(room.status).json({ er
+        return res.status(room.status).json({ error: `Erreur création room Daily: ${err}` });
+      }
+
+      const roomData = await room.json();
+
+      const token = await fetch(`${DAILY_API_URL}/meeting-tokens`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${DAILY_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          properties: {
+            room_name: roomData.name,
+            user_name: userName || 'Hôte',
+            is_owner: true,
+            start_video_off: false,
+            start_audio_off: false,
+            ...(streamingEndpoints ? { permissions: { canAdmin: ['streaming'] } } : {}),
+          },
+        }),
+      });
+
+      const tokenData = await token.json();
+
+      // Génère un code court et l'enregistre en base, lié à la room Daily
+      const supabase = getSupabaseAdmin();
+      const code = await generateUniqueInviteCode(supabase);
+
+      const { error: insertError } = await supabase.from('debate_rooms').insert({
+        daily_room_name: roomData.name,
+        invite_code: code,
+        host_id: hostId || null,
+        debate_id: debateId || null,
+        status: 'live',
+      });
+
+      if (insertError) {
+        // La room Daily existe déjà même si l'enregistrement échoue :
+        // on la supprime pour ne pas laisser de room orpheline facturée.
+        await fetch(`${DAILY_API_URL}/rooms/${roomData.name}`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${DAILY_API_KEY}` },
+        }).catch(() => {});
+        throw insertError;
+      }
+
+      return res.status(200).json({
+        roomUrl: roomData.url,
+        roomName: roomData.name,
+        token: tokenData.token,
+        inviteCode: code,
+        hlsEnabled: !!streamingEndpoints,
+      });
+    }
+
+    // 2. Résoudre un code d'invitation en nom de room Daily (avant de rejoindre)
+    if (action === 'resolve-code') {
+      if (!inviteCode) {
+        return res.status(400).json({ error: "Code d'invitation requis" });
+      }
+
+      const supabase = getSupabaseAdmin();
+      const { data, error } = await supabase
+        .from('debate_rooms')
+        .select('daily_room_name, status')
+        .eq('invite_code', inviteCode.trim().toUpperCase())
+        .maybeSingle();
+
+      if (error) throw error;
+      if (!data || data.status !== 'live') {
+        return res.status(404).json({ error: 'Code invalide ou débat terminé' });
+      }
+
+      return res.status(200).json({ roomName: data.daily_room_name });
+    }
+
+    // 3. Générer un token pour un spectateur qui rejoint une room existante
+    if (action === 'join-room') {
+      if (!roomName) {
+        return res.status(400).json({ error: 'roomName requis' });
+      }
+
+      const token = await fetch(`${DAILY_API_URL}/meeting-tokens`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${DAILY_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          properties: {
+            room_name: roomName,
+            user_name: userName || 'Spectateur',
+            is_owner: !!isHost,
+            start_video_off: true,
+            start_audio_off: true,
+          },
+        }),
+      });
+
+      if (!token.ok) {
+        const err = await token.text();
+        return res.status(token.status).json({ error: `Erreur token Daily: ${err}` });
+      }
+
+      const tokenData = await token.json();
+
+      return res.status(200).json({
+        roomUrl: `https://${process.env.DAILY_DOMAIN || 'your-domain'}.daily.co/${roomName}`,
+        token: tokenData.token,
+      });
+    }
+
+    // 4. Terminer une room (appelé quand l'hôte quitte le live)
+    if (action === 'delete-room') {
+      if (!roomName) {
+        return res.status(400).json({ error: 'roomName requis' });
+      }
+
+      await fetch(`${DAILY_API_URL}/rooms/${roomName}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${DAILY_API_KEY}` },
+      });
+
+      const supabase = getSupabaseAdmin();
+      await supabase.from('debate_rooms').update({ status: 'ended' }).eq('daily_room_name', roomName);
+
+      return res.status(200).json({ success: true });
+    }
+
+    return res.status(400).json({ error: 'Action inconnue' });
+  } catch (error) {
+    console.error('Erreur Daily API:', error);
+    return res.status(500).json({ error: 'Erreur serveur' });
+  }
+                                      }
