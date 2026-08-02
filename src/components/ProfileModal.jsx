@@ -1,75 +1,74 @@
 import { useState, useEffect } from "react";
-import { Flag, UserX, X, UserPlus, Check, MessageSquare, BadgeCheck } from "lucide-react";
+import { X, UserPlus, Check, MessageSquare } from "lucide-react";
 import { COLORS } from "../theme.js";
 import { useToast } from "./ToastContext.jsx";
 import { supabase } from "../supabaseClient.js";
-import { useFollow } from "../hooks/useSocial.js";
+import { handleDbError } from "../lib/dbErrors.js";
+import { useProfile, useProfileStats } from "../hooks/useProfile.js";
 
-export function ProfileModal({ authorId, currentUserId, onClose, onNavigateToMessages }) {
+export function ProfileModal({
+  authorId,
+  currentUserId,
+  onClose,
+  onNavigateToMessages,
+}) {
   const { showToast } = useToast();
-  const [profile, setProfile] = useState(null);
-  const [counts, setCounts] = useState({ followers: 0, following: 0 });
-  const [loading, setLoading] = useState(true);
-  const { isFollowing, toggleFollow, loading: followLoading } = useFollow(
-    currentUserId,
-    authorId
-  );
+  const { profile, loading } = useProfile(authorId, showToast);
+  const stats = useProfileStats(authorId);
+  const [isFollowing, setIsFollowing] = useState(false);
+  const [followLoading, setFollowLoading] = useState(false);
+
+  const isMe = currentUserId && authorId && currentUserId === authorId;
 
   useEffect(() => {
-    if (!authorId) return;
+    if (!currentUserId || !authorId || isMe) return;
     (async () => {
-      setLoading(true);
-      const [{ data: p }, { count: followers }, { count: following }] = await Promise.all([
-        supabase
-          .from("profiles")
-          .select("display_name, handle, flag, bio")
-          .eq("user_id", authorId)
-          .maybeSingle(),
-        supabase
-          .from("follows")
-          .select("*", { count: "exact", head: true })
-          .eq("followed_id", authorId),
-        supabase
-          .from("follows")
-          .select("*", { count: "exact", head: true })
-          .eq("follower_id", authorId),
-      ]);
-      setProfile(
-        p || {
-          display_name: "Membre BAARO",
-          handle: "@membre",
-          flag: "🌍",
-          bio: "",
-        }
-      );
-      setCounts({ followers: followers || 0, following: following || 0 });
-      setLoading(false);
+      const { data } = await supabase
+        .from("follows")
+        .select("follower_id")
+        .eq("follower_id", currentUserId)
+        .eq("followed_id", authorId)
+        .maybeSingle();
+      setIsFollowing(!!data);
     })();
-  }, [authorId]);
+  }, [currentUserId, authorId, isMe]);
 
-  const handleFollow = async () => {
-    await toggleFollow();
-    showToast(
-      isFollowing ? "Abonnement retiré" : "Abonné(e) !",
-      "success"
-    );
-    // refresh counts
-    const { count } = await supabase
-      .from("follows")
-      .select("*", { count: "exact", head: true })
-      .eq("followed_id", authorId);
-    setCounts((c) => ({ ...c, followers: count || 0 }));
+  const toggleFollow = async () => {
+    if (!currentUserId || isMe || followLoading) return;
+    setFollowLoading(true);
+    try {
+      if (isFollowing) {
+        const { error } = await supabase
+          .from("follows")
+          .delete()
+          .eq("follower_id", currentUserId)
+          .eq("followed_id", authorId);
+        if (error) throw error;
+        setIsFollowing(false);
+        showToast("Abonnement retiré", "success");
+      } else {
+        const { error } = await supabase.from("follows").insert({
+          follower_id: currentUserId,
+          followed_id: authorId,
+        });
+        if (error) throw error;
+        setIsFollowing(true);
+        showToast("Abonné(e) !", "success");
+      }
+    } catch (error) {
+      handleDbError(error, showToast, "Erreur abonnement");
+    } finally {
+      setFollowLoading(false);
+    }
   };
 
   if (loading || !profile) {
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
-        <div className="text-white">Chargement...</div>
+        <div className="text-white">Chargement du profil...</div>
       </div>
     );
   }
-
-  const isMe = currentUserId === authorId;
 
   return (
     <div
@@ -84,16 +83,27 @@ export function ProfileModal({ authorId, currentUserId, onClose, onNavigateToMes
         <div className="flex justify-between items-start">
           <div className="flex items-center gap-3">
             <div
-              className="w-14 h-14 rounded-full flex items-center justify-center font-bold text-xl gold-glow border"
-              style={{ borderColor: COLORS.borderGold, background: COLORS.surface }}
+              className="w-14 h-14 rounded-full flex items-center justify-center font-bold text-xl border overflow-hidden"
+              style={{
+                borderColor: COLORS.borderGold,
+                background: COLORS.surface,
+              }}
             >
-              <span style={{ color: COLORS.gold }}>
-                {profile.display_name?.charAt(0) || "?"}
-              </span>
+              {profile.avatar_url ? (
+                <img
+                  src={profile.avatar_url}
+                  alt=""
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                <span style={{ color: COLORS.gold }}>
+                  {profile.display_name?.charAt(0) || "?"}
+                </span>
+              )}
             </div>
             <div>
               <div
-                className="text-base font-bold flex items-center gap-1.5"
+                className="text-base font-bold"
                 style={{ color: COLORS.ivory }}
               >
                 {profile.display_name} {profile.flag}
@@ -117,33 +127,35 @@ export function ProfileModal({ authorId, currentUserId, onClose, onNavigateToMes
         </p>
 
         <div
-          className="grid grid-cols-2 gap-2 p-3 rounded-2xl border text-center font-mono text-xs"
+          className="grid grid-cols-3 gap-2 p-3 rounded-2xl border text-center text-xs"
           style={{ background: COLORS.surface, borderColor: COLORS.border }}
         >
           <div>
             <div className="font-bold text-sm" style={{ color: COLORS.ivory }}>
-              {counts.followers.toLocaleString()}
+              {stats.posts}
             </div>
-            <div className="text-[10px]" style={{ color: COLORS.muted }}>
-              Abonnés
-            </div>
+            <div style={{ color: COLORS.muted }}>Posts</div>
           </div>
           <div>
             <div className="font-bold text-sm" style={{ color: COLORS.ivory }}>
-              {counts.following.toLocaleString()}
+              {stats.followers}
             </div>
-            <div className="text-[10px]" style={{ color: COLORS.muted }}>
-              Abonnements
+            <div style={{ color: COLORS.muted }}>Abonnés</div>
+          </div>
+          <div>
+            <div className="font-bold text-sm" style={{ color: COLORS.ivory }}>
+              {stats.following}
             </div>
+            <div style={{ color: COLORS.muted }}>Abonnements</div>
           </div>
         </div>
 
         {!isMe && (
           <div className="flex gap-3 pt-2">
             <button
-              onClick={handleFollow}
+              onClick={toggleFollow}
               disabled={followLoading}
-              className="flex-1 py-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shadow-lg transition"
+              className="flex-1 py-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5"
               style={{
                 background: isFollowing ? COLORS.surface2 : COLORS.gold,
                 color: isFollowing ? COLORS.gold : COLORS.bg,
@@ -153,13 +165,12 @@ export function ProfileModal({ authorId, currentUserId, onClose, onNavigateToMes
               {isFollowing ? <Check size={16} /> : <UserPlus size={16} />}
               <span>{isFollowing ? "Abonné(e)" : "S'abonner"}</span>
             </button>
-
             <button
               onClick={() => {
                 onClose();
                 onNavigateToMessages?.();
               }}
-              className="flex-1 py-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 border hover:border-teal-400 transition"
+              className="flex-1 py-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 border"
               style={{
                 background: COLORS.surface,
                 borderColor: COLORS.borderTeal,
