@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect } from "react";
 import { supabase } from "./supabaseClient";
-import { ToastProvider, useToast } from "./components/ToastContext.jsx";
+import { ToastProvider } from "./components/ToastContext.jsx";
 import { Header } from "./components/Header.jsx";
 import { Navigation } from "./components/Navigation.jsx";
 import { FeedTab } from "./components/FeedTab.jsx";
@@ -8,7 +8,7 @@ import { VideosTab } from "./components/VideosTab.jsx";
 import { MessagesTab } from "./components/MessagesTab.jsx";
 import { WalletTab } from "./components/WalletTab.jsx";
 import { CryptoTab } from "./components/CryptoTab.jsx";
-import { DebatesTab } from "./components/DebatesTab.jsx";
+import DebatesTab from "./components/DebatesTab.jsx"; // ✅ CORRECTION : Suppression des {}
 import { OfflineTab } from "./components/OfflineTab.jsx";
 import { AiAssistantTab } from "./components/AiAssistantTab.jsx";
 import { SettingsTab } from "./components/SettingsTab.jsx";
@@ -34,6 +34,9 @@ function MainAppContent() {
   const [notifDrawerOpen, setNotifDrawerOpen] = useState(false);
   const [searchModalOpen, setSearchModalOpen] = useState(false);
   const [currentTheme, setCurrentTheme] = useState("midnight");
+  
+  // ✅ AJOUT : État pour stocker l'ID de l'utilisateur connecté
+  const [userId, setUserId] = useState(null);
 
   const [userProfile, setUserProfile] = useState({
     display_name: "Membre BAARO",
@@ -42,12 +45,14 @@ function MainAppContent() {
     bio: "Passionné de Web3, de réseaux décentralisés et d'impact social."
   });
 
-  // 🔥 Charger le profil depuis Supabase au démarrage
+  // 🔥 Charger le profil et l'ID depuis Supabase au démarrage
   useEffect(() => {
     const loadProfile = async () => {
       try {
         const { data: { user } } = await supabase.auth.getUser();
         if (user) {
+          setUserId(user.id); // ✅ Sauvegarde de l'ID utilisateur
+          
           const { data, error } = await supabase
             .from('users')
             .select('*')
@@ -132,8 +137,12 @@ function MainAppContent() {
             />
           )}
 
+          {/* ✅ CORRECTION : Passage de currentUserId au composant DebatesTab */}
           {activeTab === "debates" && (
-            <DebatesTab onRewardPoints={handleRewardPoints} />
+            <DebatesTab 
+              currentUserId={userId} 
+              onRewardPoints={handleRewardPoints} 
+            />
           )}
 
           {activeTab === "offline" && (
@@ -217,4 +226,4 @@ export default function App() {
       <MainAppContent />
     </ToastProvider>
   );
-}
+          }
