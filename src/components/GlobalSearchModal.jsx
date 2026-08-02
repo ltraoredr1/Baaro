@@ -19,7 +19,7 @@ export function GlobalSearchModal({ isOpen, onClose, onSelectUser, onSelectDebat
     }
   }, [isOpen]);
 
-  // Recherche optimisée avec debounce (anti-rebond)
+  // Recherche optimisée avec debounce (anti-rebond) et double table sécurisée
   useEffect(() => {
     if (!isOpen || !query || query.trim().length < 2) {
       // Si la requête est trop courte, on affiche juste les STABLE_USERS filtrés
@@ -36,56 +36,86 @@ export function GlobalSearchModal({ isOpen, onClose, onSelectUser, onSelectDebat
       const searchQuery = `%${query.trim()}%`;
 
       try {
-        // 1. Recherche des utilisateurs dans Supabase
-        const { data: dbUsers, error: userError } = await supabase
-          .from('users') // <--- MODIFIÉ EN 'users'
-          .select('id, display_name, handle, flag, country, avatar_url, bio, points, is_verified') // <--- 'id' au lieu de 'user_id' si c'est le nom de votre colonne
-          .or(`display_name.ilike.${searchQuery},handle.ilike.${searchQuery},country.ilike.${searchQuery}`)
-          .limit(10);
+        // 1. Recherche sécurisée dans la table 'profiles'
+        let profileUsers = [];
+        try {
+          const { data, error } = await supabase
+            .from('profiles')
+            .select('id, user_id, display_name, handle, flag, country, avatar_url, bio, points, is_verified')
+            .or(`display_name.ilike.${searchQuery},handle.ilike.${searchQuery},country.ilike.${searchQuery}`)
+            .limit(10);
+          if (!error) profileUsers = data || [];
+        } catch (e) {
+          console.warn("Table 'profiles' non trouvée ou erreur, on continue.");
+        }
 
-        if (userError) throw userError;
+        // 2. Recherche sécurisée dans la table 'users'
+        let appUsers = [];
+        try {
+          const { data, error } = await supabase
+            .from('users')
+            .select('id, display_name, handle, flag, country, avatar_url, bio, points, is_verified')
+            .or(`display_name.ilike.${searchQuery},handle.ilike.${searchQuery},country.ilike.${searchQuery}`)
+            .limit(10);
+          if (!error) appUsers = data || [];
+        } catch (e) {
+          console.warn("Table 'users' non trouvée ou erreur, on continue.");
+        }
 
-        // 2. Recherche des débats actifs dans Supabase
-        const { data: dbDebates, error: debateError } = await supabase
-          .from('debate_rooms')
-          .select('id, title, topic, invite_code, status')
-          .eq('status', 'active')
-          .or(`title.ilike.${searchQuery},topic.ilike.${searchQuery}`)
-          .limit(5);
+        // 3. Recherche des débats actifs
+        let dbDebates = [];
+        try {
+          const { data, error } = await supabase
+            .from('debate_rooms')
+            .select('id, title, topic, invite_code, status')
+            .eq('status', 'active')
+            .or(`title.ilike.${searchQuery},topic.ilike.${searchQuery}`)
+            .limit(5);
+          if (!error) dbDebates = data || [];
+        } catch (e) {
+          console.warn("Table 'debate_rooms' non trouvée ou erreur.");
+        }
 
-        if (debateError) throw debateError;
-
-        // 3. Fusionner STABLE_USERS avec les résultats Supabase (sans doublons)
+        // 4. Fusion intelligente et dédoublonnage
         const filteredStable = STABLE_USERS.filter((u) =>
           u.display_name?.toLowerCase().includes(query.toLowerCase()) ||
           u.handle?.toLowerCase().includes(query.toLowerCase())
         );
 
+        const seenIds = new Set();
         const finalUsers = [...filteredStable];
         
-        if (dbUsers) {
-          dbUsers.forEach((u) => {
-            const exists = finalUsers.some((su) => su.id === u.user_id);
-            if (!exists) {
-              finalUsers.push({
-                id: u.user_id,
-                display_name: u.display_name || "Membre BAARO",
-                handle: u.handle || "@utilisateur",
-                flag: u.flag || "🌍",
-                country: u.country || "🌍",
-                avatar: u.avatar_url || "",
-                bio: u.bio || "",
-                points: u.points || 0,
-                isVerified: u.is_verified || false,
-                isSupabase: true
-              });
-            }
-          });
-        }
+        // On marque les IDs déjà présents pour éviter les doublons
+        filteredStable.forEach(u => seenIds.add(u.id));
 
-        setResults({ users: finalUsers, debates: dbDebates || [] });
+        // Fonction pour ajouter un utilisateur sans créer de doublon
+        const addUserSafely = (u) => {
+          const uid = u.user_id || u.id; // Priorité à user_id si existe (cas de profiles)
+          if (uid && !seenIds.has(uid)) {
+            seenIds.add(uid);
+            finalUsers.push({
+              id: uid,
+              display_name: u.display_name || "Membre BAARO",
+              handle: u.handle || "@utilisateur",
+              flag: u.flag || "🌍",
+              country: u.country || "🌍",
+              avatar: u.avatar_url || "",
+              bio: u.bio || "",
+              points: u.points || 0,
+              isVerified: u.is_verified || false,
+              isSupabase: true
+            });
+          }
+        };
+
+        // On ajoute les résultats des deux tables en toute sécurité
+        profileUsers.forEach(addUserSafely);
+        appUsers.forEach(addUserSafely);
+
+        setResults({ users: finalUsers, debates: dbDebates });
+
       } catch (error) {
-        console.error("Erreur recherche:", error);
+        console.error("Erreur critique recherche:", error);
       } finally {
         setLoading(false);
       }
@@ -222,7 +252,7 @@ export function GlobalSearchModal({ isOpen, onClose, onSelectUser, onSelectDebat
                         </div>
                         <div className="text-[11px]" style={{ color: COLORS.muted }}>
                           {debate.topic}
-                        </<div>
+                        </div>
                       </div>
                     </div>
                     <div className="flex items-center gap-2 group-hover:translate-x-1 transition-transform">
@@ -239,4 +269,4 @@ export function GlobalSearchModal({ isOpen, onClose, onSelectUser, onSelectDebat
       </div>
     </div>
   );
-          }
+}
