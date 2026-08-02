@@ -8,16 +8,15 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
   const [messages, setMessages] = useState([]);
   const [newMessage, setNewMessage] = useState("");
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const messagesEndRef = useRef(null);
 
-  // 1. Charger les infos de la salle et les messages
   useEffect(() => {
-    if (!inviteCode || !currentUserId) return;
+    let isMounted = true;
+    let channel = null;
 
-    const loadData = async () => {
-      setLoading(true);
+    const loadDebate = async () => {
       try {
-        // Récupérer la salle
         const { data: roomData, error: roomError } = await supabase
           .from("debate_rooms")
           .select("*")
@@ -25,209 +24,158 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
           .single();
 
         if (roomError) {
-          console.error("Erreur salle:", roomError);
-          throw roomError;
+          if (isMounted) { setError("Salle introuvable"); setLoading(false); }
+          return;
         }
-        setRoom(roomData);
 
-        // Ajouter le participant si ce n'est pas déjà fait
-        await supabase.from("debate_participants").upsert({
-          room_id: roomData.id,
-          user_id: currentUserId,
-          role: "participant"
-        }, { onConflict: "room_id_user_id" });
+        if (isMounted) setRoom(roomData);
 
-        // Récupérer les messages avec les profils
         const { data: msgsData, error: msgsError } = await supabase
           .from("debate_messages")
-          .select(`
-            id, 
-            text, 
-            created_at, 
-            user_id,
-            profiles:profiles!debate_messages_user_id_fkey (
-              display_name, 
-              flag, 
-              avatar_url
-            )
-          `)
+          .select("id, text, created_at, user_id")
           .eq("room_id", roomData.id)
           .order("created_at", { ascending: true });
 
-        if (msgsError) {
-          console.error("Erreur messages:", msgsError);
-        } else {
-          setMessages(msgsData || []);
+        if (!msgsError && msgsData && isMounted) {
+          // Récupérer les profils en une seule requête (méthode ultra-robuste)
+          const uniqueUserIds = [...new Set(msgsData.map(m => m.user_id))];
+          let profilesMap = {};
+          
+          if (uniqueUserIds.length > 0) {
+            const { data: profiles } = await supabase
+              .from("profiles")
+              .select("user_id, display_name, avatar_url, flag")
+              .in("user_id", uniqueUserIds);
+            
+            if (profiles) {
+              profiles.forEach(p => { profilesMap[p.user_id] = p; });
+            }
+          }
+
+          const enrichedMessages = msgsData.map(m => ({
+            ...m,
+            profile: profilesMap[m.user_id] || { display_name: "Membre", flag: "🌍" }
+          }));
+
+          setMessages(enrichedMessages);
         }
-      } catch (error) {
-        console.error("Erreur chargement débat:", error);
+
+        channel = supabase
+          .channel(`room_${roomData.id}`)
+          .on("postgres_changes", { 
+            event: "INSERT", schema: "public", table: "debate_messages",
+            filter: `room_id=eq.${roomData.id}`
+          }, async (payload) => {
+            const { data: profile } = await supabase
+              .from("profiles")
+              .select("display_name, avatar_url, flag")
+              .eq("user_id", payload.new.user_id)
+              .single();
+            
+            if (isMounted) {
+              setMessages(prev => [...prev, { 
+                ...payload.new, 
+                profile: profile || { display_name: "Membre", flag: "🌍" } 
+              }]);
+            }
+          })
+          .subscribe();
+
+      } catch (err) {
+        if (isMounted) { setError(err.message); }
       } finally {
-        setLoading(false);
+        if (isMounted) { setLoading(false); }
       }
     };
 
-    loadData();
-  }, [inviteCode, currentUserId]);
-
-  // 2. Temps réel : écouter les nouveaux messages
-  useEffect(() => {
-    if (!room) return;
-
-    const channel = supabase
-      .channel(`debate_room_${room.id}`)
-      .on(
-        "postgres_changes",
-        { 
-          event: "INSERT", 
-          schema: "public", 
-          table: "debate_messages", 
-          filter: `room_id=eq.${room.id}` 
-        },
-        async (payload) => {
-          // Récupérer le profil du nouveau message
-          const { data: profile } = await supabase
-            .from("profiles")
-            .select("display_name, flag, avatar_url")
-            .eq("id", payload.new.user_id)
-            .single();
-
-          setMessages((prev) => [
-            ...prev,
-            { ...payload.new, profiles: profile }
-          ]);
-        }
-      )
-      .subscribe();
+    loadDebate();
 
     return () => {
-      supabase.removeChannel(channel);
+      isMounted = false;
+      if (channel) supabase.removeChannel(channel);
     };
-  }, [room]);
+  }, [inviteCode]);
 
-  // 3. Scroll automatique vers le bas
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
-
-  // 4. Envoyer un message
   const handleSendMessage = async (e) => {
     e.preventDefault();
     if (!newMessage.trim() || !room || !currentUserId) return;
-
-    const messageText = newMessage.trim();
-    setNewMessage("");
-
     try {
       const { error } = await supabase.from("debate_messages").insert({
         room_id: room.id,
         user_id: currentUserId,
-        text: messageText,
+        text: newMessage.trim(),
       });
-
-      if (error) {
-        console.error("Erreur envoi:", error);
-        setNewMessage(messageText);
-      }
-    } catch (error) {
-      console.error("Erreur:", error);
-      setNewMessage(messageText);
+      if (error) throw error;
+      setNewMessage("");
+    } catch (err) {
+      console.error("Erreur envoi:", err);
+      setNewMessage(newMessage);
     }
   };
 
-  if (loading) {
+  if (error) {
     return (
-      <div className="flex flex-col items-center justify-center h-full" style={{ color: COLORS.muted }}>
-        <div className="animate-spin inline-block w-8 h-8 border-2 border-current border-t-transparent rounded-full mb-3" />
-        <p>Chargement de la salle...</p>
+      <div className="flex flex-col items-center justify-center h-full p-6" style={{ background: COLORS.surface }}>
+        <p className="text-red-400 font-bold text-lg mb-2">⚠️ {error}</p>
+        <button onClick={onBack} className="px-6 py-3 rounded-xl font-bold" style={{ background: COLORS.gold, color: "#000" }}>Retour</button>
       </div>
     );
   }
 
-  if (!room) {
+  if (loading) {
     return (
-      <div className="flex flex-col items-center justify-center h-full gap-4 p-6">
-        <p style={{ color: COLORS.ivory }}>Salle de débat introuvable ou fermée.</p>
-        <button 
-          onClick={onBack} 
-          className="px-4 py-2 rounded-xl text-sm font-bold" 
-          style={{ background: COLORS.surface, color: COLORS.ivory }}
-        >
-          Retour
-        </button>
+      <div className="flex flex-col items-center justify-center h-full" style={{ background: COLORS.surface }}>
+        <div className="animate-spin w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full mb-4" />
+        <p style={{ color: COLORS.ivory }}>Chargement de la salle...</p>
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col h-full max-h-screen glass-card border shadow-2xl" style={{ borderColor: COLORS.borderGold }}>
-      {/* Header */}
-      <div className="flex items-center justify-between p-4 border-b" style={{ borderColor: COLORS.border }}>
-        <div className="flex items-center gap-3">
-          <button 
-            onClick={onBack} 
-            className="p-2 rounded-full hover:bg-white/10 transition-colors" 
-            style={{ color: COLORS.ivory }}
-          >
-            <ArrowLeft size={20} />
-          </button>
-          <div>
-            <h2 className="font-bold text-sm flex items-center gap-2" style={{ color: COLORS.ivory }}>
-              {room.title}
-              <span className="text-[10px] px-2 py-0.5 rounded-full bg-green-500/20 text-green-400 font-normal">
-                LIVE
-              </span>
-            </h2>
-            <p className="text-xs flex items-center gap-1" style={{ color: COLORS.muted }}>
-              <Hash size={12} /> {room.topic}
-            </p>
-          </div>
+    <div className="flex flex-col h-full" style={{ background: COLORS.surface }}>
+      <div className="flex items-center gap-3 p-4 border-b" style={{ borderColor: COLORS.border }}>
+        <button onClick={onBack} className="p-2 rounded-full hover:bg-white/10" style={{ color: COLORS.ivory }}>
+          <ArrowLeft size={20} />
+        </button>
+        <div className="flex-1">
+          <h2 className="font-bold text-sm flex items-center gap-2" style={{ color: COLORS.ivory }}>
+            {room?.title}
+            <span className="text-[10px] px-2 py-0.5 rounded-full bg-green-500/20 text-green-400 font-normal">LIVE</span>
+          </h2>
+          <p className="text-xs flex items-center gap-1" style={{ color: COLORS.muted }}><Hash size={12} /> {room?.topic}</p>
         </div>
-        <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full" style={{ background: COLORS.surface }}>
+        <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full" style={{ background: COLORS.surface2 }}>
           <Users size={14} style={{ color: COLORS.gold }} />
-          <span className="text-xs font-bold" style={{ color: COLORS.ivory }}>En direct</span>
         </div>
       </div>
 
-      {/* Zone des messages */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
+      <div className="flex-1 overflow-y-auto p-4 space-y-3">
         {messages.length === 0 ? (
-          <div className="text-center py-10">
-            <MessageSquare size={48} className="mx-auto mb-3 opacity-50" style={{ color: COLORS.muted }} />
-            <p className="text-sm" style={{ color: COLORS.muted }}>
-              Soyez le premier à donner votre avis !
-            </p>
+          <div className="text-center py-10" style={{ color: COLORS.muted }}>
+            <MessageSquare size={48} className="mx-auto mb-3 opacity-50" />
+            <p className="text-sm">Soyez le premier à donner votre avis !</p>
           </div>
         ) : (
           messages.map((msg) => {
             const isMe = msg.user_id === currentUserId;
+            const profile = isMe ? { display_name: "Moi", flag: "🌍" } : msg.profile;
+            
             return (
-              <div key={msg.id} className={`flex gap-3 ${isMe ? "flex-row-reverse" : "flex-row"}`}>
-                <div 
-                  className="w-8 h-8 rounded-full flex items-center justify-center text-xs shrink-0 border"
-                  style={{ borderColor: COLORS.borderGold, background: COLORS.surface2 }}
-                >
-                  {msg.profiles?.avatar_url ? (
-                    <img src={msg.profiles.avatar_url} alt="avatar" className="w-full h-full rounded-full object-cover" />
-                  ) : (
-                    <span>{msg.profiles?.flag || ""}</span>
-                  )}
-                </div>
+              <div key={msg.id} className={`flex gap-2 ${isMe ? "flex-row-reverse" : "flex-row"}`}>
+                {!isMe && (
+                  <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs shrink-0 border overflow-hidden" style={{ borderColor: COLORS.borderGold, background: COLORS.surface2 }}>
+                    {profile.avatar_url ? <img src={profile.avatar_url} className="w-full h-full object-cover" /> : profile.flag}
+                  </div>
+                )}
                 <div 
                   className={`max-w-[75%] px-4 py-2.5 rounded-2xl text-sm ${isMe ? "rounded-tr-sm" : "rounded-tl-sm"}`}
-                  style={{ 
-                    background: isMe ? COLORS.gold : COLORS.surface,
-                    color: isMe ? "#000" : COLORS.ivory
-                  }}
+                  style={{ background: isMe ? COLORS.gold : COLORS.surface2, color: isMe ? "#000" : COLORS.ivory }}
                 >
-                  {!isMe && (
-                    <div className="text-[10px] font-bold mb-1 flex items-center gap-1" style={{ color: COLORS.gold }}>
-                      {msg.profiles?.display_name || "Membre"} {msg.profiles?.flag}
-                    </div>
-                  )}
-                  <p className="leading-relaxed">{msg.text}</p>
-                  <div className={`text-[10px] mt-1.5 ${isMe ? "text-black/60" : "text-slate-400"}`}>
+                  {!isMe && <p className="text-[10px] font-bold mb-1" style={{ color: COLORS.gold }}>{profile.display_name} {profile.flag}</p>}
+                  <p>{msg.text}</p>
+                  <p className={`text-[10px] mt-1.5 ${isMe ? "text-black/60" : "text-gray-400"}`}>
                     {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                  </div>
+                  </p>
                 </div>
               </div>
             );
@@ -236,25 +184,19 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Zone de saisie */}
-      <form onSubmit={handleSendMessage} className="p-4 border-t flex items-center gap-3" style={{ borderColor: COLORS.border, background: COLORS.surface }}>
+      <form onSubmit={handleSendMessage} className="p-4 border-t flex gap-2" style={{ borderColor: COLORS.border }}>
         <input
           type="text"
           value={newMessage}
           onChange={(e) => setNewMessage(e.target.value)}
           placeholder="Participez au débat..."
-          className="flex-1 px-4 py-3 rounded-xl border text-sm outline-none focus:ring-2 transition-all"
+          className="flex-1 px-4 py-3 rounded-xl border text-sm outline-none"
           style={{ background: COLORS.surface2, borderColor: COLORS.border, color: COLORS.ivory }}
         />
-        <button
-          type="submit"
-          disabled={!newMessage.trim()}
-          className="p-3 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-          style={{ background: COLORS.gold, color: "#000" }}
-        >
+        <button type="submit" disabled={!newMessage.trim()} className="p-3 rounded-xl disabled:opacity-50" style={{ background: COLORS.gold, color: "#000" }}>
           <Send size={18} />
         </button>
       </form>
     </div>
   );
-}
+                  }
