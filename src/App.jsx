@@ -8,7 +8,7 @@ import { VideosTab } from "./components/VideosTab.jsx";
 import { MessagesTab } from "./components/MessagesTab.jsx";
 import { WalletTab } from "./components/WalletTab.jsx";
 import { CryptoTab } from "./components/CryptoTab.jsx";
-import { DebatesTab } from "./components/DebatesTab.jsx"; // ✅ CORRECTION : Ajout des {}
+import DebatesTab from "./components/DebatesTab.jsx"; // ✅ PAS D'ACCOLADES ICI
 import { OfflineTab } from "./components/OfflineTab.jsx";
 import { AiAssistantTab } from "./components/AiAssistantTab.jsx";
 import { SettingsTab } from "./components/SettingsTab.jsx";
@@ -34,25 +34,21 @@ function MainAppContent() {
   const [notifDrawerOpen, setNotifDrawerOpen] = useState(false);
   const [searchModalOpen, setSearchModalOpen] = useState(false);
   const [currentTheme, setCurrentTheme] = useState("midnight");
-  
-  // ✅ AJOUT : État pour stocker l'ID de l'utilisateur connecté
   const [userId, setUserId] = useState(null);
 
   const [userProfile, setUserProfile] = useState({
     display_name: "Membre BAARO",
     handle: "@mon_compte",
-    flag: "",
+    flag: "🌍",
     bio: "Passionné de Web3, de réseaux décentralisés et d'impact social."
   });
 
-  // 🔥 Charger le profil et l'ID depuis Supabase au démarrage
   useEffect(() => {
     const loadProfile = async () => {
       try {
         const { data: { user } } = await supabase.auth.getUser();
         if (user) {
-          setUserId(user.id); // ✅ Sauvegarde de l'ID utilisateur
-          
+          setUserId(user.id);
           const { data, error } = await supabase
             .from('users')
             .select('*')
@@ -100,82 +96,27 @@ function MainAppContent() {
         </div>
 
         <main className="md:col-span-3">
-          {activeTab === "feed" && (
-            <FeedTab
-              userId="u_me"
-              onOpenProfile={(authorId) => setInspectingProfileId(authorId)}
-              onRewardPoints={handleRewardPoints}
-            />
-          )}
-
+          {activeTab === "feed" && <FeedTab userId="u_me" onOpenProfile={(authorId) => setInspectingProfileId(authorId)} onRewardPoints={handleRewardPoints} />}
           {activeTab === "friends" && <FriendsTab />}
-
-          {activeTab === "videos" && (
-            <VideosTab onRewardPoints={handleRewardPoints} />
-          )}
-
-          {activeTab === "messages" && (
-            <MessagesTab onRewardPoints={handleRewardPoints} />
-          )}
-
-          {activeTab === "wallet" && (
-            <WalletTab
-              pointsBalance={pointsBalance}
-              baroBalance={baroBalance}
-              onRewardPoints={handleRewardPoints}
-              onNavigateToCrypto={() => setActiveTab("crypto")}
-            />
-          )}
-
-          {activeTab === "crypto" && (
-            <CryptoTab
-              pointsBalance={pointsBalance}
-              baroBalance={baroBalance}
-              onRewardPoints={handleRewardPoints}
-              setPointsBalance={setPointsBalance}
-              setBaroBalance={setBaroBalance}
-            />
-          )}
-
-          {/* ✅ CORRECTION : Passage de currentUserId au composant DebatesTab */}
-          {activeTab === "debates" && (
-            <DebatesTab 
-              currentUserId={userId} 
-              onRewardPoints={handleRewardPoints} 
-            />
-          )}
-
-          {activeTab === "offline" && (
-            <OfflineTab onRewardPoints={handleRewardPoints} />
-          )}
-
-          {activeTab === "assistant" && (
-            <AiAssistantTab onRewardPoints={handleRewardPoints} />
-          )}
-
-          {activeTab === "settings" && (
-            <SettingsTab
-              userProfile={userProfile}
-              setUserProfile={setUserProfile}
-              currentTheme={currentTheme}
-              onSelectTheme={setCurrentTheme}
-            />
-          )}
+          {activeTab === "videos" && <VideosTab onRewardPoints={handleRewardPoints} />}
+          {activeTab === "messages" && <MessagesTab onRewardPoints={handleRewardPoints} />}
+          {activeTab === "wallet" && <WalletTab pointsBalance={pointsBalance} baroBalance={baroBalance} onRewardPoints={handleRewardPoints} onNavigateToCrypto={() => setActiveTab("crypto")} />}
+          {activeTab === "crypto" && <CryptoTab pointsBalance={pointsBalance} baroBalance={baroBalance} onRewardPoints={handleRewardPoints} setPointsBalance={setPointsBalance} setBaroBalance={setBaroBalance} />}
+          
+          {/* ✅ Passage de userId ici */}
+          {activeTab === "debates" && <DebatesTab currentUserId={userId} onRewardPoints={handleRewardPoints} />}
+          
+          {activeTab === "offline" && <OfflineTab onRewardPoints={handleRewardPoints} />}
+          {activeTab === "assistant" && <AiAssistantTab onRewardPoints={handleRewardPoints} />}
+          {activeTab === "settings" && <SettingsTab userProfile={userProfile} setUserProfile={setUserProfile} currentTheme={currentTheme} onSelectTheme={setCurrentTheme} />}
         </main>
       </div>
 
       {inspectingProfileId && (
-        <ProfileModal
-          authorId={inspectingProfileId}
-          onClose={() => setInspectingProfileId(null)}
-          onNavigateToMessages={() => setActiveTab("messages")}
-        />
+        <ProfileModal authorId={inspectingProfileId} onClose={() => setInspectingProfileId(null)} onNavigateToMessages={() => setActiveTab("messages")} />
       )}
 
-      <NotificationDrawer
-        isOpen={notifDrawerOpen}
-        onClose={() => setNotifDrawerOpen(false)}
-      />
+      <NotificationDrawer isOpen={notifDrawerOpen} onClose={() => setNotifDrawerOpen(false)} />
 
       <GlobalSearchModal
         isOpen={searchModalOpen}
@@ -197,11 +138,9 @@ export default function App() {
       setLoading(false);
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (_event, session) => {
-        setSession(session);
-      }
-    );
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+    });
 
     return () => subscription.unsubscribe();
   }, []);
