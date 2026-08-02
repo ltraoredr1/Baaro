@@ -37,10 +37,9 @@ export function GlobalSearchModal({ isOpen, onClose, onSelectUser, onSelectDebat
 
       try {
         // 1. Recherche des utilisateurs dans Supabase
-        // NOTE: Si votre table s'appelle 'users' et non 'profiles', changez 'profiles' en 'users' ci-dessous
         const { data: dbUsers, error: userError } = await supabase
-          .from('profiles') 
-          .select('user_id, display_name, handle, flag, country, avatar_url, bio, points, is_verified')
+          .from('users') // <--- MODIFIÉ EN 'users'
+          .select('id, display_name, handle, flag, country, avatar_url, bio, points, is_verified') // <--- 'id' au lieu de 'user_id' si c'est le nom de votre colonne
           .or(`display_name.ilike.${searchQuery},handle.ilike.${searchQuery},country.ilike.${searchQuery}`)
           .limit(10);
 
