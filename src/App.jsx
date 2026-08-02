@@ -8,7 +8,7 @@ import { VideosTab } from "./components/VideosTab.jsx";
 import { MessagesTab } from "./components/MessagesTab.jsx";
 import { WalletTab } from "./components/WalletTab.jsx";
 import { CryptoTab } from "./components/CryptoTab.jsx";
-import DebatesTab from "./components/DebatesTab.jsx"; // ✅ PAS D'ACCOLADES ICI
+import DebatesTab from "./components/DebatesTab.jsx";
 import { OfflineTab } from "./components/OfflineTab.jsx";
 import { AiAssistantTab } from "./components/AiAssistantTab.jsx";
 import { SettingsTab } from "./components/SettingsTab.jsx";
@@ -103,7 +103,6 @@ function MainAppContent() {
           {activeTab === "wallet" && <WalletTab pointsBalance={pointsBalance} baroBalance={baroBalance} onRewardPoints={handleRewardPoints} onNavigateToCrypto={() => setActiveTab("crypto")} />}
           {activeTab === "crypto" && <CryptoTab pointsBalance={pointsBalance} baroBalance={baroBalance} onRewardPoints={handleRewardPoints} setPointsBalance={setPointsBalance} setBaroBalance={setBaroBalance} />}
           
-          {/* ✅ Passage de userId ici */}
           {activeTab === "debates" && <DebatesTab currentUserId={userId} onRewardPoints={handleRewardPoints} />}
           
           {activeTab === "offline" && <OfflineTab onRewardPoints={handleRewardPoints} />}
