@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { ArrowLeft, Send, Users, Hash } from "lucide-react";
+import { ArrowLeft, Send, Users, Hash, MessageSquare } from "lucide-react";
 import { COLORS } from "../theme.js";
 import { supabase } from "../supabaseClient.js";
 
@@ -10,9 +10,9 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
   const [loading, setLoading] = useState(true);
   const messagesEndRef = useRef(null);
 
-  // 1. Charger les infos de la salle et l'historique des messages
+  // 1. Charger les infos de la salle et les messages
   useEffect(() => {
-    if (!inviteCode) return;
+    if (!inviteCode || !currentUserId) return;
 
     const loadData = async () => {
       setLoading(true);
@@ -24,20 +24,41 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
           .eq("invite_code", inviteCode)
           .single();
 
-        if (roomError) throw roomError;
+        if (roomError) {
+          console.error("Erreur salle:", roomError);
+          throw roomError;
+        }
         setRoom(roomData);
 
-        // Récupérer les messages (joindre avec profiles pour avoir le nom de l'auteur)
+        // Ajouter le participant si ce n'est pas déjà fait
+        await supabase.from("debate_participants").upsert({
+          room_id: roomData.id,
+          user_id: currentUserId,
+          role: "participant"
+        }, { onConflict: "room_id_user_id" });
+
+        // Récupérer les messages avec les profils
         const { data: msgsData, error: msgsError } = await supabase
           .from("debate_messages")
           .select(`
-            id, text, created_at, user_id,
-            profiles (display_name, flag, avatar_url)
+            id, 
+            text, 
+            created_at, 
+            user_id,
+            profiles:profiles!debate_messages_user_id_fkey (
+              display_name, 
+              flag, 
+              avatar_url
+            )
           `)
           .eq("room_id", roomData.id)
           .order("created_at", { ascending: true });
 
-        if (!msgsError) setMessages(msgsData || []);
+        if (msgsError) {
+          console.error("Erreur messages:", msgsError);
+        } else {
+          setMessages(msgsData || []);
+        }
       } catch (error) {
         console.error("Erreur chargement débat:", error);
       } finally {
@@ -46,9 +67,9 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
     };
 
     loadData();
-  }, [inviteCode]);
+  }, [inviteCode, currentUserId]);
 
-  // 2. S'abonner aux nouveaux messages en temps réel (Supabase Realtime)
+  // 2. Temps réel : écouter les nouveaux messages
   useEffect(() => {
     if (!room) return;
 
@@ -56,9 +77,14 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
       .channel(`debate_room_${room.id}`)
       .on(
         "postgres_changes",
-        { event: "INSERT", schema: "public", table: "debate_messages", filter: `room_id=eq.${room.id}` },
+        { 
+          event: "INSERT", 
+          schema: "public", 
+          table: "debate_messages", 
+          filter: `room_id=eq.${room.id}` 
+        },
         async (payload) => {
-          // Récupérer les infos du profil du nouveau message pour l'affichage
+          // Récupérer le profil du nouveau message
           const { data: profile } = await supabase
             .from("profiles")
             .select("display_name, flag, avatar_url")
@@ -78,7 +104,7 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
     };
   }, [room]);
 
-  // 3. Scroll automatique vers le bas à chaque nouveau message
+  // 3. Scroll automatique vers le bas
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
@@ -89,7 +115,7 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
     if (!newMessage.trim() || !room || !currentUserId) return;
 
     const messageText = newMessage.trim();
-    setNewMessage(""); // Vider l'input immédiatement pour une meilleure UX
+    setNewMessage("");
 
     try {
       const { error } = await supabase.from("debate_messages").insert({
@@ -98,26 +124,34 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
         text: messageText,
       });
 
-      if (error) throw error;
+      if (error) {
+        console.error("Erreur envoi:", error);
+        setNewMessage(messageText);
+      }
     } catch (error) {
-      console.error("Erreur envoi message:", error);
-      setNewMessage(messageText); // Restaurer en cas d'échec
+      console.error("Erreur:", error);
+      setNewMessage(messageText);
     }
   };
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-full" style={{ color: COLORS.muted }}>
-        Chargement de la salle...
+      <div className="flex flex-col items-center justify-center h-full" style={{ color: COLORS.muted }}>
+        <div className="animate-spin inline-block w-8 h-8 border-2 border-current border-t-transparent rounded-full mb-3" />
+        <p>Chargement de la salle...</p>
       </div>
     );
   }
 
   if (!room) {
     return (
-      <div className="flex flex-col items-center justify-center h-full gap-4">
+      <div className="flex flex-col items-center justify-center h-full gap-4 p-6">
         <p style={{ color: COLORS.ivory }}>Salle de débat introuvable ou fermée.</p>
-        <button onClick={onBack} className="px-4 py-2 rounded-xl text-sm font-bold" style={{ background: COLORS.surface, color: COLORS.ivory }}>
+        <button 
+          onClick={onBack} 
+          className="px-4 py-2 rounded-xl text-sm font-bold" 
+          style={{ background: COLORS.surface, color: COLORS.ivory }}
+        >
           Retour
         </button>
       </div>
@@ -125,17 +159,23 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
   }
 
   return (
-    <div className="flex flex-col h-full max-h-[80vh] glass-card rounded-3xl border shadow-2xl" style={{ borderColor: COLORS.borderGold }}>
-      {/* Header de la salle */}
+    <div className="flex flex-col h-full max-h-screen glass-card border shadow-2xl" style={{ borderColor: COLORS.borderGold }}>
+      {/* Header */}
       <div className="flex items-center justify-between p-4 border-b" style={{ borderColor: COLORS.border }}>
         <div className="flex items-center gap-3">
-          <button onClick={onBack} className="p-2 rounded-full hover:bg-white/10 transition-colors" style={{ color: COLORS.ivory }}>
+          <button 
+            onClick={onBack} 
+            className="p-2 rounded-full hover:bg-white/10 transition-colors" 
+            style={{ color: COLORS.ivory }}
+          >
             <ArrowLeft size={20} />
           </button>
           <div>
             <h2 className="font-bold text-sm flex items-center gap-2" style={{ color: COLORS.ivory }}>
               {room.title}
-              <span className="text-[10px] px-2 py-0.5 rounded-full bg-green-500/20 text-green-400 font-normal">LIVE</span>
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-green-500/20 text-green-400 font-normal">
+                LIVE
+              </span>
             </h2>
             <p className="text-xs flex items-center gap-1" style={{ color: COLORS.muted }}>
               <Hash size={12} /> {room.topic}
@@ -151,8 +191,11 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
       {/* Zone des messages */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
         {messages.length === 0 ? (
-          <div className="text-center py-10" style={{ color: COLORS.muted }}>
-            <p className="text-sm">Soyez le premier à donner votre avis !</p>
+          <div className="text-center py-10">
+            <MessageSquare size={48} className="mx-auto mb-3 opacity-50" style={{ color: COLORS.muted }} />
+            <p className="text-sm" style={{ color: COLORS.muted }}>
+              Soyez le premier à donner votre avis !
+            </p>
           </div>
         ) : (
           messages.map((msg) => {
@@ -166,10 +209,11 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
                   {msg.profiles?.avatar_url ? (
                     <img src={msg.profiles.avatar_url} alt="avatar" className="w-full h-full rounded-full object-cover" />
                   ) : (
-                    <span>{msg.profiles?.flag || "🌍"}</span>
+                    <span>{msg.profiles?.flag || ""}</span>
                   )}
                 </div>
-                <div className={`max-w-[75%] px-4 py-2.5 rounded-2xl text-sm ${isMe ? "rounded-tr-sm" : "rounded-tl-sm"}`}
+                <div 
+                  className={`max-w-[75%] px-4 py-2.5 rounded-2xl text-sm ${isMe ? "rounded-tr-sm" : "rounded-tl-sm"}`}
                   style={{ 
                     background: isMe ? COLORS.gold : COLORS.surface,
                     color: isMe ? "#000" : COLORS.ivory
@@ -213,4 +257,4 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
       </form>
     </div>
   );
-          }
+}
