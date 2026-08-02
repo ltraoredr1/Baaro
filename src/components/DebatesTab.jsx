@@ -1,196 +1,235 @@
-import { useState, useEffect } from "react";
-import { Swords, Plus, Hash, Users, MessageSquare, Mic, Video } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import { ArrowLeft, Send } from "lucide-react";
 import { COLORS } from "../theme.js";
 import { supabase } from "../supabaseClient.js";
-import { CreateDebateModal } from "./CreateDebateModal.jsx";
-import { DebateRoom } from "./DebateRoom.jsx";
 
-export function DebatesTab({ currentUserId }) {
-  const [debates, setDebates] = useState([]);
+export function DebateRoom({ inviteCode, currentUserId, onBack }) {
+  const [room, setRoom] = useState(null);
+  const [messages, setMessages] = useState([]);
+  const [newMessage, setNewMessage] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [isCreateOpen, setIsCreateOpen] = useState(false);
-  const [activeDebateCode, setActiveDebateCode] = useState(null);
+  const messagesEndRef = useRef(null);
 
-  console.log("🔍 DebatesTab - currentUserId:", currentUserId);
+  useEffect(() => {
+    let isMounted = true;
+    let channel = null;
 
-  const fetchDebates = async () => {
-    setLoading(true);
-    setError(null);
-    
-    try {
-      console.log(" Chargement des débats...");
-      
-      // Requête SIMPLE sans jointure complexe
-      const { data, error } = await supabase
-        .from("debate_rooms")
-        .select("id, title, topic, mode, invite_code, status, created_at, creator_id")
-        .eq("status", "active")
-        .order("created_at", { ascending: false });
+    const loadDebate = async () => {
+      try {
+        console.log("🔍 Chargement débat - Code:", inviteCode);
+        
+        // 1. Trouver la salle
+        const { data: roomData, error: roomError } = await supabase
+          .from("debate_rooms")
+          .select("*")
+          .eq("invite_code", inviteCode)
+          .single();
 
-      if (error) {
-        console.error("❌ Erreur Supabase:", error);
-        setError(error.message);
-        setDebates([]);
-      } else {
-        console.log("✅ Débats trouvés:", data?.length || 0);
-        setDebates(data || []);
+        if (roomError) {
+          console.error("❌ Erreur salle:", roomError);
+          if (isMounted) {
+            setError("Salle introuvable");
+            setLoading(false);
+          }
+          return;
+        }
+
+        console.log("✅ Salle trouvée:", roomData.title);
+        if (isMounted) {
+          setRoom(roomData);
+        }
+
+        // 2. Charger les messages
+        const { data: msgsData, error: msgsError } = await supabase
+          .from("debate_messages")
+          .select("*")
+          .eq("room_id", roomData.id)
+          .order("created_at", { ascending: true });
+
+        if (msgsError) {
+          console.error(" Erreur messages:", msgsError);
+        } else {
+          console.log("📩 Messages chargés:", msgsData.length);
+          if (isMounted) {
+            setMessages(msgsData || []);
+          }
+        }
+
+        // 3. S'abonner aux nouveaux messages
+        channel = supabase
+          .channel(`room_${roomData.id}`)
+          .on("postgres_changes", { 
+            event: "INSERT", 
+            schema: "public", 
+            table: "debate_messages",
+            filter: `room_id=eq.${roomData.id}`
+          }, (payload) => {
+            console.log("📨 Nouveau message:", payload.new);
+            if (isMounted) {
+              setMessages(prev => [...prev, payload.new]);
+            }
+          })
+          .subscribe();
+
+      } catch (err) {
+        console.error("💥 Erreur critique:", err);
+        if (isMounted) {
+          setError(err.message);
+        }
+      } finally {
+        if (isMounted) {
+          setLoading(false);
+        }
       }
+    };
+
+    loadDebate();
+
+    // Cleanup
+    return () => {
+      isMounted = false;
+      if (channel) {
+        supabase.removeChannel(channel);
+      }
+    };
+  }, [inviteCode]);
+
+  const handleSendMessage = async (e) => {
+    e.preventDefault();
+    if (!newMessage.trim() || !room || !currentUserId) return;
+
+    try {
+      const { error } = await supabase.from("debate_messages").insert({
+        room_id: room.id,
+        user_id: currentUserId,
+        text: newMessage.trim(),
+      });
+
+      if (error) throw error;
+      setNewMessage("");
     } catch (err) {
-      console.error("💥 Erreur critique:", err);
-      setError(err.message);
-    } finally {
-      // TOUJOURS arrêter le chargement
-      setLoading(false);
+      console.error("❌ Erreur envoi:", err);
+      alert("Erreur d'envoi: " + err.message);
     }
   };
 
-  useEffect(() => {
-    // Toujours charger, même sans currentUserId
-    fetchDebates();
-
-    // Temps réel
-    const channel = supabase
-      .channel("debates_channel")
-      .on("postgres_changes", { event: "*", schema: "public", table: "debate_rooms" }, () => {
-        console.log("🔄 Changement détecté, rafraîchissement...");
-        fetchDebates();
-      })
-      .subscribe();
-
-    return () => { supabase.removeChannel(channel); };
-  }, []);
-
-  // Si un débat est actif, afficher la salle
-  if (activeDebateCode) {
+  // Affichage erreur
+  if (error) {
     return (
-      <DebateRoom
-        inviteCode={activeDebateCode}
-        currentUserId={currentUserId}
-        onBack={() => setActiveDebateCode(null)}
-      />
+      <div className="flex flex-col items-center justify-center h-full p-6" style={{ background: COLORS.surface }}>
+        <div className="text-red-400 text-center mb-4">
+          <p className="font-bold text-lg mb-2">⚠️ {error}</p>
+          <p className="text-sm opacity-75">Le débat n'est peut-être plus disponible</p>
+        </div>
+        <button 
+          onClick={onBack}
+          className="px-6 py-3 rounded-xl font-bold"
+          style={{ background: COLORS.gold, color: "#000" }}
+        >
+          Retour aux débats
+        </button>
+      </div>
     );
   }
 
+  // Affichage chargement
+  if (loading) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full" style={{ background: COLORS.surface }}>
+        <div className="animate-spin w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full mb-4" />
+        <p style={{ color: COLORS.ivory }}>Chargement de la salle...</p>
+        <p className="text-xs mt-2 opacity-50" style={{ color: COLORS.muted }}>
+          Code: {inviteCode}
+        </p>
+      </div>
+    );
+  }
+
+  // Affichage principal
   return (
-    <>
-      <div className="flex flex-col h-full p-4">
-        {/* Header */}
-        <div className="flex items-center justify-between mb-6">
-          <h2 className="text-xl font-bold flex items-center gap-2" style={{ color: COLORS.ivory }}>
-            <Swords size={24} style={{ color: COLORS.gold }} />
-            Débats en cours
+    <div className="flex flex-col h-full" style={{ background: COLORS.surface }}>
+      {/* Header */}
+      <div className="flex items-center gap-3 p-4 border-b" style={{ borderColor: COLORS.border }}>
+        <button 
+          onClick={onBack} 
+          className="p-2 rounded-full hover:bg-white/10"
+          style={{ color: COLORS.ivory }}
+        >
+          <ArrowLeft size={20} />
+        </button>
+        <div className="flex-1">
+          <h2 className="font-bold text-sm" style={{ color: COLORS.ivory }}>
+            {room?.title}
           </h2>
-          <button
-            onClick={() => setIsCreateOpen(true)}
-            className="px-4 py-2 rounded-xl font-bold text-sm flex items-center gap-2"
-            style={{ background: COLORS.gold, color: "#000" }}
-          >
-            <Plus size={16} />
-            Créer
-          </button>
-        </div>
-
-        {/* Erreur */}
-        {error && (
-          <div className="bg-red-500/20 border border-red-500 p-4 rounded-xl mb-4">
-            <p className="text-red-400 font-bold text-sm mb-1">Erreur</p>
-            <p className="text-red-300 text-xs">{error}</p>
-            <button 
-              onClick={fetchDebates}
-              className="mt-2 px-3 py-1 bg-red-500 text-white text-xs rounded"
-            >
-              Réessayer
-            </button>
-          </div>
-        )}
-
-        {/* Contenu */}
-        <div className="flex-1 overflow-y-auto space-y-3">
-          {loading ? (
-            <div className="text-center py-10" style={{ color: COLORS.muted }}>
-              <div className="animate-spin inline-block w-8 h-8 border-2 border-current border-t-transparent rounded-full mb-3" />
-              <p className="text-sm">Chargement...</p>
-            </div>
-          ) : debates.length === 0 ? (
-            <div className="text-center py-10">
-              <div 
-                className="w-20 h-20 rounded-full mx-auto mb-4 flex items-center justify-center"
-                style={{ background: COLORS.surface }}
-              >
-                <Swords size={40} style={{ color: COLORS.muted }} />
-              </div>
-              <p className="font-bold mb-2" style={{ color: COLORS.ivory }}>Aucun débat actif</p>
-              <p className="text-sm mb-4" style={{ color: COLORS.muted }}>
-                Soyez le premier à lancer un débat !
-              </p>
-              <button
-                onClick={() => setIsCreateOpen(true)}
-                className="px-6 py-3 rounded-xl font-bold text-sm"
-                style={{ background: COLORS.gold, color: "#000" }}
-              >
-                Créer un débat
-              </button>
-            </div>
-          ) : (
-            debates.map((debate) => (
-              <div
-                key={debate.id}
-                onClick={() => setActiveDebateCode(debate.invite_code)}
-                className="p-4 rounded-2xl border cursor-pointer hover:border-amber-400/50 transition-all"
-                style={{ background: COLORS.surface, borderColor: COLORS.border }}
-              >
-                <div className="flex items-start justify-between mb-3">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2 mb-2">
-                      <h3 className="font-bold text-sm" style={{ color: COLORS.ivory }}>
-                        {debate.title}
-                      </h3>
-                      <span 
-                        className="text-[10px] px-2 py-0.5 rounded-full font-normal"
-                        style={{ background: COLORS.teal + "20", color: COLORS.teal }}
-                      >
-                        LIVE
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-2 text-xs" style={{ color: COLORS.muted }}>
-                      <Hash size={12} />
-                      {debate.topic}
-                    </div>
-                  </div>
-                  <div 
-                    className="w-10 h-10 rounded-xl flex items-center justify-center"
-                    style={{ background: COLORS.surface2 }}
-                  >
-                    {debate.mode === "video" ? (
-                      <Video size={18} style={{ color: COLORS.gold }} />
-                    ) : debate.mode === "audio" ? (
-                      <Mic size={18} style={{ color: COLORS.gold }} />
-                    ) : (
-                      <MessageSquare size={18} style={{ color: COLORS.gold }} />
-                    )}
-                  </div>
-                </div>
-                <div className="text-xs" style={{ color: COLORS.muted }}>
-                  {new Date(debate.created_at).toLocaleDateString("fr-FR", {
-                    day: "numeric", month: "short", hour: "2-digit", minute: "2-digit"
-                  })}
-                </div>
-              </div>
-            ))
-          )}
+          <p className="text-xs" style={{ color: COLORS.muted }}>
+            {room?.topic}
+          </p>
         </div>
       </div>
 
-      <CreateDebateModal
-        isOpen={isCreateOpen}
-        onClose={() => setIsCreateOpen(false)}
-        currentUserId={currentUserId}
-        onSuccess={(room) => {
-          setIsCreateOpen(false);
-          setActiveDebateCode(room.invite_code);
-        }}
-      />
-    </>
+      {/* Messages */}
+      <div className="flex-1 overflow-y-auto p-4 space-y-3">
+        {messages.length === 0 ? (
+          <div className="text-center py-10" style={{ color: COLORS.muted }}>
+            <p className="text-sm">Aucun message pour le moment</p>
+            <p className="text-xs mt-1">Soyez le premier à écrire !</p>
+          </div>
+        ) : (
+          messages.map((msg) => {
+            const isMe = msg.user_id === currentUserId;
+            return (
+              <div 
+                key={msg.id} 
+                className={`flex ${isMe ? "justify-end" : "justify-start"}`}
+              >
+                <div 
+                  className={`max-w-[75%] px-4 py-2 rounded-xl text-sm ${
+                    isMe ? "rounded-tr-sm" : "rounded-tl-sm"
+                  }`}
+                  style={{ 
+                    background: isMe ? COLORS.gold : COLORS.surface2,
+                    color: isMe ? "#000" : COLORS.ivory
+                  }}
+                >
+                  <p>{msg.text}</p>
+                  <p className={`text-[10px] mt-1 ${isMe ? "text-black/60" : "text-gray-400"}`}>
+                    {new Date(msg.created_at).toLocaleTimeString([], { 
+                      hour: '2-digit', 
+                      minute: '2-digit' 
+                    })}
+                  </p>
+                </div>
+              </div>
+            );
+          })
+        )}
+        <div ref={messagesEndRef} />
+      </div>
+
+      {/* Input */}
+      <form onSubmit={handleSendMessage} className="p-4 border-t flex gap-2" style={{ borderColor: COLORS.border }}>
+        <input
+          type="text"
+          value={newMessage}
+          onChange={(e) => setNewMessage(e.target.value)}
+          placeholder="Votre message..."
+          className="flex-1 px-4 py-3 rounded-xl border text-sm outline-none"
+          style={{ 
+            background: COLORS.surface2, 
+            borderColor: COLORS.border, 
+            color: COLORS.ivory 
+          }}
+        />
+        <button 
+          type="submit"
+          disabled={!newMessage.trim()}
+          className="px-4 py-3 rounded-xl disabled:opacity-50"
+          style={{ background: COLORS.gold, color: "#000" }}
+        >
+          <Send size={18} />
+        </button>
+      </form>
+    </div>
   );
-            }
+}
