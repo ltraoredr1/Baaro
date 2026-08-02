@@ -4,7 +4,7 @@ import { COLORS } from "../theme.js";
 import { useToast } from "./ToastContext.jsx";
 import { 
   Send, Search, CheckCheck, UserPlus, 
-  Mic, MicOff, Volume2, X, Trash2 
+  Mic, MicOff, Volume2, X
 } from "lucide-react";
 
 export function MessagesTab({ onRewardPoints }) {
@@ -19,13 +19,11 @@ export function MessagesTab({ onRewardPoints }) {
   const [allUsers, setAllUsers] = useState([]);
   const [showNewChat, setShowNewChat] = useState(false);
 
-  // États pour l'enregistrement audio
+  // États audio
   const [isRecording, setIsRecording] = useState(false);
   const [audioBlob, setAudioBlob] = useState(null);
   const [audioUrl, setAudioUrl] = useState(null);
   const [recordingTime, setRecordingTime] = useState(0);
-  const [audioChunks, setAudioChunks] = useState([]);
-  const [isPlaying, setIsPlaying] = useState(false);
   const mediaRecorderRef = useRef(null);
   const timerRef = useRef(null);
 
@@ -45,7 +43,6 @@ export function MessagesTab({ onRewardPoints }) {
     if (user) loadConversations();
   }, [user]);
 
-  // Nettoyer les timers
   useEffect(() => {
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
@@ -129,7 +126,7 @@ export function MessagesTab({ onRewardPoints }) {
     }
   };
 
-  // ========== FONCTIONS AUDIO ==========
+  // ========== AUDIO ==========
 
   const startRecording = async () => {
     try {
@@ -145,7 +142,6 @@ export function MessagesTab({ onRewardPoints }) {
         const blob = new Blob(chunks, { type: 'audio/webm' });
         setAudioBlob(blob);
         setAudioUrl(URL.createObjectURL(blob));
-        setAudioChunks(chunks);
         if (timerRef.current) {
           clearInterval(timerRef.current);
           timerRef.current = null;
@@ -155,22 +151,17 @@ export function MessagesTab({ onRewardPoints }) {
       recorder.start();
       mediaRecorderRef.current = recorder;
       setIsRecording(true);
-      setAudioChunks(chunks);
       setRecordingTime(0);
 
       timerRef.current = setInterval(() => {
         setRecordingTime(prev => {
-          if (prev >= 60) {
-            stopRecording();
-            return prev;
-          }
+          if (prev >= 60) { stopRecording(); return prev; }
           return prev + 1;
         });
       }, 1000);
 
     } catch (error) {
-      console.error('Erreur microphone:', error);
-      showToast('Accès au microphone refusé', 'error');
+      showToast('Accès microphone refusé', 'error');
     }
   };
 
@@ -190,33 +181,20 @@ export function MessagesTab({ onRewardPoints }) {
     stopRecording();
     setAudioBlob(null);
     setAudioUrl(null);
-    setAudioChunks([]);
     setRecordingTime(0);
-    if (mediaRecorderRef.current) {
-      mediaRecorderRef.current = null;
-    }
   };
 
   const uploadAudio = async (blob) => {
-    const fileName = `audio_${Date.now()}.webm`;
-    const filePath = `messages/${fileName}`;
-
-    const { data, error } = await supabase.storage
-      .from('audio')
-      .upload(filePath, blob);
-
+    const filePath = `messages/audio_${Date.now()}.webm`;
+    const { error } = await supabase.storage.from('audio').upload(filePath, blob);
     if (error) throw error;
-
-    const { data: { publicUrl } } = supabase.storage
-      .from('audio')
-      .getPublicUrl(filePath);
-
+    const { data: { publicUrl } } = supabase.storage.from('audio').getPublicUrl(filePath);
+    console.log('✅ Audio uploadé:', publicUrl);
     return publicUrl;
   };
 
   const sendVoiceMessage = async () => {
     if (!audioBlob || !selectedConvId) return;
-
     try {
       const conv = conversations.find(c => c.id === selectedConvId);
       if (!conv) return;
@@ -238,31 +216,44 @@ export function MessagesTab({ onRewardPoints }) {
 
       if (error) throw error;
 
-      setMessages(prev => [...prev, data[0]]);
+      setMessages([...messages, data[0]]);
       setAudioBlob(null);
       setAudioUrl(null);
-      setAudioChunks([]);
       setRecordingTime(0);
       onRewardPoints?.(2);
       showPointsReward(2, "Message vocal envoyé");
       loadConversations();
     } catch (error) {
-      console.error('Erreur envoi audio:', error);
-      showToast('Erreur: ' + error.message, 'error');
+      showToast('Erreur envoi audio: ' + error.message, 'error');
     }
   };
 
-  const formatDuration = (seconds) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  // 🔥 LECTURE AUDIO CORRIGÉE
+  const playAudio = (url) => {
+    if (!url) {
+      showToast('❌ URL audio manquante', 'error');
+      return;
+    }
+
+    try {
+      const audio = new Audio(url);
+      audio.onerror = () => {
+        showToast('❌ Erreur de lecture audio', 'error');
+      };
+      audio.oncanplay = () => {
+        audio.play().catch(() => showToast('❌ Lecture impossible', 'error'));
+      };
+      audio.load();
+    } catch (error) {
+      showToast('❌ Erreur: ' + error.message, 'error');
+    }
   };
 
-  // ========== FIN FONCTIONS AUDIO ==========
+  const formatDuration = (s) => `${String(Math.floor(s/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;
+  // ========== FIN AUDIO ==========
 
   const sendMessage = async () => {
     if (!inputMsg.trim() || !selectedConvId) return;
-
     try {
       const conv = conversations.find(c => c.id === selectedConvId);
       if (!conv) return;
@@ -286,8 +277,7 @@ export function MessagesTab({ onRewardPoints }) {
       showPointsReward(1, "Message envoyé");
       loadConversations();
     } catch (error) {
-      console.error('Erreur envoi:', error);
-      showToast('Erreur: ' + error.message, 'error');
+      showToast('Erreur envoi', 'error');
     }
   };
 
@@ -314,8 +304,7 @@ export function MessagesTab({ onRewardPoints }) {
       setSelectedConvId(convId);
       loadMessages(convId);
     } catch (error) {
-      console.error('Erreur création conversation:', error);
-      showToast('Erreur: ' + error.message, 'error');
+      showToast('Erreur création', 'error');
     }
   };
 
@@ -491,10 +480,7 @@ export function MessagesTab({ onRewardPoints }) {
                           {m.audio_url && (
                             <div className="mt-1 flex items-center gap-2 p-1.5 rounded-lg" style={{ background: COLORS.surface2 }}>
                               <button
-                                onClick={() => {
-                                  const audio = new Audio(m.audio_url);
-                                  audio.play();
-                                }}
+                                onClick={() => playAudio(m.audio_url)}
                                 className="p-1.5 rounded-full"
                                 style={{ background: COLORS.gold, color: COLORS.bg }}
                               >
