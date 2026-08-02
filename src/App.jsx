@@ -15,9 +15,9 @@ import { SettingsTab } from "./components/SettingsTab.jsx";
 import { ProfileModal } from "./components/ProfileModal.jsx";
 import { NotificationDrawer } from "./components/NotificationDrawer.jsx";
 import { GlobalSearchModal } from "./components/GlobalSearchModal.jsx";
-import { COLORS } from "./theme.js";
+import { FriendsTab } from "./components/FriendsTab.jsx";
 import AuthScreen from "./components/AuthScreen.jsx";
-import { FriendsTab } from './components/FriendsTab.jsx';
+import { COLORS } from "./theme.js";
 
 const THEME_BG_MAP = {
   midnight: "#0B1220",
@@ -29,7 +29,7 @@ function MainAppContent() {
   const [activeTab, setActiveTab] = useState("feed");
   const [lang, setLang] = useState("fr");
   const [pointsBalance, setPointsBalance] = useState(240);
-  const [baroBalance, setBaroBalance] = useState(2.40);
+  const [baroBalance, setBaroBalance] = useState(2.4);
   const [inspectingProfileId, setInspectingProfileId] = useState(null);
   const [notifDrawerOpen, setNotifDrawerOpen] = useState(false);
   const [searchModalOpen, setSearchModalOpen] = useState(false);
@@ -40,34 +40,56 @@ function MainAppContent() {
     display_name: "Membre BAARO",
     handle: "@mon_compte",
     flag: "🌍",
-    bio: "Passionné de Web3, de réseaux décentralisés et d'impact social."
+    bio: "Passionné de Web3, de réseaux décentralisés et d'impact social.",
   });
 
+  // Charger l'utilisateur connecté + son profil
   useEffect(() => {
     const loadProfile = async () => {
       try {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (user) {
-          setUserId(user.id);
-          const { data, error } = await supabase
-            .from('users')
-            .select('*')
-            .eq('id', user.id)
-            .single();
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        if (!user) return;
 
-          if (data) {
-            setUserProfile({
-              display_name: data.display_name || 'Membre BAARO',
-              handle: data.handle || '@mon_compte',
-              flag: data.flag || '🌍',
-              bio: data.bio || ''
-            });
-          }
+        setUserId(user.id);
+
+        // Lecture depuis profiles (schéma officiel)
+        const { data } = await supabase
+          .from("profiles")
+          .select("display_name, handle, flag, bio")
+          .eq("user_id", user.id)
+          .maybeSingle();
+
+        if (data) {
+          setUserProfile({
+            display_name: data.display_name || "Membre BAARO",
+            handle: data.handle || "@mon_compte",
+            flag: data.flag || "🌍",
+            bio: data.bio || "",
+          });
         }
+
+        // Solde wallet
+        const { data: wallet } = await supabase
+          .from("wallets")
+          .select("balance")
+          .eq("user_id", user.id)
+          .maybeSingle();
+        if (wallet) setPointsBalance(Number(wallet.balance) || 0);
+
+        // Solde BARO
+        const { data: crypto } = await supabase
+          .from("crypto_holdings")
+          .select("holdings")
+          .eq("user_id", user.id)
+          .maybeSingle();
+        if (crypto) setBaroBalance(Number(crypto.holdings) || 0);
       } catch (error) {
-        console.error('Erreur chargement profil:', error);
+        console.error("Erreur chargement profil:", error);
       }
     };
+
     loadProfile();
   }, []);
 
@@ -78,14 +100,17 @@ function MainAppContent() {
   const themeBg = THEME_BG_MAP[currentTheme] || THEME_BG_MAP.midnight;
 
   return (
-    <div className="min-h-screen flex flex-col transition-colors duration-500" style={{ background: themeBg, color: COLORS.ivory }}>
+    <div
+      className="min-h-screen flex flex-col transition-colors duration-500"
+      style={{ background: themeBg, color: COLORS.ivory }}
+    >
       <Header
         lang={lang}
         setLang={setLang}
         pointsBalance={pointsBalance}
         baroBalance={baroBalance}
         userProfile={userProfile}
-        onOpenProfile={() => setInspectingProfileId("u_amina")}
+        onOpenProfile={() => userId && setInspectingProfileId(userId)}
         onOpenNotifications={() => setNotifDrawerOpen(true)}
         onOpenSearch={() => setSearchModalOpen(true)}
       />
@@ -96,31 +121,87 @@ function MainAppContent() {
         </div>
 
         <main className="md:col-span-3">
-          {activeTab === "feed" && <FeedTab userId="u_me" onOpenProfile={(authorId) => setInspectingProfileId(authorId)} onRewardPoints={handleRewardPoints} />}
-          {activeTab === "friends" && <FriendsTab />}
-          {activeTab === "videos" && <VideosTab onRewardPoints={handleRewardPoints} />}
-          {activeTab === "messages" && <MessagesTab onRewardPoints={handleRewardPoints} />}
-          {activeTab === "wallet" && <WalletTab pointsBalance={pointsBalance} baroBalance={baroBalance} onRewardPoints={handleRewardPoints} onNavigateToCrypto={() => setActiveTab("crypto")} />}
-          {activeTab === "crypto" && <CryptoTab pointsBalance={pointsBalance} baroBalance={baroBalance} onRewardPoints={handleRewardPoints} setPointsBalance={setPointsBalance} setBaroBalance={setBaroBalance} />}
-          
-          {activeTab === "debates" && <DebatesTab currentUserId={userId} onRewardPoints={handleRewardPoints} />}
-          
-          {activeTab === "offline" && <OfflineTab onRewardPoints={handleRewardPoints} />}
-          {activeTab === "assistant" && <AiAssistantTab onRewardPoints={handleRewardPoints} />}
-          {activeTab === "settings" && <SettingsTab userProfile={userProfile} setUserProfile={setUserProfile} currentTheme={currentTheme} onSelectTheme={setCurrentTheme} />}
+          {activeTab === "feed" && (
+            <FeedTab
+              userId={userId}
+              onOpenProfile={(authorId) => setInspectingProfileId(authorId)}
+              onRewardPoints={handleRewardPoints}
+            />
+          )}
+
+          {activeTab === "friends" && <FriendsTab userId={userId} />}
+
+          {activeTab === "videos" && (
+            <VideosTab onRewardPoints={handleRewardPoints} />
+          )}
+
+          {activeTab === "messages" && (
+            <MessagesTab onRewardPoints={handleRewardPoints} />
+          )}
+
+          {activeTab === "wallet" && (
+            <WalletTab
+              pointsBalance={pointsBalance}
+              baroBalance={baroBalance}
+              onRewardPoints={handleRewardPoints}
+              onNavigateToCrypto={() => setActiveTab("crypto")}
+            />
+          )}
+
+          {activeTab === "crypto" && (
+            <CryptoTab
+              pointsBalance={pointsBalance}
+              baroBalance={baroBalance}
+              onRewardPoints={handleRewardPoints}
+              setPointsBalance={setPointsBalance}
+              setBaroBalance={setBaroBalance}
+            />
+          )}
+
+          {activeTab === "debates" && (
+            <DebatesTab
+              currentUserId={userId}
+              onRewardPoints={handleRewardPoints}
+            />
+          )}
+
+          {activeTab === "offline" && (
+            <OfflineTab onRewardPoints={handleRewardPoints} />
+          )}
+
+          {activeTab === "assistant" && (
+            <AiAssistantTab onRewardPoints={handleRewardPoints} />
+          )}
+
+          {activeTab === "settings" && (
+            <SettingsTab
+              userProfile={userProfile}
+              setUserProfile={setUserProfile}
+              currentTheme={currentTheme}
+              onSelectTheme={setCurrentTheme}
+            />
+          )}
         </main>
       </div>
 
       {inspectingProfileId && (
-        <ProfileModal authorId={inspectingProfileId} onClose={() => setInspectingProfileId(null)} onNavigateToMessages={() => setActiveTab("messages")} />
+        <ProfileModal
+          authorId={inspectingProfileId}
+          currentUserId={userId}
+          onClose={() => setInspectingProfileId(null)}
+          onNavigateToMessages={() => setActiveTab("messages")}
+        />
       )}
 
-      <NotificationDrawer isOpen={notifDrawerOpen} onClose={() => setNotifDrawerOpen(false)} />
+      <NotificationDrawer
+        isOpen={notifDrawerOpen}
+        onClose={() => setNotifDrawerOpen(false)}
+      />
 
       <GlobalSearchModal
         isOpen={searchModalOpen}
         onClose={() => setSearchModalOpen(false)}
-        onSelectUser={(userId) => setInspectingProfileId(userId)}
+        onSelectUser={(id) => setInspectingProfileId(id)}
         onSelectTab={(tabId) => setActiveTab(tabId)}
       />
     </div>
@@ -137,7 +218,9 @@ export default function App() {
       setLoading(false);
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
     });
 
@@ -146,7 +229,10 @@ export default function App() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center" style={{ background: "#0B1220", color: "white" }}>
+      <div
+        className="min-h-screen flex items-center justify-center"
+        style={{ background: "#0B1220", color: "white" }}
+      >
         <div className="text-center">
           <div className="text-4xl mb-4">⏳</div>
           <p>Chargement de BAARO...</p>
@@ -164,4 +250,4 @@ export default function App() {
       <MainAppContent />
     </ToastProvider>
   );
-}
+  }
