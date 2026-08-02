@@ -121,7 +121,6 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
     };
   }, []);
 
-  // ---------- PUBLIER (max 5 / min) ----------
   const handleCreatePost = async (e) => {
     e.preventDefault();
     if (!newText.trim() || submitting) return;
@@ -161,7 +160,6 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
     }
   };
 
-  // ---------- LIKE (max 30 / min) ----------
   const handleLike = async (postId) => {
     const authorId = user?.id || userId;
     if (!authorId) {
@@ -177,7 +175,6 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
 
     const isLiked = !!likedPosts[postId];
 
-    // UI optimiste
     setLikedPosts((prev) => ({ ...prev, [postId]: !isLiked }));
     setPosts((prev) =>
       prev.map((p) =>
@@ -205,7 +202,6 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
         showPointsReward?.(2, "J'aime distribué");
       }
     } catch (error) {
-      // Rollback
       setLikedPosts((prev) => ({ ...prev, [postId]: isLiked }));
       setPosts((prev) =>
         prev.map((p) =>
@@ -221,7 +217,6 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
     }
   };
 
-  // ---------- COMMENTAIRE (max 20 / min) ----------
   const handleAddComment = async (postId) => {
     if (!newCommentText.trim()) return;
 
@@ -296,7 +291,6 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
 
   return (
     <div className="flex flex-col gap-6 max-w-2xl mx-auto w-full pb-20">
-      {/* Composer */}
       <form
         onSubmit={handleCreatePost}
         className="glass-card rounded-2xl p-4 shadow-xl border"
@@ -385,7 +379,6 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
         </div>
       </form>
 
-      {/* Liste */}
       {posts.length === 0 ? (
         <div className="text-center py-8 text-gray-400">
           <p className="text-4xl mb-2">📭</p>
@@ -587,4 +580,4 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
       )}
     </div>
   );
-                }
+        }
