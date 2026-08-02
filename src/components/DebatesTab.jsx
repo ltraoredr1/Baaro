@@ -1,114 +1,157 @@
-import { useState } from "react";
-import { Swords, ThumbsUp, ThumbsDown, Plus, Video, LogIn } from "lucide-react";
+import { useState, useEffect } from "react";
+import { Swords, ThumbsUp, ThumbsDown, Plus, Video, LogIn, Loader2 } from "lucide-react";
 import { COLORS } from "../theme.js";
 import { useToast } from "./ToastContext.jsx";
 import { DebateRoom } from "./DebateRoom.jsx";
+import { useDebates } from "../hooks/useDebates.js";
+import { supabase } from "../supabaseClient.js";
 
-const DEMO_DEBATES = [
-  {
-    id: "d1",
-    title: "Faut-il automatiser les récompenses de créateurs via les Smart Contracts ?",
-    category: "Gouvernance & Tech",
-    creator: "Mamadou Sy",
-    flag: "🇲🇱",
-    forVotes: 142,
-    againstVotes: 38,
-    comments: [
-      { id: "c1", author: "Sarah J.", side: "pour", text: "Oui ! Les smart contracts garantissent la transparence et éliminent les intermédiaires." },
-      { id: "c2", author: "Lars H.", side: "contre", text: "Des audits de sécurité rigoureux sont nécessaires avant toute automatisation totale." }
-    ]
-  },
-  {
-    id: "d2",
-    title: "Le mode de communication P2P hors-ligne doit-il devenir la priorité de BAARO ?",
-    category: "Fonctionnalités",
-    creator: "Elena Rostova",
-    flag: "🇷🇺",
-    forVotes: 210,
-    againstVotes: 15,
-    comments: [
-      { id: "c3", author: "Kenji T.", side: "pour", text: "Crucial pour les zones à faible connectivité internet !" }
-    ]
-  }
-];
-
-export function DebatesTab({ onRewardPoints, userName = "Vous" }) {
+export function DebatesTab({ onRewardPoints, userName = "Vous", userId }) {
   const { showToast, showPointsReward } = useToast();
-  const [debates, setDebates] = useState(DEMO_DEBATES);
-  const [activeDebateId, setActiveDebateId] = useState("d1");
+  
+  // États locaux
+  const [activeDebateId, setActiveDebateId] = useState(null);
   const [argumentText, setArgumentText] = useState("");
   const [argumentSide, setArgumentSide] = useState("pour");
   const [votedMap, setVotedMap] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [userVotes, setUserVotes] = useState({});
 
-  // Session d'appel vidéo en cours : { mode: "host" | "guest", debate?, inviteCode? }
+  // Session d'appel vidéo
   const [callSession, setCallSession] = useState(null);
   const [joinCodeInput, setJoinCodeInput] = useState("");
   const [showJoinField, setShowJoinField] = useState(false);
 
+  // Hook pour les débats (connecté à Supabase)
+  const { debates, loading: debatesLoading, createDebate, addVote, addArgument, refreshDebates } = useDebates(userId);
+
+  // Charger les débats au montage
+  useEffect(() => {
+    if (userId) {
+      refreshDebates();
+    }
+  }, [userId]);
+
+  // Charger les votes de l'utilisateur
+  useEffect(() => {
+    if (!userId) return;
+
+    const loadUserVotes = async () => {
+      const { data, error } = await supabase
+        .from('debate_votes')
+        .select('debate_id, side')
+        .eq('user_id', userId);
+
+      if (!error && data) {
+        const votes = {};
+        data.forEach(v => {
+          votes[v.debate_id] = v.side;
+        });
+        setUserVotes(votes);
+        setVotedMap(votes);
+      }
+    };
+
+    loadUserVotes();
+  }, [userId, debates]);
+
+  // Définir le débat actif
+  useEffect(() => {
+    if (debates.length > 0 && !activeDebateId) {
+      setActiveDebateId(debates[0].id);
+    }
+  }, [debates]);
+
   const activeDebate = debates.find((d) => d.id === activeDebateId) || debates[0];
 
-  const handleVote = (debateId, side) => {
+  // Gestion du vote
+  const handleVote = async (debateId, side) => {
     if (votedMap[debateId]) {
       showToast("Vous avez déjà voté sur ce débat", "info");
       return;
     }
 
-    setVotedMap((prev) => ({ ...prev, [debateId]: side }));
-    setDebates((prev) =>
-      prev.map((d) =>
-        d.id === debateId
-          ? {
-              ...d,
-              forVotes: d.forVotes + (side === "pour" ? 1 : 0),
-              againstVotes: d.againstVotes + (side === "contre" ? 1 : 0)
-            }
-          : d
-      )
-    );
-
-    onRewardPoints(5);
-    showPointsReward(5, "Vote enregistré dans l'arène");
+    setLoading(true);
+    try {
+      const result = await addVote(debateId, side);
+      
+      if (result.success) {
+        setVotedMap((prev) => ({ ...prev, [debateId]: side }));
+        onRewardPoints(5);
+        showPointsReward(5, "Vote enregistré dans l'arène");
+        await refreshDebates();
+      } else {
+        showToast(result.error || "Erreur lors du vote", "error");
+      }
+    } catch (error) {
+      showToast("Erreur lors du vote", "error");
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const handleAddArgument = (e) => {
+  // Gestion de l'ajout d'argument
+  const handleAddArgument = async (e) => {
     e.preventDefault();
-    if (!argumentText.trim()) return;
+    if (!argumentText.trim()) {
+      showToast("Veuillez écrire un argument", "error");
+      return;
+    }
 
-    const newArg = {
-      id: `arg_${Date.now()}`,
-      author: "Vous",
-      side: argumentSide,
-      text: argumentText
-    };
+    if (!activeDebate) {
+      showToast("Aucun débat actif", "error");
+      return;
+    }
 
-    setDebates((prev) =>
-      prev.map((d) =>
-        d.id === activeDebateId
-          ? { ...d, comments: [...d.comments, newArg] }
-          : d
-      )
-    );
-
-    setArgumentText("");
-    onRewardPoints(10);
-    showPointsReward(10, "Argument publié dans le débat");
+    setLoading(true);
+    try {
+      const result = await addArgument(activeDebate.id, argumentText, argumentSide);
+      
+      if (result.success) {
+        setArgumentText("");
+        onRewardPoints(10);
+        showPointsReward(10, "Argument publié dans le débat");
+        await refreshDebates();
+      } else {
+        showToast(result.error || "Erreur lors de l'ajout", "error");
+      }
+    } catch (error) {
+      showToast("Erreur lors de l'ajout de l'argument", "error");
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const handleStartVideoDebate = () => {
-    setCallSession({ mode: "host", debate: activeDebate });
+  // Démarrer un débat vidéo
+  const handleStartVideoDebate = async () => {
+    if (!activeDebate) {
+      showToast("Aucun débat sélectionné", "error");
+      return;
+    }
+
+    setCallSession({ 
+      mode: "host", 
+      debate: activeDebate,
+      userId: userId
+    });
   };
 
+  // Rejoindre par code
   const handleJoinByCode = (e) => {
     e.preventDefault();
     const code = joinCodeInput.trim().toUpperCase();
-    if (code.length !== 6) {
-      showToast("Le code doit contenir 6 caractères", "error");
+    if (code.length !== 8) {
+      showToast("Le code doit contenir 8 caractères", "error");
       return;
     }
-    setCallSession({ mode: "guest", inviteCode: code });
+    setCallSession({ 
+      mode: "guest", 
+      inviteCode: code,
+      userId: userId
+    });
   };
 
-  // Pendant un appel vidéo actif, on remplace toute la vue par la room
+  // Pendant un appel vidéo actif
   if (callSession) {
     return (
       <DebateRoom
@@ -116,6 +159,7 @@ export function DebatesTab({ onRewardPoints, userName = "Vous" }) {
         debate={callSession.debate}
         inviteCode={callSession.inviteCode}
         userName={userName}
+        userId={userId}
         onLeave={() => {
           setCallSession(null);
           setJoinCodeInput("");
@@ -124,8 +168,38 @@ export function DebatesTab({ onRewardPoints, userName = "Vous" }) {
     );
   }
 
-  const totalVotes = activeDebate.forVotes + activeDebate.againstVotes;
-  const forPct = totalVotes > 0 ? Math.round((activeDebate.forVotes / totalVotes) * 100) : 50;
+  // Affichage du chargement
+  if (debatesLoading) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20">
+        <Loader2 className="animate-spin" size={40} style={{ color: COLORS.gold }} />
+        <p className="mt-4 text-sm" style={{ color: COLORS.muted }}>Chargement des débats...</p>
+      </div>
+    );
+  }
+
+  // Pas de débats
+  if (!activeDebate) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20 gap-4 max-w-4xl mx-auto">
+        <Swords size={48} style={{ color: COLORS.gold }} />
+        <h3 className="text-lg font-bold" style={{ color: COLORS.ivory }}>Aucun débat en cours</h3>
+        <p className="text-sm" style={{ color: COLORS.muted }}>Soyez le premier à lancer un débat !</p>
+        <button
+          onClick={() => createDebate()}
+          className="px-6 py-3 rounded-xl text-sm font-bold gold-glow"
+          style={{ background: COLORS.gold, color: COLORS.bg }}
+        >
+          <Plus size={16} className="inline mr-2" />
+          Créer un débat
+        </button>
+      </div>
+    );
+  }
+
+  const totalVotes = activeDebate.for_votes + activeDebate.against_votes;
+  const forPct = totalVotes > 0 ? Math.round((activeDebate.for_votes / totalVotes) * 100) : 50;
+  const hasVoted = !!votedMap[activeDebate.id];
 
   return (
     <div className="flex flex-col gap-6 max-w-4xl mx-auto w-full pb-20">
@@ -135,7 +209,9 @@ export function DebatesTab({ onRewardPoints, userName = "Vous" }) {
             <Swords size={22} style={{ color: COLORS.gold }} />
             Arènes de Débats Publiques
           </h2>
-          <p className="text-xs" style={{ color: COLORS.muted }}>Exprimez votre opinion et gagnez des points de gouvernance</p>
+          <p className="text-xs" style={{ color: COLORS.muted }}>
+            {debates.length} débat{debates.length > 1 ? 's' : ''} en cours
+          </p>
         </div>
       </div>
 
@@ -164,10 +240,10 @@ export function DebatesTab({ onRewardPoints, userName = "Vous" }) {
         <form onSubmit={handleJoinByCode} className="flex gap-2">
           <input
             type="text"
-            placeholder="Code à 6 caractères"
+            placeholder="Code à 8 caractères"
             value={joinCodeInput}
-            onChange={(e) => setJoinCodeInput(e.target.value.toUpperCase().slice(0, 6))}
-            maxLength={6}
+            onChange={(e) => setJoinCodeInput(e.target.value.toUpperCase().slice(0, 8))}
+            maxLength={8}
             className="flex-1 bg-transparent border rounded-xl px-3 py-2 text-sm font-mono tracking-widest uppercase outline-none"
             style={{ borderColor: COLORS.borderTeal, color: COLORS.ivory }}
           />
@@ -182,13 +258,15 @@ export function DebatesTab({ onRewardPoints, userName = "Vous" }) {
       )}
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {/* Debate List Column */}
+        {/* Liste des débats */}
         <div className="glass-card rounded-2xl p-4 border flex flex-col gap-3" style={{ borderColor: COLORS.border }}>
           <span className="text-xs font-bold uppercase tracking-wider" style={{ color: COLORS.muted }}>Débats Récents</span>
 
-          <div className="flex flex-col gap-2">
+          <div className="flex flex-col gap-2 max-h-[500px] overflow-y-auto">
             {debates.map((d) => {
               const isActive = d.id === activeDebateId;
+              const isVoted = !!votedMap[d.id];
+              
               return (
                 <button
                   key={d.id}
@@ -199,29 +277,46 @@ export function DebatesTab({ onRewardPoints, userName = "Vous" }) {
                     borderColor: isActive ? COLORS.borderGold : COLORS.border
                   }}
                 >
-                  <div className="text-[10px] font-bold uppercase tracking-wider" style={{ color: COLORS.teal }}>{d.category}</div>
-                  <div className="text-xs font-bold mt-1 leading-snug line-clamp-2" style={{ color: COLORS.ivory }}>{d.title}</div>
+                  <div className="flex justify-between items-start">
+                    <div className="text-[10px] font-bold uppercase tracking-wider" style={{ color: COLORS.teal }}>
+                      {d.category || 'Débat'}
+                    </div>
+                    {isVoted && (
+                      <span className="text-[8px] px-1.5 py-0.5 rounded" style={{ background: COLORS.gold, color: COLORS.bg }}>
+                        ✓ voté
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-xs font-bold mt-1 leading-snug line-clamp-2" style={{ color: COLORS.ivory }}>
+                    {d.title}
+                  </div>
+                  <div className="text-[10px] mt-1" style={{ color: COLORS.muted }}>
+                    {d.host_username || 'Anonyme'} · {d.comments?.length || 0} arguments
+                  </div>
                 </button>
               );
             })}
           </div>
         </div>
 
-        {/* Selected Debate Arena View */}
+        {/* Vue du débat sélectionné */}
         <div className="md:col-span-2 glass-card rounded-2xl p-5 border flex flex-col gap-5" style={{ borderColor: COLORS.borderGold }}>
           <div>
             <span className="text-xs font-mono px-2.5 py-0.5 rounded-full" style={{ background: COLORS.tealGlow, color: COLORS.teal }}>
-              {activeDebate.category}
+              {activeDebate.category || 'Débat Public'}
             </span>
             <h3 className="text-lg font-bold mt-2" style={{ color: COLORS.ivory }}>{activeDebate.title}</h3>
-            <div className="text-xs mt-1" style={{ color: COLORS.muted }}>Proposé par {activeDebate.creator} {activeDebate.flag}</div>
+            <div className="text-xs mt-1" style={{ color: COLORS.muted }}>
+              Proposé par {activeDebate.host_username || 'Anonyme'} 
+              {activeDebate.flag && ` ${activeDebate.flag}`}
+            </div>
           </div>
 
-          {/* Voting Gauge */}
+          {/* Jauge de vote */}
           <div className="p-4 rounded-xl border flex flex-col gap-3" style={{ background: COLORS.surface, borderColor: COLORS.border }}>
             <div className="flex justify-between text-xs font-bold">
-              <span style={{ color: COLORS.teal }}>POUR : {forPct}% ({activeDebate.forVotes} votes)</span>
-              <span style={{ color: "#EC4899" }}>CONTRE : {100 - forPct}% ({activeDebate.againstVotes} votes)</span>
+              <span style={{ color: COLORS.teal }}>POUR : {forPct}% ({activeDebate.for_votes || 0} votes)</span>
+              <span style={{ color: "#EC4899" }}>CONTRE : {100 - forPct}% ({activeDebate.against_votes || 0} votes)</span>
             </div>
 
             <div className="w-full h-3 rounded-full overflow-hidden flex" style={{ background: COLORS.surface2 }}>
@@ -229,12 +324,23 @@ export function DebatesTab({ onRewardPoints, userName = "Vous" }) {
               <div className="h-full transition-all duration-500" style={{ width: `${100 - forPct}%`, background: "#EC4899" }} />
             </div>
 
-            {/* Vote Action Buttons */}
+            {/* Boutons de vote */}
             <div className="flex gap-3 mt-1">
               <button
                 onClick={() => handleVote(activeDebate.id, "pour")}
-                className="flex-1 py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 border hover:border-teal-400 transition"
-                style={{ background: COLORS.surface2, borderColor: COLORS.borderTeal, color: COLORS.teal }}
+                disabled={loading || hasVoted}
+                className={`flex-1 py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 border transition ${
+                  hasVoted && votedMap[activeDebate.id] === "pour" 
+                    ? "bg-teal-500/20 border-teal-500" 
+                    : "hover:border-teal-400"
+                }`}
+                style={{
+                  background: hasVoted && votedMap[activeDebate.id] === "pour" ? COLORS.tealGlow : COLORS.surface2,
+                  borderColor: hasVoted && votedMap[activeDebate.id] === "pour" ? COLORS.teal : COLORS.borderTeal,
+                  color: hasVoted && votedMap[activeDebate.id] === "pour" ? COLORS.teal : COLORS.teal,
+                  opacity: hasVoted ? 0.6 : 1,
+                  cursor: hasVoted ? 'not-allowed' : 'pointer'
+                }}
               >
                 <ThumbsUp size={14} />
                 <span>Voter POUR (+5 pts)</span>
@@ -242,47 +348,87 @@ export function DebatesTab({ onRewardPoints, userName = "Vous" }) {
 
               <button
                 onClick={() => handleVote(activeDebate.id, "contre")}
-                className="flex-1 py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 border hover:border-rose-400 transition"
-                style={{ background: COLORS.surface2, borderColor: "rgba(236,72,153,0.3)", color: "#EC4899" }}
+                disabled={loading || hasVoted}
+                className={`flex-1 py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 border transition ${
+                  hasVoted && votedMap[activeDebate.id] === "contre" 
+                    ? "bg-rose-500/20 border-rose-500" 
+                    : "hover:border-rose-400"
+                }`}
+                style={{
+                  background: hasVoted && votedMap[activeDebate.id] === "contre" ? "rgba(236,72,153,0.2)" : COLORS.surface2,
+                  borderColor: hasVoted && votedMap[activeDebate.id] === "contre" ? "#EC4899" : "rgba(236,72,153,0.3)",
+                  color: hasVoted && votedMap[activeDebate.id] === "contre" ? "#EC4899" : "#EC4899",
+                  opacity: hasVoted ? 0.6 : 1,
+                  cursor: hasVoted ? 'not-allowed' : 'pointer'
+                }}
               >
                 <ThumbsDown size={14} />
                 <span>Voter CONTRE (+5 pts)</span>
               </button>
             </div>
+            {hasVoted && (
+              <p className="text-[10px] text-center" style={{ color: COLORS.gold }}>
+                ✓ Vous avez voté {votedMap[activeDebate.id] === "pour" ? "POUR" : "CONTRE"}
+              </p>
+            )}
           </div>
 
-          {/* Arguments Feed */}
+          {/* Arguments */}
           <div className="flex flex-col gap-3">
-            <span className="text-xs font-bold uppercase tracking-wider" style={{ color: COLORS.muted }}>Arguments des Membres</span>
-            {activeDebate.comments.map((c) => (
-              <div key={c.id} className="p-3 rounded-xl text-xs border flex flex-col gap-1" style={{ background: COLORS.surface, borderColor: c.side === "pour" ? COLORS.borderTeal : "rgba(236,72,153,0.3)" }}>
-                <div className="flex justify-between font-bold">
-                  <span style={{ color: COLORS.gold }}>{c.author}</span>
-                  <span className="uppercase text-[10px]" style={{ color: c.side === "pour" ? COLORS.teal : "#EC4899" }}>
-                    Avis: {c.side}
-                  </span>
+            <span className="text-xs font-bold uppercase tracking-wider" style={{ color: COLORS.muted }}>
+              Arguments des Membres ({activeDebate.comments?.length || 0})
+            </span>
+            
+            {activeDebate.comments && activeDebate.comments.length > 0 ? (
+              activeDebate.comments.map((c) => (
+                <div 
+                  key={c.id} 
+                  className="p-3 rounded-xl text-xs border flex flex-col gap-1" 
+                  style={{ 
+                    background: COLORS.surface, 
+                    borderColor: c.side === "pour" ? COLORS.borderTeal : "rgba(236,72,153,0.3)" 
+                  }}
+                >
+                  <div className="flex justify-between font-bold">
+                    <span style={{ color: COLORS.gold }}>{c.author_username || 'Anonyme'}</span>
+                    <span className="uppercase text-[10px]" style={{ color: c.side === "pour" ? COLORS.teal : "#EC4899" }}>
+                      Avis: {c.side}
+                    </span>
+                  </div>
+                  <p style={{ color: COLORS.ivory }}>{c.text}</p>
                 </div>
-                <p style={{ color: COLORS.ivory }}>{c.text}</p>
-              </div>
-            ))}
+              ))
+            ) : (
+              <p className="text-xs" style={{ color: COLORS.muted }}>Aucun argument pour l'instant. Soyez le premier !</p>
+            )}
           </div>
 
-          {/* Add Argument Form */}
+          {/* Formulaire d'ajout d'argument */}
           <form onSubmit={handleAddArgument} className="flex flex-col gap-2 pt-3 border-t" style={{ borderColor: COLORS.border }}>
             <div className="flex gap-2">
               <button
                 type="button"
                 onClick={() => setArgumentSide("pour")}
-                className={`px-3 py-1 text-xs font-bold rounded-lg border ${argumentSide === "pour" ? "bg-teal-500/20 text-teal-400 border-teal-500" : ""}`}
-                style={{ borderColor: COLORS.border, color: argumentSide === "pour" ? COLORS.teal : COLORS.muted }}
+                className={`px-3 py-1 text-xs font-bold rounded-lg border transition ${
+                  argumentSide === "pour" ? "bg-teal-500/20 text-teal-400 border-teal-500" : ""
+                }`}
+                style={{
+                  borderColor: argumentSide === "pour" ? COLORS.teal : COLORS.border,
+                  color: argumentSide === "pour" ? COLORS.teal : COLORS.muted
+                }}
               >
                 Position: POUR
               </button>
               <button
                 type="button"
                 onClick={() => setArgumentSide("contre")}
-                className={`px-3 py-1 text-xs font-bold rounded-lg border ${argumentSide === "contre" ? "bg-rose-500/20 text-rose-400 border-rose-500" : ""}`}
-                style={{ borderColor: COLORS.border, color: argumentSide === "contre" ? "#EC4899" : COLORS.muted }}
+                className={`px-3 py-1 text-xs font-bold rounded-lg border transition ${
+                  argumentSide === "contre" ? "bg-rose-500/20 text-rose-400 border-rose-500" : ""
+                }`}
+                style={{
+                  borderColor: argumentSide === "contre" ? "#EC4899" : COLORS.border,
+                  color: argumentSide === "contre" ? "#EC4899" : COLORS.muted
+                }}
               >
                 Position: CONTRE
               </button>
@@ -294,15 +440,17 @@ export function DebatesTab({ onRewardPoints, userName = "Vous" }) {
                 placeholder="Rédigez votre argument réfléchi..."
                 value={argumentText}
                 onChange={(e) => setArgumentText(e.target.value)}
+                disabled={loading}
                 className="flex-1 bg-transparent border rounded-xl px-3 py-2 text-xs outline-none"
                 style={{ borderColor: COLORS.border, color: COLORS.ivory }}
               />
               <button
                 type="submit"
-                className="px-4 py-2 rounded-xl text-xs font-bold gold-glow"
+                disabled={loading}
+                className="px-4 py-2 rounded-xl text-xs font-bold gold-glow disabled:opacity-50"
                 style={{ background: COLORS.gold, color: COLORS.bg }}
               >
-                Soumettre (+10 pts)
+                {loading ? <Loader2 className="animate-spin inline" size={14} /> : 'Soumettre (+10 pts)'}
               </button>
             </div>
           </form>
@@ -310,4 +458,4 @@ export function DebatesTab({ onRewardPoints, userName = "Vous" }) {
       </div>
     </div>
   );
-    }
+}
