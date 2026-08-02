@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Heart,
   MessageCircle,
@@ -18,73 +18,12 @@ import {
 } from "lucide-react";
 import { COLORS } from "../theme.js";
 import { useToast } from "./ToastContext.jsx";
-import { STABLE_USERS } from "../data/users.js";
-
-const DEMO_STORIES = [
-  { id: 1, name: "Vous", avatar: "👤", isUser: true, hasNew: false },
-  ...STABLE_USERS.slice(0, 5).map((u) => ({
-    id: u.id,
-    name: u.display_name.split(" ")[0],
-    avatar: u.flag,
-    photo: u.avatar,
-    hasNew: true
-  }))
-];
-
-const INITIAL_POSTS = [
-  {
-    id: "p1",
-    author_id: "u_amina",
-    display_name: "Amina Kouyaté",
-    handle: "@amina_dakar",
-    flag: "🇸🇳",
-    avatar: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80",
-    isVerified: true,
-    text: "Lancement officiel de notre coopérative solaire locale à Dakar ! Les transactions en BARO Coin permettent aux habitants d'échanger de l'énergie de manière décentralisée. ⚡🌱 #GreenTech #BaroCoin #AfricaTech",
-    likes: 142,
-    comments_count: 8,
-    created_at: new Date(Date.now() - 3600000).toISOString(),
-    poll: {
-      question: "Pensez-vous que les micro-grids solaires soutiendront le développement local ?",
-      options: [
-        { label: "Oui, totalement", votes: 84 },
-        { label: "Besoin de plus de données", votes: 16 }
-      ],
-      totalVotes: 100
-    }
-  },
-  {
-    id: "p2",
-    author_id: "u_kenji",
-    display_name: "Kenji Takahashi",
-    handle: "@kenji_tokyo",
-    flag: "🇯🇵",
-    avatar: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=150&q=80",
-    isVerified: true,
-    text: "Une journée incroyable au sommet Web3 de Tokyo. Le potentiel du réseau BAARO pour relier la communauté mondiale sans frais bancaires est tout simplement révolutionnaire ! 🚀",
-    likes: 289,
-    comments_count: 14,
-    created_at: new Date(Date.now() - 7200000).toISOString(),
-    image: "https://images.unsplash.com/photo-1503899036084-c55cdd92da26?auto=format&fit=crop&w=800&q=80"
-  },
-  {
-    id: "p3",
-    author_id: "u_sarah",
-    display_name: "Sarah Jenkins",
-    handle: "@sarah_austin",
-    flag: "🇺🇸",
-    avatar: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=150&q=80",
-    isVerified: true,
-    text: "Petite question pour la communauté : quel est le moyen le plus efficace d'accumuler vos premiers points BAARO ? J'utilise le parrainage et la création de contenu !",
-    likes: 97,
-    comments_count: 5,
-    created_at: new Date(Date.now() - 14400000).toISOString(),
-  }
-];
+import { supabase } from "../supabaseClient.js";
 
 export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
   const { showToast, showPointsReward } = useToast();
-  const [posts, setPosts] = useState(INITIAL_POSTS);
+  const [posts, setPosts] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [newText, setNewText] = useState("");
   const [mood, setMood] = useState("");
   const [showPoll, setShowPoll] = useState(false);
@@ -93,55 +32,145 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
   const [pollOpt2, setPollOpt2] = useState("");
   const [likedPosts, setLikedPosts] = useState({});
   const [commentOpen, setCommentOpen] = useState({});
-  const [commentsMap, setCommentsMap] = useState({
-    p1: [{ id: "c1", author: "Kenji T.", text: "Félicitations pour cette initiative !" }]
-  });
+  const [commentsMap, setCommentsMap] = useState({});
   const [newCommentText, setNewCommentText] = useState("");
   const [translatedMap, setTranslatedMap] = useState({});
+  const [user, setUser] = useState(null);
 
-  const handleCreatePost = (e) => {
-    e.preventDefault();
-    if (!newText.trim()) return;
-
-    const newPostObj = {
-      id: `p_${Date.now()}`,
-      author_id: userId || "u_me",
-      display_name: "Vous",
-      handle: "@mon_compte",
-      flag: "🌍",
-      isVerified: true,
-      text: newText + (mood ? ` (Humeur: ${mood})` : ""),
-      likes: 0,
-      comments_count: 0,
-      created_at: new Date().toISOString(),
-      poll: showPoll && pollQ.trim() ? {
-        question: pollQ,
-        options: [
-          { label: pollOpt1 || "Oui", votes: 0 },
-          { label: pollOpt2 || "Non", votes: 0 }
-        ],
-        totalVotes: 0
-      } : null
+  // Charger l'utilisateur connecté
+  useEffect(() => {
+    const getUser = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      setUser(user);
     };
+    getUser();
+  }, []);
 
-    setPosts([newPostObj, ...posts]);
-    setNewText("");
-    setMood("");
-    setShowPoll(false);
-    setPollQ("");
-    setPollOpt1("");
-    setPollOpt2("");
+  // Charger les publications
+  const loadPosts = async () => {
+    setLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from('posts')
+        .select(`
+          *,
+          profiles:author_id (
+            display_name,
+            handle,
+            flag,
+            avatar_url,
+            is_verified
+          )
+        `)
+        .order('created_at', { ascending: false });
 
-    onRewardPoints(15);
-    showPointsReward(15, "Publication engageante créée !");
+      if (error) throw error;
+      
+      // Transformer les données pour le format attendu
+      const formattedPosts = data.map(post => ({
+        id: post.id,
+        author_id: post.author_id,
+        display_name: post.profiles?.display_name || 'Membre',
+        handle: post.profiles?.handle || '@utilisateur',
+        flag: post.profiles?.flag || '🌍',
+        avatar: post.profiles?.avatar_url || '',
+        isVerified: post.profiles?.is_verified || false,
+        text: post.text,
+        likes: post.likes || 0,
+        comments_count: post.comments_count || 0,
+        created_at: post.created_at,
+        image: post.media_url,
+        media_type: post.media_type,
+        // S'il y a un sondage (si ta table a cette colonne)
+        poll: post.poll || null
+      }));
+
+      setPosts(formattedPosts);
+    } catch (error) {
+      console.error('Erreur chargement posts:', error);
+      showToast('Erreur chargement des publications', 'error');
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const handleLike = (postId) => {
+  useEffect(() => {
+    loadPosts();
+  }, []);
+
+  // Souscrire aux changements en temps réel
+  useEffect(() => {
+    const subscription = supabase
+      .channel('posts_channel')
+      .on('postgres_changes', 
+        { event: 'INSERT', schema: 'public', table: 'posts' },
+        () => loadPosts()
+      )
+      .on('postgres_changes',
+        { event: 'DELETE', schema: 'public', table: 'posts' },
+        () => loadPosts()
+      )
+      .subscribe();
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const handleCreatePost = async (e) => {
+    e.preventDefault();
+    if (!newText.trim()) return;
+    if (!user) {
+      showToast('Vous devez être connecté', 'error');
+      return;
+    }
+
+    try {
+      const { data, error } = await supabase
+        .from('posts')
+        .insert({
+          author_id: user.id,
+          text: newText + (mood ? ` (Humeur: ${mood})` : ""),
+          media_type: null,
+          media_url: null
+        })
+        .select();
+
+      if (error) throw error;
+
+      setNewText("");
+      setMood("");
+      setShowPoll(false);
+      setPollQ("");
+      setPollOpt1("");
+      setPollOpt2("");
+
+      onRewardPoints(15);
+      showPointsReward(15, "Publication engageante créée !");
+      
+      // Recharger les posts
+      await loadPosts();
+    } catch (error) {
+      console.error('Erreur publication:', error);
+      showToast('Erreur: ' + error.message, 'error');
+    }
+  };
+
+  const handleLike = async (postId) => {
     const isLiked = likedPosts[postId];
     setLikedPosts((prev) => ({ ...prev, [postId]: !isLiked }));
+    
+    // Mettre à jour localement
     setPosts((prev) =>
       prev.map((p) => (p.id === postId ? { ...p, likes: p.likes + (isLiked ? -1 : 1) } : p))
     );
+
+    // Mettre à jour dans Supabase
+    const post = posts.find(p => p.id === postId);
+    if (post) {
+      await supabase
+        .from('posts')
+        .update({ likes: post.likes + (isLiked ? -1 : 1) })
+        .eq('id', postId);
+    }
 
     if (!isLiked) {
       onRewardPoints(2);
@@ -149,13 +178,29 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
     }
   };
 
-  const handleAddComment = (postId) => {
+  const handleAddComment = async (postId) => {
     if (!newCommentText.trim()) return;
-    const newCmt = { id: `c_${Date.now()}`, author: "Vous", text: newCommentText };
+    
+    const newCmt = { 
+      id: `c_${Date.now()}`, 
+      author: "Vous", 
+      text: newCommentText 
+    };
+    
     setCommentsMap((prev) => ({ ...prev, [postId]: [...(prev[postId] || []), newCmt] }));
     setPosts((prev) =>
       prev.map((p) => (p.id === postId ? { ...p, comments_count: p.comments_count + 1 } : p))
     );
+    
+    // Mettre à jour dans Supabase
+    const post = posts.find(p => p.id === postId);
+    if (post) {
+      await supabase
+        .from('posts')
+        .update({ comments_count: post.comments_count + 1 })
+        .eq('id', postId);
+    }
+    
     setNewCommentText("");
     onRewardPoints(1);
     showPointsReward(1, "Commentaire ajouté");
@@ -172,37 +217,22 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
     }
   };
 
+  if (loading) {
+    return (
+      <div className="text-center py-8 text-gray-400">
+        <div className="animate-spin text-2xl mb-2">⏳</div>
+        Chargement des publications...
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col gap-6 max-w-2xl mx-auto w-full pb-20">
-      {/* Stories Bar */}
-      <div className="flex items-center gap-3 overflow-x-auto py-2 px-1 no-scrollbar">
-        {DEMO_STORIES.map((s) => (
-          <div key={s.id} onClick={() => onOpenProfile(s.id)} className="flex flex-col items-center gap-1 cursor-pointer group flex-shrink-0">
-            <div
-              className={`w-16 h-16 rounded-full p-0.5 transition-transform group-hover:scale-105 ${
-                s.hasNew ? "bg-gradient-to-tr from-amber-500 to-teal-400 p-[2px]" : "border border-amber-500/20"
-              }`}
-            >
-              <div className="w-full h-full rounded-full overflow-hidden flex items-center justify-center font-bold text-lg" style={{ background: COLORS.surface2 }}>
-                {s.photo ? (
-                  <img src={s.photo} alt={s.name} className="w-full h-full object-cover" />
-                ) : (
-                  <span>{s.avatar}</span>
-                )}
-              </div>
-            </div>
-            <span className="text-[11px] font-medium max-w-[64px] truncate" style={{ color: COLORS.ivory }}>
-              {s.name}
-            </span>
-          </div>
-        ))}
-      </div>
-
       {/* Post Composer */}
       <form onSubmit={handleCreatePost} className="glass-card rounded-2xl p-4 shadow-xl border" style={{ borderColor: COLORS.borderGold }}>
         <div className="flex gap-3 mb-3">
           <div className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm shadow-md gold-glow" style={{ background: COLORS.gold, color: COLORS.bg }}>
-            V
+            {user?.email?.charAt(0).toUpperCase() || 'V'}
           </div>
           <textarea
             value={newText}
@@ -252,7 +282,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => showToast("Upload d'image simulé", "info")}
+              onClick={() => showToast("Upload d'image en développement", "info")}
               className="p-2 rounded-lg hover:bg-white/5 text-amber-400 flex items-center gap-1 text-xs"
             >
               <ImageIcon size={16} />
@@ -292,147 +322,138 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
       </form>
 
       {/* Feed List */}
-      <div className="flex flex-col gap-4">
-        {posts.map((post) => {
-          const isLiked = likedPosts[post.id];
-          const isTranslated = !!translatedMap[post.id];
-          const comments = commentsMap[post.id] || [];
+      {posts.length === 0 ? (
+        <div className="text-center py-8 text-gray-400">
+          <p className="text-4xl mb-2">📭</p>
+          <p>Aucune publication pour le moment</p>
+          <p className="text-sm mt-2">Soyez le premier à publier !</p>
+        </div>
+      ) : (
+        <div className="flex flex-col gap-4">
+          {posts.map((post) => {
+            const isLiked = likedPosts[post.id];
+            const isTranslated = !!translatedMap[post.id];
+            const comments = commentsMap[post.id] || [];
 
-          return (
-            <article key={post.id} className="glass-card rounded-2xl p-5 shadow-xl border flex flex-col gap-3" style={{ borderColor: COLORS.border }}>
-              {/* Post Header */}
-              <div className="flex items-center justify-between">
-                <div
-                  className="flex items-center gap-3 cursor-pointer group"
-                  onClick={() => onOpenProfile(post.author_id)}
-                >
-                  <div className="w-10 h-10 rounded-full overflow-hidden border flex items-center justify-center font-bold text-sm" style={{ borderColor: COLORS.borderGold, background: COLORS.surface }}>
-                    {post.avatar ? (
-                      <img src={post.avatar} alt={post.display_name} className="w-full h-full object-cover" />
+            return (
+              <article key={post.id} className="glass-card rounded-2xl p-5 shadow-xl border flex flex-col gap-3" style={{ borderColor: COLORS.border }}>
+                {/* Post Header */}
+                <div className="flex items-center justify-between">
+                  <div
+                    className="flex items-center gap-3 cursor-pointer group"
+                    onClick={() => onOpenProfile && onOpenProfile(post.author_id)}
+                  >
+                    <div className="w-10 h-10 rounded-full overflow-hidden border flex items-center justify-center font-bold text-sm" style={{ borderColor: COLORS.borderGold, background: COLORS.surface }}>
+                      {post.avatar ? (
+                        <img src={post.avatar} alt={post.display_name} className="w-full h-full object-cover" />
+                      ) : (
+                        <span style={{ color: COLORS.gold }}>{post.display_name?.charAt(0) || '?'}</span>
+                      )}
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-1.5 text-sm font-semibold group-hover:text-amber-400 transition" style={{ color: COLORS.ivory }}>
+                        {post.display_name} {post.flag}
+                        {post.isVerified && <BadgeCheck size={15} style={{ color: COLORS.teal }} />}
+                      </div>
+                      <div className="text-xs" style={{ color: COLORS.muted }}>
+                        {post.handle} • {new Date(post.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </div>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={() => handleTranslate(post.id, post.text)}
+                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs border hover:border-amber-400/50 transition"
+                    style={{ background: COLORS.surface, borderColor: COLORS.border, color: COLORS.muted }}
+                  >
+                    <Languages size={13} style={{ color: COLORS.teal }} />
+                    <span>{isTranslated ? "Original" : "Traduire"}</span>
+                  </button>
+                </div>
+
+                {/* Post Content */}
+                <p className="text-sm leading-relaxed" style={{ color: COLORS.ivory }}>
+                  {isTranslated ? translatedMap[post.id] : post.text}
+                </p>
+
+                {/* Optional Post Image */}
+                {post.image && (
+                  <div className="rounded-xl overflow-hidden max-h-72 border" style={{ borderColor: COLORS.border }}>
+                    <img src={post.image} alt="Post content" className="w-full h-full object-cover hover:scale-105 transition duration-500" />
+                  </div>
+                )}
+
+                {/* Actions Footer */}
+                <div className="flex items-center justify-between pt-3 border-t text-xs font-medium" style={{ borderColor: COLORS.border }}>
+                  <button
+                    onClick={() => handleLike(post.id)}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition ${
+                      isLiked ? "text-rose-400 bg-rose-500/10" : "hover:bg-white/5"
+                    }`}
+                    style={{ color: isLiked ? "#EC4899" : COLORS.muted }}
+                  >
+                    <Heart size={16} fill={isLiked ? "#EC4899" : "none"} />
+                    <span>{post.likes || 0}</span>
+                  </button>
+
+                  <button
+                    onClick={() => setCommentOpen((prev) => ({ ...prev, [post.id]: !prev[post.id] }))}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg hover:bg-white/5 transition"
+                    style={{ color: COLORS.muted }}
+                  >
+                    <MessageCircle size={16} />
+                    <span>{post.comments_count || 0}</span>
+                  </button>
+
+                  <button
+                    onClick={() => showToast("Lien de partage copié !", "success")}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg hover:bg-white/5 transition"
+                    style={{ color: COLORS.muted }}
+                  >
+                    <Share2 size={16} />
+                    <span>Partager</span>
+                  </button>
+                </div>
+
+                {/* Comments Section */}
+                {commentOpen[post.id] && (
+                  <div className="flex flex-col gap-2 pt-3 border-t mt-1" style={{ borderColor: COLORS.border }}>
+                    <div className="text-xs font-semibold" style={{ color: COLORS.muted }}>Commentaires</div>
+                    {comments.length > 0 ? (
+                      comments.map((c) => (
+                        <div key={c.id} className="p-2.5 rounded-xl text-xs flex flex-col gap-1" style={{ background: COLORS.surface }}>
+                          <span className="font-bold" style={{ color: COLORS.gold }}>{c.author}</span>
+                          <span style={{ color: COLORS.ivory }}>{c.text}</span>
+                        </div>
+                      ))
                     ) : (
-                      <span style={{ color: COLORS.gold }}>{post.display_name.charAt(0)}</span>
+                      <p className="text-xs" style={{ color: COLORS.muted }}>Aucun commentaire</p>
                     )}
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-1.5 text-sm font-semibold group-hover:text-amber-400 transition" style={{ color: COLORS.ivory }}>
-                      {post.display_name} {post.flag}
-                      {post.isVerified && <BadgeCheck size={15} style={{ color: COLORS.teal }} />}
-                    </div>
-                    <div className="text-xs" style={{ color: COLORS.muted }}>
-                      {post.handle} • {new Date(post.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                    </div>
-                  </div>
-                </div>
 
-                <button
-                  onClick={() => handleTranslate(post.id, post.text)}
-                  className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs border hover:border-amber-400/50 transition"
-                  style={{ background: COLORS.surface, borderColor: COLORS.border, color: COLORS.muted }}
-                >
-                  <Languages size={13} style={{ color: COLORS.teal }} />
-                  <span>{isTranslated ? "Original" : "Traduire"}</span>
-                </button>
-              </div>
-
-              {/* Post Content */}
-              <p className="text-sm leading-relaxed" style={{ color: COLORS.ivory }}>
-                {isTranslated ? translatedMap[post.id] : post.text}
-              </p>
-
-              {/* Optional Post Image */}
-              {post.image && (
-                <div className="rounded-xl overflow-hidden max-h-72 border" style={{ borderColor: COLORS.border }}>
-                  <img src={post.image} alt="Post content" className="w-full h-full object-cover hover:scale-105 transition duration-500" />
-                </div>
-              )}
-
-              {/* Optional Poll */}
-              {post.poll && (
-                <div className="p-3 rounded-xl border flex flex-col gap-2" style={{ background: COLORS.surface, borderColor: COLORS.borderGold }}>
-                  <div className="text-xs font-bold" style={{ color: COLORS.gold }}>Sondage communautaire</div>
-                  <div className="text-xs" style={{ color: COLORS.ivory }}>{post.poll.question}</div>
-                  <div className="flex flex-col gap-1.5 mt-1">
-                    {post.poll.options.map((opt, idx) => (
+                    <div className="flex gap-2 mt-1">
+                      <input
+                        type="text"
+                        placeholder="Ajouter un commentaire..."
+                        value={newCommentText}
+                        onChange={(e) => setNewCommentText(e.target.value)}
+                        className="flex-1 bg-transparent border rounded-xl px-3 py-1.5 text-xs outline-none"
+                        style={{ borderColor: COLORS.border, color: COLORS.ivory }}
+                      />
                       <button
-                        key={idx}
-                        onClick={() => showPointsReward(1, "Vote comptabilisé")}
-                        className="w-full text-left p-2 rounded-lg text-xs flex justify-between items-center border hover:border-amber-400/50 transition"
-                        style={{ background: COLORS.surface2, borderColor: COLORS.border, color: COLORS.ivory }}
+                        onClick={() => handleAddComment(post.id)}
+                        className="p-2 rounded-xl"
+                        style={{ background: COLORS.teal, color: COLORS.bg }}
                       >
-                        <span>{opt.label}</span>
-                        <span className="font-mono text-[11px]" style={{ color: COLORS.teal }}>{opt.votes} votes</span>
+                        <Send size={14} />
                       </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Actions Footer */}
-              <div className="flex items-center justify-between pt-3 border-t text-xs font-medium" style={{ borderColor: COLORS.border }}>
-                <button
-                  onClick={() => handleLike(post.id)}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition ${
-                    isLiked ? "text-rose-400 bg-rose-500/10" : "hover:bg-white/5"
-                  }`}
-                  style={{ color: isLiked ? "#EC4899" : COLORS.muted }}
-                >
-                  <Heart size={16} fill={isLiked ? "#EC4899" : "none"} />
-                  <span>{post.likes}</span>
-                </button>
-
-                <button
-                  onClick={() => setCommentOpen((prev) => ({ ...prev, [post.id]: !prev[post.id] }))}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg hover:bg-white/5 transition"
-                  style={{ color: COLORS.muted }}
-                >
-                  <MessageCircle size={16} />
-                  <span>{post.comments_count}</span>
-                </button>
-
-                <button
-                  onClick={() => showToast("Lien de partage copié !", "success")}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg hover:bg-white/5 transition"
-                  style={{ color: COLORS.muted }}
-                >
-                  <Share2 size={16} />
-                  <span>Partager</span>
-                </button>
-              </div>
-
-              {/* Comments Section Drawer */}
-              {commentOpen[post.id] && (
-                <div className="flex flex-col gap-2 pt-3 border-t mt-1" style={{ borderColor: COLORS.border }}>
-                  <div className="text-xs font-semibold" style={{ color: COLORS.muted }}>Commentaires</div>
-                  {comments.map((c) => (
-                    <div key={c.id} className="p-2.5 rounded-xl text-xs flex flex-col gap-1" style={{ background: COLORS.surface }}>
-                      <span className="font-bold" style={{ color: COLORS.gold }}>{c.author}</span>
-                      <span style={{ color: COLORS.ivory }}>{c.text}</span>
                     </div>
-                  ))}
-
-                  <div className="flex gap-2 mt-1">
-                    <input
-                      type="text"
-                      placeholder="Ajouter un commentaire..."
-                      value={newCommentText}
-                      onChange={(e) => setNewCommentText(e.target.value)}
-                      className="flex-1 bg-transparent border rounded-xl px-3 py-1.5 text-xs outline-none"
-                      style={{ borderColor: COLORS.border, color: COLORS.ivory }}
-                    />
-                    <button
-                      onClick={() => handleAddComment(post.id)}
-                      className="p-2 rounded-xl"
-                      style={{ background: COLORS.teal, color: COLORS.bg }}
-                    >
-                      <Send size={14} />
-                    </button>
                   </div>
-                </div>
-              )}
-            </article>
-          );
-        })}
-      </div>
+                )}
+              </article>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
-}
+                }
