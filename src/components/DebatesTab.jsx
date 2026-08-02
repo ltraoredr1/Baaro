@@ -5,7 +5,6 @@ import { supabase } from "../supabaseClient.js";
 import { CreateDebateModal } from "./CreateDebateModal.jsx";
 import { DebateRoom } from "./DebateRoom.jsx";
 
-// ✅ EXPORT PAR DÉFAUT (sans accolades)
 export default function DebatesTab({ currentUserId, onRewardPoints }) {
   const [debates, setDebates] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -24,14 +23,14 @@ export default function DebatesTab({ currentUserId, onRewardPoints }) {
         .order("created_at", { ascending: false });
 
       if (error) {
-        console.error("❌ Erreur Supabase:", error);
+        console.error("Erreur Supabase:", error);
         setError(error.message);
         setDebates([]);
       } else {
         setDebates(data || []);
       }
     } catch (err) {
-      console.error("💥 Erreur critique:", err);
+      console.error("Erreur critique:", err);
       setError(err.message);
     } finally {
       setLoading(false);
@@ -40,18 +39,15 @@ export default function DebatesTab({ currentUserId, onRewardPoints }) {
 
   useEffect(() => {
     fetchDebates();
-
     const channel = supabase
       .channel("debates_channel")
       .on("postgres_changes", { event: "*", schema: "public", table: "debate_rooms" }, () => {
         fetchDebates();
       })
       .subscribe();
-
     return () => { supabase.removeChannel(channel); };
   }, []);
 
-  // Si un débat est actif, afficher la salle
   if (activeDebateCode) {
     return (
       <DebateRoom
@@ -154,4 +150,4 @@ export default function DebatesTab({ currentUserId, onRewardPoints }) {
       />
     </>
   );
-                }
+}
