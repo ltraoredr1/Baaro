@@ -1,262 +1,216 @@
-// src/components/DebateRoom.jsx
-import { useState, useEffect, useRef, useCallback } from "react";
-import { Mic, MicOff, Video, VideoOff, PhoneOff, Copy, Check, Users, Loader2 } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import { ArrowLeft, Send, Users, Hash } from "lucide-react";
 import { COLORS } from "../theme.js";
-import { useToast } from "./ToastContext.jsx";
-import {
-  startLive,
-  joinLiveByCode,
-  leaveLive,
-  enableMic,
-  enableCamera,
-  subscribeToEvents,
-  getCallObject,
-} from "../lib/webrtc.js";
+import { supabase } from "../supabaseClient.js";
 
-export function DebateRoom({ mode, room, inviteCode: customInviteCode, userName, userId, onLeave }) {
-  const { showToast } = useToast();
-  const [status, setStatus] = useState("connecting");
-  const [errorMsg, setErrorMsg] = useState("");
-  
-  // Utilise soit le code d'invitation passé, soit celui de la room
-  const joinCode = customInviteCode || room?.code || room?.id;
-  const [inviteCode, setInviteCode] = useState(mode === "guest" ? joinCode : null);
-  
-  const [participants, setParticipants] = useState({});
-  const [micOn, setMicOn] = useState(mode === "host");
-  const [camOn, setCamOn] = useState(mode === "host");
-  const [copied, setCopied] = useState(false);
+export function DebateRoom({ inviteCode, currentUserId, onBack }) {
+  const [room, setRoom] = useState(null);
+  const [messages, setMessages] = useState([]);
+  const [newMessage, setNewMessage] = useState("");
+  const [loading, setLoading] = useState(true);
+  const messagesEndRef = useRef(null);
 
-  const videoRefs = useRef({});
-  const roomNameRef = useRef(null);
-
-  // Attacher le flux vidéo à la balise HTML <video>
-  const attachTrack = useCallback((participantId, track) => {
-    const el = videoRefs.current[participantId];
-    if (!el || !track) return;
-    if (el.srcObject?.getVideoTracks()[0] !== track) {
-      el.srcObject = new MediaStream([track]);
-    }
-  }, []);
-
-  // Rafraîchir la liste des participants
-  const refreshParticipants = useCallback(() => {
-    const callObject = getCallObject();
-    if (!callObject) return;
-    const all = callObject.participants();
-    setParticipants({ ...all });
-
-    // Attacher les tracks après mise à jour
-    Object.values(all).forEach((p) => {
-      if (p.tracks?.video?.persistentTrack) {
-        attachTrack(p.session_id, p.tracks.video.persistentTrack);
-      } else if (p.tracks?.video?.track) {
-        attachTrack(p.session_id, p.tracks.video.track);
-      }
-    });
-  }, [attachTrack]);
-
+  // 1. Charger les infos de la salle et l'historique des messages
   useEffect(() => {
-    let cancelled = false;
+    if (!inviteCode) return;
 
-    async function connect() {
+    const loadData = async () => {
+      setLoading(true);
       try {
-        if (mode === "host") {
-          const result = await startLive({ userName, debateId: room?.id });
-          if (cancelled) return;
-          roomNameRef.current = result?.roomName || room?.id;
-          setInviteCode(result?.inviteCode || room?.code);
-        } else {
-          if (!joinCode) throw new Error("Code d'invitation ou identifiant de salon manquant");
-          await joinLiveByCode({ inviteCode: joinCode, userName, isHost: false });
-          if (cancelled) return;
-          roomNameRef.current = joinCode;
-        }
+        // Récupérer la salle
+        const { data: roomData, error: roomError } = await supabase
+          .from("debate_rooms")
+          .select("*")
+          .eq("invite_code", inviteCode)
+          .single();
 
-        subscribeToEvents({
-          onParticipantJoined: refreshParticipants,
-          onParticipantLeft: refreshParticipants,
-          onTrackStarted: refreshParticipants,
-          onTrackStopped: refreshParticipants,
-          onError: (e) => {
-            console.error("Erreur WebRTC/Daily:", e);
-            if (!cancelled) {
-              setStatus("error");
-              setErrorMsg("Connexion perdue avec l'arène de débat");
-            }
-          },
-        });
+        if (roomError) throw roomError;
+        setRoom(roomData);
 
-        refreshParticipants();
-        if (!cancelled) setStatus("live");
-      } catch (err) {
-        console.error(err);
-        if (!cancelled) {
-          setStatus("error");
-          setErrorMsg(err.message || "Impossible de rejoindre le débat");
-        }
-      }
-    }
+        // Récupérer les messages (joindre avec profiles pour avoir le nom de l'auteur)
+        const { data: msgsData, error: msgsError } = await supabase
+          .from("debate_messages")
+          .select(`
+            id, text, created_at, user_id,
+            profiles (display_name, flag, avatar_url)
+          `)
+          .eq("room_id", roomData.id)
+          .order("created_at", { ascending: true });
 
-    connect();
-
-    return () => {
-      cancelled = true;
-      if (roomNameRef.current) {
-        leaveLive({ roomName: roomNameRef.current, isHost: mode === "host" }).catch(console.error);
+        if (!msgsError) setMessages(msgsData || []);
+      } catch (error) {
+        console.error("Erreur chargement débat:", error);
+      } finally {
+        setLoading(false);
       }
     };
-  }, [mode, joinCode, userName, room?.id, refreshParticipants]);
 
-  const handleToggleMic = () => {
-    const next = !micOn;
-    setMicOn(next);
-    enableMic(next);
-  };
+    loadData();
+  }, [inviteCode]);
 
-  const handleToggleCamera = () => {
-    const next = !camOn;
-    setCamOn(next);
-    enableCamera(next);
-  };
+  // 2. S'abonner aux nouveaux messages en temps réel (Supabase Realtime)
+  useEffect(() => {
+    if (!room) return;
 
-  const handleLeave = async () => {
+    const channel = supabase
+      .channel(`debate_room_${room.id}`)
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "debate_messages", filter: `room_id=eq.${room.id}` },
+        async (payload) => {
+          // Récupérer les infos du profil du nouveau message pour l'affichage
+          const { data: profile } = await supabase
+            .from("profiles")
+            .select("display_name, flag, avatar_url")
+            .eq("id", payload.new.user_id)
+            .single();
+
+          setMessages((prev) => [
+            ...prev,
+            { ...payload.new, profiles: profile }
+          ]);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [room]);
+
+  // 3. Scroll automatique vers le bas à chaque nouveau message
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  // 4. Envoyer un message
+  const handleSendMessage = async (e) => {
+    e.preventDefault();
+    if (!newMessage.trim() || !room || !currentUserId) return;
+
+    const messageText = newMessage.trim();
+    setNewMessage(""); // Vider l'input immédiatement pour une meilleure UX
+
     try {
-      await leaveLive({ roomName: roomNameRef.current, isHost: mode === "host" });
-    } catch (e) {
-      console.error(e);
-    } finally {
-      onLeave?.();
+      const { error } = await supabase.from("debate_messages").insert({
+        room_id: room.id,
+        user_id: currentUserId,
+        text: messageText,
+      });
+
+      if (error) throw error;
+    } catch (error) {
+      console.error("Erreur envoi message:", error);
+      setNewMessage(messageText); // Restaurer en cas d'échec
     }
   };
 
-  const handleCopyCode = async () => {
-    if (!inviteCode) return;
-    try {
-      await navigator.clipboard.writeText(inviteCode);
-      setCopied(true);
-      showToast("Code de salon copié !", "success");
-      setTimeout(() => setCopied(false), 2000);
-    } catch (e) {
-      showToast("Impossible de copier le code", "error");
-    }
-  };
-
-  const participantList = Object.values(participants);
-
-  if (status === "connecting") {
+  if (loading) {
     return (
-      <div className="flex flex-col items-center justify-center gap-3 py-20">
-        <Loader2 className="animate-spin" size={28} style={{ color: COLORS.gold }} />
-        <span className="text-sm" style={{ color: COLORS.muted }}>Connexion à l'arène en direct…</span>
+      <div className="flex items-center justify-center h-full" style={{ color: COLORS.muted }}>
+        Chargement de la salle...
       </div>
     );
   }
 
-  if (status === "error") {
+  if (!room) {
     return (
-      <div className="flex flex-col items-center justify-center gap-3 py-20 text-center px-6">
-        <span className="text-sm font-bold" style={{ color: "#EF4444" }}>{errorMsg}</span>
-        <button
-          onClick={onLeave}
-          className="px-4 py-2 rounded-xl text-xs font-bold"
-          style={{ background: COLORS.gold, color: COLORS.bg }}
-        >
-          Retour aux débats
+      <div className="flex flex-col items-center justify-center h-full gap-4">
+        <p style={{ color: COLORS.ivory }}>Salle de débat introuvable ou fermée.</p>
+        <button onClick={onBack} className="px-4 py-2 rounded-xl text-sm font-bold" style={{ background: COLORS.surface, color: COLORS.ivory }}>
+          Retour
         </button>
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col gap-4 max-w-4xl mx-auto w-full pb-24">
-      {/* En-tête de la room */}
-      <div className="flex items-center justify-between p-2 rounded-xl border" style={{ background: COLORS.surface, borderColor: COLORS.border }}>
-        <div>
-          <h2 className="text-base font-bold" style={{ color: COLORS.ivory }}>
-            {room?.title || "Débat en direct"}
-          </h2>
-          <div className="flex items-center gap-1.5 text-xs" style={{ color: COLORS.muted }}>
-            <Users size={12} />
-            <span>
-              {participantList.length} participant{participantList.length > 1 ? "s" : ""}
-            </span>
+    <div className="flex flex-col h-full max-h-[80vh] glass-card rounded-3xl border shadow-2xl" style={{ borderColor: COLORS.borderGold }}>
+      {/* Header de la salle */}
+      <div className="flex items-center justify-between p-4 border-b" style={{ borderColor: COLORS.border }}>
+        <div className="flex items-center gap-3">
+          <button onClick={onBack} className="p-2 rounded-full hover:bg-white/10 transition-colors" style={{ color: COLORS.ivory }}>
+            <ArrowLeft size={20} />
+          </button>
+          <div>
+            <h2 className="font-bold text-sm flex items-center gap-2" style={{ color: COLORS.ivory }}>
+              {room.title}
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-green-500/20 text-green-400 font-normal">LIVE</span>
+            </h2>
+            <p className="text-xs flex items-center gap-1" style={{ color: COLORS.muted }}>
+              <Hash size={12} /> {room.topic}
+            </p>
           </div>
         </div>
-
-        {inviteCode && (
-          <button
-            onClick={handleCopyCode}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-xl border text-xs font-bold"
-            style={{ borderColor: COLORS.borderGold, color: COLORS.gold, background: COLORS.surface2 }}
-          >
-            {copied ? <Check size={14} /> : <Copy size={14} />}
-            <span className="font-mono tracking-widest">{inviteCode}</span>
-          </button>
-        )}
+        <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full" style={{ background: COLORS.surface }}>
+          <Users size={14} style={{ color: COLORS.gold }} />
+          <span className="text-xs font-bold" style={{ color: COLORS.ivory }}>En direct</span>
+        </div>
       </div>
 
-      {/* Grille Vidéo des participants */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-        {participantList.map((p) => (
-          <div
-            key={p.session_id}
-            className="relative aspect-video rounded-xl overflow-hidden border flex items-center justify-center"
-            style={{ background: COLORS.bg, borderColor: COLORS.border }}
-          >
-            <video
-              ref={(el) => {
-                videoRefs.current[p.session_id] = el;
-              }}
-              autoPlay
-              playsInline
-              muted={p.local}
-              className="w-full h-full object-cover"
-            />
-            <span
-              className="absolute bottom-1.5 left-1.5 text-[10px] font-bold px-2 py-0.5 rounded-full backdrop-blur-md"
-              style={{ background: "rgba(0,0,0,0.6)", color: COLORS.ivory }}
-            >
-              {p.user_name || (p.local ? "Vous" : "Participant")}
-            </span>
+      {/* Zone des messages */}
+      <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
+        {messages.length === 0 ? (
+          <div className="text-center py-10" style={{ color: COLORS.muted }}>
+            <p className="text-sm">Soyez le premier à donner votre avis !</p>
           </div>
-        ))}
+        ) : (
+          messages.map((msg) => {
+            const isMe = msg.user_id === currentUserId;
+            return (
+              <div key={msg.id} className={`flex gap-3 ${isMe ? "flex-row-reverse" : "flex-row"}`}>
+                <div 
+                  className="w-8 h-8 rounded-full flex items-center justify-center text-xs shrink-0 border"
+                  style={{ borderColor: COLORS.borderGold, background: COLORS.surface2 }}
+                >
+                  {msg.profiles?.avatar_url ? (
+                    <img src={msg.profiles.avatar_url} alt="avatar" className="w-full h-full rounded-full object-cover" />
+                  ) : (
+                    <span>{msg.profiles?.flag || "🌍"}</span>
+                  )}
+                </div>
+                <div className={`max-w-[75%] px-4 py-2.5 rounded-2xl text-sm ${isMe ? "rounded-tr-sm" : "rounded-tl-sm"}`}
+                  style={{ 
+                    background: isMe ? COLORS.gold : COLORS.surface,
+                    color: isMe ? "#000" : COLORS.ivory
+                  }}
+                >
+                  {!isMe && (
+                    <div className="text-[10px] font-bold mb-1 flex items-center gap-1" style={{ color: COLORS.gold }}>
+                      {msg.profiles?.display_name || "Membre"} {msg.profiles?.flag}
+                    </div>
+                  )}
+                  <p className="leading-relaxed">{msg.text}</p>
+                  <div className={`text-[10px] mt-1.5 ${isMe ? "text-black/60" : "text-slate-400"}`}>
+                    {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </div>
+                </div>
+              </div>
+            );
+          })
+        )}
+        <div ref={messagesEndRef} />
       </div>
 
-      {/* Barre de contrôle flottante */}
-      <div className="fixed bottom-6 left-0 right-0 flex justify-center gap-4 z-30">
+      {/* Zone de saisie */}
+      <form onSubmit={handleSendMessage} className="p-4 border-t flex items-center gap-3" style={{ borderColor: COLORS.border, background: COLORS.surface }}>
+        <input
+          type="text"
+          value={newMessage}
+          onChange={(e) => setNewMessage(e.target.value)}
+          placeholder="Participez au débat..."
+          className="flex-1 px-4 py-3 rounded-xl border text-sm outline-none focus:ring-2 transition-all"
+          style={{ background: COLORS.surface2, borderColor: COLORS.border, color: COLORS.ivory }}
+        />
         <button
-          onClick={handleToggleMic}
-          className="w-12 h-12 rounded-full flex items-center justify-center border shadow-lg transition active:scale-95"
-          style={{
-            background: micOn ? COLORS.surface2 : "#EF4444",
-            borderColor: COLORS.border,
-            color: micOn ? COLORS.ivory : "#fff",
-          }}
+          type="submit"
+          disabled={!newMessage.trim()}
+          className="p-3 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+          style={{ background: COLORS.gold, color: "#000" }}
         >
-          {micOn ? <Mic size={18} /> : <MicOff size={18} />}
+          <Send size={18} />
         </button>
-
-        <button
-          onClick={handleToggleCamera}
-          className="w-12 h-12 rounded-full flex items-center justify-center border shadow-lg transition active:scale-95"
-          style={{
-            background: camOn ? COLORS.surface2 : "#EF4444",
-            borderColor: COLORS.border,
-            color: camOn ? COLORS.ivory : "#fff",
-          }}
-        >
-          {camOn ? <Video size={18} /> : <VideoOff size={18} />}
-        </button>
-
-        <button
-          onClick={handleLeave}
-          className="w-12 h-12 rounded-full flex items-center justify-center shadow-lg transition active:scale-95"
-          style={{ background: "#EF4444", color: "#fff" }}
-        >
-          <PhoneOff size={18} />
-        </button>
-      </div>
+      </form>
     </div>
   );
-}
+          }
