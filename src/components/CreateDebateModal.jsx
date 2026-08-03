@@ -28,10 +28,9 @@ export function CreateDebateModal({ isOpen, onClose, currentUserId, onSuccess })
     setError(null);
 
     try {
-      let inviteCode = generateInviteCode();
-      let dailyRoomName = null;
+      let room = null;
 
-      // Si mode audio ou vidéo → créer la room Daily d'abord
+      // ========== MODE AUDIO / VIDÉO ==========
       if (mode === "audio" || mode === "video") {
         const res = await fetch(`${API_BASE}/api/create-room`, {
           method: "POST",
@@ -49,33 +48,57 @@ export function CreateDebateModal({ isOpen, onClose, currentUserId, onSuccess })
           throw new Error(dailyData.error || "Impossible de créer la salle audio");
         }
 
-        // On utilise le code généré par le serveur si disponible
-        inviteCode = dailyData.inviteCode || inviteCode;
-        dailyRoomName = dailyData.roomName || null;
+        const inviteCode = dailyData.inviteCode;
+        const dailyRoomName = dailyData.roomName;
+
+        const { data: updatedRoom, error: updateError } = await supabase
+          .from("debate_rooms")
+          .update({
+            title: title.trim(),
+            topic: topic.trim(),
+            mode: mode,
+            daily_room_name: dailyRoomName,
+            max_participants: 10,
+          })
+          .eq("invite_code", inviteCode)
+          .select()
+          .single();
+
+        if (updateError) throw updateError;
+        room = updatedRoom;
+
+        await supabase.from("debate_participants").upsert({
+          room_id: room.id,
+          user_id: currentUserId,
+        });
       }
 
-      // Créer la salle dans Supabase
-      const { data: room, error: roomError } = await supabase
-        .from("debate_rooms")
-        .insert({
-          title: title.trim(),
-          topic: topic.trim(),
-          mode: mode,
-          invite_code: inviteCode,
-          host_id: currentUserId,
-          status: "active",
-          daily_room_name: dailyRoomName,
-        })
-        .select()
-        .single();
+      // ========== MODE TEXTE ==========
+      else {
+        const inviteCode = generateInviteCode();
 
-      if (roomError) throw roomError;
+        const { data: newRoom, error: roomError } = await supabase
+          .from("debate_rooms")
+          .insert({
+            title: title.trim(),
+            topic: topic.trim(),
+            mode: "text",
+            invite_code: inviteCode,
+            host_id: currentUserId,
+            status: "active",
+            max_participants: 10,
+          })
+          .select()
+          .single();
 
-      // Ajouter le créateur comme participant
-      await supabase.from("debate_participants").insert({
-        room_id: room.id,
-        user_id: currentUserId,
-      });
+        if (roomError) throw roomError;
+        room = newRoom;
+
+        await supabase.from("debate_participants").upsert({
+          room_id: room.id,
+          user_id: currentUserId,
+        });
+      }
 
       onSuccess(room);
       onClose();
