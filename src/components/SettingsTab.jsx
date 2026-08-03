@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { supabase } from "../supabaseClient";
-import { User, Award, Check, Palette, LogOut } from "lucide-react";
+import { User, Award, Check, Palette, LogOut, ShieldCheck } from "lucide-react";
 import { COLORS } from "../theme.js";
 
 const SUBSCRIPTION_TIERS = [
@@ -54,6 +54,66 @@ export function SettingsTab({
   const [editFlag, setEditFlag] = useState(flag);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
+
+  // ===== Sécurisation du compte (invité -> compte stable, même id) =====
+  const [isAnonymousUser, setIsAnonymousUser] = useState(false);
+  const [secureEmail, setSecureEmail] = useState("");
+  const [securePassword, setSecurePassword] = useState("");
+  const [secureLoading, setSecureLoading] = useState(false);
+  const [secureOauthLoading, setSecureOauthLoading] = useState(null); // "facebook" | "twitter" | null
+  const [secureMessage, setSecureMessage] = useState("");
+
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data }) => {
+      setIsAnonymousUser(data?.user?.is_anonymous === true);
+    });
+  }, []);
+
+  const handleSecureWithEmail = async (e) => {
+    e.preventDefault();
+    if (secureLoading) return;
+    setSecureLoading(true);
+    setSecureMessage("");
+
+    try {
+      // updateUser() sur une session invité la transforme en compte stable
+      // SANS changer l'id — historique, posts, likes, wallet restent liés.
+      const { error } = await supabase.auth.updateUser({
+        email: secureEmail,
+        password: securePassword,
+      });
+      if (error) throw error;
+
+      setSecureMessage(
+        "✅ Vérifiez votre boîte mail pour confirmer l'adresse — votre compte deviendra stable une fois le lien cliqué."
+      );
+    } catch (err) {
+      setSecureMessage("❌ " + (err.message || "Erreur"));
+    } finally {
+      setSecureLoading(false);
+    }
+  };
+
+  const handleSecureWithOAuth = async (provider) => {
+    if (secureOauthLoading) return;
+    setSecureOauthLoading(provider);
+    setSecureMessage("");
+
+    try {
+      // linkIdentity() attache le fournisseur OAuth à la session invité
+      // actuelle (même id), contrairement à signInWithOAuth() qui créerait
+      // un compte séparé.
+      const { error } = await supabase.auth.linkIdentity({
+        provider,
+        options: { redirectTo: window.location.origin },
+      });
+      if (error) throw error;
+      // La page redirige vers le fournisseur, puis revient sur l'app.
+    } catch (err) {
+      setSecureMessage("❌ " + (err.message || "Erreur"));
+      setSecureOauthLoading(null);
+    }
+  };
 
   const handleSaveProfile = async (e) => {
     e.preventDefault();
@@ -124,6 +184,113 @@ export function SettingsTab({
           }}
         >
           {message}
+        </div>
+      )}
+
+      {/* Sécurisation du compte (invités uniquement) */}
+      {isAnonymousUser && (
+        <div
+          className="rounded-2xl p-5 border flex flex-col gap-4"
+          style={{
+            background: COLORS.surface,
+            borderColor: COLORS.borderGold,
+          }}
+        >
+          <h3
+            className="text-base font-bold flex items-center gap-2"
+            style={{ color: COLORS.gold }}
+          >
+            <ShieldCheck size={18} />
+            Sécuriser mon compte
+          </h3>
+          <p className="text-sm" style={{ color: COLORS.muted }}>
+            Vous utilisez un compte invité : vos publications et abonnements
+            existent, mais vous ne gagnez pas de points et vous perdrez tout
+            en changeant d'appareil. Ajoutez un e-mail ou un réseau pour
+            garder le même compte partout et débloquer les gains.
+          </p>
+
+          {secureMessage && (
+            <div
+              className="p-3 rounded-xl text-sm"
+              style={{
+                background: secureMessage.startsWith("✅")
+                  ? "rgba(45,191,166,0.15)"
+                  : "rgba(239,68,68,0.15)",
+                color: secureMessage.startsWith("✅") ? COLORS.teal : "#F87171",
+              }}
+            >
+              {secureMessage}
+            </div>
+          )}
+
+          <div className="flex flex-col gap-3">
+            <button
+              type="button"
+              onClick={() => handleSecureWithOAuth("facebook")}
+              disabled={!!secureOauthLoading}
+              className="w-full py-3 rounded-xl font-semibold text-sm transition disabled:opacity-50"
+              style={{ background: "#1877F2", color: "#fff" }}
+            >
+              {secureOauthLoading === "facebook" ? "Connexion..." : "Lier Facebook"}
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSecureWithOAuth("twitter")}
+              disabled={!!secureOauthLoading}
+              className="w-full py-3 rounded-xl font-semibold text-sm transition disabled:opacity-50"
+              style={{ background: "#000000", color: "#fff", border: "1px solid " + COLORS.border }}
+            >
+              {secureOauthLoading === "twitter" ? "Connexion..." : "Lier X"}
+            </button>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <div className="flex-1 h-px" style={{ background: COLORS.border }} />
+            <span className="text-xs" style={{ color: COLORS.muted }}>ou par e-mail</span>
+            <div className="flex-1 h-px" style={{ background: COLORS.border }} />
+          </div>
+
+          <form onSubmit={handleSecureWithEmail} className="flex flex-col gap-3">
+            <input
+              type="email"
+              placeholder="Email"
+              value={secureEmail}
+              onChange={(e) => setSecureEmail(e.target.value)}
+              required
+              className="w-full rounded-xl p-3 text-sm outline-none border"
+              style={{
+                background: COLORS.surface2,
+                borderColor: COLORS.border,
+                color: COLORS.ivory,
+              }}
+            />
+            <input
+              type="password"
+              placeholder="Mot de passe"
+              value={securePassword}
+              onChange={(e) => setSecurePassword(e.target.value)}
+              required
+              minLength={6}
+              className="w-full rounded-xl p-3 text-sm outline-none border"
+              style={{
+                background: COLORS.surface2,
+                borderColor: COLORS.border,
+                color: COLORS.ivory,
+              }}
+            />
+            <button
+              type="submit"
+              disabled={secureLoading}
+              className="w-full py-3 rounded-xl font-bold text-sm disabled:opacity-50"
+              style={{
+                background: "linear-gradient(135deg, #D9AE52 0%, #2DBFA6 100%)",
+                color: COLORS.bg,
+              }}
+            >
+              {secureLoading ? "…" : "Sécuriser avec cet e-mail"}
+            </button>
+          </form>
         </div>
       )}
 
