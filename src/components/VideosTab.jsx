@@ -153,7 +153,7 @@ export function VideosTab({ onRewardPoints, userId }) {
     setCommentOpen(videoId);
     const { data } = await supabase
       .from("video_comments")
-      .select(`id, content, created_at, profiles:author_id (display_name, handle, flag)`)
+      .select("id, content, created_at, profiles:author_id (display_name, handle, flag)")
       .eq("video_id", videoId)
       .order("created_at", { ascending: true });
     setComments((prev) => ({ ...prev, [videoId]: data || [] }));
@@ -189,8 +189,8 @@ export function VideosTab({ onRewardPoints, userId }) {
       await supabase.from("videos").insert({
         author_id: user.id,
         video_url: v.video_url,
-        title: `🔁 ${v.title}`,
-        description: `Repost de @${v.profiles?.handle || "membre"}`,
+        title: "🔁 " + v.title,
+        description: "Repost de @" + (v.profiles?.handle || "membre"),
         duration: v.duration || "00:00",
         views: 0,
         likes: 0,
@@ -207,7 +207,7 @@ export function VideosTab({ onRewardPoints, userId }) {
   };
 
   const handleShare = async (v) => {
-    const url = `\( {window.location.origin}?video= \){v.id}`;
+    const url = window.location.origin + "?video=" + v.id;
     if (navigator.share) {
       try {
         await navigator.share({ title: v.title, text: "Regarde sur BAARO", url });
@@ -232,8 +232,8 @@ export function VideosTab({ onRewardPoints, userId }) {
 
     try {
       const ext = selectedFile.name.split(".").pop() || "mp4";
-      const fileName = `\( {Date.now()}. \){ext}`;
-      const path = `\( {currentUser.id}/ \){fileName}`;
+      const fileName = Date.now() + "." + ext;
+      const path = currentUser.id + "/" + fileName;
 
       const { error: upErr } = await supabase.storage
         .from("videos")
@@ -285,7 +285,7 @@ export function VideosTab({ onRewardPoints, userId }) {
     setUploadingStory(true);
     try {
       const ext = storyFile.name.split(".").pop() || "jpg";
-      const path = `\( {currentUser.id}/ \){Date.now()}.${ext}`;
+      const path = currentUser.id + "/" + Date.now() + "." + ext;
 
       const { error: upErr } = await supabase.storage.from("stories").upload(path, storyFile);
       if (upErr) throw upErr;
@@ -431,7 +431,7 @@ export function VideosTab({ onRewardPoints, userId }) {
                   <div className="flex items-center gap-3">
                     <div className="w-11 h-11 rounded-full border-2 border-white overflow-hidden bg-gray-800">
                       {profile.avatar_url ? (
-                        <img src={profile.avatar_url} className="w-full h-full object-cover" />
+                        <img src={profile.avatar_url} className="w-full h-full object-cover" alt="" />
                       ) : (
                         <div className="w-full h-full flex items-center justify-center text-lg">{profile.flag || "🌍"}</div>
                       )}
@@ -453,7 +453,7 @@ export function VideosTab({ onRewardPoints, userId }) {
 
                 <div className="absolute right-3 bottom-28 flex flex-col gap-5 items-center z-20">
                   <button onClick={() => handleLike(v.id)} className="flex flex-col items-center gap-1">
-                    <div className={`p-3 rounded-full backdrop-blur-md ${isLiked ? "bg-pink-500/30" : "bg-white/15"}`}>
+                    <div className={"p-3 rounded-full backdrop-blur-md " + (isLiked ? "bg-pink-500/30" : "bg-white/15")}>
                       <Heart size={26} className={isLiked ? "text-pink-500" : "text-white"} fill={isLiked ? "currentColor" : "none"} />
                     </div>
                     <span className="text-xs font-bold text-white">{v.likes || 0}</span>
@@ -483,7 +483,6 @@ export function VideosTab({ onRewardPoints, userId }) {
         )}
       </div>
 
-      {/* Modal Commentaires */}
       {commentOpen && (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 backdrop-blur-sm">
           <div className="w-full max-w-lg bg-zinc-900 rounded-t-2xl p-4 max-h-[70vh] flex flex-col">
@@ -515,7 +514,6 @@ export function VideosTab({ onRewardPoints, userId }) {
         </div>
       )}
 
-      {/* Modal Upload + Musique */}
       {showUpload && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-md">
           <div className="w-full max-w-md rounded-2xl p-6 border" style={{ background: COLORS.surface, borderColor: COLORS.borderGold }}>
@@ -558,7 +556,6 @@ export function VideosTab({ onRewardPoints, userId }) {
               className="w-full bg-black/40 rounded-xl px-4 py-3 text-sm text-white outline-none border border-white/10 resize-none mb-3"
             />
 
-            {/* Bouton Ajouter un son */}
             <button
               onClick={() => setShowSoundPicker(true)}
               className="w-full py-2.5 mb-4 rounded-xl bg-white/10 text-white text-sm flex items-center justify-center gap-2"
@@ -569,7 +566,7 @@ export function VideosTab({ onRewardPoints, userId }) {
 
             {uploading && (
               <div className="w-full bg-gray-800 rounded-full h-2 mb-4 overflow-hidden">
-                <div className="h-full rounded-full" style={{ width: `${uploadProgress}%`, background: COLORS.gold }} />
+                <div className="h-full rounded-full" style={{ width: uploadProgress + "%", background: COLORS.gold }} />
               </div>
             )}
 
@@ -579,13 +576,12 @@ export function VideosTab({ onRewardPoints, userId }) {
               className="w-full py-3.5 rounded-xl font-bold disabled:opacity-40"
               style={{ background: COLORS.gold, color: "#000" }}
             >
-              {uploading ? `Publication... ${uploadProgress}%` : "Publier"}
+              {uploading ? "Publication... " + uploadProgress + "%" : "Publier"}
             </button>
           </div>
         </div>
       )}
 
-      {/* Modal Choix du son */}
       {showSoundPicker && (
         <div className="fixed inset-0 z-[60] flex items-end bg-black/80">
           <div className="w-full max-h-[60vh] rounded-t-3xl bg-[#111] p-4 overflow-y-auto">
@@ -617,7 +613,6 @@ export function VideosTab({ onRewardPoints, userId }) {
         </div>
       )}
 
-      {/* Modal Story */}
       {showCreateStory && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90">
           <div className="w-full max-w-md rounded-2xl p-6 border" style={{ background: COLORS.surface, borderColor: COLORS.borderGold }}>
