@@ -14,11 +14,12 @@ import { COLORS } from "../theme.js";
 
 const NAV_ITEMS = [
   { id: "feed", label: "Fil", icon: Rss, badge: null },
-  { id: "friends", label: "Communauté", icon: Users, badge: null },
   { id: "videos", label: "Vidéos", icon: Play, badge: "HOT" },
   { id: "messages", label: "Chat", icon: MessageSquare, badge: "3" },
   { id: "debates", label: "Débats", icon: Swords, badge: null },
   { id: "crypto", label: "BARO Coin", icon: Coins, badge: "PRO" },
+  // --- à partir d'ici = menu "Plus" sur mobile ---
+  { id: "friends", label: "Communauté", icon: Users, badge: null },
   { id: "wallet", label: "Portefeuille", icon: Wallet, badge: null },
   { id: "offline", label: "Hors-ligne", icon: WifiOff, badge: "P2P" },
   { id: "assistant", label: "IA Assistant", icon: Sparkles, badge: null },
@@ -94,7 +95,7 @@ export function Navigation({ activeTab, setActiveTab }) {
         })}
       </nav>
 
-      {/* Mobile Floating Bottom Bar */}
+      {/* Mobile Floating Bottom Bar — 5 premiers = accueil */}
       <nav
         className="md:hidden fixed bottom-3 left-3 right-3 z-50 glass-panel rounded-2xl border p-1.5 shadow-2xl flex items-center justify-around"
         style={{
@@ -138,6 +139,7 @@ export function Navigation({ activeTab, setActiveTab }) {
           style={{
             color:
               activeTab === "settings" ||
+              activeTab === "friends" ||
               activeTab === "wallet" ||
               activeTab === "offline" ||
               activeTab === "assistant"
@@ -151,4 +153,4 @@ export function Navigation({ activeTab, setActiveTab }) {
       </nav>
     </>
   );
-}
+        }
