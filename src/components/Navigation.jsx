@@ -8,34 +8,27 @@ import {
   WifiOff,
   Sparkles,
   Settings,
-  Users,
-  MoreHorizontal
+  Users
 } from "lucide-react";
 import { COLORS } from "../theme.js";
-import { useState } from "react";
 
 const NAV_ITEMS = [
-  { id: "feed", label: "Fil", icon: Rss },
-  { id: "friends", label: "Communauté", icon: Users },
-  { id: "videos", label: "Vidéos", icon: Play },
-  { id: "messages", label: "Messages", icon: MessageSquare },
-  { id: "debates", label: "Débats", icon: Swords },
-  { id: "crypto", label: "BARO", icon: Coins },
-  { id: "wallet", label: "Portefeuille", icon: Wallet },
-  { id: "offline", label: "Hors-ligne", icon: WifiOff },
-  { id: "assistant", label: "IA", icon: Sparkles },
-  { id: "settings", label: "Réglages", icon: Settings },
+  { id: "feed", label: "Fil", icon: Rss, badge: null },
+  { id: "friends", label: "Communauté", icon: Users, badge: null },
+  { id: "videos", label: "Vidéos", icon: Play, badge: "HOT" },
+  { id: "messages", label: "Chat", icon: MessageSquare, badge: "3" },
+  { id: "debates", label: "Débats", icon: Swords, badge: null },
+  { id: "crypto", label: "BARO Coin", icon: Coins, badge: "PRO" },
+  { id: "wallet", label: "Portefeuille", icon: Wallet, badge: null },
+  { id: "offline", label: "Hors-ligne", icon: WifiOff, badge: "P2P" },
+  { id: "assistant", label: "IA Assistant", icon: Sparkles, badge: null },
+  { id: "settings", label: "Réglages", icon: Settings, badge: null },
 ];
 
 export function Navigation({ activeTab, setActiveTab }) {
-  const [showMore, setShowMore] = useState(false);
-
-  const mainItems = NAV_ITEMS.slice(0, 4); // Fil, Communauté, Vidéos, Messages
-  const moreItems = NAV_ITEMS.slice(4);    // le reste
-
   return (
     <>
-      {/* ========== DESKTOP ========== */}
+      {/* Desktop / Tablet Sidebar */}
       <nav
         className="hidden md:flex flex-col gap-1 p-3 glass-panel rounded-2xl border sticky top-24 shadow-xl"
         style={{ borderColor: COLORS.border }}
@@ -44,19 +37,17 @@ export function Navigation({ activeTab, setActiveTab }) {
           className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest"
           style={{ color: COLORS.muted }}
         >
-          Navigation
+          Navigation Principale
         </div>
-
         {NAV_ITEMS.map((item) => {
           const Icon = item.icon;
           const isActive = activeTab === item.id;
-
           return (
             <button
               key={item.id}
               onClick={() => setActiveTab(item.id)}
-              className={`flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all ${
-                isActive ? "gold-glow" : "hover:bg-white/5"
+              className={`flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all group ${
+                isActive ? "shadow-md gold-glow" : "hover:bg-[rgba(255,255,255,0.05)]"
               }`}
               style={{
                 background: isActive
@@ -68,41 +59,65 @@ export function Navigation({ activeTab, setActiveTab }) {
                   : "1px solid transparent",
               }}
             >
-              <Icon
-                size={18}
-                style={{
-                  color: isActive ? COLORS.gold : COLORS.muted,
-                }}
-              />
-              <span>{item.label}</span>
+              <div className="flex items-center gap-3">
+                <Icon
+                  size={18}
+                  style={{
+                    color: isActive ? COLORS.gold : COLORS.muted,
+                    filter: isActive
+                      ? "drop-shadow(0 0 6px rgba(217,174,82,0.5))"
+                      : "none",
+                  }}
+                  className="transition-transform group-hover:scale-110"
+                />
+                <span>{item.label}</span>
+              </div>
+
+              {item.badge && (
+                <span
+                  className="text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase"
+                  style={{
+                    background:
+                      item.badge === "PRO"
+                        ? COLORS.purple
+                        : item.badge === "P2P"
+                        ? COLORS.teal
+                        : COLORS.gold,
+                    color: COLORS.bg,
+                  }}
+                >
+                  {item.badge}
+                </span>
+              )}
             </button>
           );
         })}
       </nav>
 
-      {/* ========== MOBILE BOTTOM BAR ========== */}
+      {/* Mobile Floating Bottom Bar */}
       <nav
-        className="md:hidden fixed bottom-3 left-3 right-3 z-50 rounded-2xl border p-1.5 shadow-2xl flex items-center justify-around"
+        className="md:hidden fixed bottom-3 left-3 right-3 z-50 glass-panel rounded-2xl border p-1.5 shadow-2xl flex items-center justify-around"
         style={{
           borderColor: COLORS.borderGold,
-          background: "rgba(11, 18, 32, 0.95)",
+          background: "rgba(11, 18, 32, 0.92)",
         }}
       >
-        {mainItems.map((item) => {
+        {NAV_ITEMS.slice(0, 5).map((item) => {
           const Icon = item.icon;
           const isActive = activeTab === item.id;
-
           return (
             <button
               key={item.id}
-              onClick={() => {
-                setActiveTab(item.id);
-                setShowMore(false);
-              }}
+              onClick={() => setActiveTab(item.id)}
               className="flex flex-col items-center gap-0.5 p-2 rounded-xl transition relative"
-              style={{ color: isActive ? COLORS.gold : COLORS.muted }}
+              style={{
+                color: isActive ? COLORS.gold : COLORS.muted,
+              }}
             >
-              <Icon size={20} />
+              <Icon
+                size={20}
+                style={{ color: isActive ? COLORS.gold : COLORS.muted }}
+              />
               <span className="text-[10px] font-medium leading-none">
                 {item.label}
               </span>
@@ -115,78 +130,25 @@ export function Navigation({ activeTab, setActiveTab }) {
             </button>
           );
         })}
-
-        {/* Bouton Plus */}
         <button
-          onClick={() => setShowMore(!showMore)}
-          className="flex flex-col items-center gap-0.5 p-2 rounded-xl transition relative"
+          onClick={() =>
+            setActiveTab(activeTab === "settings" ? "feed" : "settings")
+          }
+          className="flex flex-col items-center gap-0.5 p-2 rounded-xl transition"
           style={{
             color:
-              showMore || moreItems.some((i) => i.id === activeTab)
-                ? COLORS.gold
+              activeTab === "settings" ||
+              activeTab === "wallet" ||
+              activeTab === "offline" ||
+              activeTab === "assistant"
+                ? COLORS.teal
                 : COLORS.muted,
           }}
         >
-          <MoreHorizontal size={20} />
+          <Settings size={20} />
           <span className="text-[10px] font-medium leading-none">Plus</span>
         </button>
       </nav>
-
-      {/* ========== MENU PLUS (MOBILE) ========== */}
-      {showMore && (
-        <div
-          className="md:hidden fixed inset-0 z-40 bg-black/70"
-          onClick={() => setShowMore(false)}
-        >
-          <div
-            className="absolute bottom-20 left-3 right-3 rounded-2xl p-4 border shadow-2xl"
-            style={{
-              background: COLORS.surface,
-              borderColor: COLORS.borderGold,
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <p
-              className="text-xs font-bold uppercase tracking-wider mb-3 px-1"
-              style={{ color: COLORS.muted }}
-            >
-              Plus d'options
-            </p>
-
-            <div className="grid grid-cols-3 gap-3">
-              {moreItems.map((item) => {
-                const Icon = item.icon;
-                const isActive = activeTab === item.id;
-
-                return (
-                  <button
-                    key={item.id}
-                    onClick={() => {
-                      setActiveTab(item.id);
-                      setShowMore(false);
-                    }}
-                    className="flex flex-col items-center gap-2 p-3 rounded-xl transition"
-                    style={{
-                      background: isActive
-                        ? "rgba(217,174,82,0.15)"
-                        : "rgba(255,255,255,0.05)",
-                      color: isActive ? COLORS.gold : COLORS.ivory,
-                      border: isActive
-                        ? `1px solid ${COLORS.borderGold}`
-                        : "1px solid transparent",
-                    }}
-                  >
-                    <Icon size={22} />
-                    <span className="text-[11px] font-medium text-center leading-tight">
-                      {item.label}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-      )}
     </>
   );
 }
