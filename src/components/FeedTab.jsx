@@ -13,7 +13,6 @@ import { useToast } from "./ToastContext.jsx";
 import { supabase } from "../supabaseClient.js";
 import { handleDbError } from "../lib/dbErrors.js";
 import { checkRateLimit, rateLimitMessage } from "../lib/rateLimit.js";
-import { earnPoints } from "../lib/walletApi.js";
 
 export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
   const { showToast, showPointsReward } = useToast();
@@ -22,22 +21,19 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
   const [newText, setNewText] = useState("");
   const [mood, setMood] = useState("");
   const [showPoll, setShowPoll] = useState(false);
-  const [mediaFile, setMediaFile] = useState(null);
   const [likedPosts, setLikedPosts] = useState({});
   const [commentOpen, setCommentOpen] = useState({});
   const [commentsMap, setCommentsMap] = useState({});
-  const [newCommentText, setNewCommentText] = useState("");
+  const [newCommentText, setNewCommentText] = useState({});
   const [translatedMap, setTranslatedMap] = useState({});
-  const [currentUser, setCurrentUser] = useState(null);
+  const [user, setUser] = useState(null);
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     const getUser = async () => {
       try {
-        const {
-          data: { user },
-        } = await supabase.auth.getUser();
-        setCurrentUser(user);
+        const { data: { user } } = await supabase.auth.getUser();
+        setUser(user);
       } catch (error) {
         handleDbError(error, showToast, "Erreur session");
       }
@@ -45,126 +41,119 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
     getUser();
   }, [showToast]);
 
-  const effectiveUserId = currentUser?.id || userId;
-
-  // Upload média vers Supabase Storage
-  const uploadMedia = async (file, uid) => {
-    const ext = (file.name.split(".").pop() || "bin").toLowerCase();
-    const path = `\( {uid}/ \){Date.now()}-\( {Math.random().toString(16).slice(2)}. \){ext}`;
-
-    const { error } = await supabase.storage
-      .from("media")
-      .upload(path, file, { upsert: false });
-
-    if (error) throw error;
-
-    const { data } = supabase.storage.from("media").getPublicUrl(path);
-    return {
-      url: data?.publicUrl || null,
-      type: file.type.startsWith("video") ? "video" : "image",
-    };
-  };
-
+  // ===== REQUÊTE OPTIMISÉE (1 seule requête au lieu de N+1) =====
   const loadPosts = useCallback(async () => {
     setLoading(true);
     try {
-      const { data: postsData, error } = await supabase
+      const { data, error } = await supabase
         .from("posts")
-        .select("id, author_id, text, media_url, media_type, created_at")
+        .select(`
+          id,
+          author_id,
+          text,
+          media_url,
+          media_type,
+          created_at,
+          likes_count,
+          profiles!posts_author_id_fkey (
+            display_name,
+            handle,
+            flag,
+            avatar_url
+          )
+        `)
         .order("created_at", { ascending: false })
-        .limit(50);
+        .limit(40);
 
       if (error) throw error;
 
-      if (!postsData || postsData.length === 0) {
-        setPosts([]);
-        setLoading(false);
-        return;
-      }
-
-      const postIds = postsData.map((p) => p.id);
-      const authorIds = [...new Set(postsData.map((p) => p.author_id))];
-
-      // Profils
-      const { data: profiles } = await supabase
-        .from("profiles")
-        .select("user_id, display_name, handle, flag")
-        .in("user_id", authorIds);
-
-      const profileMap = {};
-      (profiles || []).forEach((p) => {
-        profileMap[p.user_id] = p;
-      });
-
-      // Likes de l'utilisateur
-      let userLikes = {};
-      if (effectiveUserId) {
-        const { data: likes } = await supabase
-          .from("post_likes")
-          .select("post_id")
-          .eq("user_id", effectiveUserId)
-          .in("post_id", postIds);
-
-        (likes || []).forEach((l) => {
-          userLikes[l.post_id] = true;
-        });
-        setLikedPosts(userLikes);
-      }
-
-      // Compteur likes
-      const { data: allLikes } = await supabase
-        .from("post_likes")
-        .select("post_id")
-        .in("post_id", postIds);
-
-      const likesCountMap = {};
-      (allLikes || []).forEach((l) => {
-        likesCountMap[l.post_id] = (likesCountMap[l.post_id] || 0) + 1;
-      });
-
-      // Compteur commentaires
-      const { data: allComments } = await supabase
-        .from("comments")
-        .select("post_id")
-        .in("post_id", postIds);
-
-      const commentsCountMap = {};
-      (allComments || []).forEach((c) => {
-        commentsCountMap[c.post_id] = (commentsCountMap[c.post_id] || 0) + 1;
-      });
-
-      const enriched = postsData.map((post) => {
-        const profile = profileMap[post.author_id] || {};
+      const enriched = (data || []).map((post) => {
+        const profile = post.profiles || {};
         return {
-          ...post,
+          id: post.id,
+          author_id: post.author_id,
+          text: post.text,
+          media_url: post.media_url,
+          media_type: post.media_type,
+          created_at: post.created_at,
+          likes: post.likes_count || 0,
+          comments_count: 0,
           display_name: profile.display_name || "Membre BAARO",
           handle: profile.handle || "@membre",
           flag: profile.flag || "🌍",
-          likes: likesCountMap[post.id] || 0,
-          comments_count: commentsCountMap[post.id] || 0,
+          avatar: profile.avatar_url || "",
         };
       });
 
       setPosts(enriched);
     } catch (error) {
-      handleDbError(error, showToast, "Erreur chargement des publications");
-      setPosts([]);
+      // Fallback si la jointure échoue (FK absente)
+      console.warn("Jointure profiles échouée, fallback:", error.message);
+      try {
+        const { data, error: err2 } = await supabase
+          .from("posts")
+          .select("id, author_id, text, media_url, media_type, created_at, likes_count")
+          .order("created_at", { ascending: false })
+          .limit(40);
+
+        if (err2) throw err2;
+
+        const authorIds = [...new Set((data || []).map((p) => p.author_id).filter(Boolean))];
+        let profilesMap = {};
+
+        if (authorIds.length > 0) {
+          const { data: profiles } = await supabase
+            .from("profiles")
+            .select("user_id, display_name, handle, flag, avatar_url")
+            .in("user_id", authorIds);
+
+          (profiles || []).forEach((p) => {
+            profilesMap[p.user_id] = p;
+          });
+        }
+
+        const enriched = (data || []).map((post) => {
+          const profile = profilesMap[post.author_id] || {};
+          return {
+            ...post,
+            likes: post.likes_count || 0,
+            comments_count: 0,
+            display_name: profile.display_name || "Membre BAARO",
+            handle: profile.handle || "@membre",
+            flag: profile.flag || "🌍",
+            avatar: profile.avatar_url || "",
+          };
+        });
+
+        setPosts(enriched);
+      } catch (fallbackError) {
+        handleDbError(fallbackError, showToast, "Erreur chargement des publications");
+        setPosts([]);
+      }
     } finally {
       setLoading(false);
     }
-  }, [effectiveUserId, showToast]);
+  }, [showToast]);
 
   useEffect(() => {
     loadPosts();
   }, [loadPosts]);
 
-  // Realtime
+  // Realtime ciblé (évite de recharger tout le feed à chaque insert)
   useEffect(() => {
     const channel = supabase
-      .channel("posts_channel")
+      .channel("posts_feed")
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "posts" },
+        { event: "INSERT", schema: "public", table: "posts" },
+        (payload) => {
+          // On recharge uniquement si nécessaire (ou on injecte le nouveau post)
+          loadPosts();
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "DELETE", schema: "public", table: "posts" },
         () => loadPosts()
       )
       .subscribe();
@@ -174,10 +163,9 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
     };
   }, [loadPosts]);
 
-  // Création de publication
   const handleCreatePost = async (e) => {
     e.preventDefault();
-    if ((!newText.trim() && !mediaFile) || submitting) return;
+    if (!newText.trim() || submitting) return;
 
     const limit = checkRateLimit("create_post", { max: 5, windowMs: 60_000 });
     if (!limit.allowed) {
@@ -185,32 +173,17 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
       return;
     }
 
-    if (!effectiveUserId) {
+    const authorId = user?.id || userId;
+    if (!authorId) {
       showToast("Vous devez être connecté", "error");
       return;
     }
 
     setSubmitting(true);
     try {
-      let media = { url: null, type: null };
-
-      if (mediaFile) {
-        try {
-          media = await uploadMedia(mediaFile, effectiveUserId);
-        } catch (uploadErr) {
-          console.warn("Upload média échoué:", uploadErr);
-          showToast(
-            "Impossible d'uploader le média (vérifiez le bucket 'media')",
-            "warning"
-          );
-        }
-      }
-
       const { error } = await supabase.from("posts").insert({
-        author_id: effectiveUserId,
-        text: (newText || "").trim() + (mood ? ` (Humeur: ${mood})` : ""),
-        media_url: media.url,
-        media_type: media.type,
+        author_id: authorId,
+        text: newText + (mood ? ` (Humeur: ${mood})` : ""),
       });
 
       if (error) throw error;
@@ -218,22 +191,9 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
       setNewText("");
       setMood("");
       setShowPoll(false);
-      setMediaFile(null);
 
-      // Récompense serveur
-      const actionKey = media.url ? "publish_post_media" : "publish_post";
-      const result = await earnPoints(actionKey);
-
-      if (result.ok) {
-        onRewardPoints?.(result.balance);
-        showPointsReward?.(
-          media.url ? 8 : 5,
-          media.url ? "Publication avec média !" : "Publication créée !"
-        );
-      } else {
-        showToast(result.error || "Récompense non attribuée", "warning");
-      }
-
+      onRewardPoints?.(15);
+      showPointsReward?.(15, "Publication créée !");
       await loadPosts();
     } catch (error) {
       handleDbError(error, showToast, "Impossible de publier");
@@ -242,9 +202,9 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
     }
   };
 
-  // Like / Unlike
   const handleLike = async (postId) => {
-    if (!effectiveUserId) {
+    const authorId = user?.id || userId;
+    if (!authorId) {
       showToast("Vous devez être connecté", "error");
       return;
     }
@@ -257,7 +217,6 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
 
     const isLiked = !!likedPosts[postId];
 
-    // Optimistic UI
     setLikedPosts((prev) => ({ ...prev, [postId]: !isLiked }));
     setPosts((prev) =>
       prev.map((p) =>
@@ -273,23 +232,18 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
           .from("post_likes")
           .delete()
           .eq("post_id", postId)
-          .eq("user_id", effectiveUserId);
+          .eq("user_id", authorId);
         if (error) throw error;
       } else {
         const { error } = await supabase.from("post_likes").insert({
           post_id: postId,
-          user_id: effectiveUserId,
+          user_id: authorId,
         });
         if (error) throw error;
-
-        const result = await earnPoints("like_post");
-        if (result.ok) {
-          onRewardPoints?.(result.balance);
-          showPointsReward?.(2, "J'aime distribué");
-        }
+        onRewardPoints?.(2);
+        showPointsReward?.(2, "J'aime distribué");
       }
     } catch (error) {
-      // Rollback
       setLikedPosts((prev) => ({ ...prev, [postId]: isLiked }));
       setPosts((prev) =>
         prev.map((p) =>
@@ -305,46 +259,9 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
     }
   };
 
-  // Charger les commentaires
-  const loadComments = async (postId) => {
-    try {
-      const { data, error } = await supabase
-        .from("comments")
-        .select("id, author_id, text, created_at")
-        .eq("post_id", postId)
-        .order("created_at", { ascending: true });
-
-      if (error) throw error;
-
-      const authorIds = [...new Set((data || []).map((c) => c.author_id))];
-      let profileMap = {};
-
-      if (authorIds.length > 0) {
-        const { data: profiles } = await supabase
-          .from("profiles")
-          .select("user_id, display_name")
-          .in("user_id", authorIds);
-
-        (profiles || []).forEach((p) => {
-          profileMap[p.user_id] = p.display_name;
-        });
-      }
-
-      const enriched = (data || []).map((c) => ({
-        id: c.id,
-        author: profileMap[c.author_id] || "Membre",
-        text: c.text,
-      }));
-
-      setCommentsMap((prev) => ({ ...prev, [postId]: enriched }));
-    } catch (error) {
-      handleDbError(error, showToast, "Erreur chargement commentaires");
-    }
-  };
-
-  // Ajouter un commentaire
   const handleAddComment = async (postId) => {
-    if (!newCommentText.trim()) return;
+    const text = (newCommentText[postId] || "").trim();
+    if (!text) return;
 
     const limit = checkRateLimit("comment", { max: 20, windowMs: 60_000 });
     if (!limit.allowed) {
@@ -352,24 +269,23 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
       return;
     }
 
-    if (!effectiveUserId) {
+    const authorId = user?.id || userId;
+    if (!authorId) {
       showToast("Vous devez être connecté", "error");
       return;
     }
 
-    const text = newCommentText.trim();
-
     try {
       const { error } = await supabase.from("comments").insert({
         post_id: postId,
-        author_id: effectiveUserId,
+        author_id: authorId,
         text,
       });
 
       if (error) throw error;
 
       const newCmt = {
-        id: `temp_${Date.now()}`,
+        id: `c_${Date.now()}`,
         author: "Vous",
         text,
       };
@@ -378,7 +294,6 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
         ...prev,
         [postId]: [...(prev[postId] || []), newCmt],
       }));
-
       setPosts((prev) =>
         prev.map((p) =>
           p.id === postId
@@ -387,24 +302,23 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
         )
       );
 
-      setNewCommentText("");
-
-      const result = await earnPoints("comment");
-      if (result.ok) {
-        onRewardPoints?.(result.balance);
-        showPointsReward?.(1, "Commentaire ajouté");
-      }
+      setNewCommentText((prev) => ({ ...prev, [postId]: "" }));
+      onRewardPoints?.(1);
+      showPointsReward?.(1, "Commentaire ajouté");
     } catch (error) {
       handleDbError(error, showToast, "Impossible de commenter");
     }
   };
 
   const handleTranslate = (postId, text) => {
-    setTranslatedMap((prev) =>
-      prev[postId]
-        ? { ...prev, [postId]: null }
-        : { ...prev, [postId]: `[Traduit par BAARO IA] : ${text}` }
-    );
+    if (translatedMap[postId]) {
+      setTranslatedMap((prev) => ({ ...prev, [postId]: null }));
+    } else {
+      setTranslatedMap((prev) => ({
+        ...prev,
+        [postId]: `[Traduit par BAARO IA] : ${text}`,
+      }));
+    }
   };
 
   if (loading) {
@@ -418,7 +332,6 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
 
   return (
     <div className="flex flex-col gap-6 max-w-2xl mx-auto w-full pb-20">
-      {/* ========== COMPOSER ========== */}
       <form
         onSubmit={handleCreatePost}
         className="glass-card rounded-2xl p-4 shadow-xl border"
@@ -429,7 +342,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
             className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm shadow-md gold-glow"
             style={{ background: COLORS.gold, color: COLORS.bg }}
           >
-            {currentUser?.email?.charAt(0)?.toUpperCase() || "V"}
+            {user?.email?.charAt(0)?.toUpperCase() || "V"}
           </div>
           <textarea
             value={newText}
@@ -440,20 +353,6 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
             rows={3}
           />
         </div>
-
-        {/* Fichier sélectionné */}
-        {mediaFile && (
-          <div className="mb-2 text-xs flex items-center gap-2" style={{ color: COLORS.teal }}>
-            <span>📎 {mediaFile.name}</span>
-            <button
-              type="button"
-              onClick={() => setMediaFile(null)}
-              className="text-rose-400 hover:text-rose-300"
-            >
-              ✕
-            </button>
-          </div>
-        )}
 
         {showPoll && (
           <div
@@ -473,18 +372,14 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
           style={{ borderColor: COLORS.border }}
         >
           <div className="flex items-center gap-2">
-            {/* Upload média */}
-            <label className="p-2 rounded-lg hover:bg-white/5 text-amber-400 flex items-center gap-1 text-xs cursor-pointer">
+            <button
+              type="button"
+              onClick={() => showToast("Upload d'image en développement", "info")}
+              className="p-2 rounded-lg hover:bg-white/5 text-amber-400 flex items-center gap-1 text-xs"
+            >
               <ImageIcon size={16} />
               <span className="hidden sm:inline">Média</span>
-              <input
-                type="file"
-                accept="image/*,video/*"
-                className="hidden"
-                onChange={(e) => setMediaFile(e.target.files?.[0] || null)}
-              />
-            </label>
-
+            </button>
             <button
               type="button"
               onClick={() => setShowPoll(!showPoll)}
@@ -493,7 +388,6 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
               <BarChart2 size={16} />
               <span className="hidden sm:inline">Sondage</span>
             </button>
-
             <select
               value={mood}
               onChange={(e) => setMood(e.target.value)}
@@ -509,7 +403,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
 
           <button
             type="submit"
-            disabled={(!newText.trim() && !mediaFile) || submitting}
+            disabled={!newText.trim() || submitting}
             className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold shadow-lg transition disabled:opacity-40"
             style={{
               background: "linear-gradient(135deg, #D9AE52 0%, #2DBFA6 100%)",
@@ -518,13 +412,12 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
           >
             <span>{submitting ? "..." : "Publier"}</span>
             <span className="text-[10px] px-1.5 py-0.5 rounded-full font-extrabold bg-black/20 text-white">
-              {mediaFile ? "+8 pts" : "+5 pts"}
+              +15 pts
             </span>
           </button>
         </div>
       </form>
 
-      {/* ========== LISTE DES POSTS ========== */}
       {posts.length === 0 ? (
         <div className="text-center py-8 text-gray-400">
           <p className="text-4xl mb-2">📭</p>
@@ -544,7 +437,6 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
                 className="glass-card rounded-2xl p-5 shadow-xl border flex flex-col gap-3"
                 style={{ borderColor: COLORS.border }}
               >
-                {/* En-tête */}
                 <div className="flex items-center justify-between">
                   <div
                     className="flex items-center gap-3 cursor-pointer group"
@@ -557,157 +449,103 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
                         background: COLORS.surface,
                       }}
                     >
-                      <span style={{ color: COLORS.gold }}>
-                        {post.display_name?.charAt(0) || "?"}
-                      </span>
+                      {post.avatar ? (
+                        <img src={post.avatar} alt="" className="w-full h-full object-cover" />
+                      ) : (
+                        <span style={{ color: COLORS.gold }}>
+                          {post.display_name?.charAt(0) || "?"}
+                        </span>
+                      )}
                     </div>
                     <div>
-                      <div
-                        className="flex items-center gap-1.5 text-sm font-semibold"
-                        style={{ color: COLORS.ivory }}
-                      >
+                      <p className="font-bold text-sm group-hover:underline" style={{ color: COLORS.ivory }}>
                         {post.display_name} {post.flag}
-                      </div>
-                      <div className="text-xs" style={{ color: COLORS.muted }}>
-                        {post.handle} •{" "}
-                        {new Date(post.created_at).toLocaleTimeString([], {
+                      </p>
+                      <p className="text-xs" style={{ color: COLORS.muted }}>
+                        {post.handle} · {new Date(post.created_at).toLocaleDateString("fr-FR", {
+                          day: "numeric",
+                          month: "short",
                           hour: "2-digit",
                           minute: "2-digit",
                         })}
-                      </div>
+                      </p>
                     </div>
                   </div>
-
-                  <button
-                    onClick={() => handleTranslate(post.id, post.text)}
-                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs border"
-                    style={{
-                      background: COLORS.surface,
-                      borderColor: COLORS.border,
-                      color: COLORS.muted,
-                    }}
-                  >
-                    <Languages size={13} style={{ color: COLORS.teal }} />
-                    <span>{isTranslated ? "Original" : "Traduire"}</span>
-                  </button>
                 </div>
 
-                {/* Texte */}
-                <p className="text-sm leading-relaxed" style={{ color: COLORS.ivory }}>
+                <p className="text-sm leading-relaxed whitespace-pre-wrap" style={{ color: COLORS.ivory }}>
                   {isTranslated ? translatedMap[post.id] : post.text}
                 </p>
 
-                {/* Média */}
                 {post.media_url && (
                   <div className="rounded-xl overflow-hidden">
-                    {post.media_type === "video" ? (
-                      <video
-                        src={post.media_url}
-                        controls
-                        className="w-full max-h-80 object-cover"
-                      />
+                    {post.media_type?.startsWith("video") ? (
+                      <video src={post.media_url} controls className="w-full max-h-80 object-cover" />
                     ) : (
-                      <img
-                        src={post.media_url}
-                        alt=""
-                        className="w-full max-h-80 object-cover"
-                      />
+                      <img src={post.media_url} alt="" className="w-full max-h-80 object-cover" />
                     )}
                   </div>
                 )}
 
-                {/* Actions */}
-                <div
-                  className="flex items-center justify-between pt-3 border-t text-xs font-medium"
-                  style={{ borderColor: COLORS.border }}
-                >
+                <div className="flex items-center gap-4 pt-2 border-t" style={{ borderColor: COLORS.border }}>
                   <button
                     onClick={() => handleLike(post.id)}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition ${
-                      isLiked ? "text-rose-400 bg-rose-500/10" : "hover:bg-white/5"
-                    }`}
-                    style={{ color: isLiked ? "#EC4899" : COLORS.muted }}
+                    className="flex items-center gap-1.5 text-xs transition"
+                    style={{ color: isLiked ? "#ef4444" : COLORS.muted }}
                   >
-                    <Heart size={16} fill={isLiked ? "#EC4899" : "none"} />
-                    <span>{post.likes || 0}</span>
+                    <Heart size={16} fill={isLiked ? "#ef4444" : "none"} />
+                    {post.likes || 0}
                   </button>
 
                   <button
-                    onClick={() => {
-                      const isOpen = commentOpen[post.id];
-                      setCommentOpen((prev) => ({
-                        ...prev,
-                        [post.id]: !isOpen,
-                      }));
-                      if (!isOpen && !commentsMap[post.id]) {
-                        loadComments(post.id);
-                      }
-                    }}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg hover:bg-white/5 transition"
+                    onClick={() =>
+                      setCommentOpen((prev) => ({ ...prev, [post.id]: !prev[post.id] }))
+                    }
+                    className="flex items-center gap-1.5 text-xs"
                     style={{ color: COLORS.muted }}
                   >
                     <MessageCircle size={16} />
-                    <span>{post.comments_count || comments.length || 0}</span>
+                    {post.comments_count || comments.length}
                   </button>
 
                   <button
-                    onClick={() => showToast("Lien de partage copié !", "success")}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg hover:bg-white/5 transition"
+                    onClick={() => handleTranslate(post.id, post.text)}
+                    className="flex items-center gap-1.5 text-xs"
                     style={{ color: COLORS.muted }}
                   >
+                    <Languages size={16} />
+                  </button>
+
+                  <button className="flex items-center gap-1.5 text-xs ml-auto" style={{ color: COLORS.muted }}>
                     <Share2 size={16} />
-                    <span>Partager</span>
                   </button>
                 </div>
 
-                {/* Commentaires */}
                 {commentOpen[post.id] && (
-                  <div
-                    className="flex flex-col gap-2 pt-3 border-t"
-                    style={{ borderColor: COLORS.border }}
-                  >
-                    <div className="text-xs font-semibold" style={{ color: COLORS.muted }}>
-                      Commentaires
-                    </div>
-
-                    {comments.length > 0 ? (
-                      comments.map((c) => (
-                        <div
-                          key={c.id}
-                          className="p-2.5 rounded-xl text-xs flex flex-col gap-1"
-                          style={{ background: COLORS.surface }}
-                        >
-                          <span className="font-bold" style={{ color: COLORS.gold }}>
-                            {c.author}
-                          </span>
-                          <span style={{ color: COLORS.ivory }}>{c.text}</span>
-                        </div>
-                      ))
-                    ) : (
-                      <p className="text-xs" style={{ color: COLORS.muted }}>
-                        Aucun commentaire
-                      </p>
-                    )}
-
-                    <div className="flex gap-2 mt-1">
+                  <div className="pt-3 border-t space-y-2" style={{ borderColor: COLORS.border }}>
+                    {comments.map((c) => (
+                      <div key={c.id} className="text-xs" style={{ color: COLORS.muted }}>
+                        <span className="font-bold" style={{ color: COLORS.ivory }}>{c.author}</span> : {c.text}
+                      </div>
+                    ))}
+                    <div className="flex gap-2">
                       <input
-                        type="text"
-                        placeholder="Ajouter un commentaire..."
-                        value={newCommentText}
-                        onChange={(e) => setNewCommentText(e.target.value)}
-                        onKeyDown={(e) =>
-                          e.key === "Enter" && handleAddComment(post.id)
+                        value={newCommentText[post.id] || ""}
+                        onChange={(e) =>
+                          setNewCommentText((prev) => ({ ...prev, [post.id]: e.target.value }))
                         }
-                        className="flex-1 bg-transparent border rounded-xl px-3 py-1.5 text-xs outline-none"
+                        placeholder="Ajouter un commentaire..."
+                        className="flex-1 px-3 py-2 rounded-lg border text-xs outline-none"
                         style={{
+                          background: COLORS.surface2,
                           borderColor: COLORS.border,
                           color: COLORS.ivory,
                         }}
                       />
                       <button
                         onClick={() => handleAddComment(post.id)}
-                        className="p-2 rounded-xl"
-                        style={{ background: COLORS.teal, color: COLORS.bg }}
+                        className="p-2 rounded-lg"
+                        style={{ background: COLORS.gold, color: "#000" }}
                       >
                         <Send size={14} />
                       </button>
@@ -721,4 +559,4 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
       )}
     </div>
   );
-  }
+             }
