@@ -52,12 +52,26 @@ function MainAppContent({ session }) {
       setUserId(uid);
 
       try {
-        // Profil
-        let { data: profile } = await supabase
-          .from("profiles")
-          .select("display_name, handle, flag, bio")
-          .eq("user_id", uid)
-          .maybeSingle();
+        // ===== 3 REQUÊTES EN PARALLÈLE (au lieu de séquentielles) =====
+        const [profileRes, walletRes, cryptoRes] = await Promise.all([
+          supabase
+            .from("profiles")
+            .select("display_name, handle, flag, bio")
+            .eq("user_id", uid)
+            .maybeSingle(),
+          supabase
+            .from("wallets")
+            .select("balance")
+            .eq("user_id", uid)
+            .maybeSingle(),
+          supabase
+            .from("crypto_holdings")
+            .select("holdings")
+            .eq("user_id", uid)
+            .maybeSingle(),
+        ]);
+
+        let profile = profileRes.data;
 
         if (!profile) {
           const defaultHandle = `@user_${uid.slice(0, 8)}`;
@@ -72,7 +86,6 @@ function MainAppContent({ session }) {
             })
             .select()
             .single();
-
           profile = created;
         }
 
@@ -85,15 +98,8 @@ function MainAppContent({ session }) {
           });
         }
 
-        // Solde points
-        const { data: wallet } = await supabase
-          .from("wallets")
-          .select("balance")
-          .eq("user_id", uid)
-          .maybeSingle();
-
-        if (wallet) {
-          setPointsBalance(Number(wallet.balance) || 0);
+        if (walletRes.data) {
+          setPointsBalance(Number(walletRes.data.balance) || 0);
         } else {
           await supabase.from("wallets").upsert({
             user_id: uid,
@@ -102,15 +108,8 @@ function MainAppContent({ session }) {
           setPointsBalance(1284);
         }
 
-        // Solde BARO
-        const { data: crypto } = await supabase
-          .from("crypto_holdings")
-          .select("holdings")
-          .eq("user_id", uid)
-          .maybeSingle();
-
-        if (crypto) {
-          setBaroBalance(Number(crypto.holdings) || 0);
+        if (cryptoRes.data) {
+          setBaroBalance(Number(cryptoRes.data.holdings) || 0);
         }
       } catch (error) {
         console.error("Erreur chargement données utilisateur:", error);
