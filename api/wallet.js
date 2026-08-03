@@ -10,12 +10,20 @@ const POINTS_PER_BARO = 100;
 
 // Actions de gain autorisées (le client ne peut envoyer que ces clés)
 const EARN_ACTIONS = {
+  // Posts
   like_post:          { pts: 2,  label: "Interaction sur une publication" },
   publish_post:       { pts: 5,  label: "Nouvelle publication" },
   publish_post_media: { pts: 8,  label: "Publication avec média" },
   comment:            { pts: 1,  label: "Commentaire ajouté" },
   watch_video:        { pts: 1,  label: "Vue générée" },
   subscribe:          { pts: 5,  label: "Abonnement activé" },
+
+  // Vidéos (sécurisées)
+  like_video:         { pts: 2,  label: "Vidéo aimée" },
+  publish_video:      { pts: 25, label: "Vidéo publiée" },
+  repost_video:       { pts: 5,  label: "Repost vidéo" },
+  tip_video:          { pts: 5,  label: "Tip envoyé" },
+  comment_video:      { pts: 2,  label: "Commentaire vidéo" },
 };
 
 // Options de rachat
