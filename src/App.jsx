@@ -16,8 +16,8 @@ import { ProfileModal } from "./components/ProfileModal.jsx";
 import { NotificationDrawer } from "./components/NotificationDrawer.jsx";
 import { GlobalSearchModal } from "./components/GlobalSearchModal.jsx";
 import { FriendsTab } from "./components/FriendsTab.jsx";
-import AuthScreen from "./components/AuthScreen.jsx";
 import { COLORS } from "./theme.js";
+import AuthScreen from "./components/AuthScreen.jsx";
 
 const THEME_BG_MAP = {
   midnight: "#0B1220",
@@ -28,55 +28,66 @@ const THEME_BG_MAP = {
 function MainAppContent() {
   const [activeTab, setActiveTab] = useState("feed");
   const [lang, setLang] = useState("fr");
-  const [pointsBalance, setPointsBalance] = useState(240);
-  const [baroBalance, setBaroBalance] = useState(2.4);
+  const [pointsBalance, setPointsBalance] = useState(0);
+  const [baroBalance, setBaroBalance] = useState(0);
   const [inspectingProfileId, setInspectingProfileId] = useState(null);
   const [notifDrawerOpen, setNotifDrawerOpen] = useState(false);
   const [searchModalOpen, setSearchModalOpen] = useState(false);
   const [currentTheme, setCurrentTheme] = useState("midnight");
   const [userId, setUserId] = useState(null);
-
   const [userProfile, setUserProfile] = useState({
     display_name: "Membre BAARO",
-    handle: "@mon_compte",
+    handle: "@membre",
     flag: "🌍",
-    bio: "Passionné de Web3, de réseaux décentralisés et d'impact social.",
+    bio: "",
   });
 
-  // Charger l'utilisateur connecté + son profil
+  // Charge l'utilisateur + son profil + ses soldes
   useEffect(() => {
-    const loadProfile = async () => {
+    const loadUserData = async () => {
       try {
         const {
           data: { user },
         } = await supabase.auth.getUser();
+
         if (!user) return;
 
         setUserId(user.id);
 
-        // Lecture depuis profiles (schéma officiel)
-        const { data } = await supabase
+        // Profil
+        const { data: profile } = await supabase
           .from("profiles")
           .select("display_name, handle, flag, bio")
           .eq("user_id", user.id)
           .maybeSingle();
 
-        if (data) {
+        if (profile) {
           setUserProfile({
-            display_name: data.display_name || "Membre BAARO",
-            handle: data.handle || "@mon_compte",
-            flag: data.flag || "🌍",
-            bio: data.bio || "",
+            display_name: profile.display_name || "Membre BAARO",
+            handle: profile.handle || "@membre",
+            flag: profile.flag || "🌍",
+            bio: profile.bio || "",
+          });
+        } else {
+          // Crée le profil s'il n'existe pas encore
+          await supabase.from("profiles").upsert({
+            user_id: user.id,
+            display_name: "Membre BAARO",
+            handle: `@user_${user.id.slice(0, 8)}`,
+            flag: "🌍",
           });
         }
 
-        // Solde wallet
+        // Solde points
         const { data: wallet } = await supabase
           .from("wallets")
           .select("balance")
           .eq("user_id", user.id)
           .maybeSingle();
-        if (wallet) setPointsBalance(Number(wallet.balance) || 0);
+
+        if (wallet) {
+          setPointsBalance(Number(wallet.balance) || 0);
+        }
 
         // Solde BARO
         const { data: crypto } = await supabase
@@ -84,15 +95,19 @@ function MainAppContent() {
           .select("holdings")
           .eq("user_id", user.id)
           .maybeSingle();
-        if (crypto) setBaroBalance(Number(crypto.holdings) || 0);
+
+        if (crypto) {
+          setBaroBalance(Number(crypto.holdings) || 0);
+        }
       } catch (error) {
-        console.error("Erreur chargement profil:", error);
+        console.error("Erreur chargement données utilisateur:", error);
       }
     };
 
-    loadProfile();
+    loadUserData();
   }, []);
 
+  // Mise à jour optimiste des points (sera remplacé plus tard par useWallet)
   const handleRewardPoints = useCallback((pts) => {
     setPointsBalance((prev) => prev + pts);
   }, []);
@@ -110,7 +125,7 @@ function MainAppContent() {
         pointsBalance={pointsBalance}
         baroBalance={baroBalance}
         userProfile={userProfile}
-        onOpenProfile={() => userId && setInspectingProfileId(userId)}
+        onOpenProfile={() => setInspectingProfileId(userId)}
         onOpenNotifications={() => setNotifDrawerOpen(true)}
         onOpenSearch={() => setSearchModalOpen(true)}
       />
@@ -128,17 +143,13 @@ function MainAppContent() {
               onRewardPoints={handleRewardPoints}
             />
           )}
-
-          {activeTab === "friends" && <FriendsTab userId={userId} />}
-
+          {activeTab === "friends" && <FriendsTab />}
           {activeTab === "videos" && (
             <VideosTab onRewardPoints={handleRewardPoints} />
           )}
-
           {activeTab === "messages" && (
             <MessagesTab onRewardPoints={handleRewardPoints} />
           )}
-
           {activeTab === "wallet" && (
             <WalletTab
               pointsBalance={pointsBalance}
@@ -147,7 +158,6 @@ function MainAppContent() {
               onNavigateToCrypto={() => setActiveTab("crypto")}
             />
           )}
-
           {activeTab === "crypto" && (
             <CryptoTab
               pointsBalance={pointsBalance}
@@ -157,22 +167,18 @@ function MainAppContent() {
               setBaroBalance={setBaroBalance}
             />
           )}
-
           {activeTab === "debates" && (
             <DebatesTab
               currentUserId={userId}
               onRewardPoints={handleRewardPoints}
             />
           )}
-
           {activeTab === "offline" && (
             <OfflineTab onRewardPoints={handleRewardPoints} />
           )}
-
           {activeTab === "assistant" && (
             <AiAssistantTab onRewardPoints={handleRewardPoints} />
           )}
-
           {activeTab === "settings" && (
             <SettingsTab
               userProfile={userProfile}
@@ -187,7 +193,6 @@ function MainAppContent() {
       {inspectingProfileId && (
         <ProfileModal
           authorId={inspectingProfileId}
-          currentUserId={userId}
           onClose={() => setInspectingProfileId(null)}
           onNavigateToMessages={() => setActiveTab("messages")}
         />
@@ -250,4 +255,4 @@ export default function App() {
       <MainAppContent />
     </ToastProvider>
   );
-  }
+}
