@@ -56,13 +56,15 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
 
     const loadDebate = async () => {
       try {
+        // Recherche robuste (insensible à la casse + statut actif)
         const { data: roomData, error: roomError } = await supabase
           .from("debate_rooms")
           .select(
-            "id, title, topic, mode, invite_code, status, created_at, creator_id, daily_room_name"
+            "id, title, topic, mode, invite_code, status, created_at, host_id, daily_room_name"
           )
-          .eq("invite_code", inviteCode)
-          .single();
+          .ilike("invite_code", inviteCode)
+          .eq("status", "active")
+          .maybeSingle();
 
         if (roomError || !roomData) {
           if (isMounted) {
@@ -75,12 +77,13 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
         if (isMounted) {
           setRoom(roomData);
           setIsVoiceMode(roomData.mode === "audio" || roomData.mode === "video");
-          setIsHost(roomData.creator_id === currentUserId);
+          setIsHost(roomData.host_id === currentUserId);
           if (roomData.daily_room_name) {
             setDailyRoomName(roomData.daily_room_name);
           }
         }
 
+        // Messages
         const { data: msgsData } = await supabase
           .from("debate_messages")
           .select("id, text, created_at, user_id")
@@ -119,6 +122,7 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
           );
         }
 
+        // Realtime messages
         channel = supabase
           .channel(`room_${roomData.id}`)
           .on(
@@ -181,18 +185,17 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
           profilesCache.current[currentUserId]?.display_name || "Participant";
 
         await joinLiveByCode({
-          inviteCode,
+          inviteCode: room.invite_code,
           userName,
-          isHost: room.creator_id === currentUserId,
+          isHost: room.host_id === currentUserId,
           audioOnly: room.mode === "audio",
         });
 
-        // Micro coupé par défaut (sauf hôte)
-        const shouldStartMic = room.creator_id === currentUserId;
+        // Micro activé par défaut pour l'hôte, coupé pour les autres
+        const shouldStartMic = room.host_id === currentUserId;
         enableMic(shouldStartMic);
         setMicOn(shouldStartMic);
 
-        // Participants
         const updateParticipants = () => {
           setParticipants(getParticipants());
         };
@@ -208,14 +211,6 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
             setVoiceError("Erreur audio. Réessaie.");
           },
         });
-
-        // Récupérer le roomName Daily pour leave
-        const call = getCallObject();
-        if (call) {
-          const participants = call.participants();
-          const local = participants?.local;
-          // roomName est stocké dans l'état du call
-        }
       } catch (err) {
         console.error("Erreur vocal:", err);
         setVoiceError(err.message || "Impossible de rejoindre l'audio");
@@ -226,10 +221,6 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
     };
 
     startVoice();
-
-    return () => {
-      // cleanup sera fait au unmount
-    };
   }, [room, isVoiceMode, inviteCode, currentUserId]);
 
   // Cleanup vocal au démontage
@@ -497,4 +488,4 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
       </form>
     </div>
   );
-      }
+}
