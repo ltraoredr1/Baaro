@@ -1,7 +1,25 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { ArrowLeft, Send, Users, Hash, MessageSquare } from "lucide-react";
+import {
+  ArrowLeft,
+  Send,
+  Users,
+  Hash,
+  MessageSquare,
+  Mic,
+  MicOff,
+  PhoneOff,
+  Volume2,
+} from "lucide-react";
 import { COLORS } from "../theme.js";
 import { supabase } from "../supabaseClient.js";
+import {
+  joinLiveByCode,
+  leaveLive,
+  enableMic,
+  subscribeToEvents,
+  getCallObject,
+  getParticipants,
+} from "../lib/webrtc.js";
 
 export function DebateRoom({ inviteCode, currentUserId, onBack }) {
   const [room, setRoom] = useState(null);
@@ -9,8 +27,19 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
   const [newMessage, setNewMessage] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+
+  // Vocal
+  const [isVoiceMode, setIsVoiceMode] = useState(false);
+  const [micOn, setMicOn] = useState(false);
+  const [voiceConnecting, setVoiceConnecting] = useState(false);
+  const [participants, setParticipants] = useState({});
+  const [voiceError, setVoiceError] = useState(null);
+  const [dailyRoomName, setDailyRoomName] = useState(null);
+  const [isHost, setIsHost] = useState(false);
+
   const messagesEndRef = useRef(null);
   const profilesCache = useRef({});
+  const voiceStarted = useRef(false);
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -20,16 +49,18 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
     scrollToBottom();
   }, [messages, scrollToBottom]);
 
+  // ===== Chargement de la salle + messages =====
   useEffect(() => {
     let isMounted = true;
     let channel = null;
 
     const loadDebate = async () => {
       try {
-        // 1. Charger la salle
         const { data: roomData, error: roomError } = await supabase
           .from("debate_rooms")
-          .select("id, title, topic, mode, invite_code, status, created_at, creator_id")
+          .select(
+            "id, title, topic, mode, invite_code, status, created_at, creator_id, daily_room_name"
+          )
           .eq("invite_code", inviteCode)
           .single();
 
@@ -41,32 +72,35 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
           return;
         }
 
-        if (isMounted) setRoom(roomData);
+        if (isMounted) {
+          setRoom(roomData);
+          setIsVoiceMode(roomData.mode === "audio" || roomData.mode === "video");
+          setIsHost(roomData.creator_id === currentUserId);
+          if (roomData.daily_room_name) {
+            setDailyRoomName(roomData.daily_room_name);
+          }
+        }
 
-        // 2. Charger les messages (colonnes minimales)
-        const { data: msgsData, error: msgsError } = await supabase
+        const { data: msgsData } = await supabase
           .from("debate_messages")
           .select("id, text, created_at, user_id")
           .eq("room_id", roomData.id)
           .order("created_at", { ascending: true })
           .limit(200);
 
-        if (!msgsError && msgsData && isMounted) {
-          // 3. Une seule requête pour tous les profils
+        if (msgsData && isMounted) {
           const uniqueUserIds = [
             ...new Set(msgsData.map((m) => m.user_id).filter(Boolean)),
           ];
-
           let profilesMap = { ...profilesCache.current };
 
           if (uniqueUserIds.length > 0) {
-            const missingIds = uniqueUserIds.filter((id) => !profilesMap[id]);
-            if (missingIds.length > 0) {
+            const missing = uniqueUserIds.filter((id) => !profilesMap[id]);
+            if (missing.length > 0) {
               const { data: profiles } = await supabase
                 .from("profiles")
                 .select("user_id, display_name, avatar_url, flag")
-                .in("user_id", missingIds);
-
+                .in("user_id", missing);
               (profiles || []).forEach((p) => {
                 profilesMap[p.user_id] = p;
               });
@@ -74,18 +108,17 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
             }
           }
 
-          const enrichedMessages = msgsData.map((m) => ({
-            ...m,
-            profile: profilesMap[m.user_id] || {
-              display_name: "Membre",
-              flag: "🌍",
-            },
-          }));
-
-          setMessages(enrichedMessages);
+          setMessages(
+            msgsData.map((m) => ({
+              ...m,
+              profile: profilesMap[m.user_id] || {
+                display_name: "Membre",
+                flag: "🌍",
+              },
+            }))
+          );
         }
 
-        // 4. Realtime
         channel = supabase
           .channel(`room_${roomData.id}`)
           .on(
@@ -98,18 +131,15 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
             },
             async (payload) => {
               let profile = profilesCache.current[payload.new.user_id];
-
               if (!profile && payload.new.user_id) {
                 const { data } = await supabase
                   .from("profiles")
                   .select("display_name, avatar_url, flag")
                   .eq("user_id", payload.new.user_id)
                   .maybeSingle();
-
                 profile = data || { display_name: "Membre", flag: "🌍" };
                 profilesCache.current[payload.new.user_id] = profile;
               }
-
               if (isMounted) {
                 setMessages((prev) => [
                   ...prev,
@@ -135,7 +165,93 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
       isMounted = false;
       if (channel) supabase.removeChannel(channel);
     };
-  }, [inviteCode]);
+  }, [inviteCode, currentUserId]);
+
+  // ===== Connexion vocale automatique si mode audio/video =====
+  useEffect(() => {
+    if (!room || !isVoiceMode || voiceStarted.current || !inviteCode) return;
+
+    const startVoice = async () => {
+      setVoiceConnecting(true);
+      setVoiceError(null);
+      voiceStarted.current = true;
+
+      try {
+        const userName =
+          profilesCache.current[currentUserId]?.display_name || "Participant";
+
+        await joinLiveByCode({
+          inviteCode,
+          userName,
+          isHost: room.creator_id === currentUserId,
+          audioOnly: room.mode === "audio",
+        });
+
+        // Micro coupé par défaut (sauf hôte)
+        const shouldStartMic = room.creator_id === currentUserId;
+        enableMic(shouldStartMic);
+        setMicOn(shouldStartMic);
+
+        // Participants
+        const updateParticipants = () => {
+          setParticipants(getParticipants());
+        };
+        updateParticipants();
+
+        subscribeToEvents({
+          onParticipantJoined: updateParticipants,
+          onParticipantLeft: updateParticipants,
+          onTrackStarted: updateParticipants,
+          onTrackStopped: updateParticipants,
+          onError: (e) => {
+            console.error("Daily error:", e);
+            setVoiceError("Erreur audio. Réessaie.");
+          },
+        });
+
+        // Récupérer le roomName Daily pour leave
+        const call = getCallObject();
+        if (call) {
+          const participants = call.participants();
+          const local = participants?.local;
+          // roomName est stocké dans l'état du call
+        }
+      } catch (err) {
+        console.error("Erreur vocal:", err);
+        setVoiceError(err.message || "Impossible de rejoindre l'audio");
+        voiceStarted.current = false;
+      } finally {
+        setVoiceConnecting(false);
+      }
+    };
+
+    startVoice();
+
+    return () => {
+      // cleanup sera fait au unmount
+    };
+  }, [room, isVoiceMode, inviteCode, currentUserId]);
+
+  // Cleanup vocal au démontage
+  useEffect(() => {
+    return () => {
+      leaveLive({ roomName: dailyRoomName, isHost }).catch(() => {});
+    };
+  }, [dailyRoomName, isHost]);
+
+  const toggleMic = () => {
+    const next = !micOn;
+    enableMic(next);
+    setMicOn(next);
+  };
+
+  const handleLeaveVoice = async () => {
+    await leaveLive({ roomName: dailyRoomName, isHost });
+    voiceStarted.current = false;
+    setMicOn(false);
+    setParticipants({});
+    onBack();
+  };
 
   const handleSendMessage = async (e) => {
     e.preventDefault();
@@ -187,14 +303,17 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
     );
   }
 
+  const participantCount = Object.keys(participants).length;
+
   return (
     <div className="flex flex-col h-full" style={{ background: COLORS.surface }}>
+      {/* Header */}
       <div
         className="flex items-center gap-3 p-4 border-b"
         style={{ borderColor: COLORS.border }}
       >
         <button
-          onClick={onBack}
+          onClick={handleLeaveVoice}
           className="p-2 rounded-full hover:bg-white/10"
           style={{ color: COLORS.ivory }}
         >
@@ -209,6 +328,11 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
             <span className="text-[10px] px-2 py-0.5 rounded-full bg-green-500/20 text-green-400 font-normal">
               LIVE
             </span>
+            {isVoiceMode && (
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-400 font-normal flex items-center gap-1">
+                <Volume2 size={10} /> VOCAL
+              </span>
+            )}
           </h2>
           <p className="text-xs flex items-center gap-1" style={{ color: COLORS.muted }}>
             <Hash size={12} /> {room?.topic}
@@ -219,9 +343,58 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
           style={{ background: COLORS.surface2 }}
         >
           <Users size={14} style={{ color: COLORS.gold }} />
+          <span className="text-xs" style={{ color: COLORS.ivory }}>
+            {participantCount || "–"}
+          </span>
         </div>
       </div>
 
+      {/* Barre vocale */}
+      {isVoiceMode && (
+        <div
+          className="px-4 py-3 border-b flex items-center justify-between gap-3"
+          style={{ borderColor: COLORS.border, background: COLORS.surface2 }}
+        >
+          {voiceConnecting ? (
+            <p className="text-xs" style={{ color: COLORS.muted }}>
+              Connexion audio…
+            </p>
+          ) : voiceError ? (
+            <p className="text-xs text-red-400">{voiceError}</p>
+          ) : (
+            <p className="text-xs flex items-center gap-1.5" style={{ color: COLORS.teal }}>
+              <Volume2 size={14} />
+              Mode vocal actif
+            </p>
+          )}
+
+          <div className="flex items-center gap-2">
+            <button
+              onClick={toggleMic}
+              disabled={voiceConnecting || !!voiceError}
+              className="p-3 rounded-full transition disabled:opacity-40"
+              style={{
+                background: micOn ? COLORS.gold : "rgba(239,68,68,0.2)",
+                color: micOn ? "#000" : "#ef4444",
+              }}
+              title={micOn ? "Couper le micro" : "Activer le micro"}
+            >
+              {micOn ? <Mic size={18} /> : <MicOff size={18} />}
+            </button>
+
+            <button
+              onClick={handleLeaveVoice}
+              className="p-3 rounded-full"
+              style={{ background: "rgba(239,68,68,0.25)", color: "#ef4444" }}
+              title="Quitter le live"
+            >
+              <PhoneOff size={18} />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Messages */}
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
         {messages.length === 0 ? (
           <div className="text-center py-10" style={{ color: COLORS.muted }}>
@@ -295,6 +468,7 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
         <div ref={messagesEndRef} />
       </div>
 
+      {/* Input chat */}
       <form
         onSubmit={handleSendMessage}
         className="p-4 border-t flex gap-2"
@@ -323,4 +497,4 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
       </form>
     </div>
   );
-              }
+      }
