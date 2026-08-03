@@ -16,23 +16,20 @@ export default function DebatesTab({ currentUserId, onRewardPoints }) {
     setLoading(true);
     setError(null);
     try {
-      // Une seule requête légère + colonnes minimales
       const { data, error } = await supabase
         .from("debate_rooms")
-        .select("id, title, topic, mode, invite_code, status, created_at, creator_id")
+        .select("id, title, topic, mode, invite_code, status, created_at, host_id")
         .eq("status", "active")
         .order("created_at", { ascending: false })
         .limit(50);
 
       if (error) {
-        console.error("Erreur Supabase:", error);
         setError(error.message);
         setDebates([]);
       } else {
         setDebates(data || []);
       }
     } catch (err) {
-      console.error("Erreur critique:", err);
       setError(err.message);
     } finally {
       setLoading(false);
@@ -41,28 +38,25 @@ export default function DebatesTab({ currentUserId, onRewardPoints }) {
 
   useEffect(() => {
     fetchDebates();
-
     const channel = supabase
       .channel("debates_channel")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "debate_rooms" },
-        () => fetchDebates()
-      )
+      .on("postgres_changes", { event: "*", schema: "public", table: "debate_rooms" }, () => {
+        fetchDebates();
+      })
       .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
+    return () => supabase.removeChannel(channel);
   }, [fetchDebates]);
 
+  // ===== MODE PLEIN ÉCRAN quand on est dans une salle =====
   if (activeDebateCode) {
     return (
-      <DebateRoom
-        inviteCode={activeDebateCode}
-        currentUserId={currentUserId}
-        onBack={() => setActiveDebateCode(null)}
-      />
+      <div className="fixed inset-0 z-50 flex flex-col" style={{ background: COLORS.surface }}>
+        <DebateRoom
+          inviteCode={activeDebateCode}
+          currentUserId={currentUserId}
+          onBack={() => setActiveDebateCode(null)}
+        />
+      </div>
     );
   }
 
@@ -88,10 +82,7 @@ export default function DebatesTab({ currentUserId, onRewardPoints }) {
           <div className="bg-red-500/20 border border-red-500 p-4 rounded-xl mb-4">
             <p className="text-red-400 font-bold text-sm mb-1">Erreur</p>
             <p className="text-red-300 text-xs">{error}</p>
-            <button
-              onClick={fetchDebates}
-              className="mt-2 px-3 py-1 bg-red-500 text-white text-xs rounded"
-            >
+            <button onClick={fetchDebates} className="mt-2 px-3 py-1 bg-red-500 text-white text-xs rounded">
               Réessayer
             </button>
           </div>
@@ -105,15 +96,10 @@ export default function DebatesTab({ currentUserId, onRewardPoints }) {
             </div>
           ) : debates.length === 0 ? (
             <div className="text-center py-10">
-              <div
-                className="w-20 h-20 rounded-full mx-auto mb-4 flex items-center justify-center"
-                style={{ background: COLORS.surface }}
-              >
+              <div className="w-20 h-20 rounded-full mx-auto mb-4 flex items-center justify-center" style={{ background: COLORS.surface }}>
                 <Swords size={40} style={{ color: COLORS.muted }} />
               </div>
-              <p className="font-bold mb-2" style={{ color: COLORS.ivory }}>
-                Aucun débat actif
-              </p>
+              <p className="font-bold mb-2" style={{ color: COLORS.ivory }}>Aucun débat actif</p>
               <button
                 onClick={() => setIsCreateOpen(true)}
                 className="px-6 py-3 rounded-xl font-bold text-sm mt-4"
@@ -133,13 +119,8 @@ export default function DebatesTab({ currentUserId, onRewardPoints }) {
                 <div className="flex items-start justify-between mb-3">
                   <div className="flex-1">
                     <div className="flex items-center gap-2 mb-2">
-                      <h3 className="font-bold text-sm" style={{ color: COLORS.ivory }}>
-                        {debate.title}
-                      </h3>
-                      <span
-                        className="text-[10px] px-2 py-0.5 rounded-full font-normal"
-                        style={{ background: COLORS.teal + "20", color: COLORS.teal }}
-                      >
+                      <h3 className="font-bold text-sm" style={{ color: COLORS.ivory }}>{debate.title}</h3>
+                      <span className="text-[10px] px-2 py-0.5 rounded-full font-normal" style={{ background: COLORS.teal + "20", color: COLORS.teal }}>
                         LIVE
                       </span>
                     </div>
@@ -147,25 +128,15 @@ export default function DebatesTab({ currentUserId, onRewardPoints }) {
                       <Hash size={12} /> {debate.topic}
                     </div>
                   </div>
-                  <div
-                    className="w-10 h-10 rounded-xl flex items-center justify-center"
-                    style={{ background: COLORS.surface2 }}
-                  >
-                    {debate.mode === "video" ? (
-                      <Video size={18} style={{ color: COLORS.gold }} />
-                    ) : debate.mode === "audio" ? (
-                      <Mic size={18} style={{ color: COLORS.gold }} />
-                    ) : (
-                      <MessageSquare size={18} style={{ color: COLORS.gold }} />
-                    )}
+                  <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: COLORS.surface2 }}>
+                    {debate.mode === "video" ? <Video size={18} style={{ color: COLORS.gold }} /> :
+                     debate.mode === "audio" ? <Mic size={18} style={{ color: COLORS.gold }} /> :
+                     <MessageSquare size={18} style={{ color: COLORS.gold }} />}
                   </div>
                 </div>
                 <div className="text-xs" style={{ color: COLORS.muted }}>
                   {new Date(debate.created_at).toLocaleDateString("fr-FR", {
-                    day: "numeric",
-                    month: "short",
-                    hour: "2-digit",
-                    minute: "2-digit",
+                    day: "numeric", month: "short", hour: "2-digit", minute: "2-digit"
                   })}
                 </div>
               </div>
