@@ -18,7 +18,7 @@ export default function DebatesTab({ currentUserId, onRewardPoints }) {
     try {
       const { data, error } = await supabase
         .from("debate_rooms")
-        .select("id, title, topic, mode, invite_code, status, created_at, host_id")
+        .select("id, title, topic, mode, invite_code, status, created_at, host_id, max_participants")
         .eq("status", "active")
         .order("created_at", { ascending: false })
         .limit(50);
@@ -47,7 +47,7 @@ export default function DebatesTab({ currentUserId, onRewardPoints }) {
     return () => supabase.removeChannel(channel);
   }, [fetchDebates]);
 
-  // ===== MODE PLEIN ÉCRAN quand on est dans une salle =====
+  // Mode plein écran
   if (activeDebateCode) {
     return (
       <div className="fixed inset-0 z-50 flex flex-col" style={{ background: COLORS.surface }}>
