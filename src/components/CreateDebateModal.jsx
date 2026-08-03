@@ -2,11 +2,12 @@ import { useState } from "react";
 import { X, Hash, Mic, Video, MessageSquare, Sparkles } from "lucide-react";
 import { COLORS } from "../theme.js";
 import { supabase } from "../supabaseClient.js";
+import { API_BASE } from "../config.js";
 
 export function CreateDebateModal({ isOpen, onClose, currentUserId, onSuccess }) {
   const [title, setTitle] = useState("");
   const [topic, setTopic] = useState("");
-  const [mode, setMode] = useState("text"); // text | audio | video
+  const [mode, setMode] = useState("text");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
@@ -27,9 +28,33 @@ export function CreateDebateModal({ isOpen, onClose, currentUserId, onSuccess })
     setError(null);
 
     try {
-      const inviteCode = generateInviteCode();
+      let inviteCode = generateInviteCode();
+      let dailyRoomName = null;
 
-      // Insertion compatible avec le schéma (host_id)
+      // Si mode audio ou vidéo → créer la room Daily d'abord
+      if (mode === "audio" || mode === "video") {
+        const res = await fetch(`${API_BASE}/api/create-room`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "create-room",
+            userName: "Hôte",
+            hostId: currentUserId,
+            enableHLS: false,
+          }),
+        });
+
+        const dailyData = await res.json();
+        if (!res.ok) {
+          throw new Error(dailyData.error || "Impossible de créer la salle audio");
+        }
+
+        // On utilise le code généré par le serveur si disponible
+        inviteCode = dailyData.inviteCode || inviteCode;
+        dailyRoomName = dailyData.roomName || null;
+      }
+
+      // Créer la salle dans Supabase
       const { data: room, error: roomError } = await supabase
         .from("debate_rooms")
         .insert({
@@ -37,8 +62,9 @@ export function CreateDebateModal({ isOpen, onClose, currentUserId, onSuccess })
           topic: topic.trim(),
           mode: mode,
           invite_code: inviteCode,
-          host_id: currentUserId,        // ← important (pas creator_id)
+          host_id: currentUserId,
           status: "active",
+          daily_room_name: dailyRoomName,
         })
         .select()
         .single();
