@@ -1,44 +1,18 @@
 /**
  * Protection anti-capture d'écran
- * - Android (Capacitor) : FLAG_SECURE réel
  * - Web / PWA : flou quand l'onglet perd le focus
+ * - Android natif : à activer plus tard avec @capacitor-community/privacy-screen
+ *   (ne pas importer ici, sinon le build Vercel casse)
  */
-import { Capacitor } from "@capacitor/core";
 
-let privacyPlugin = null;
-
-async function getPlugin() {
-  if (privacyPlugin) return privacyPlugin;
-  if (Capacitor.getPlatform() !== "android") return null;
-  try {
-    const mod = await import("@capacitor-community/privacy-screen");
-    privacyPlugin = mod.PrivacyScreen;
-    return privacyPlugin;
-  } catch {
-    return null;
-  }
-}
-
-/** Active le blocage des captures (Android) */
+/** No-op sur le web. Sur Android natif, on brancherá le plugin plus tard. */
 export async function enableSecureScreen() {
-  const plugin = await getPlugin();
-  if (!plugin) return;
-  try {
-    await plugin.enable();
-  } catch (err) {
-    console.warn("[secureScreen] enable:", err?.message);
-  }
+  // Réservé à l'app Android (FLAG_SECURE)
 }
 
-/** Désactive le blocage */
+/** No-op sur le web. */
 export async function disableSecureScreen() {
-  const plugin = await getPlugin();
-  if (!plugin) return;
-  try {
-    await plugin.disable();
-  } catch {
-    // ignore
-  }
+  // Réservé à l'app Android
 }
 
 /**
@@ -46,10 +20,10 @@ export async function disableSecureScreen() {
  * Retourne une fonction de nettoyage.
  */
 export function attachWebPrivacyBlur(elementId = "chat-content") {
-  const el = () => document.getElementById(elementId);
+  const getEl = () => document.getElementById(elementId);
 
-  const blur = () => el()?.classList.add("privacy-blur");
-  const unblur = () => el()?.classList.remove("privacy-blur");
+  const blur = () => getEl()?.classList.add("privacy-blur");
+  const unblur = () => getEl()?.classList.remove("privacy-blur");
 
   const onVisibility = () => {
     if (document.hidden) blur();
