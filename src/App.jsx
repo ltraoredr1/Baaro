@@ -25,7 +25,7 @@ const THEME_BG_MAP = {
   emerald: "#061A14",
 };
 
-function MainAppContent() {
+function MainAppContent({ session }) {
   const [activeTab, setActiveTab] = useState("feed");
   const [lang, setLang] = useState("fr");
   const [pointsBalance, setPointsBalance] = useState(0);
@@ -41,25 +41,42 @@ function MainAppContent() {
     flag: "🌍",
     bio: "",
   });
+  const [loadingData, setLoadingData] = useState(true);
 
-  // Charge l'utilisateur + son profil + ses soldes
+  // Charge toutes les données de l'utilisateur connecté
   useEffect(() => {
+    if (!session?.user) return;
+
     const loadUserData = async () => {
+      setLoadingData(true);
+      const uid = session.user.id;
+      setUserId(uid);
+
       try {
-        const {
-          data: { user },
-        } = await supabase.auth.getUser();
-
-        if (!user) return;
-
-        setUserId(user.id);
-
-        // Profil
-        const { data: profile } = await supabase
+        // 1. Profil
+        let { data: profile } = await supabase
           .from("profiles")
           .select("display_name, handle, flag, bio")
-          .eq("user_id", user.id)
+          .eq("user_id", uid)
           .maybeSingle();
+
+        // Crée le profil s'il n'existe pas
+        if (!profile) {
+          const defaultHandle = `@user_${uid.slice(0, 8)}`;
+          const { data: created } = await supabase
+            .from("profiles")
+            .upsert({
+              user_id: uid,
+              display_name: "Membre BAARO",
+              handle: defaultHandle,
+              flag: "🌍",
+              bio: "",
+            })
+            .select()
+            .single();
+
+          profile = created;
+        }
 
         if (profile) {
           setUserProfile({
@@ -68,32 +85,31 @@ function MainAppContent() {
             flag: profile.flag || "🌍",
             bio: profile.bio || "",
           });
-        } else {
-          // Crée le profil s'il n'existe pas encore
-          await supabase.from("profiles").upsert({
-            user_id: user.id,
-            display_name: "Membre BAARO",
-            handle: `@user_${user.id.slice(0, 8)}`,
-            flag: "🌍",
-          });
         }
 
-        // Solde points
+        // 2. Solde points
         const { data: wallet } = await supabase
           .from("wallets")
           .select("balance")
-          .eq("user_id", user.id)
+          .eq("user_id", uid)
           .maybeSingle();
 
         if (wallet) {
           setPointsBalance(Number(wallet.balance) || 0);
+        } else {
+          // Crée le wallet par défaut si absent
+          await supabase.from("wallets").upsert({
+            user_id: uid,
+            balance: 1284,
+          });
+          setPointsBalance(1284);
         }
 
-        // Solde BARO
+        // 3. Solde BARO
         const { data: crypto } = await supabase
           .from("crypto_holdings")
           .select("holdings")
-          .eq("user_id", user.id)
+          .eq("user_id", uid)
           .maybeSingle();
 
         if (crypto) {
@@ -101,18 +117,41 @@ function MainAppContent() {
         }
       } catch (error) {
         console.error("Erreur chargement données utilisateur:", error);
+      } finally {
+        setLoadingData(false);
       }
     };
 
     loadUserData();
-  }, []);
+  }, [session]);
 
-  // Mise à jour optimiste des points (sera remplacé plus tard par useWallet)
-  const handleRewardPoints = useCallback((pts) => {
-    setPointsBalance((prev) => prev + pts);
+  // Mise à jour du solde (reçoit soit un delta, soit le nouveau solde complet)
+  const handleRewardPoints = useCallback((ptsOrNewBalance) => {
+    if (typeof ptsOrNewBalance !== "number") return;
+
+    // Si la valeur est grande, on considère que c'est le solde complet renvoyé par l'API
+    if (ptsOrNewBalance > 50) {
+      setPointsBalance(ptsOrNewBalance);
+    } else {
+      setPointsBalance((prev) => prev + ptsOrNewBalance);
+    }
   }, []);
 
   const themeBg = THEME_BG_MAP[currentTheme] || THEME_BG_MAP.midnight;
+
+  if (loadingData) {
+    return (
+      <div
+        className="min-h-screen flex items-center justify-center"
+        style={{ background: themeBg, color: "white" }}
+      >
+        <div className="text-center">
+          <div className="text-4xl mb-4 animate-pulse">⏳</div>
+          <p>Chargement de votre espace BAARO...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -143,23 +182,36 @@ function MainAppContent() {
               onRewardPoints={handleRewardPoints}
             />
           )}
-          {activeTab === "friends" && <FriendsTab />}
+
+          {activeTab === "friends" && <FriendsTab currentUserId={userId} />}
+
           {activeTab === "videos" && (
-            <VideosTab onRewardPoints={handleRewardPoints} />
+            <VideosTab
+              userId={userId}
+              onRewardPoints={handleRewardPoints}
+            />
           )}
+
           {activeTab === "messages" && (
-            <MessagesTab onRewardPoints={handleRewardPoints} />
+            <MessagesTab
+              userId={userId}
+              onRewardPoints={handleRewardPoints}
+            />
           )}
+
           {activeTab === "wallet" && (
             <WalletTab
+              userId={userId}
               pointsBalance={pointsBalance}
               baroBalance={baroBalance}
               onRewardPoints={handleRewardPoints}
               onNavigateToCrypto={() => setActiveTab("crypto")}
             />
           )}
+
           {activeTab === "crypto" && (
             <CryptoTab
+              userId={userId}
               pointsBalance={pointsBalance}
               baroBalance={baroBalance}
               onRewardPoints={handleRewardPoints}
@@ -167,20 +219,25 @@ function MainAppContent() {
               setBaroBalance={setBaroBalance}
             />
           )}
+
           {activeTab === "debates" && (
             <DebatesTab
               currentUserId={userId}
               onRewardPoints={handleRewardPoints}
             />
           )}
+
           {activeTab === "offline" && (
             <OfflineTab onRewardPoints={handleRewardPoints} />
           )}
+
           {activeTab === "assistant" && (
             <AiAssistantTab onRewardPoints={handleRewardPoints} />
           )}
+
           {activeTab === "settings" && (
             <SettingsTab
+              userId={userId}
               userProfile={userProfile}
               setUserProfile={setUserProfile}
               currentTheme={currentTheme}
@@ -190,19 +247,24 @@ function MainAppContent() {
         </main>
       </div>
 
+      {/* Modal de profil */}
       {inspectingProfileId && (
         <ProfileModal
           authorId={inspectingProfileId}
+          currentUserId={userId}
           onClose={() => setInspectingProfileId(null)}
           onNavigateToMessages={() => setActiveTab("messages")}
         />
       )}
 
+      {/* Notifications */}
       <NotificationDrawer
         isOpen={notifDrawerOpen}
         onClose={() => setNotifDrawerOpen(false)}
+        userId={userId}
       />
 
+      {/* Recherche globale */}
       <GlobalSearchModal
         isOpen={searchModalOpen}
         onClose={() => setSearchModalOpen(false)}
@@ -218,11 +280,13 @@ export default function App() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    // Récupère la session existante
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
       setLoading(false);
     });
 
+    // Écoute les changements d'auth
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
@@ -246,13 +310,15 @@ export default function App() {
     );
   }
 
+  // Pas de session → écran d'auth
   if (!session) {
     return <AuthScreen />;
   }
 
+  // Session active → application
   return (
     <ToastProvider>
-      <MainAppContent />
+      <MainAppContent session={session} />
     </ToastProvider>
   );
 }
