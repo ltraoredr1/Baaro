@@ -1,12 +1,25 @@
 /**
- * MessagesTab avec chiffrement E2E.
+ * MessagesTab avec chiffrement E2E + anti-capture d'écran
  */
 import { useState, useEffect, useRef } from "react";
-import { ArrowLeft, Send, MessageCircle, Plus, X, Lock, AlertTriangle } from "lucide-react";
+import {
+  ArrowLeft,
+  Send,
+  MessageCircle,
+  Plus,
+  X,
+  Lock,
+  AlertTriangle,
+} from "lucide-react";
 import { COLORS } from "../theme.js";
 import { supabase } from "../supabaseClient.js";
 import { useMessaging } from "../hooks/useMessaging.js";
 import { useCryptoKeys } from "../hooks/useCryptoKeys.js";
+import {
+  enableSecureScreen,
+  disableSecureScreen,
+  attachWebPrivacyBlur,
+} from "../lib/secureScreen.js";
 
 export function MessagesTab({ onRewardPoints }) {
   const [currentUserId, setCurrentUserId] = useState(null);
@@ -36,6 +49,19 @@ export function MessagesTab({ onRewardPoints }) {
       if (user) setCurrentUserId(user.id);
     });
   }, []);
+
+  // Anti-capture d'écran (Android FLAG_SECURE + flou web)
+  useEffect(() => {
+    if (!activeChat) return;
+
+    enableSecureScreen();
+    const cleanupWeb = attachWebPrivacyBlur("chat-content");
+
+    return () => {
+      disableSecureScreen();
+      cleanupWeb();
+    };
+  }, [activeChat]);
 
   useEffect(() => {
     if (!currentUserId) return;
@@ -194,7 +220,7 @@ export function MessagesTab({ onRewardPoints }) {
       >
         <div className="flex items-center justify-between mb-6">
           <h2 className="text-lg font-bold" style={{ color: COLORS.ivory }}>
-            Nouvelle conversation
+            Nouveau chat
           </h2>
           <button
             onClick={() => setShowUserSelector(false)}
@@ -272,7 +298,10 @@ export function MessagesTab({ onRewardPoints }) {
 
   if (activeChat) {
     return (
-      <div className="flex flex-col h-full" style={{ background: COLORS.surface }}>
+      <div
+        className="flex flex-col h-full"
+        style={{ background: COLORS.surface }}
+      >
         <div
           className="flex items-center gap-3 p-4 border-b"
           style={{ borderColor: COLORS.border }}
@@ -327,7 +356,10 @@ export function MessagesTab({ onRewardPoints }) {
           </div>
         )}
 
-        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+        <div
+          id="chat-content"
+          className="flex-1 overflow-y-auto p-4 space-y-3"
+        >
           {loadingMessages ? (
             <div className="text-center py-10" style={{ color: COLORS.muted }}>
               <div className="animate-spin inline-block w-6 h-6 border-2 border-current border-t-transparent rounded-full mb-2" />
@@ -345,7 +377,9 @@ export function MessagesTab({ onRewardPoints }) {
               return (
                 <div
                   key={msg.id}
-                  className={`flex gap-2 ${isMe ? "flex-row-reverse" : "flex-row"}`}
+                  className={`flex gap-2 ${
+                    isMe ? "flex-row-reverse" : "flex-row"
+                  }`}
                 >
                   {!isMe && (
                     <div
@@ -449,10 +483,8 @@ export function MessagesTab({ onRewardPoints }) {
           style={{ color: COLORS.ivory }}
         >
           <MessageCircle size={24} style={{ color: COLORS.gold }} />
-          Messages
-          {keysReady && (
-            <Lock size={14} style={{ color: COLORS.gold }} />
-          )}
+          Chat
+          {keysReady && <Lock size={14} style={{ color: COLORS.gold }} />}
         </h2>
         <button
           onClick={() => setShowUserSelector(true)}
@@ -487,7 +519,7 @@ export function MessagesTab({ onRewardPoints }) {
               <MessageCircle size={40} style={{ color: COLORS.muted }} />
             </div>
             <p className="font-bold mb-2" style={{ color: COLORS.ivory }}>
-              Aucune conversation
+              Aucun chat
             </p>
             <p className="text-sm" style={{ color: COLORS.muted }}>
               Appuyez sur + pour démarrer
