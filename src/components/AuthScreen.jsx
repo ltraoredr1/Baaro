@@ -9,6 +9,7 @@ export default function AuthScreen() {
   const [password, setPassword] = useState("");
   const [isLogin, setIsLogin] = useState(true);
   const [loading, setLoading] = useState(false);
+  const [oauthLoading, setOauthLoading] = useState(null); // "facebook" | "twitter" | null
   const [error, setError] = useState(null);
   const [captchaToken, setCaptchaToken] = useState(null);
 
@@ -75,6 +76,28 @@ export default function AuthScreen() {
     }
   };
 
+  // Connexion Facebook / X (OAuth) — redirige vers le fournisseur puis revient sur l'app
+  const handleOAuth = async (provider) => {
+    if (loading || oauthLoading) return;
+    setOauthLoading(provider);
+    setError(null);
+
+    try {
+      const { error: authError } = await supabase.auth.signInWithOAuth({
+        provider,
+        options: {
+          redirectTo: window.location.origin,
+        },
+      });
+      if (authError) throw authError;
+      // La page redirige vers le fournisseur ; le retour est géré par
+      // onAuthStateChange dans App.jsx, rien à faire de plus ici.
+    } catch (err) {
+      setError(err.message || "Erreur de connexion");
+      setOauthLoading(null);
+    }
+  };
+
   return (
     <div
       className="min-h-screen flex items-center justify-center p-4"
@@ -126,6 +149,38 @@ export default function AuthScreen() {
                 {error}
               </div>
             )}
+
+            {/* Séparateur */}
+            <div className="flex items-center gap-3">
+              <div className="flex-1 h-px" style={{ background: COLORS.border || "#334155" }} />
+              <span className="text-xs" style={{ color: COLORS.muted || "#94a3b8" }}>
+                ou
+              </span>
+              <div className="flex-1 h-px" style={{ background: COLORS.border || "#334155" }} />
+            </div>
+
+            {/* Boutons OAuth */}
+            <div className="flex flex-col gap-3">
+              <button
+                type="button"
+                onClick={() => handleOAuth("facebook")}
+                disabled={!!oauthLoading}
+                className="w-full py-3 rounded-xl font-semibold text-sm transition disabled:opacity-50 flex items-center justify-center gap-2"
+                style={{ background: "#1877F2", color: "#fff" }}
+              >
+                {oauthLoading === "facebook" ? "Connexion..." : "Continuer avec Facebook"}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleOAuth("twitter")}
+                disabled={!!oauthLoading}
+                className="w-full py-3 rounded-xl font-semibold text-sm transition disabled:opacity-50 flex items-center justify-center gap-2"
+                style={{ background: "#000000", color: "#fff", border: "1px solid #334155" }}
+              >
+                {oauthLoading === "twitter" ? "Connexion..." : "Continuer avec X"}
+              </button>
+            </div>
 
             <button
               onClick={() => setMode("email")}
