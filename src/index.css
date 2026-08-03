@@ -87,3 +87,11 @@ html, body, #root {
 .animate-float {
   animation: float 3s ease-in-out infinite;
 }
+
+/* Anti-capture web : flou quand l'onglet n'est plus au premier plan */
+.privacy-blur {
+  filter: blur(14px) brightness(0.7);
+  transition: filter 0.12s ease;
+  pointer-events: none;
+  user-select: none;
+}
