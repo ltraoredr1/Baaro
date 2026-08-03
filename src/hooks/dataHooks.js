@@ -97,6 +97,24 @@ export function usePosts(userId, scope = "all") {
     load();
   }, [load]);
 
+  // Rafraîchit le fil en direct dès qu'une publication est ajoutée, modifiée ou supprimée.
+  useEffect(() => {
+    const channel = supabase
+      .channel("posts-realtime")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "posts" },
+        () => {
+          load();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [load]);
+
   const likePost = useCallback(
     async (postId) => {
       if (!userId) return;
