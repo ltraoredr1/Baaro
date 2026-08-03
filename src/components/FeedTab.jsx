@@ -22,6 +22,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
   const [newText, setNewText] = useState("");
   const [mood, setMood] = useState("");
   const [showPoll, setShowPoll] = useState(false);
+  const [mediaFile, setMediaFile] = useState(null);
   const [likedPosts, setLikedPosts] = useState({});
   const [commentOpen, setCommentOpen] = useState({});
   const [commentsMap, setCommentsMap] = useState({});
@@ -46,6 +47,24 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
 
   const effectiveUserId = currentUser?.id || userId;
 
+  // Upload média vers Supabase Storage
+  const uploadMedia = async (file, uid) => {
+    const ext = (file.name.split(".").pop() || "bin").toLowerCase();
+    const path = `\( {uid}/ \){Date.now()}-\( {Math.random().toString(16).slice(2)}. \){ext}`;
+
+    const { error } = await supabase.storage
+      .from("media")
+      .upload(path, file, { upsert: false });
+
+    if (error) throw error;
+
+    const { data } = supabase.storage.from("media").getPublicUrl(path);
+    return {
+      url: data?.publicUrl || null,
+      type: file.type.startsWith("video") ? "video" : "image",
+    };
+  };
+
   const loadPosts = useCallback(async () => {
     setLoading(true);
     try {
@@ -66,6 +85,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
       const postIds = postsData.map((p) => p.id);
       const authorIds = [...new Set(postsData.map((p) => p.author_id))];
 
+      // Profils
       const { data: profiles } = await supabase
         .from("profiles")
         .select("user_id, display_name, handle, flag")
@@ -76,6 +96,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
         profileMap[p.user_id] = p;
       });
 
+      // Likes de l'utilisateur
       let userLikes = {};
       if (effectiveUserId) {
         const { data: likes } = await supabase
@@ -90,6 +111,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
         setLikedPosts(userLikes);
       }
 
+      // Compteur likes
       const { data: allLikes } = await supabase
         .from("post_likes")
         .select("post_id")
@@ -100,6 +122,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
         likesCountMap[l.post_id] = (likesCountMap[l.post_id] || 0) + 1;
       });
 
+      // Compteur commentaires
       const { data: allComments } = await supabase
         .from("comments")
         .select("post_id")
@@ -135,6 +158,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
     loadPosts();
   }, [loadPosts]);
 
+  // Realtime
   useEffect(() => {
     const channel = supabase
       .channel("posts_channel")
@@ -150,10 +174,10 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
     };
   }, [loadPosts]);
 
-  // Création de publication + récompense serveur
+  // Création de publication
   const handleCreatePost = async (e) => {
     e.preventDefault();
-    if (!newText.trim() || submitting) return;
+    if ((!newText.trim() && !mediaFile) || submitting) return;
 
     const limit = checkRateLimit("create_post", { max: 5, windowMs: 60_000 });
     if (!limit.allowed) {
@@ -168,9 +192,25 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
 
     setSubmitting(true);
     try {
+      let media = { url: null, type: null };
+
+      if (mediaFile) {
+        try {
+          media = await uploadMedia(mediaFile, effectiveUserId);
+        } catch (uploadErr) {
+          console.warn("Upload média échoué:", uploadErr);
+          showToast(
+            "Impossible d'uploader le média (vérifiez le bucket 'media')",
+            "warning"
+          );
+        }
+      }
+
       const { error } = await supabase.from("posts").insert({
         author_id: effectiveUserId,
-        text: newText + (mood ? ` (Humeur: ${mood})` : ""),
+        text: (newText || "").trim() + (mood ? ` (Humeur: ${mood})` : ""),
+        media_url: media.url,
+        media_type: media.type,
       });
 
       if (error) throw error;
@@ -178,12 +218,18 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
       setNewText("");
       setMood("");
       setShowPoll(false);
+      setMediaFile(null);
 
-      // Récompense côté serveur
-      const result = await earnPoints("publish_post");
+      // Récompense serveur
+      const actionKey = media.url ? "publish_post_media" : "publish_post";
+      const result = await earnPoints(actionKey);
+
       if (result.ok) {
-        onRewardPoints?.(result.balance); // met à jour avec le vrai solde
-        showPointsReward?.(5, "Publication créée !");
+        onRewardPoints?.(result.balance);
+        showPointsReward?.(
+          media.url ? 8 : 5,
+          media.url ? "Publication avec média !" : "Publication créée !"
+        );
       } else {
         showToast(result.error || "Récompense non attribuée", "warning");
       }
@@ -196,7 +242,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
     }
   };
 
-  // Like / Unlike + récompense serveur
+  // Like / Unlike
   const handleLike = async (postId) => {
     if (!effectiveUserId) {
       showToast("Vous devez être connecté", "error");
@@ -236,7 +282,6 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
         });
         if (error) throw error;
 
-        // Récompense côté serveur uniquement à l'ajout du like
         const result = await earnPoints("like_post");
         if (result.ok) {
           onRewardPoints?.(result.balance);
@@ -260,6 +305,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
     }
   };
 
+  // Charger les commentaires
   const loadComments = async (postId) => {
     try {
       const { data, error } = await supabase
@@ -272,11 +318,13 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
 
       const authorIds = [...new Set((data || []).map((c) => c.author_id))];
       let profileMap = {};
+
       if (authorIds.length > 0) {
         const { data: profiles } = await supabase
           .from("profiles")
           .select("user_id, display_name")
           .in("user_id", authorIds);
+
         (profiles || []).forEach((p) => {
           profileMap[p.user_id] = p.display_name;
         });
@@ -294,6 +342,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
     }
   };
 
+  // Ajouter un commentaire
   const handleAddComment = async (postId) => {
     if (!newCommentText.trim()) return;
 
@@ -339,9 +388,12 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
       );
 
       setNewCommentText("");
-      // Pour l'instant on garde +1 local (pas encore d'action "comment" côté serveur)
-      onRewardPoints?.(1);
-      showPointsReward?.(1, "Commentaire ajouté");
+
+      const result = await earnPoints("comment");
+      if (result.ok) {
+        onRewardPoints?.(result.balance);
+        showPointsReward?.(1, "Commentaire ajouté");
+      }
     } catch (error) {
       handleDbError(error, showToast, "Impossible de commenter");
     }
@@ -366,7 +418,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
 
   return (
     <div className="flex flex-col gap-6 max-w-2xl mx-auto w-full pb-20">
-      {/* Composer */}
+      {/* ========== COMPOSER ========== */}
       <form
         onSubmit={handleCreatePost}
         className="glass-card rounded-2xl p-4 shadow-xl border"
@@ -389,6 +441,20 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
           />
         </div>
 
+        {/* Fichier sélectionné */}
+        {mediaFile && (
+          <div className="mb-2 text-xs flex items-center gap-2" style={{ color: COLORS.teal }}>
+            <span>📎 {mediaFile.name}</span>
+            <button
+              type="button"
+              onClick={() => setMediaFile(null)}
+              className="text-rose-400 hover:text-rose-300"
+            >
+              ✕
+            </button>
+          </div>
+        )}
+
         {showPoll && (
           <div
             className="mb-3 p-3 rounded-xl border text-xs"
@@ -407,16 +473,18 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
           style={{ borderColor: COLORS.border }}
         >
           <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() =>
-                showToast("Upload d'image en développement", "info")
-              }
-              className="p-2 rounded-lg hover:bg-white/5 text-amber-400 flex items-center gap-1 text-xs"
-            >
+            {/* Upload média */}
+            <label className="p-2 rounded-lg hover:bg-white/5 text-amber-400 flex items-center gap-1 text-xs cursor-pointer">
               <ImageIcon size={16} />
               <span className="hidden sm:inline">Média</span>
-            </button>
+              <input
+                type="file"
+                accept="image/*,video/*"
+                className="hidden"
+                onChange={(e) => setMediaFile(e.target.files?.[0] || null)}
+              />
+            </label>
+
             <button
               type="button"
               onClick={() => setShowPoll(!showPoll)}
@@ -425,6 +493,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
               <BarChart2 size={16} />
               <span className="hidden sm:inline">Sondage</span>
             </button>
+
             <select
               value={mood}
               onChange={(e) => setMood(e.target.value)}
@@ -440,7 +509,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
 
           <button
             type="submit"
-            disabled={!newText.trim() || submitting}
+            disabled={(!newText.trim() && !mediaFile) || submitting}
             className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold shadow-lg transition disabled:opacity-40"
             style={{
               background: "linear-gradient(135deg, #D9AE52 0%, #2DBFA6 100%)",
@@ -449,13 +518,13 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
           >
             <span>{submitting ? "..." : "Publier"}</span>
             <span className="text-[10px] px-1.5 py-0.5 rounded-full font-extrabold bg-black/20 text-white">
-              +5 pts
+              {mediaFile ? "+8 pts" : "+5 pts"}
             </span>
           </button>
         </div>
       </form>
 
-      {/* Liste des posts */}
+      {/* ========== LISTE DES POSTS ========== */}
       {posts.length === 0 ? (
         <div className="text-center py-8 text-gray-400">
           <p className="text-4xl mb-2">📭</p>
@@ -475,6 +544,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
                 className="glass-card rounded-2xl p-5 shadow-xl border flex flex-col gap-3"
                 style={{ borderColor: COLORS.border }}
               >
+                {/* En-tête */}
                 <div className="flex items-center justify-between">
                   <div
                     className="flex items-center gap-3 cursor-pointer group"
@@ -522,10 +592,12 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
                   </button>
                 </div>
 
+                {/* Texte */}
                 <p className="text-sm leading-relaxed" style={{ color: COLORS.ivory }}>
                   {isTranslated ? translatedMap[post.id] : post.text}
                 </p>
 
+                {/* Média */}
                 {post.media_url && (
                   <div className="rounded-xl overflow-hidden">
                     {post.media_type === "video" ? (
@@ -544,6 +616,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
                   </div>
                 )}
 
+                {/* Actions */}
                 <div
                   className="flex items-center justify-between pt-3 border-t text-xs font-medium"
                   style={{ borderColor: COLORS.border }}
@@ -587,6 +660,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
                   </button>
                 </div>
 
+                {/* Commentaires */}
                 {commentOpen[post.id] && (
                   <div
                     className="flex flex-col gap-2 pt-3 border-t"
@@ -647,4 +721,4 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
       )}
     </div>
   );
-}
+  }
