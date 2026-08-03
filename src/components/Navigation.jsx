@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   Rss,
   Play,
@@ -8,17 +9,20 @@ import {
   WifiOff,
   Sparkles,
   Settings,
-  Users
+  Users,
+  X,
 } from "lucide-react";
 import { COLORS } from "../theme.js";
 
-const NAV_ITEMS = [
+const MAIN_ITEMS = [
   { id: "feed", label: "Fil", icon: Rss, badge: null },
   { id: "videos", label: "Vidéos", icon: Play, badge: "HOT" },
   { id: "messages", label: "Chat", icon: MessageSquare, badge: "3" },
   { id: "debates", label: "Débats", icon: Swords, badge: null },
-  { id: "crypto", label: "BARO Coin", icon: Coins, badge: "PRO" },
-  // --- à partir d'ici = menu "Plus" sur mobile ---
+  { id: "crypto", label: "BARO", icon: Coins, badge: "PRO" },
+];
+
+const MORE_ITEMS = [
   { id: "friends", label: "Communauté", icon: Users, badge: null },
   { id: "wallet", label: "Portefeuille", icon: Wallet, badge: null },
   { id: "offline", label: "Hors-ligne", icon: WifiOff, badge: "P2P" },
@@ -26,7 +30,18 @@ const NAV_ITEMS = [
   { id: "settings", label: "Réglages", icon: Settings, badge: null },
 ];
 
+const ALL_ITEMS = [...MAIN_ITEMS, ...MORE_ITEMS];
+
 export function Navigation({ activeTab, setActiveTab }) {
+  const [moreOpen, setMoreOpen] = useState(false);
+
+  const goTo = (id) => {
+    setActiveTab(id);
+    setMoreOpen(false);
+  };
+
+  const isMoreActive = MORE_ITEMS.some((i) => i.id === activeTab);
+
   return (
     <>
       {/* Desktop / Tablet Sidebar */}
@@ -40,13 +55,13 @@ export function Navigation({ activeTab, setActiveTab }) {
         >
           Navigation Principale
         </div>
-        {NAV_ITEMS.map((item) => {
+        {ALL_ITEMS.map((item) => {
           const Icon = item.icon;
           const isActive = activeTab === item.id;
           return (
             <button
               key={item.id}
-              onClick={() => setActiveTab(item.id)}
+              onClick={() => goTo(item.id)}
               className={`flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all group ${
                 isActive ? "shadow-md gold-glow" : "hover:bg-[rgba(255,255,255,0.05)]"
               }`}
@@ -73,7 +88,6 @@ export function Navigation({ activeTab, setActiveTab }) {
                 />
                 <span>{item.label}</span>
               </div>
-
               {item.badge && (
                 <span
                   className="text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase"
@@ -95,7 +109,68 @@ export function Navigation({ activeTab, setActiveTab }) {
         })}
       </nav>
 
-      {/* Mobile Floating Bottom Bar — 5 premiers = accueil */}
+      {/* Menu Plus (mobile) */}
+      {moreOpen && (
+        <div
+          className="md:hidden fixed inset-0 z-[60] flex flex-col justify-end"
+          style={{ background: "rgba(0,0,0,0.55)" }}
+          onClick={() => setMoreOpen(false)}
+        >
+          <div
+            className="rounded-t-3xl border-t p-4 pb-8"
+            style={{
+              background: COLORS.surface || "#111A2C",
+              borderColor: COLORS.borderGold,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h3
+                className="font-bold text-sm"
+                style={{ color: COLORS.ivory }}
+              >
+                Plus
+              </h3>
+              <button
+                onClick={() => setMoreOpen(false)}
+                className="p-2 rounded-full"
+                style={{ color: COLORS.muted }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              {MORE_ITEMS.map((item) => {
+                const Icon = item.icon;
+                const isActive = activeTab === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    onClick={() => goTo(item.id)}
+                    className="flex flex-col items-center gap-2 p-3 rounded-2xl border transition"
+                    style={{
+                      background: isActive
+                        ? "rgba(217,174,82,0.15)"
+                        : "rgba(255,255,255,0.03)",
+                      borderColor: isActive
+                        ? COLORS.borderGold
+                        : COLORS.border,
+                      color: isActive ? COLORS.gold : COLORS.ivory,
+                    }}
+                  >
+                    <Icon size={22} />
+                    <span className="text-[11px] font-medium text-center leading-tight">
+                      {item.label}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Mobile bottom bar */}
       <nav
         className="md:hidden fixed bottom-3 left-3 right-3 z-50 glass-panel rounded-2xl border p-1.5 shadow-2xl flex items-center justify-around"
         style={{
@@ -103,17 +178,15 @@ export function Navigation({ activeTab, setActiveTab }) {
           background: "rgba(11, 18, 32, 0.92)",
         }}
       >
-        {NAV_ITEMS.slice(0, 5).map((item) => {
+        {MAIN_ITEMS.map((item) => {
           const Icon = item.icon;
           const isActive = activeTab === item.id;
           return (
             <button
               key={item.id}
-              onClick={() => setActiveTab(item.id)}
+              onClick={() => goTo(item.id)}
               className="flex flex-col items-center gap-0.5 p-2 rounded-xl transition relative"
-              style={{
-                color: isActive ? COLORS.gold : COLORS.muted,
-              }}
+              style={{ color: isActive ? COLORS.gold : COLORS.muted }}
             >
               <Icon
                 size={20}
@@ -132,25 +205,20 @@ export function Navigation({ activeTab, setActiveTab }) {
           );
         })}
         <button
-          onClick={() =>
-            setActiveTab(activeTab === "settings" ? "feed" : "settings")
-          }
-          className="flex flex-col items-center gap-0.5 p-2 rounded-xl transition"
-          style={{
-            color:
-              activeTab === "settings" ||
-              activeTab === "friends" ||
-              activeTab === "wallet" ||
-              activeTab === "offline" ||
-              activeTab === "assistant"
-                ? COLORS.teal
-                : COLORS.muted,
-          }}
+          onClick={() => setMoreOpen(true)}
+          className="flex flex-col items-center gap-0.5 p-2 rounded-xl transition relative"
+          style={{ color: isMoreActive || moreOpen ? COLORS.teal : COLORS.muted }}
         >
           <Settings size={20} />
           <span className="text-[10px] font-medium leading-none">Plus</span>
+          {(isMoreActive || moreOpen) && (
+            <span
+              className="absolute -bottom-1 w-4 h-1 rounded-full"
+              style={{ background: COLORS.teal }}
+            />
+          )}
         </button>
       </nav>
     </>
   );
-        }
+}
