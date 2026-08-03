@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   Heart,
   MessageCircle,
@@ -26,16 +26,17 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
   const [commentsMap, setCommentsMap] = useState({});
   const [newCommentText, setNewCommentText] = useState("");
   const [translatedMap, setTranslatedMap] = useState({});
-  const [user, setUser] = useState(null);
+  const [currentUser, setCurrentUser] = useState(null);
   const [submitting, setSubmitting] = useState(false);
 
+  // Récupère l'utilisateur connecté
   useEffect(() => {
     const getUser = async () => {
       try {
         const {
           data: { user },
         } = await supabase.auth.getUser();
-        setUser(user);
+        setCurrentUser(user);
       } catch (error) {
         handleDbError(error, showToast, "Erreur session");
       }
@@ -43,50 +44,88 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
     getUser();
   }, [showToast]);
 
-  const loadPosts = async () => {
+  const effectiveUserId = currentUser?.id || userId;
+
+  // Charge les publications + profils + likes de l'utilisateur
+  const loadPosts = useCallback(async () => {
     setLoading(true);
     try {
-      const { data, error } = await supabase
+      const { data: postsData, error } = await supabase
         .from("posts")
-        .select(
-          "id, author_id, text, media_url, media_type, created_at, likes_count"
-        )
+        .select("id, author_id, text, media_url, media_type, created_at")
         .order("created_at", { ascending: false })
         .limit(50);
 
       if (error) throw error;
 
-      const enriched = await Promise.all(
-        (data || []).map(async (post) => {
-          try {
-            const { data: profile } = await supabase
-              .from("profiles")
-              .select("display_name, handle, flag")
-              .eq("user_id", post.author_id)
-              .maybeSingle();
+      if (!postsData || postsData.length === 0) {
+        setPosts([]);
+        setLoading(false);
+        return;
+      }
 
-            return {
-              ...post,
-              display_name: profile?.display_name || "Membre BAARO",
-              handle: profile?.handle || "@membre",
-              flag: profile?.flag || "🌍",
-              likes: post.likes_count || 0,
-              comments_count: 0,
-              avatar: "",
-            };
-          } catch {
-            return {
-              ...post,
-              display_name: "Membre BAARO",
-              handle: "@membre",
-              flag: "🌍",
-              likes: post.likes_count || 0,
-              comments_count: 0,
-              avatar: "",
-            };
-          }
-        })
-      );
+      const postIds = postsData.map((p) => p.id);
+      const authorIds = [...new Set(postsData.map((p) => p.author_id))];
+
+      // Charge les profils des auteurs
+      const { data: profiles } = await supabase
+        .from("profiles")
+        .select("user_id, display_name, handle, flag")
+        .in("user_id", authorIds);
+
+      const profileMap = {};
+      (profiles || []).forEach((p) => {
+        profileMap[p.user_id] = p;
+      });
+
+      // Charge les likes de l'utilisateur courant
+      let userLikes = {};
+      if (effectiveUserId) {
+        const { data: likes } = await supabase
+          .from("post_likes")
+          .select("post_id")
+          .eq("user_id", effectiveUserId)
+          .in("post_id", postIds);
+
+        (likes || []).forEach((l) => {
+          userLikes[l.post_id] = true;
+        });
+        setLikedPosts(userLikes);
+      }
+
+      // Compte total des likes par post
+      const { data: allLikes } = await supabase
+        .from("post_likes")
+        .select("post_id")
+        .in("post_id", postIds);
+
+      const likesCountMap = {};
+      (allLikes || []).forEach((l) => {
+        likesCountMap[l.post_id] = (likesCountMap[l.post_id] || 0) + 1;
+      });
+
+      // Compte des commentaires
+      const { data: allComments } = await supabase
+        .from("comments")
+        .select("post_id")
+        .in("post_id", postIds);
+
+      const commentsCountMap = {};
+      (allComments || []).forEach((c) => {
+        commentsCountMap[c.post_id] = (commentsCountMap[c.post_id] || 0) + 1;
+      });
+
+      const enriched = postsData.map((post) => {
+        const profile = profileMap[post.author_id] || {};
+        return {
+          ...post,
+          display_name: profile.display_name || "Membre BAARO",
+          handle: profile.handle || "@membre",
+          flag: profile.flag || "🌍",
+          likes: likesCountMap[post.id] || 0,
+          comments_count: commentsCountMap[post.id] || 0,
+        };
+      });
 
       setPosts(enriched);
     } catch (error) {
@@ -95,32 +134,29 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [effectiveUserId, showToast]);
 
   useEffect(() => {
     loadPosts();
-  }, []);
+  }, [loadPosts]);
 
+  // Realtime
   useEffect(() => {
-    const subscription = supabase
+    const channel = supabase
       .channel("posts_channel")
       .on(
         "postgres_changes",
-        { event: "INSERT", schema: "public", table: "posts" },
-        () => loadPosts()
-      )
-      .on(
-        "postgres_changes",
-        { event: "DELETE", schema: "public", table: "posts" },
+        { event: "*", schema: "public", table: "posts" },
         () => loadPosts()
       )
       .subscribe();
 
     return () => {
-      subscription.unsubscribe();
+      supabase.removeChannel(channel);
     };
-  }, []);
+  }, [loadPosts]);
 
+  // Création de publication
   const handleCreatePost = async (e) => {
     e.preventDefault();
     if (!newText.trim() || submitting) return;
@@ -131,8 +167,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
       return;
     }
 
-    const authorId = user?.id || userId;
-    if (!authorId) {
+    if (!effectiveUserId) {
       showToast("Vous devez être connecté", "error");
       return;
     }
@@ -140,7 +175,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
     setSubmitting(true);
     try {
       const { error } = await supabase.from("posts").insert({
-        author_id: authorId,
+        author_id: effectiveUserId,
         text: newText + (mood ? ` (Humeur: ${mood})` : ""),
       });
 
@@ -160,9 +195,9 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
     }
   };
 
+  // Like / Unlike
   const handleLike = async (postId) => {
-    const authorId = user?.id || userId;
-    if (!authorId) {
+    if (!effectiveUserId) {
       showToast("Vous devez être connecté", "error");
       return;
     }
@@ -175,6 +210,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
 
     const isLiked = !!likedPosts[postId];
 
+    // Optimistic UI
     setLikedPosts((prev) => ({ ...prev, [postId]: !isLiked }));
     setPosts((prev) =>
       prev.map((p) =>
@@ -190,18 +226,20 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
           .from("post_likes")
           .delete()
           .eq("post_id", postId)
-          .eq("user_id", authorId);
+          .eq("user_id", effectiveUserId);
         if (error) throw error;
       } else {
         const { error } = await supabase.from("post_likes").insert({
           post_id: postId,
-          user_id: authorId,
+          user_id: effectiveUserId,
         });
         if (error) throw error;
+
         onRewardPoints?.(2);
         showPointsReward?.(2, "J'aime distribué");
       }
     } catch (error) {
+      // Rollback
       setLikedPosts((prev) => ({ ...prev, [postId]: isLiked }));
       setPosts((prev) =>
         prev.map((p) =>
@@ -217,6 +255,43 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
     }
   };
 
+  // Charger les commentaires d'un post
+  const loadComments = async (postId) => {
+    try {
+      const { data, error } = await supabase
+        .from("comments")
+        .select("id, author_id, text, created_at")
+        .eq("post_id", postId)
+        .order("created_at", { ascending: true });
+
+      if (error) throw error;
+
+      // Enrichir avec les noms
+      const authorIds = [...new Set((data || []).map((c) => c.author_id))];
+      let profileMap = {};
+      if (authorIds.length > 0) {
+        const { data: profiles } = await supabase
+          .from("profiles")
+          .select("user_id, display_name")
+          .in("user_id", authorIds);
+        (profiles || []).forEach((p) => {
+          profileMap[p.user_id] = p.display_name;
+        });
+      }
+
+      const enriched = (data || []).map((c) => ({
+        id: c.id,
+        author: profileMap[c.author_id] || "Membre",
+        text: c.text,
+      }));
+
+      setCommentsMap((prev) => ({ ...prev, [postId]: enriched }));
+    } catch (error) {
+      handleDbError(error, showToast, "Erreur chargement commentaires");
+    }
+  };
+
+  // Ajouter un commentaire
   const handleAddComment = async (postId) => {
     if (!newCommentText.trim()) return;
 
@@ -226,8 +301,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
       return;
     }
 
-    const authorId = user?.id || userId;
-    if (!authorId) {
+    if (!effectiveUserId) {
       showToast("Vous devez être connecté", "error");
       return;
     }
@@ -237,14 +311,15 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
     try {
       const { error } = await supabase.from("comments").insert({
         post_id: postId,
-        author_id: authorId,
+        author_id: effectiveUserId,
         text,
       });
 
       if (error) throw error;
 
+      // Ajout optimiste
       const newCmt = {
-        id: `c_${Date.now()}`,
+        id: `temp_${Date.now()}`,
         author: "Vous",
         text,
       };
@@ -253,6 +328,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
         ...prev,
         [postId]: [...(prev[postId] || []), newCmt],
       }));
+
       setPosts((prev) =>
         prev.map((p) =>
           p.id === postId
@@ -270,14 +346,11 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
   };
 
   const handleTranslate = (postId, text) => {
-    if (translatedMap[postId]) {
-      setTranslatedMap((prev) => ({ ...prev, [postId]: null }));
-    } else {
-      setTranslatedMap((prev) => ({
-        ...prev,
-        [postId]: `[Traduit par BAARO IA] : ${text}`,
-      }));
-    }
+    setTranslatedMap((prev) =>
+      prev[postId]
+        ? { ...prev, [postId]: null }
+        : { ...prev, [postId]: `[Traduit par BAARO IA] : ${text}` }
+    );
   };
 
   if (loading) {
@@ -291,6 +364,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
 
   return (
     <div className="flex flex-col gap-6 max-w-2xl mx-auto w-full pb-20">
+      {/* Composer */}
       <form
         onSubmit={handleCreatePost}
         className="glass-card rounded-2xl p-4 shadow-xl border"
@@ -301,7 +375,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
             className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm shadow-md gold-glow"
             style={{ background: COLORS.gold, color: COLORS.bg }}
           >
-            {user?.email?.charAt(0)?.toUpperCase() || "V"}
+            {currentUser?.email?.charAt(0)?.toUpperCase() || "V"}
           </div>
           <textarea
             value={newText}
@@ -379,6 +453,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
         </div>
       </form>
 
+      {/* Liste des posts */}
       {posts.length === 0 ? (
         <div className="text-center py-8 text-gray-400">
           <p className="text-4xl mb-2">📭</p>
@@ -398,6 +473,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
                 className="glass-card rounded-2xl p-5 shadow-xl border flex flex-col gap-3"
                 style={{ borderColor: COLORS.border }}
               >
+                {/* En-tête */}
                 <div className="flex items-center justify-between">
                   <div
                     className="flex items-center gap-3 cursor-pointer group"
@@ -445,13 +521,12 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
                   </button>
                 </div>
 
-                <p
-                  className="text-sm leading-relaxed"
-                  style={{ color: COLORS.ivory }}
-                >
+                {/* Contenu */}
+                <p className="text-sm leading-relaxed" style={{ color: COLORS.ivory }}>
                   {isTranslated ? translatedMap[post.id] : post.text}
                 </p>
 
+                {/* Média */}
                 {post.media_url && (
                   <div className="rounded-xl overflow-hidden">
                     {post.media_type === "video" ? (
@@ -470,6 +545,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
                   </div>
                 )}
 
+                {/* Actions */}
                 <div
                   className="flex items-center justify-between pt-3 border-t text-xs font-medium"
                   style={{ borderColor: COLORS.border }}
@@ -477,9 +553,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
                   <button
                     onClick={() => handleLike(post.id)}
                     className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition ${
-                      isLiked
-                        ? "text-rose-400 bg-rose-500/10"
-                        : "hover:bg-white/5"
+                      isLiked ? "text-rose-400 bg-rose-500/10" : "hover:bg-white/5"
                     }`}
                     style={{ color: isLiked ? "#EC4899" : COLORS.muted }}
                   >
@@ -488,25 +562,25 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
                   </button>
 
                   <button
-                    onClick={() =>
+                    onClick={() => {
+                      const isOpen = commentOpen[post.id];
                       setCommentOpen((prev) => ({
                         ...prev,
-                        [post.id]: !prev[post.id],
-                      }))
-                    }
+                        [post.id]: !isOpen,
+                      }));
+                      if (!isOpen && !commentsMap[post.id]) {
+                        loadComments(post.id);
+                      }
+                    }}
                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg hover:bg-white/5 transition"
                     style={{ color: COLORS.muted }}
                   >
                     <MessageCircle size={16} />
-                    <span>
-                      {post.comments_count || comments.length || 0}
-                    </span>
+                    <span>{post.comments_count || comments.length || 0}</span>
                   </button>
 
                   <button
-                    onClick={() =>
-                      showToast("Lien de partage copié !", "success")
-                    }
+                    onClick={() => showToast("Lien de partage copié !", "success")}
                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg hover:bg-white/5 transition"
                     style={{ color: COLORS.muted }}
                   >
@@ -515,17 +589,16 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
                   </button>
                 </div>
 
+                {/* Section commentaires */}
                 {commentOpen[post.id] && (
                   <div
                     className="flex flex-col gap-2 pt-3 border-t"
                     style={{ borderColor: COLORS.border }}
                   >
-                    <div
-                      className="text-xs font-semibold"
-                      style={{ color: COLORS.muted }}
-                    >
+                    <div className="text-xs font-semibold" style={{ color: COLORS.muted }}>
                       Commentaires
                     </div>
+
                     {comments.length > 0 ? (
                       comments.map((c) => (
                         <div
@@ -533,10 +606,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
                           className="p-2.5 rounded-xl text-xs flex flex-col gap-1"
                           style={{ background: COLORS.surface }}
                         >
-                          <span
-                            className="font-bold"
-                            style={{ color: COLORS.gold }}
-                          >
+                          <span className="font-bold" style={{ color: COLORS.gold }}>
                             {c.author}
                           </span>
                           <span style={{ color: COLORS.ivory }}>{c.text}</span>
