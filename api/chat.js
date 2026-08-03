@@ -1,5 +1,5 @@
 // api/chat.js
-// Proxy sécurisé vers l'API Anthropic (Claude).
+// Proxy sécurisé vers Claude (Anthropic).
 // La clé ANTHROPIC_API_KEY ne quitte jamais le serveur.
 
 export default async function handler(req, res) {
@@ -22,16 +22,41 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { system, messages, max_tokens } = req.body || {};
+    const { messages, context, max_tokens, mode, system: customSystem } = req.body || {};
 
-    // Validation basique
+    // Validation
     if (!Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ error: "messages doit être un tableau non vide" });
     }
 
-    // Limite de sécurité (évite les abus de tokens)
-    const safeMaxTokens = Math.min(Number(max_tokens) || 1000, 2000);
+    // Limite de sécurité
+    const safeMaxTokens = Math.min(Number(max_tokens) || 1200, 2000);
 
+    // System prompt de base
+    let systemPrompt = customSystem || `Tu es l'assistant officiel de BAARO, un réseau social mondial avec portefeuille de points, crypto interne BARO Coin, messagerie chiffrée et débats live.
+Tu es bienveillant, concis, actionnable et expert en engagement communautaire.
+Réponds toujours en français, de façon claire, motivante et utile.
+Tu peux proposer des actions concrètes (créer un débat, publier, gagner des points, etc.).`;
+
+    // Ajout du contexte utilisateur si fourni
+    if (context && typeof context === "object") {
+      systemPrompt += `\n\nContexte utilisateur actuel :
+- Nom : ${context.display_name || "Membre"}
+- Handle : ${context.handle || "non renseigné"}
+- Solde points : ${context.points ?? 0}
+- Solde BARO : ${context.baro ?? 0}
+- Bio : ${context.bio || "non renseignée"}
+- Débats récents : ${context.recent_debates || "aucun"}`;
+    }
+
+    // Mode spécial "co-animatrice" pour les débats
+    if (mode === "cohost") {
+      systemPrompt += `\n\nTu es actuellement la co-animatrice IA d'un débat live.
+Sois dynamique, pose des questions pertinentes, relance le débat, félicite les bons arguments et reste neutre.
+Réponds en 1 à 3 phrases maximum pour ne pas monopoliser le chat.`;
+    }
+
+    // Appel à Anthropic
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
@@ -40,10 +65,13 @@ export default async function handler(req, res) {
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514", // modèle stable recommandé
+        model: "claude-sonnet-4-20250514",
         max_tokens: safeMaxTokens,
-        system: system || "Tu es l'assistant de BAARO, un réseau social engagé et bienveillant.",
-        messages,
+        system: systemPrompt,
+        messages: messages.map((m) => ({
+          role: m.role === "assistant" ? "assistant" : "user",
+          content: typeof m.content === "string" ? m.content : m.text || "",
+        })),
       }),
     });
 
@@ -56,7 +84,16 @@ export default async function handler(req, res) {
       });
     }
 
-    return res.status(200).json(data);
+    // Format de réponse unifié (compatible avec l'ancien et le nouveau code)
+    const replyText =
+      data.content?.[0]?.text ||
+      data.content?.find?.((c) => c.type === "text")?.text ||
+      "Désolé, je n'ai pas pu générer une réponse.";
+
+    return res.status(200).json({
+      ...data,
+      reply: replyText,
+    });
   } catch (err) {
     console.error("Erreur /api/chat :", err);
     return res.status(500).json({ error: "Erreur serveur lors de l'appel à Claude" });
