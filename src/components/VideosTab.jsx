@@ -13,6 +13,7 @@ export function VideosTab({ onRewardPoints, userId }) {
   const { showToast, showPointsReward } = useToast();
   const [videos, setVideos] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
   const [user, setUser] = useState(null);
   const [playingId, setPlayingId] = useState(null);
   const [muted, setMuted] = useState(true);
@@ -35,6 +36,7 @@ export function VideosTab({ onRewardPoints, userId }) {
   const [storyFile, setStoryFile] = useState(null);
   const [storyText, setStoryText] = useState("");
   const [uploadingStory, setUploadingStory] = useState(false);
+  const [videoErrors, setVideoErrors] = useState({});
 
   const videoRefs = useRef({});
   const observerRef = useRef(null);
@@ -54,6 +56,8 @@ export function VideosTab({ onRewardPoints, userId }) {
 
   const loadVideos = useCallback(async () => {
     setLoading(true);
+    setLoadError(null);
+
     try {
       const { data, error } = await supabase
         .from("videos")
@@ -79,7 +83,8 @@ export function VideosTab({ onRewardPoints, userId }) {
       }
     } catch (err) {
       console.error(err);
-      showToast("Erreur chargement vidéos", "error");
+      setLoadError(err.message || "Impossible de charger les vidéos");
+      showToast("Erreur de chargement des vidéos", "error");
     } finally {
       setLoading(false);
     }
@@ -286,4 +291,470 @@ export function VideosTab({ onRewardPoints, userId }) {
     setUploadingStory(true);
     try {
       const ext = storyFile.name.split(".").pop() || "jpg";
-      const path = `\( {currentUser.id}/ \){Date.now()}.${ext
+      const path = `\( {currentUser.id}/ \){Date.now()}.${ext}`;
+
+      const { error: upErr } = await supabase.storage
+        .from("stories")
+        .upload(path, storyFile);
+
+      if (upErr) throw upErr;
+
+      const { data: { publicUrl } } = supabase.storage
+        .from("stories")
+        .getPublicUrl(path);
+
+      const isVideo = storyFile.type.startsWith("video");
+
+      await supabase.from("stories").insert({
+        author_id: currentUser.id,
+        media_url: publicUrl,
+        media_type: isVideo ? "video" : "image",
+        text_overlay: storyText.trim() || null,
+      });
+
+      showToast("Story publiée ! 🔥", "success");
+      setShowCreateStory(false);
+      setStoryFile(null);
+      setStoryText("");
+      onRewardPoints?.(15);
+      showPointsReward?.(15, "Story publiée");
+    } catch (err) {
+      showToast("Erreur story : " + err.message, "error");
+    } finally {
+      setUploadingStory(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-[80vh] bg-black text-gray-400">
+        <div className="text-center">
+          <div className="text-4xl animate-pulse mb-3">🎬</div>
+          <p>Chargement...</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <div className="bg-black">
+        <StoriesBar
+          onOpenStory={setStoryGroup}
+          onCreateStory={() => setShowCreateStory(true)}
+        />
+      </div>
+
+      <div className="h-[calc(100dvh-160px)] w-full overflow-y-scroll snap-y snap-mandatory bg-black no-scrollbar relative">
+        <div className="absolute top-0 left-0 right-0 z-30 flex justify-between items-center px-4 py-3 bg-gradient-to-b from-black/80 to-transparent pointer-events-none">
+          <h2 className="text-lg font-bold text-white pointer-events-auto">BAARO Videos</h2>
+          <div className="flex gap-2 pointer-events-auto">
+            <button
+              onClick={() => setMuted(!muted)}
+              className="p-2.5 rounded-full bg-white/15 backdrop-blur-md text-white"
+            >
+              {muted ? <VolumeX size={20} /> : <Volume2 size={20} />}
+            </button>
+            <button
+              onClick={() => setShowUpload(true)}
+              className="p-2.5 rounded-full bg-white/15 backdrop-blur-md text-white"
+            >
+              <Plus size={20} />
+            </button>
+          </div>
+        </div>
+
+        {loadError ? (
+          <div className="h-full flex flex-col items-center justify-center text-center p-6">
+            <div className="text-5xl mb-4">⚠️</div>
+            <p className="text-white font-bold text-lg mb-2">Erreur de chargement</p>
+            <p className="text-gray-400 text-sm mb-6 max-w-xs">{loadError}</p>
+            <button
+              onClick={loadVideos}
+              className="px-5 py-2.5 rounded-xl font-bold"
+              style={{ background: COLORS.gold, color: "#000" }}
+            >
+              Réessayer
+            </button>
+          </div>
+        ) : videos.length === 0 ? (
+          <div className="h-full flex flex-col items-center justify-center text-gray-400 p-6 text-center">
+            <div className="text-6xl mb-4">🎬</div>
+            <p className="text-white font-bold text-xl mb-2">Aucune vidéo</p>
+            <button
+              onClick={() => setShowUpload(true)}
+              className="mt-4 px-6 py-3 rounded-2xl font-bold"
+              style={{ background: COLORS.gold, color: "#000" }}
+            >
+              Publier une vidéo
+            </button>
+          </div>
+        ) : (
+          videos.map((v) => {
+            const isPlaying = playingId === v.id;
+            const isLiked = !!likedMap[v.id];
+            const profile = v.profiles || {};
+            const hasError = !!videoErrors[v.id];
+
+            return (
+              <div
+                key={v.id}
+                className="h-full w-full snap-start relative flex items-center justify-center bg-black"
+              >
+                <video
+                  ref={(el) => {
+                    if (el) videoRefs.current[v.id] = el;
+                  }}
+                  data-id={v.id}
+                  src={v.video_url}
+                  className="h-full w-full object-cover"
+                  loop
+                  playsInline
+                  muted={muted}
+                  onClick={() => {
+                    const el = videoRefs.current[v.id];
+                    if (!el || hasError) return;
+                    if (el.paused) el.play().catch(() => {});
+                    else el.pause();
+                  }}
+                  onError={() => {
+                    setVideoErrors((prev) => ({ ...prev, [v.id]: true }));
+                  }}
+                  onLoadedData={() => {
+                    setVideoErrors((prev) => {
+                      const copy = { ...prev };
+                      delete copy[v.id];
+                      return copy;
+                    });
+                  }}
+                />
+
+                {hasError && (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/85 z-20 p-6 text-center">
+                    <div className="text-5xl mb-4">⚠️</div>
+                    <p className="text-white font-bold text-lg mb-2">Impossible de lire cette vidéo</p>
+                    <p className="text-gray-400 text-sm mb-6 max-w-xs">
+                      Le fichier est peut-être corrompu ou le format n’est pas supporté.
+                    </p>
+                    <button
+                      onClick={() => {
+                        setVideoErrors((prev) => {
+                          const copy = { ...prev };
+                          delete copy[v.id];
+                          return copy;
+                        });
+                        const el = videoRefs.current[v.id];
+                        if (el) {
+                          el.load();
+                          el.play().catch(() => {});
+                        }
+                      }}
+                      className="px-5 py-2.5 rounded-xl text-sm font-bold"
+                      style={{ background: COLORS.gold, color: "#000" }}
+                    >
+                      Réessayer
+                    </button>
+                  </div>
+                )}
+
+                <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-transparent to-black/40 pointer-events-none" />
+
+                {v.is_repost && (
+                  <div className="absolute top-16 left-4 px-3 py-1 rounded-full text-[10px] font-bold bg-black/60 border border-yellow-500/40 text-yellow-400 z-10 flex items-center gap-1.5">
+                    <Repeat2 size={12} /> REPOST
+                  </div>
+                )}
+
+                {!isPlaying && !hasError && (
+                  <div className="absolute inset-0 flex items-center justify-center z-10 pointer-events-none">
+                    <div className="w-16 h-16 rounded-full bg-black/50 backdrop-blur-md flex items-center justify-center">
+                      <Play size={32} className="text-white ml-1" fill="white" />
+                    </div>
+                  </div>
+                )}
+
+                <div className="absolute bottom-24 left-4 right-20 z-20 flex flex-col gap-2.5">
+                  <div className="flex items-center gap-3">
+                    <div className="w-11 h-11 rounded-full border-2 border-white overflow-hidden bg-gray-800">
+                      {profile.avatar_url ? (
+                        <img src={profile.avatar_url} className="w-full h-full object-cover" />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center text-lg">
+                          {profile.flag || "🌍"}
+                        </div>
+                      )}
+                    </div>
+                    <div>
+                      <div className="text-sm font-bold text-white">
+                        @{profile.handle || "membre"} {profile.flag}
+                      </div>
+                      <div className="text-xs text-gray-300">
+                        {profile.display_name || "Membre BAARO"}
+                      </div>
+                    </div>
+                  </div>
+                  <p className="text-sm text-white leading-snug line-clamp-3">
+                    {v.title}
+                    {v.description && <span className="text-gray-300"> • {v.description}</span>}
+                  </p>
+                  <div className="flex items-center gap-2 text-xs text-gray-400">
+                    <Music size={12} />
+                    <span>Son original</span>
+                  </div>
+                </div>
+
+                <div className="absolute right-3 bottom-28 flex flex-col gap-5 items-center z-20">
+                  <button onClick={() => handleLike(v.id)} className="flex flex-col items-center gap-1">
+                    <div className={`p-3 rounded-full backdrop-blur-md ${isLiked ? "bg-pink-500/30" : "bg-white/15"}`}>
+                      <Heart size={26} className={isLiked ? "text-pink-500" : "text-white"} fill={isLiked ? "currentColor" : "none"} />
+                    </div>
+                    <span className="text-xs font-bold text-white">{v.likes || 0}</span>
+                  </button>
+                  <button onClick={() => openComments(v.id)} className="flex flex-col items-center gap-1">
+                    <div className="p-3 rounded-full bg-white/15 backdrop-blur-md">
+                      <MessageCircle size={26} className="text-white" />
+                    </div>
+                    <span className="text-xs font-bold text-white">{v.comments_count || 0}</span>
+                  </button>
+                  <button onClick={() => handleRepost(v)} className="flex flex-col items-center gap-1">
+                    <div className="p-3 rounded-full bg-white/15 backdrop-blur-md">
+                      <Repeat2 size={26} className="text-white" />
+                    </div>
+                    <span className="text-xs font-bold text-white">Repost</span>
+                  </button>
+                  <button onClick={() => handleShare(v)} className="flex flex-col items-center gap-1">
+                    <div className="p-3 rounded-full bg-white/15 backdrop-blur-md">
+                      {shareFeedbackId === v.id ? <Check size={26} className="text-green-400" /> : <Share2 size={26} className="text-white" />}
+                    </div>
+                    <span className="text-xs font-bold text-white">
+                      {shareFeedbackId === v.id ? "Copié" : "Partager"}
+                    </span>
+                  </button>
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
+
+      {/* Modal Commentaires */}
+      {commentOpen && (
+        <div className="fixed inset-0 z-50 flex items-end bg-black/70 backdrop-blur-sm">
+          <div className="w-full max-h-[70vh] rounded-t-3xl bg-[#111] border-t border-white/10 flex flex-col">
+            <div className="flex justify-between items-center p-4 border-b border-white/10">
+              <h3 className="font-bold text-white">Commentaires</h3>
+              <button onClick={() => setCommentOpen(null)} className="text-gray-400">
+                <X size={22} />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+              {(comments[commentOpen] || []).map((c) => (
+                <div key={c.id} className="flex gap-3">
+                  <div className="w-8 h-8 rounded-full bg-gray-700 flex items-center justify-center text-sm">
+                    {c.profiles?.flag || "🌍"}
+                  </div>
+                  <div>
+                    <p className="text-xs font-bold text-white">@{c.profiles?.handle || "membre"}</p>
+                    <p className="text-sm text-gray-200">{c.text}</p>
+                  </div>
+                </div>
+              ))}
+              {(comments[commentOpen] || []).length === 0 && (
+                <p className="text-center text-gray-500 text-sm py-8">Aucun commentaire</p>
+              )}
+            </div>
+            <div className="p-3 border-t border-white/10 flex gap-2">
+              <input
+                value={newComment}
+                onChange={(e) => setNewComment(e.target.value)}
+                placeholder="Ajouter un commentaire..."
+                className="flex-1 bg-white/10 rounded-full px-4 py-2.5 text-sm text-white outline-none"
+                onKeyDown={(e) => e.key === "Enter" && sendComment()}
+              />
+              <button onClick={sendComment} className="p-2.5 rounded-full" style={{ background: COLORS.gold, color: "#000" }}>
+                <Send size={18} />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Upload Vidéo */}
+      {showUpload && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-md">
+          <div className="w-full max-w-md rounded-2xl p-6 border" style={{ background: COLORS.surface, borderColor: COLORS.borderGold }}>
+            <div className="flex justify-between items-center mb-5">
+              <h3 className="text-lg font-bold text-white">Publier une vidéo</h3>
+              <button onClick={() => setShowUpload(false)} className="text-gray-400">
+                <X size={24} />
+              </button>
+            </div>
+
+            <div
+              onClick={() => document.getElementById("videoInput").click()}
+              className="border-2 border-dashed rounded-xl p-8 text-center cursor-pointer mb-4"
+              style={{ borderColor: selectedFile ? COLORS.gold : "rgba(255,255,255,0.15)" }}
+            >
+              {selectedFile ? (
+                <div>
+                  <p className="text-white font-medium truncate">{selectedFile.name}</p>
+                  <p className="text-xs text-gray-400 mt-1">{(selectedFile.size / 1024 / 1024).toFixed(1)} Mo</p>
+                </div>
+              ) : (
+                <div>
+                  <div className="text-4xl mb-2">🎬</div>
+                  <p className="text-gray-400 text-sm">Choisir une vidéo</p>
+                </div>
+              )}
+              <input
+                id="videoInput"
+                type="file"
+                accept="video/*"
+                className="hidden"
+                onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
+              />
+            </div>
+
+            <input
+              type="text"
+              placeholder="Titre"
+              value={uploadTitle}
+              onChange={(e) => setUploadTitle(e.target.value)}
+              className="w-full bg-black/40 rounded-xl px-4 py-3 text-sm text-white outline-none border border-white/10 mb-3"
+            />
+            <textarea
+              placeholder="Description"
+              value={uploadDescription}
+              onChange={(e) => setUploadDescription(e.target.value)}
+              rows={2}
+              className="w-full bg-black/40 rounded-xl px-4 py-3 text-sm text-white outline-none border border-white/10 resize-none mb-3"
+            />
+
+            <button
+              onClick={() => setShowSoundPicker(true)}
+              className="w-full py-2.5 mb-4 rounded-xl bg-white/10 text-white text-sm flex items-center justify-center gap-2"
+            >
+              <Music size={16} />
+              {selectedSound ? selectedSound.title : "Ajouter un son"}
+            </button>
+
+            {uploading && (
+              <div className="w-full bg-gray-800 rounded-full h-2 mb-4 overflow-hidden">
+                <div className="h-full rounded-full" style={{ width: `${uploadProgress}%`, background: COLORS.gold }} />
+              </div>
+            )}
+
+            <button
+              onClick={handleUpload}
+              disabled={!selectedFile || uploading}
+              className="w-full py-3.5 rounded-xl font-bold disabled:opacity-40"
+              style={{ background: COLORS.gold, color: "#000" }}
+            >
+              {uploading ? `Publication... ${uploadProgress}%` : "Publier (+30 pts)"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Choix du son */}
+      {showSoundPicker && (
+        <div className="fixed inset-0 z-[60] flex items-end bg-black/80">
+          <div className="w-full max-h-[60vh] rounded-t-3xl bg-[#111] p-4 overflow-y-auto">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="font-bold text-white">Choisir un son</h3>
+              <button onClick={() => setShowSoundPicker(false)} className="text-gray-400">
+                <X size={22} />
+              </button>
+            </div>
+            {sounds.length === 0 ? (
+              <p className="text-gray-500 text-center py-8">Aucun son pour le moment</p>
+            ) : (
+              sounds.map((s) => (
+                <button
+                  key={s.id}
+                  onClick={() => {
+                    setSelectedSound(s);
+                    setShowSoundPicker(false);
+                  }}
+                  className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-white/5 text-left"
+                >
+                  <Music size={18} className="text-yellow-400" />
+                  <div>
+                    <p className="text-white text-sm font-medium">{s.title}</p>
+                    <p className="text-xs text-gray-400">{s.artist}</p>
+                  </div>
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Modal Créer Story */}
+      {showCreateStory && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90">
+          <div className="w-full max-w-md rounded-2xl p-6 border" style={{ background: COLORS.surface, borderColor: COLORS.borderGold }}>
+            <div className="flex justify-between items-center mb-5">
+              <h3 className="text-lg font-bold text-white">Créer une Story</h3>
+              <button onClick={() => setShowCreateStory(false)} className="text-gray-400">
+                <X size={24} />
+              </button>
+            </div>
+
+            <div
+              onClick={() => document.getElementById("storyInput").click()}
+              className="border-2 border-dashed rounded-xl p-8 text-center cursor-pointer mb-4"
+              style={{ borderColor: storyFile ? COLORS.gold : "rgba(255,255,255,0.15)" }}
+            >
+              {storyFile ? (
+                <p className="text-white">{storyFile.name}</p>
+              ) : (
+                <div>
+                  <div className="text-4xl mb-2">📸</div>
+                  <p className="text-gray-400 text-sm">Photo ou vidéo</p>
+                </div>
+              )}
+              <input
+                id="storyInput"
+                type="file"
+                accept="image/*,video/*"
+                className="hidden"
+                onChange={(e) => setStoryFile(e.target.files?.[0] || null)}
+              />
+            </div>
+
+            <input
+              type="text"
+              placeholder="Texte (optionnel)"
+              value={storyText}
+              onChange={(e) => setStoryText(e.target.value)}
+              className="w-full bg-black/40 rounded-xl px-4 py-3 text-sm text-white outline-none border border-white/10 mb-4"
+            />
+
+            <button
+              onClick={handleCreateStory}
+              disabled={!storyFile || uploadingStory}
+              className="w-full py-3.5 rounded-xl font-bold disabled:opacity-40"
+              style={{ background: COLORS.gold, color: "#000" }}
+            >
+              {uploadingStory ? "Publication..." : "Publier la Story (+15 pts)"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {storyGroup && (
+        <StoryViewer
+          group={storyGroup}
+          onClose={() => setStoryGroup(null)}
+          currentUserId={user?.id}
+        />
+      )}
+
+      <style>{`
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      `}</style>
+    </>
+  );
+                                 }
