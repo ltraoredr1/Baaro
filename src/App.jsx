@@ -43,7 +43,6 @@ function MainAppContent({ session }) {
   });
   const [loadingData, setLoadingData] = useState(true);
 
-  // Charge toutes les données de l'utilisateur connecté
   useEffect(() => {
     if (!session?.user) return;
 
@@ -53,14 +52,13 @@ function MainAppContent({ session }) {
       setUserId(uid);
 
       try {
-        // 1. Profil
+        // Profil
         let { data: profile } = await supabase
           .from("profiles")
           .select("display_name, handle, flag, bio")
           .eq("user_id", uid)
           .maybeSingle();
 
-        // Crée le profil s'il n'existe pas
         if (!profile) {
           const defaultHandle = `@user_${uid.slice(0, 8)}`;
           const { data: created } = await supabase
@@ -87,7 +85,7 @@ function MainAppContent({ session }) {
           });
         }
 
-        // 2. Solde points
+        // Solde points
         const { data: wallet } = await supabase
           .from("wallets")
           .select("balance")
@@ -97,7 +95,6 @@ function MainAppContent({ session }) {
         if (wallet) {
           setPointsBalance(Number(wallet.balance) || 0);
         } else {
-          // Crée le wallet par défaut si absent
           await supabase.from("wallets").upsert({
             user_id: uid,
             balance: 1284,
@@ -105,7 +102,7 @@ function MainAppContent({ session }) {
           setPointsBalance(1284);
         }
 
-        // 3. Solde BARO
+        // Solde BARO
         const { data: crypto } = await supabase
           .from("crypto_holdings")
           .select("holdings")
@@ -125,11 +122,9 @@ function MainAppContent({ session }) {
     loadUserData();
   }, [session]);
 
-  // Mise à jour du solde (reçoit soit un delta, soit le nouveau solde complet)
   const handleRewardPoints = useCallback((ptsOrNewBalance) => {
     if (typeof ptsOrNewBalance !== "number") return;
 
-    // Si la valeur est grande, on considère que c'est le solde complet renvoyé par l'API
     if (ptsOrNewBalance > 50) {
       setPointsBalance(ptsOrNewBalance);
     } else {
@@ -186,17 +181,11 @@ function MainAppContent({ session }) {
           {activeTab === "friends" && <FriendsTab currentUserId={userId} />}
 
           {activeTab === "videos" && (
-            <VideosTab
-              userId={userId}
-              onRewardPoints={handleRewardPoints}
-            />
+            <VideosTab userId={userId} onRewardPoints={handleRewardPoints} />
           )}
 
           {activeTab === "messages" && (
-            <MessagesTab
-              userId={userId}
-              onRewardPoints={handleRewardPoints}
-            />
+            <MessagesTab userId={userId} onRewardPoints={handleRewardPoints} />
           )}
 
           {activeTab === "wallet" && (
@@ -247,7 +236,6 @@ function MainAppContent({ session }) {
         </main>
       </div>
 
-      {/* Modal de profil */}
       {inspectingProfileId && (
         <ProfileModal
           authorId={inspectingProfileId}
@@ -257,14 +245,12 @@ function MainAppContent({ session }) {
         />
       )}
 
-      {/* Notifications */}
       <NotificationDrawer
         isOpen={notifDrawerOpen}
         onClose={() => setNotifDrawerOpen(false)}
         userId={userId}
       />
 
-      {/* Recherche globale */}
       <GlobalSearchModal
         isOpen={searchModalOpen}
         onClose={() => setSearchModalOpen(false)}
@@ -280,13 +266,11 @@ export default function App() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Récupère la session existante
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
       setLoading(false);
     });
 
-    // Écoute les changements d'auth
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
@@ -310,12 +294,10 @@ export default function App() {
     );
   }
 
-  // Pas de session → écran d'auth
   if (!session) {
     return <AuthScreen />;
   }
 
-  // Session active → application
   return (
     <ToastProvider>
       <MainAppContent session={session} />
