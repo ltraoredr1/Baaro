@@ -13,6 +13,7 @@ import { useToast } from "./ToastContext.jsx";
 import { supabase } from "../supabaseClient.js";
 import { handleDbError } from "../lib/dbErrors.js";
 import { checkRateLimit, rateLimitMessage } from "../lib/rateLimit.js";
+import { earnPoints } from "../lib/walletApi.js";
 
 export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
   const { showToast, showPointsReward } = useToast();
@@ -29,7 +30,6 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
   const [currentUser, setCurrentUser] = useState(null);
   const [submitting, setSubmitting] = useState(false);
 
-  // Récupère l'utilisateur connecté
   useEffect(() => {
     const getUser = async () => {
       try {
@@ -46,7 +46,6 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
 
   const effectiveUserId = currentUser?.id || userId;
 
-  // Charge les publications + profils + likes de l'utilisateur
   const loadPosts = useCallback(async () => {
     setLoading(true);
     try {
@@ -67,7 +66,6 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
       const postIds = postsData.map((p) => p.id);
       const authorIds = [...new Set(postsData.map((p) => p.author_id))];
 
-      // Charge les profils des auteurs
       const { data: profiles } = await supabase
         .from("profiles")
         .select("user_id, display_name, handle, flag")
@@ -78,7 +76,6 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
         profileMap[p.user_id] = p;
       });
 
-      // Charge les likes de l'utilisateur courant
       let userLikes = {};
       if (effectiveUserId) {
         const { data: likes } = await supabase
@@ -93,7 +90,6 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
         setLikedPosts(userLikes);
       }
 
-      // Compte total des likes par post
       const { data: allLikes } = await supabase
         .from("post_likes")
         .select("post_id")
@@ -104,7 +100,6 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
         likesCountMap[l.post_id] = (likesCountMap[l.post_id] || 0) + 1;
       });
 
-      // Compte des commentaires
       const { data: allComments } = await supabase
         .from("comments")
         .select("post_id")
@@ -140,7 +135,6 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
     loadPosts();
   }, [loadPosts]);
 
-  // Realtime
   useEffect(() => {
     const channel = supabase
       .channel("posts_channel")
@@ -156,7 +150,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
     };
   }, [loadPosts]);
 
-  // Création de publication
+  // Création de publication + récompense serveur
   const handleCreatePost = async (e) => {
     e.preventDefault();
     if (!newText.trim() || submitting) return;
@@ -185,8 +179,15 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
       setMood("");
       setShowPoll(false);
 
-      onRewardPoints?.(15);
-      showPointsReward?.(15, "Publication créée !");
+      // Récompense côté serveur
+      const result = await earnPoints("publish_post");
+      if (result.ok) {
+        onRewardPoints?.(result.balance); // met à jour avec le vrai solde
+        showPointsReward?.(5, "Publication créée !");
+      } else {
+        showToast(result.error || "Récompense non attribuée", "warning");
+      }
+
       await loadPosts();
     } catch (error) {
       handleDbError(error, showToast, "Impossible de publier");
@@ -195,7 +196,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
     }
   };
 
-  // Like / Unlike
+  // Like / Unlike + récompense serveur
   const handleLike = async (postId) => {
     if (!effectiveUserId) {
       showToast("Vous devez être connecté", "error");
@@ -235,8 +236,12 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
         });
         if (error) throw error;
 
-        onRewardPoints?.(2);
-        showPointsReward?.(2, "J'aime distribué");
+        // Récompense côté serveur uniquement à l'ajout du like
+        const result = await earnPoints("like_post");
+        if (result.ok) {
+          onRewardPoints?.(result.balance);
+          showPointsReward?.(2, "J'aime distribué");
+        }
       }
     } catch (error) {
       // Rollback
@@ -255,7 +260,6 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
     }
   };
 
-  // Charger les commentaires d'un post
   const loadComments = async (postId) => {
     try {
       const { data, error } = await supabase
@@ -266,7 +270,6 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
 
       if (error) throw error;
 
-      // Enrichir avec les noms
       const authorIds = [...new Set((data || []).map((c) => c.author_id))];
       let profileMap = {};
       if (authorIds.length > 0) {
@@ -291,7 +294,6 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
     }
   };
 
-  // Ajouter un commentaire
   const handleAddComment = async (postId) => {
     if (!newCommentText.trim()) return;
 
@@ -317,7 +319,6 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
 
       if (error) throw error;
 
-      // Ajout optimiste
       const newCmt = {
         id: `temp_${Date.now()}`,
         author: "Vous",
@@ -338,6 +339,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
       );
 
       setNewCommentText("");
+      // Pour l'instant on garde +1 local (pas encore d'action "comment" côté serveur)
       onRewardPoints?.(1);
       showPointsReward?.(1, "Commentaire ajouté");
     } catch (error) {
@@ -447,7 +449,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
           >
             <span>{submitting ? "..." : "Publier"}</span>
             <span className="text-[10px] px-1.5 py-0.5 rounded-full font-extrabold bg-black/20 text-white">
-              +15 pts
+              +5 pts
             </span>
           </button>
         </div>
@@ -473,7 +475,6 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
                 className="glass-card rounded-2xl p-5 shadow-xl border flex flex-col gap-3"
                 style={{ borderColor: COLORS.border }}
               >
-                {/* En-tête */}
                 <div className="flex items-center justify-between">
                   <div
                     className="flex items-center gap-3 cursor-pointer group"
@@ -521,12 +522,10 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
                   </button>
                 </div>
 
-                {/* Contenu */}
                 <p className="text-sm leading-relaxed" style={{ color: COLORS.ivory }}>
                   {isTranslated ? translatedMap[post.id] : post.text}
                 </p>
 
-                {/* Média */}
                 {post.media_url && (
                   <div className="rounded-xl overflow-hidden">
                     {post.media_type === "video" ? (
@@ -545,7 +544,6 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
                   </div>
                 )}
 
-                {/* Actions */}
                 <div
                   className="flex items-center justify-between pt-3 border-t text-xs font-medium"
                   style={{ borderColor: COLORS.border }}
@@ -589,7 +587,6 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
                   </button>
                 </div>
 
-                {/* Section commentaires */}
                 {commentOpen[post.id] && (
                   <div
                     className="flex flex-col gap-2 pt-3 border-t"
@@ -650,4 +647,4 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
       )}
     </div>
   );
-        }
+}
