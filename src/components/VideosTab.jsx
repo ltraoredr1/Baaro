@@ -582,3 +582,198 @@ export function VideosTab({ onRewardPoints, userId }) {
                 <div className="absolute right-3 bottom-28 flex flex-col gap-5 items-center z-10">
                   <button onClick={() => handleLike(v.id)} className="flex flex-col items-center gap-1">
                     <div
+                      className={`p-3 rounded-full backdrop-blur-md transition ${
+                        isLiked ? "bg-pink-500/20" : "bg-white/10"
+                      }`}
+                    >
+                      <Heart
+                        size={28}
+                        className={isLiked ? "text-pink-500" : "text-white"}
+                        fill={isLiked ? "currentColor" : "none"}
+                      />
+                    </div>
+                    <span className="text-xs font-bold text-white">{v.likes || 0}</span>
+                  </button>
+
+                  <button
+                    onClick={() => openComments(v.id)}
+                    className="flex flex-col items-center gap-1"
+                  >
+                    <div className="p-3 rounded-full bg-white/10 backdrop-blur-md">
+                      <MessageCircle size={28} className="text-white" />
+                    </div>
+                    <span className="text-xs font-bold text-white">
+                      {v.comments_count || 0}
+                    </span>
+                  </button>
+
+                  <button onClick={() => handleRepost(v)} className="flex flex-col items-center gap-1">
+                    <div className="p-3 rounded-full bg-white/10 backdrop-blur-md">
+                      <Repeat2 size={28} className="text-white" />
+                    </div>
+                    <span className="text-xs font-bold text-white">Repost</span>
+                  </button>
+
+                  <button
+                    onClick={() => handleTip(profile.display_name || "Membre")}
+                    className="flex flex-col items-center gap-1"
+                  >
+                    <div className="p-3 rounded-full bg-yellow-500/20 backdrop-blur-md border border-yellow-500/50">
+                      <Coins size={28} className="text-yellow-400" />
+                    </div>
+                    <span className="text-xs font-bold text-white">Tip</span>
+                  </button>
+
+                  <button onClick={() => handleShare(v)} className="flex flex-col items-center gap-1">
+                    <div className="p-3 rounded-full bg-white/10 backdrop-blur-md">
+                      {shareFeedbackId === v.id ? (
+                        <Check size={28} className="text-green-400" />
+                      ) : (
+                        <Share2 size={28} className="text-white" />
+                      )}
+                    </div>
+                    <span className="text-xs font-bold text-white">
+                      {shareFeedbackId === v.id ? "Copié" : "Partager"}
+                    </span>
+                  </button>
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
+
+      {/* Modal Upload */}
+      {showUpload && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-md">
+          <div
+            className="w-full max-w-md rounded-2xl p-6 border"
+            style={{ background: COLORS.surface, borderColor: COLORS.borderGold }}
+          >
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-bold text-white">📤 Publier une vidéo</h3>
+              <button onClick={() => setShowUpload(false)} className="text-gray-400 hover:text-white">
+                <X size={24} />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div
+                onClick={() => document.getElementById("videoInput").click()}
+                className="border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition"
+                style={{ borderColor: selectedFile ? COLORS.gold : COLORS.border }}
+              >
+                {selectedFile ? (
+                  <div>
+                    <p className="text-white font-medium">{selectedFile.name}</p>
+                    <p className="text-xs text-gray-400">
+                      {(selectedFile.size / 1024 / 1024).toFixed(1)} MB
+                    </p>
+                  </div>
+                ) : (
+                  <div>
+                    <div className="text-4xl mb-2">🎬</div>
+                    <p className="text-gray-400">Clique pour sélectionner</p>
+                  </div>
+                )}
+                <input
+                  id="videoInput"
+                  type="file"
+                  accept="video/*"
+                  className="hidden"
+                  onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
+                />
+              </div>
+
+              <input
+                type="text"
+                placeholder="Titre"
+                value={uploadTitle}
+                onChange={(e) => setUploadTitle(e.target.value)}
+                className="w-full bg-black/30 rounded-xl px-4 py-3 text-sm text-white outline-none border border-gray-700"
+              />
+
+              <textarea
+                placeholder="Description"
+                value={uploadDescription}
+                onChange={(e) => setUploadDescription(e.target.value)}
+                rows={2}
+                className="w-full bg-black/30 rounded-xl px-4 py-3 text-sm text-white outline-none border border-gray-700 resize-none"
+              />
+
+              {uploading && (
+                <div className="w-full bg-gray-700 rounded-full h-2 overflow-hidden">
+                  <div
+                    className="h-full transition-all duration-300"
+                    style={{ width: `${uploadProgress}%`, background: COLORS.gold }}
+                  />
+                </div>
+              )}
+
+              <button
+                onClick={handleUpload}
+                disabled={!selectedFile || uploading}
+                className="w-full py-3 rounded-xl font-bold transition disabled:opacity-40"
+                style={{ background: COLORS.gold, color: "#000" }}
+              >
+                {uploading ? "Publication..." : "Publier"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Commentaires simple */}
+      {commentOpen && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 backdrop-blur-sm">
+          <div className="w-full max-w-lg bg-zinc-900 rounded-t-2xl p-4 max-h-[70vh] flex flex-col">
+            <div className="flex justify-between items-center mb-3">
+              <h3 className="font-bold text-white">Commentaires</h3>
+              <button onClick={() => setCommentOpen(null)}>
+                <X size={22} className="text-gray-400" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto space-y-3 mb-3">
+              {(comments[commentOpen] || []).map((c) => (
+                <div key={c.id} className="text-sm">
+                  <span className="font-bold text-white">
+                    @{c.profiles?.handle || "membre"}
+                  </span>
+                  <span className="text-gray-300 ml-2">{c.content}</span>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex gap-2">
+              <input
+                value={newComment}
+                onChange={(e) => setNewComment(e.target.value)}
+                placeholder="Ajouter un commentaire..."
+                className="flex-1 bg-black/40 rounded-xl px-4 py-2.5 text-sm text-white outline-none"
+                onKeyDown={(e) => e.key === "Enter" && sendComment()}
+              />
+              <button
+                onClick={sendComment}
+                className="p-2.5 rounded-xl"
+                style={{ background: COLORS.gold }}
+              >
+                <Send size={18} className="text-black" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <style jsx>{`
+        .no-scrollbar::-webkit-scrollbar {
+          display: none;
+        }
+        .no-scrollbar {
+          -ms-overflow-style: none;
+          scrollbar-width: none;
+        }
+      `}</style>
+    </>
+  );
+}
