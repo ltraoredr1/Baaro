@@ -2,7 +2,7 @@
 import { getAdminClient, requireUser } from "./_supabaseAdmin.js";
 
 const DAILY_API_URL = "https://api.daily.co/v1";
-const INVITE_CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // sans O/0/I/1
+const INVITE_CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
 function generateInviteCode(length = 6) {
   let code = "";
@@ -47,13 +47,11 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: e.message });
   }
 
-  // Authentification (recommandée)
   let user = null;
   try {
     user = await requireUser(req, admin);
   } catch {
-    // On laisse passer pour l’instant (mode anonyme possible),
-    // mais on logue si besoin.
+    // mode anonyme possible
   }
 
   const {
@@ -97,10 +95,10 @@ export default async function handler(req, res) {
         body: JSON.stringify({
           privacy: "private",
           properties: {
-            exp: Math.floor(Date.now() / 1000) + 60 * 60 * 4, // 4h
+            exp: Math.floor(Date.now() / 1000) + 60 * 60 * 4,
             enable_chat: false,
             enable_screenshare: false,
-            max_participants: 50,
+            max_participants: 10,
             enable_recording: false,
             ...(streamingEndpoints ? { streaming_endpoints: streamingEndpoints } : {}),
           },
@@ -114,7 +112,6 @@ export default async function handler(req, res) {
 
       const roomData = await roomRes.json();
 
-      // Token hôte
       const tokenRes = await fetch(`${DAILY_API_URL}/meeting-tokens`, {
         method: "POST",
         headers: {
@@ -144,10 +141,10 @@ export default async function handler(req, res) {
         host_id: hostId || user?.id || null,
         title: "Live BAARO",
         status: "active",
+        max_participants: 10,
       });
 
       if (insertError) {
-        // Nettoyage de la room Daily en cas d'échec
         await fetch(`\( {DAILY_API_URL}/rooms/ \){roomData.name}`, {
           method: "DELETE",
           headers: { Authorization: `Bearer ${DAILY_API_KEY}` },
@@ -172,7 +169,7 @@ export default async function handler(req, res) {
 
       const { data, error } = await admin
         .from("debate_rooms")
-        .select("daily_room_name, status")
+        .select("daily_room_name, status, max_participants")
         .eq("invite_code", inviteCode.trim().toUpperCase())
         .maybeSingle();
 
@@ -181,7 +178,10 @@ export default async function handler(req, res) {
         return res.status(404).json({ error: "Code invalide ou live terminé" });
       }
 
-      return res.status(200).json({ roomName: data.daily_room_name });
+      return res.status(200).json({
+        roomName: data.daily_room_name,
+        maxParticipants: data.max_participants || 10,
+      });
     }
 
     // ---------- JOIN ROOM ----------
