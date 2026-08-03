@@ -93,6 +93,24 @@ export function VideosTab({ onRewardPoints, userId }) {
     loadVideos();
   }, [loadVideos]);
 
+  // Rafraîchit le fil de vidéos en direct dès qu'une vidéo est ajoutée, modifiée ou supprimée.
+  useEffect(() => {
+    const channel = supabase
+      .channel("videos-realtime")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "videos" },
+        () => {
+          loadVideos();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [loadVideos]);
+
   useEffect(() => {
     if (videos.length === 0) return;
 
@@ -664,4 +682,4 @@ export function VideosTab({ onRewardPoints, userId }) {
       `}</style>
     </>
   );
-    }
+}
