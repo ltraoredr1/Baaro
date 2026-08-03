@@ -1,133 +1,117 @@
-/**
- * MessagesTab avec chiffrement E2E + anti-capture d'écran
- */
-import { useState, useEffect, useRef } from "react";
-import {
-  ArrowLeft,
-  Send,
-  MessageCircle,
-  Plus,
-  X,
-  Lock,
-  AlertTriangle,
-} from "lucide-react";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { ArrowLeft, Send, MessageCircle, Plus, X } from "lucide-react";
 import { COLORS } from "../theme.js";
 import { supabase } from "../supabaseClient.js";
-import { useMessaging } from "../hooks/useMessaging.js";
-import { useCryptoKeys } from "../hooks/useCryptoKeys.js";
-import {
-  enableSecureScreen,
-  disableSecureScreen,
-  attachWebPrivacyBlur,
-} from "../lib/secureScreen.js";
 
 export function MessagesTab({ onRewardPoints }) {
   const [currentUserId, setCurrentUserId] = useState(null);
   const [conversations, setConversations] = useState([]);
   const [activeChat, setActiveChat] = useState(null);
+  const [messages, setMessages] = useState([]);
   const [newMessage, setNewMessage] = useState("");
-  const [loadingConvs, setLoadingConvs] = useState(true);
+  const [loading, setLoading] = useState(true);
   const [showUserSelector, setShowUserSelector] = useState(false);
   const [availableUsers, setAvailableUsers] = useState([]);
   const messagesEndRef = useRef(null);
-
-  const { ready: keysReady, error: keysError } = useCryptoKeys(currentUserId);
-
-  const {
-    messages,
-    loading: loadingMessages,
-    sendMessage,
-    sendError,
-  } = useMessaging(
-    activeChat?.id ?? null,
-    currentUserId,
-    activeChat?.otherUserId ?? null
-  );
+  const profilesCache = useRef({});
 
   useEffect(() => {
-    supabase.auth.getUser().then(({ data: { user } }) => {
+    const getUser = async () => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
       if (user) setCurrentUserId(user.id);
-    });
+    };
+    getUser();
   }, []);
 
-  // Anti-capture d'écran (Android FLAG_SECURE + flou web)
-  useEffect(() => {
-    if (!activeChat) return;
+  const fetchConversations = useCallback(async () => {
+    if (!currentUserId) return;
+    setLoading(true);
+    try {
+      // Requête optimisée : conversations + dernier message
+      const { data, error } = await supabase
+        .from("conversations")
+        .select(
+          `
+          id,
+          user1_id,
+          user2_id,
+          created_at,
+          messages (
+            text,
+            created_at,
+            sender_id
+          )
+        `
+        )
+        .or(`user1_id.eq.\( {currentUserId},user2_id.eq. \){currentUserId}`)
+        .order("created_at", { ascending: false })
+        .limit(40);
 
-    enableSecureScreen();
-    const cleanupWeb = attachWebPrivacyBlur("chat-content");
+      if (error) throw error;
 
-    return () => {
-      disableSecureScreen();
-      cleanupWeb();
-    };
-  }, [activeChat]);
+      const otherUserIds = [
+        ...new Set(
+          (data || []).map((c) =>
+            c.user1_id === currentUserId ? c.user2_id : c.user1_id
+          )
+        ),
+      ];
+
+      let profileMap = { ...profilesCache.current };
+
+      if (otherUserIds.length > 0) {
+        const missing = otherUserIds.filter((id) => !profileMap[id]);
+        if (missing.length > 0) {
+          const { data: profiles } = await supabase
+            .from("profiles")
+            .select("user_id, display_name, avatar_url, flag")
+            .in("user_id", missing);
+
+          (profiles || []).forEach((p) => {
+            profileMap[p.user_id] = p;
+          });
+          profilesCache.current = profileMap;
+        }
+      }
+
+      const enriched = (data || []).map((c) => {
+        const otherId =
+          c.user1_id === currentUserId ? c.user2_id : c.user1_id;
+        const profile = profileMap[otherId] || {
+          display_name: "Utilisateur",
+          flag: "🌍",
+        };
+        const msgs = c.messages || [];
+        const lastMsg = msgs.length > 0 ? msgs[msgs.length - 1] : null;
+
+        return {
+          id: c.id,
+          otherUserId: otherId,
+          otherUserName: profile.display_name,
+          otherUserAvatar: profile.avatar_url,
+          otherUserFlag: profile.flag,
+          lastMsg,
+          created_at: c.created_at,
+        };
+      });
+
+      setConversations(enriched);
+    } catch (err) {
+      console.error("Erreur conversations:", err);
+    } finally {
+      setLoading(false);
+    }
+  }, [currentUserId]);
 
   useEffect(() => {
     if (!currentUserId) return;
 
-    const fetchConversations = async () => {
-      setLoadingConvs(true);
-      try {
-        const { data, error } = await supabase
-          .from("conversations")
-          .select(
-            `id, user1_id, user2_id, created_at,
-             messages (text, created_at, sender_id)`
-          )
-          .or(`user1_id.eq.\( {currentUserId},user2_id.eq. \){currentUserId}`)
-          .order("created_at", { ascending: false });
-
-        if (error || !data) return;
-
-        const otherIds = [
-          ...new Set(
-            data.map((c) =>
-              c.user1_id === currentUserId ? c.user2_id : c.user1_id
-            )
-          ),
-        ];
-
-        const { data: profiles } = await supabase
-          .from("profiles")
-          .select("user_id, display_name, avatar_url, flag, public_key")
-          .in("user_id", otherIds);
-
-        const profileMap = {};
-        (profiles || []).forEach((p) => {
-          profileMap[p.user_id] = p;
-        });
-
-        const enriched = data.map((c) => {
-          const otherId =
-            c.user1_id === currentUserId ? c.user2_id : c.user1_id;
-          const profile = profileMap[otherId] || {
-            display_name: "Utilisateur",
-            flag: "🌍",
-          };
-          return {
-            ...c,
-            otherUserId: otherId,
-            otherUserName: profile.display_name,
-            otherUserAvatar: profile.avatar_url,
-            otherUserFlag: profile.flag,
-            hasPublicKey: !!profile.public_key,
-            lastMsg: c.messages?.[c.messages.length - 1],
-          };
-        });
-
-        setConversations(enriched);
-      } catch (err) {
-        console.error("Erreur conversations:", err);
-      } finally {
-        setLoadingConvs(false);
-      }
-    };
-
     fetchConversations();
 
     const channel = supabase
-      .channel("public:conversations")
+      .channel("public:messages")
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "messages" },
@@ -135,8 +119,47 @@ export function MessagesTab({ onRewardPoints }) {
       )
       .subscribe();
 
-    return () => supabase.removeChannel(channel);
-  }, [currentUserId]);
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [currentUserId, fetchConversations]);
+
+  useEffect(() => {
+    if (!activeChat?.id) return;
+
+    const fetchMessages = async () => {
+      const { data, error } = await supabase
+        .from("messages")
+        .select("id, text, created_at, sender_id")
+        .eq("conversation_id", activeChat.id)
+        .order("created_at", { ascending: true })
+        .limit(150);
+
+      if (!error) setMessages(data || []);
+    };
+
+    fetchMessages();
+
+    const channel = supabase
+      .channel(`room_${activeChat.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "messages",
+          filter: `conversation_id=eq.${activeChat.id}`,
+        },
+        (payload) => {
+          setMessages((prev) => [...prev, payload.new]);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [activeChat]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -144,21 +167,24 @@ export function MessagesTab({ onRewardPoints }) {
 
   useEffect(() => {
     if (!showUserSelector || !currentUserId) return;
-    supabase
-      .from("profiles")
-      .select("user_id, display_name, handle, avatar_url, flag, public_key")
-      .neq("user_id", currentUserId)
-      .then(({ data }) => {
-        if (data) setAvailableUsers(data);
-      });
+
+    const fetchUsers = async () => {
+      const { data: users } = await supabase
+        .from("profiles")
+        .select("user_id, display_name, handle, avatar_url, flag")
+        .neq("user_id", currentUserId)
+        .limit(50);
+
+      if (users) setAvailableUsers(users);
+    };
+    fetchUsers();
   }, [showUserSelector, currentUserId]);
 
   const createOrOpenConversation = async (
     otherUserId,
     otherUserName,
     otherUserAvatar,
-    otherUserFlag,
-    hasPublicKey
+    otherUserFlag
   ) => {
     if (!currentUserId || otherUserId === currentUserId) return;
     setShowUserSelector(false);
@@ -176,7 +202,6 @@ export function MessagesTab({ onRewardPoints }) {
       otherUserName: otherUserName || "Utilisateur",
       otherUserAvatar,
       otherUserFlag: otherUserFlag || "🌍",
-      hasPublicKey: !!hasPublicKey,
     };
 
     if (existing) {
@@ -197,30 +222,34 @@ export function MessagesTab({ onRewardPoints }) {
     }
   };
 
-  const handleSend = async (e) => {
+  const handleSendMessage = async (e) => {
     e.preventDefault();
-    if (!newMessage.trim() || !activeChat) return;
+    if (!newMessage.trim() || !activeChat || !currentUserId) return;
 
     const text = newMessage.trim();
     setNewMessage("");
 
-    const result = await sendMessage(text);
-    if (!result.ok) {
+    try {
+      const { error } = await supabase.from("messages").insert({
+        conversation_id: activeChat.id,
+        sender_id: currentUserId,
+        text,
+      });
+      if (error) throw error;
+      if (typeof onRewardPoints === "function") onRewardPoints(1);
+    } catch (err) {
+      console.error("Erreur envoi:", err);
       setNewMessage(text);
     }
   };
 
-  // ─── Sélecteur d'utilisateur ─────────────────────────────────────────────
-
+  // --- SÉLECTION D'UTILISATEUR ---
   if (showUserSelector) {
     return (
-      <div
-        className="flex flex-col h-full p-4"
-        style={{ background: COLORS.surface }}
-      >
+      <div className="flex flex-col h-full p-4" style={{ background: COLORS.surface }}>
         <div className="flex items-center justify-between mb-6">
           <h2 className="text-lg font-bold" style={{ color: COLORS.ivory }}>
-            Nouveau chat
+            Nouvelle conversation
           </h2>
           <button
             onClick={() => setShowUserSelector(false)}
@@ -239,15 +268,11 @@ export function MessagesTab({ onRewardPoints }) {
                   user.user_id,
                   user.display_name,
                   user.avatar_url,
-                  user.flag,
-                  !!user.public_key
+                  user.flag
                 )
               }
               className="p-4 rounded-2xl border cursor-pointer hover:border-amber-400/50 transition-all"
-              style={{
-                background: COLORS.surface,
-                borderColor: COLORS.border,
-              }}
+              style={{ background: COLORS.surface, borderColor: COLORS.border }}
             >
               <div className="flex items-center gap-3">
                 {user.avatar_url ? (
@@ -260,32 +285,19 @@ export function MessagesTab({ onRewardPoints }) {
                 ) : (
                   <div
                     className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-lg"
-                    style={{
-                      background: COLORS.surface2,
-                      color: COLORS.ivory,
-                    }}
+                    style={{ background: COLORS.surface2, color: COLORS.ivory }}
                   >
                     {user.flag || "🌍"}
                   </div>
                 )}
-                <div className="flex-1">
-                  <p
-                    className="font-bold text-sm"
-                    style={{ color: COLORS.ivory }}
-                  >
+                <div>
+                  <p className="font-bold text-sm" style={{ color: COLORS.ivory }}>
                     {user.display_name || user.handle}
                   </p>
                   <p className="text-xs" style={{ color: COLORS.muted }}>
                     {user.handle}
                   </p>
                 </div>
-                {user.public_key ? (
-                  <Lock size={14} style={{ color: COLORS.gold }} />
-                ) : (
-                  <span className="text-[10px]" style={{ color: COLORS.muted }}>
-                    pas de clé
-                  </span>
-                )}
               </div>
             </div>
           ))}
@@ -294,14 +306,10 @@ export function MessagesTab({ onRewardPoints }) {
     );
   }
 
-  // ─── Fenêtre de chat ─────────────────────────────────────────────────────
-
+  // --- FENÊTRE DE CHAT ---
   if (activeChat) {
     return (
-      <div
-        className="flex flex-col h-full"
-        style={{ background: COLORS.surface }}
-      >
+      <div className="flex flex-col h-full" style={{ background: COLORS.surface }}>
         <div
           className="flex items-center gap-3 p-4 border-b"
           style={{ borderColor: COLORS.border }}
@@ -328,44 +336,13 @@ export function MessagesTab({ onRewardPoints }) {
               {activeChat.otherUserFlag || "?"}
             </div>
           )}
-          <div className="flex-1">
-            <h3 className="font-bold text-sm" style={{ color: COLORS.ivory }}>
-              {activeChat.otherUserName}
-            </h3>
-            {activeChat.hasPublicKey && (
-              <p
-                className="text-[10px] flex items-center gap-1"
-                style={{ color: COLORS.gold }}
-              >
-                <Lock size={10} /> Chiffrement E2E actif
-              </p>
-            )}
-          </div>
+          <h3 className="font-bold text-sm" style={{ color: COLORS.ivory }}>
+            {activeChat.otherUserName}
+          </h3>
         </div>
 
-        {!activeChat.hasPublicKey && (
-          <div
-            className="mx-4 mt-3 p-3 rounded-xl flex items-start gap-2 text-xs"
-            style={{ background: "rgba(245,158,11,0.15)", color: "#FBBF24" }}
-          >
-            <AlertTriangle size={16} className="shrink-0 mt-0.5" />
-            <span>
-              Ce contact n'a pas encore de clé publique. Demandez-lui d'ouvrir
-              BAARO une fois pour activer le chiffrement.
-            </span>
-          </div>
-        )}
-
-        <div
-          id="chat-content"
-          className="flex-1 overflow-y-auto p-4 space-y-3"
-        >
-          {loadingMessages ? (
-            <div className="text-center py-10" style={{ color: COLORS.muted }}>
-              <div className="animate-spin inline-block w-6 h-6 border-2 border-current border-t-transparent rounded-full mb-2" />
-              <p className="text-sm">Déchiffrement…</p>
-            </div>
-          ) : messages.length === 0 ? (
+        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+          {messages.length === 0 ? (
             <div className="text-center py-10" style={{ color: COLORS.muted }}>
               <p className="text-sm">
                 Dites bonjour à {activeChat.otherUserName} ! 👋
@@ -377,9 +354,7 @@ export function MessagesTab({ onRewardPoints }) {
               return (
                 <div
                   key={msg.id}
-                  className={`flex gap-2 ${
-                    isMe ? "flex-row-reverse" : "flex-row"
-                  }`}
+                  className={`flex gap-2 ${isMe ? "flex-row-reverse" : "flex-row"}`}
                 >
                   {!isMe && (
                     <div
@@ -389,7 +364,15 @@ export function MessagesTab({ onRewardPoints }) {
                         background: COLORS.surface2,
                       }}
                     >
-                      {activeChat.otherUserFlag || "?"}
+                      {activeChat.otherUserAvatar ? (
+                        <img
+                          src={activeChat.otherUserAvatar}
+                          className="w-full h-full object-cover"
+                          alt=""
+                        />
+                      ) : (
+                        activeChat.otherUserFlag
+                      )}
                     </div>
                   )}
                   <div
@@ -401,24 +384,17 @@ export function MessagesTab({ onRewardPoints }) {
                       color: isMe ? "#000" : COLORS.ivory,
                     }}
                   >
-                    <p className={msg.decryptFailed ? "italic opacity-70" : ""}>
-                      {msg.plaintext}
-                    </p>
-                    <div
-                      className={`flex items-center gap-1.5 mt-1 text-[10px] ${
+                    <p>{msg.text}</p>
+                    <p
+                      className={`text-[10px] mt-1 ${
                         isMe ? "text-black/60" : "text-gray-400"
                       }`}
                     >
-                      {msg.encrypted && !msg.decryptFailed && (
-                        <Lock size={9} />
-                      )}
-                      <span>
-                        {new Date(msg.created_at).toLocaleTimeString([], {
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })}
-                      </span>
-                    </div>
+                      {new Date(msg.created_at).toLocaleTimeString([], {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
+                    </p>
                   </div>
                 </div>
               );
@@ -427,17 +403,8 @@ export function MessagesTab({ onRewardPoints }) {
           <div ref={messagesEndRef} />
         </div>
 
-        {sendError && (
-          <div
-            className="mx-4 mb-2 p-2 rounded-lg text-xs"
-            style={{ background: "rgba(239,68,68,0.15)", color: "#F87171" }}
-          >
-            {sendError}
-          </div>
-        )}
-
         <form
-          onSubmit={handleSend}
+          onSubmit={handleSendMessage}
           className="p-4 border-t flex gap-2"
           style={{ borderColor: COLORS.border }}
         >
@@ -445,13 +412,8 @@ export function MessagesTab({ onRewardPoints }) {
             type="text"
             value={newMessage}
             onChange={(e) => setNewMessage(e.target.value)}
-            placeholder={
-              activeChat.hasPublicKey
-                ? "Message chiffré…"
-                : "Message (pas encore chiffré)…"
-            }
-            disabled={!keysReady || !activeChat.hasPublicKey}
-            className="flex-1 px-4 py-3 rounded-xl border text-sm outline-none disabled:opacity-50"
+            placeholder="Votre message..."
+            className="flex-1 px-4 py-3 rounded-xl border text-sm outline-none"
             style={{
               background: COLORS.surface2,
               borderColor: COLORS.border,
@@ -460,9 +422,7 @@ export function MessagesTab({ onRewardPoints }) {
           />
           <button
             type="submit"
-            disabled={
-              !newMessage.trim() || !keysReady || !activeChat.hasPublicKey
-            }
+            disabled={!newMessage.trim()}
             className="p-3 rounded-xl disabled:opacity-50"
             style={{ background: COLORS.gold, color: "#000" }}
           >
@@ -473,8 +433,7 @@ export function MessagesTab({ onRewardPoints }) {
     );
   }
 
-  // ─── Liste des conversations ─────────────────────────────────────────────
-
+  // --- LISTE DES CONVERSATIONS ---
   return (
     <div className="flex flex-col h-full p-4">
       <div className="flex items-center justify-between mb-6">
@@ -483,8 +442,7 @@ export function MessagesTab({ onRewardPoints }) {
           style={{ color: COLORS.ivory }}
         >
           <MessageCircle size={24} style={{ color: COLORS.gold }} />
-          Chat
-          {keysReady && <Lock size={14} style={{ color: COLORS.gold }} />}
+          Messages
         </h2>
         <button
           onClick={() => setShowUserSelector(true)}
@@ -495,20 +453,11 @@ export function MessagesTab({ onRewardPoints }) {
         </button>
       </div>
 
-      {keysError && (
-        <div
-          className="mb-4 p-3 rounded-xl text-xs"
-          style={{ background: "rgba(239,68,68,0.15)", color: "#F87171" }}
-        >
-          Erreur crypto : {keysError}
-        </div>
-      )}
-
       <div className="flex-1 overflow-y-auto space-y-2">
-        {loadingConvs ? (
+        {loading ? (
           <div className="text-center py-10" style={{ color: COLORS.muted }}>
             <div className="animate-spin inline-block w-8 h-8 border-2 border-current border-t-transparent rounded-full mb-3" />
-            <p className="text-sm">Chargement…</p>
+            <p className="text-sm">Chargement...</p>
           </div>
         ) : conversations.length === 0 ? (
           <div className="text-center py-10">
@@ -519,72 +468,46 @@ export function MessagesTab({ onRewardPoints }) {
               <MessageCircle size={40} style={{ color: COLORS.muted }} />
             </div>
             <p className="font-bold mb-2" style={{ color: COLORS.ivory }}>
-              Aucun chat
+              Aucune conversation
             </p>
-            <p className="text-sm" style={{ color: COLORS.muted }}>
-              Appuyez sur + pour démarrer
-            </p>
+            <button
+              onClick={() => setShowUserSelector(true)}
+              className="px-6 py-3 rounded-xl font-bold text-sm mt-4"
+              style={{ background: COLORS.gold, color: "#000" }}
+            >
+              Démarrer une conversation
+            </button>
           </div>
         ) : (
-          conversations.map((c) => (
+          conversations.map((conv) => (
             <div
-              key={c.id}
-              onClick={() =>
-                setActiveChat({
-                  id: c.id,
-                  otherUserId: c.otherUserId,
-                  otherUserName: c.otherUserName,
-                  otherUserAvatar: c.otherUserAvatar,
-                  otherUserFlag: c.otherUserFlag,
-                  hasPublicKey: c.hasPublicKey,
-                })
-              }
-              className="p-4 rounded-2xl border cursor-pointer hover:border-amber-400/40 transition-all"
-              style={{
-                background: COLORS.surface,
-                borderColor: COLORS.border,
-              }}
+              key={conv.id}
+              onClick={() => setActiveChat(conv)}
+              className="p-4 rounded-2xl border cursor-pointer hover:border-amber-400/50 transition-all"
+              style={{ background: COLORS.surface, borderColor: COLORS.border }}
             >
               <div className="flex items-center gap-3">
-                {c.otherUserAvatar ? (
+                {conv.otherUserAvatar ? (
                   <img
-                    src={c.otherUserAvatar}
+                    src={conv.otherUserAvatar}
                     alt=""
-                    className="w-11 h-11 rounded-full object-cover border"
+                    className="w-12 h-12 rounded-full object-cover border"
                     style={{ borderColor: COLORS.borderGold }}
                   />
                 ) : (
                   <div
-                    className="w-11 h-11 rounded-full flex items-center justify-center font-bold"
-                    style={{
-                      background: COLORS.surface2,
-                      color: COLORS.ivory,
-                    }}
+                    className="w-12 h-12 rounded-full flex items-center justify-center font-bold text-lg"
+                    style={{ background: COLORS.surface2, color: COLORS.ivory }}
                   >
-                    {c.otherUserFlag || "🌍"}
+                    {conv.otherUserFlag || "🌍"}
                   </div>
                 )}
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-1.5">
-                    <p
-                      className="font-bold text-sm truncate"
-                      style={{ color: COLORS.ivory }}
-                    >
-                      {c.otherUserName}
-                    </p>
-                    {c.hasPublicKey && (
-                      <Lock size={11} style={{ color: COLORS.gold }} />
-                    )}
-                  </div>
-                  <p
-                    className="text-xs truncate"
-                    style={{ color: COLORS.muted }}
-                  >
-                    {c.lastMsg
-                      ? c.lastMsg.text?.startsWith("{")
-                        ? "🔒 Message chiffré"
-                        : c.lastMsg.text
-                      : "Aucun message"}
+                  <p className="font-bold text-sm truncate" style={{ color: COLORS.ivory }}>
+                    {conv.otherUserName}
+                  </p>
+                  <p className="text-xs truncate" style={{ color: COLORS.muted }}>
+                    {conv.lastMsg?.text || "Aucun message"}
                   </p>
                 </div>
               </div>
@@ -594,4 +517,4 @@ export function MessagesTab({ onRewardPoints }) {
       </div>
     </div>
   );
-}
+        }
