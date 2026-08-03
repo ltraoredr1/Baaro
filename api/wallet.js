@@ -43,6 +43,15 @@ function jsonError(res, status, message) {
   return res.status(status).json({ error: message });
 }
 
+// Les comptes invités (anonymes) peuvent liker/commenter, mais ne gagnent
+// jamais de points, ne rachètent rien et ne convertissent jamais en BARO.
+// Vérifié ici côté serveur : le frontend seul ne suffit pas (contournable
+// depuis la console du navigateur, comme le "Sécurité du portefeuille" du
+// README l'explique déjà pour les montants).
+function isAnonymous(user) {
+  return user?.is_anonymous === true;
+}
+
 async function getProfile(admin, userId) {
   const { data } = await admin
     .from("profiles")
@@ -103,6 +112,9 @@ async function applyBalanceDelta(admin, userId, previousBalance, delta) {
 }
 
 async function cashoutEligibility(admin, user) {
+  if (isAnonymous(user)) {
+    return { ok: false, reason: "Créez un compte pour accéder aux rachats" };
+  }
   const profile = await getProfile(admin, user.id);
   if (!profile) {
     return { ok: false, reason: "Profil introuvable" };
@@ -128,6 +140,18 @@ async function cashoutEligibility(admin, user) {
 // ============================================================
 
 async function handleEarn(admin, user, body, res) {
+  // Compte invité : l'action (like, commentaire...) reste possible côté app,
+  // mais aucun point n'est crédité ici.
+  if (isAnonymous(user)) {
+    const wallet = await getOrCreateWallet(admin, user.id);
+    return res.status(200).json({
+      ok: true,
+      balance: Number(wallet.balance),
+      transaction: null,
+      note: "Compte invité : aucun point gagné",
+    });
+  }
+
   const rule = EARN_ACTIONS[body.actionKey];
   if (!rule) {
     return jsonError(res, 400, "Action de gain inconnue");
@@ -167,6 +191,10 @@ async function handleEarn(admin, user, body, res) {
 }
 
 async function handleRedeem(admin, user, body, res) {
+  if (isAnonymous(user)) {
+    return jsonError(res, 403, "Créez un compte pour accéder aux récompenses");
+  }
+
   const opt = REDEEM_OPTIONS[body.optionId];
   if (!opt) {
     return jsonError(res, 400, "Récompense inconnue");
@@ -207,6 +235,10 @@ async function handleRedeem(admin, user, body, res) {
 }
 
 async function handleConvert(admin, user, body, res) {
+  if (isAnonymous(user)) {
+    return jsonError(res, 403, "Créez un compte pour convertir en BARO");
+  }
+
   const pts = Number(body.pts);
   if (!Number.isFinite(pts) || pts <= 0 || pts % 1 !== 0) {
     return jsonError(res, 400, "Montant invalide");
