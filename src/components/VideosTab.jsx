@@ -680,4 +680,4 @@ export function VideosTab({ onRewardPoints, userId }) {
       `}</style>
     </>
   );
-}
+             }
