@@ -1,133 +1,134 @@
 // ---------------------------------------------------------------------
-// Communauté : abonnés, abonnements, amis (mutuels)
-// Remplace l'ancien useFollowers. Utilise les vrais noms de colonnes
-// (following_id, status, is_friend) et évite les jointures imbriquées
-// fragiles : on récupère les ids via follows, puis les profils en un
-// seul appel .in(), ce qui marche quel que soit le nom des contraintes
-// de clé étrangère.
+// Publications (fil d'actualité)
+// scope: "all" (tout le monde) | "following" (abonnements) | "friends" (amis mutuels)
 // ---------------------------------------------------------------------
-export function useCommunity(userId) {
-  const [abonnes, setAbonnes] = useState([]);
-  const [abonnements, setAbonnements] = useState([]);
-  const [amis, setAmis] = useState([]);
-  const [counts, setCounts] = useState({ followers: 0, following: 0, friends: 0 });
+async function uploadPostMedia(userId, file) {
+  try {
+    const ext = (file.name.split(".").pop() || "bin").toLowerCase();
+    const path = `${userId}/${Date.now()}-${Math.random().toString(16).slice(2)}.${ext}`;
+    const { error } = await supabase.storage.from("media").upload(path, file, { upsert: false });
+    if (error) throw error;
+    const { data } = supabase.storage.from("media").getPublicUrl(path);
+    return { url: data?.publicUrl || null, type: file.type.startsWith("video") ? "video" : "image" };
+  } catch (e) {
+    console.warn("Upload média impossible :", e.message);
+    return { url: null, type: null };
+  }
+}
+
+// Renvoie la liste des author_id à afficher pour un scope donné.
+// null = pas de restriction (scope "all").
+async function resolveScopeAuthorIds(userId, scope) {
+  if (!userId || scope === "all") return null;
+
+  const { data: rows } = await supabase
+    .from("follows")
+    .select("following_id, is_friend")
+    .eq("follower_id", userId)
+    .eq("status", "succès");
+
+  const ids = (rows || [])
+    .filter((r) => (scope === "friends" ? r.is_friend === true : true))
+    .map((r) => r.following_id);
+
+  return ids;
+}
+
+export function usePosts(userId, scope = "all") {
+  const [posts, setPosts] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
-    if (!userId) {
-      setAbonnes([]);
-      setAbonnements([]);
-      setAmis([]);
+    setLoading(true);
+
+    const scopeIds = await resolveScopeAuthorIds(userId, scope);
+
+    // Scope "following"/"friends" sans personne suivie -> fil vide, pas d'appel inutile.
+    if (scopeIds !== null && scopeIds.length === 0) {
+      setPosts([]);
       setLoading(false);
       return;
     }
-    setLoading(true);
 
-    const [{ data: abonnesRows }, { data: abonnementsRows }] = await Promise.all([
-      supabase
-        .from("follows")
-        .select("follower_id, created_at")
-        .eq("following_id", userId)
-        .eq("status", "succès")
-        .order("created_at", { ascending: false }),
-      supabase
-        .from("follows")
-        .select("following_id, created_at, is_friend")
-        .eq("follower_id", userId)
-        .eq("status", "succès")
-        .order("created_at", { ascending: false }),
-    ]);
+    let query = supabase
+      .from("posts")
+      .select("id, author_id, text, media_url, media_type, created_at, profiles(display_name, handle, flag)")
+      .order("created_at", { ascending: false })
+      .limit(50);
 
-    const abonnesMeta = abonnesRows || [];
-    const abonnementsMeta = abonnementsRows || [];
-
-    const abonnesIds = abonnesMeta.map((r) => r.follower_id);
-    const abonnementsIds = abonnementsMeta.map((r) => r.following_id);
-    const amisIds = abonnementsMeta.filter((r) => r.is_friend === true).map((r) => r.following_id);
-
-    const allIds = Array.from(new Set([...abonnesIds, ...abonnementsIds]));
-    let profilesById = {};
-
-    if (allIds.length > 0) {
-      const { data: profilesData } = await supabase
-        .from("profiles")
-        .select("user_id, display_name, flag, handle")
-        .in("user_id", allIds);
-      profilesById = (profilesData || []).reduce((acc, p) => {
-        acc[p.user_id] = p;
-        return acc;
-      }, {});
+    if (scopeIds !== null) {
+      query = query.in("author_id", scopeIds);
     }
 
-    const toCard = (id, meta) => {
-      const p = profilesById[id];
-      if (!p) return null;
-      return {
-        id,
-        name: p.display_name || "Membre BAARO",
-        flag: p.flag || "🌍",
-        handle: p.handle || "",
-        since: meta?.created_at ? formatTs(meta.created_at) : "",
-      };
-    };
+    const { data: rows } = await query;
 
-    setAbonnes(abonnesMeta.map((r) => toCard(r.follower_id, r)).filter(Boolean));
-    setAbonnements(abonnementsMeta.map((r) => toCard(r.following_id, r)).filter(Boolean));
-    setAmis(amisIds.map((id) => toCard(id, abonnementsMeta.find((r) => r.following_id === id))).filter(Boolean));
-    setCounts({ followers: abonnesIds.length, following: abonnementsIds.length, friends: amisIds.length });
+    const ids = (rows || []).map((p) => p.id);
+    let likeRows = [];
+    let commentRows = [];
+    if (ids.length > 0) {
+      const [{ data: likes }, { data: comments }] = await Promise.all([
+        supabase.from("post_likes").select("post_id, user_id").in("post_id", ids),
+        supabase.from("comments").select("post_id").in("post_id", ids),
+      ]);
+      likeRows = likes || [];
+      commentRows = comments || [];
+    }
+
+    setPosts(
+      (rows || []).map((p) => ({
+        id: p.id,
+        authorId: p.author_id,
+        name: p.profiles?.display_name || "Membre BAARO",
+        flag: p.profiles?.flag || "🌍",
+        handle: p.profiles?.handle || "",
+        text: p.text,
+        mediaUrl: p.media_url,
+        mediaType: p.media_type,
+        liked: likeRows.some((l) => l.post_id === p.id && l.user_id === userId),
+        likes: likeRows.filter((l) => l.post_id === p.id).length,
+        comments: commentRows.filter((c) => c.post_id === p.id).length,
+        earned: 0,
+      }))
+    );
     setLoading(false);
-  }, [userId]);
+  }, [userId, scope]);
 
   useEffect(() => {
     load();
   }, [load]);
 
-  const toggleFollow = useCallback(
-    async (targetId) => {
-      if (!userId || !targetId || targetId === userId) return;
-
-      const { data: existing } = await supabase
-        .from("follows")
-        .select("id")
-        .eq("follower_id", userId)
-        .eq("following_id", targetId)
-        .eq("status", "succès")
-        .maybeSingle();
-
-      if (existing) {
-        // Désabonnement : on retire la ligne, et on retire aussi is_friend
-        // côté relation inverse puisque la mutualité est cassée.
-        await supabase.from("follows").delete().eq("id", existing.id);
-        await supabase
-          .from("follows")
-          .update({ is_friend: false })
-          .eq("follower_id", targetId)
-          .eq("following_id", userId);
+  const likePost = useCallback(
+    async (postId) => {
+      if (!userId) return;
+      const current = posts.find((p) => p.id === postId);
+      const alreadyLiked = !!current?.liked;
+      setPosts((prev) =>
+        prev.map((p) => (p.id === postId ? { ...p, liked: !alreadyLiked, likes: p.likes + (alreadyLiked ? -1 : 1) } : p))
+      );
+      if (alreadyLiked) {
+        await supabase.from("post_likes").delete().eq("post_id", postId).eq("user_id", userId);
       } else {
-        // Abonnement
-        await supabase.from("follows").insert({ follower_id: userId, following_id: targetId, status: "succès" });
-
-        // Si l'autre personne me suit déjà, la relation devient mutuelle -> amis
-        const { data: reverse } = await supabase
-          .from("follows")
-          .select("id")
-          .eq("follower_id", targetId)
-          .eq("following_id", userId)
-          .eq("status", "succès")
-          .maybeSingle();
-
-        if (reverse) {
-          await Promise.all([
-            supabase.from("follows").update({ is_friend: true }).eq("id", reverse.id),
-            supabase.from("follows").update({ is_friend: true }).eq("follower_id", userId).eq("following_id", targetId),
-          ]);
-        }
+        await supabase.from("post_likes").insert({ post_id: postId, user_id: userId });
       }
+    },
+    [userId, posts]
+  );
 
+  const createPost = useCallback(
+    async (text, file) => {
+      if (!userId) return;
+      let media = { url: null, type: null };
+      if (file) media = await uploadPostMedia(userId, file);
+      await supabase.from("posts").insert({
+        author_id: userId,
+        text: text || "",
+        media_url: media.url,
+        media_type: media.type,
+      });
       await load();
     },
     [userId, load]
   );
 
-  return { abonnes, abonnements, amis, counts, loading, toggleFollow, refresh: load };
+  return { posts, loading, likePost, createPost, reload: load };
 }
