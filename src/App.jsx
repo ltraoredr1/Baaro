@@ -221,7 +221,13 @@ function MainAppContent({ session }) {
           )}
 
           {activeTab === "assistant" && (
-            <AiAssistantTab onRewardPoints={handleRewardPoints} />
+            <AiAssistantTab
+              userId={userId}
+              userProfile={userProfile}
+              pointsBalance={pointsBalance}
+              baroBalance={baroBalance}
+              onRewardPoints={handleRewardPoints}
+            />
           )}
 
           {activeTab === "settings" && (
