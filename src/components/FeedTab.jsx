@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Heart,
   MessageCircle,
@@ -14,10 +14,24 @@ import { supabase } from "../supabaseClient.js";
 import { handleDbError } from "../lib/dbErrors.js";
 import { checkRateLimit, rateLimitMessage } from "../lib/rateLimit.js";
 
+// Taille de page pour le fil. Pagination par CURSEUR (created_at + id),
+// pas par offset : reste rapide et correct même si de nouveaux posts
+// arrivent pendant que quelqu'un scrolle.
+const PAGE_SIZE = 20;
+
+function applyCursor(query, cursor) {
+  if (!cursor) return query;
+  return query.or(
+    `created_at.lt.${cursor.created_at},and(created_at.eq.${cursor.created_at},id.lt.${cursor.id})`
+  );
+}
+
 export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
   const { showToast, showPointsReward } = useToast();
   const [posts, setPosts] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
   const [newText, setNewText] = useState("");
   const [mood, setMood] = useState("");
   const [showPoll, setShowPoll] = useState(false);
@@ -28,6 +42,11 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
   const [translatedMap, setTranslatedMap] = useState({});
   const [user, setUser] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+
+  // Curseur = (created_at, id) du dernier post affiché. En ref pour ne
+  // pas déclencher de re-render et rester à jour dans loadMorePosts.
+  const cursorRef = useRef(null);
+  const sentinelRef = useRef(null);
 
   useEffect(() => {
     const getUser = async () => {
@@ -41,103 +60,168 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
     getUser();
   }, [showToast]);
 
-  // ===== REQUÊTE OPTIMISÉE (1 seule requête au lieu de N+1) =====
+  // ===== Une page de posts, jointure profiles incluse =====
+  const fetchPostsPage = useCallback(async (cursor) => {
+    let query = supabase
+      .from("posts")
+      .select(`
+        id,
+        author_id,
+        text,
+        media_url,
+        media_type,
+        created_at,
+        likes_count,
+        profiles!posts_author_id_fkey (
+          display_name,
+          handle,
+          flag,
+          avatar_url
+        )
+      `)
+      .order("created_at", { ascending: false })
+      .order("id", { ascending: false })
+      .limit(PAGE_SIZE);
+
+    query = applyCursor(query, cursor);
+
+    const { data, error } = await query;
+    if (error) throw error;
+
+    return (data || []).map((post) => {
+      const profile = post.profiles || {};
+      return {
+        id: post.id,
+        author_id: post.author_id,
+        text: post.text,
+        media_url: post.media_url,
+        media_type: post.media_type,
+        created_at: post.created_at,
+        likes: post.likes_count || 0,
+        comments_count: 0,
+        display_name: profile.display_name || "Membre BAARO",
+        handle: profile.handle || "@membre",
+        flag: profile.flag || "🌍",
+        avatar: profile.avatar_url || "",
+      };
+    });
+  }, []);
+
+  // ===== Fallback si la jointure profiles échoue (FK absente) =====
+  const fetchPostsPageFallback = useCallback(async (cursor) => {
+    let query = supabase
+      .from("posts")
+      .select("id, author_id, text, media_url, media_type, created_at, likes_count")
+      .order("created_at", { ascending: false })
+      .order("id", { ascending: false })
+      .limit(PAGE_SIZE);
+
+    query = applyCursor(query, cursor);
+
+    const { data, error: err2 } = await query;
+    if (err2) throw err2;
+
+    const authorIds = [...new Set((data || []).map((p) => p.author_id).filter(Boolean))];
+    let profilesMap = {};
+
+    if (authorIds.length > 0) {
+      const { data: profiles } = await supabase
+        .from("profiles")
+        .select("user_id, display_name, handle, flag, avatar_url")
+        .in("user_id", authorIds);
+
+      (profiles || []).forEach((p) => {
+        profilesMap[p.user_id] = p;
+      });
+    }
+
+    return (data || []).map((post) => {
+      const profile = profilesMap[post.author_id] || {};
+      return {
+        ...post,
+        likes: post.likes_count || 0,
+        comments_count: 0,
+        display_name: profile.display_name || "Membre BAARO",
+        handle: profile.handle || "@membre",
+        flag: profile.flag || "🌍",
+        avatar: profile.avatar_url || "",
+      };
+    });
+  }, []);
+
+  const updateCursorFromRows = (rows) => {
+    if (rows.length > 0) {
+      const last = rows[rows.length - 1];
+      cursorRef.current = { created_at: last.created_at, id: last.id };
+    }
+    setHasMore(rows.length === PAGE_SIZE);
+  };
+
+  // Charge/recharge la 1ère page (reset complet du fil : nouveau post,
+  // changement d'onglet, pull-to-refresh...).
   const loadPosts = useCallback(async () => {
     setLoading(true);
+    cursorRef.current = null;
     try {
-      const { data, error } = await supabase
-        .from("posts")
-        .select(`
-          id,
-          author_id,
-          text,
-          media_url,
-          media_type,
-          created_at,
-          likes_count,
-          profiles!posts_author_id_fkey (
-            display_name,
-            handle,
-            flag,
-            avatar_url
-          )
-        `)
-        .order("created_at", { ascending: false })
-        .limit(40);
-
-      if (error) throw error;
-
-      const enriched = (data || []).map((post) => {
-        const profile = post.profiles || {};
-        return {
-          id: post.id,
-          author_id: post.author_id,
-          text: post.text,
-          media_url: post.media_url,
-          media_type: post.media_type,
-          created_at: post.created_at,
-          likes: post.likes_count || 0,
-          comments_count: 0,
-          display_name: profile.display_name || "Membre BAARO",
-          handle: profile.handle || "@membre",
-          flag: profile.flag || "🌍",
-          avatar: profile.avatar_url || "",
-        };
-      });
-
-      setPosts(enriched);
+      const rows = await fetchPostsPage(null);
+      setPosts(rows);
+      updateCursorFromRows(rows);
     } catch (error) {
-      // Fallback si la jointure échoue (FK absente)
       console.warn("Jointure profiles échouée, fallback:", error.message);
       try {
-        const { data, error: err2 } = await supabase
-          .from("posts")
-          .select("id, author_id, text, media_url, media_type, created_at, likes_count")
-          .order("created_at", { ascending: false })
-          .limit(40);
-
-        if (err2) throw err2;
-
-        const authorIds = [...new Set((data || []).map((p) => p.author_id).filter(Boolean))];
-        let profilesMap = {};
-
-        if (authorIds.length > 0) {
-          const { data: profiles } = await supabase
-            .from("profiles")
-            .select("user_id, display_name, handle, flag, avatar_url")
-            .in("user_id", authorIds);
-
-          (profiles || []).forEach((p) => {
-            profilesMap[p.user_id] = p;
-          });
-        }
-
-        const enriched = (data || []).map((post) => {
-          const profile = profilesMap[post.author_id] || {};
-          return {
-            ...post,
-            likes: post.likes_count || 0,
-            comments_count: 0,
-            display_name: profile.display_name || "Membre BAARO",
-            handle: profile.handle || "@membre",
-            flag: profile.flag || "🌍",
-            avatar: profile.avatar_url || "",
-          };
-        });
-
-        setPosts(enriched);
+        const rows = await fetchPostsPageFallback(null);
+        setPosts(rows);
+        updateCursorFromRows(rows);
       } catch (fallbackError) {
         handleDbError(fallbackError, showToast, "Erreur chargement des publications");
         setPosts([]);
+        setHasMore(false);
       }
     } finally {
       setLoading(false);
     }
-  }, [showToast]);
+  }, [fetchPostsPage, fetchPostsPageFallback, showToast]);
+
+  // Charge la page suivante et l'ajoute en bas du fil (scroll infini).
+  const loadMorePosts = useCallback(async () => {
+    if (loadingMore || !hasMore || loading || !cursorRef.current) return;
+    setLoadingMore(true);
+    const cursor = cursorRef.current;
+    try {
+      const rows = await fetchPostsPage(cursor);
+      setPosts((prev) => [...prev, ...rows]);
+      updateCursorFromRows(rows);
+    } catch (error) {
+      try {
+        const rows = await fetchPostsPageFallback(cursor);
+        setPosts((prev) => [...prev, ...rows]);
+        updateCursorFromRows(rows);
+      } catch (fallbackError) {
+        handleDbError(fallbackError, showToast, "Erreur chargement de la suite du fil");
+      }
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [fetchPostsPage, fetchPostsPageFallback, loadingMore, hasMore, loading, showToast]);
 
   useEffect(() => {
     loadPosts();
   }, [loadPosts]);
+
+  // Déclenche loadMorePosts() quand le sentinel devient visible en bas du fil.
+  useEffect(() => {
+    if (!sentinelRef.current) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting) loadMorePosts();
+      },
+      { rootMargin: "400px" }
+    );
+
+    observer.observe(sentinelRef.current);
+    return () => observer.disconnect();
+  }, [loadMorePosts]);
 
   // Realtime ciblé (évite de recharger tout le feed à chaque insert)
   useEffect(() => {
@@ -555,8 +639,23 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
               </article>
             );
           })}
+
+          {/* Sentinel invisible : déclenche loadMorePosts() quand on scrolle jusqu'ici */}
+          {hasMore && <div ref={sentinelRef} style={{ height: 1 }} />}
+
+          {loadingMore && (
+            <div className="text-center py-4 text-xs" style={{ color: COLORS.muted }}>
+              Chargement de plus de publications...
+            </div>
+          )}
+
+          {!hasMore && posts.length > 0 && (
+            <div className="text-center py-4 text-xs" style={{ color: COLORS.muted }}>
+              Vous avez tout vu ✨
+            </div>
+          )}
         </div>
       )}
     </div>
   );
-             }
+}
