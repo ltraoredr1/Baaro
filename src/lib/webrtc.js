@@ -1,6 +1,7 @@
 // src/lib/webrtc.js
-// - setParticipantRole / requestCoHost / respondCoHostRequest / demoteToViewer
-// - Consentement obligatoire pour devenir co-hôte
+// - join / create Daily
+// - co-hôte avec consentement (request / respond)
+// - pause / resume room
 
 import DailyIframe from "@daily-co/daily-js";
 import { supabase } from "../supabaseClient.js";
@@ -40,20 +41,32 @@ async function callRolesApi(body) {
   return data;
 }
 
-/**
- * Crée la room Daily + la ligne debate_rooms côté serveur, SANS rejoindre
- * l'appel. À utiliser dans CreateDebateModal.jsx.
- */
-export async function createRoomOnServer({ userName, enableHLS = false }) {
-  return callApi({ action: "create-room", userName, enableHLS });
+export async function createRoomOnServer({
+  userName,
+  enableHLS = false,
+  title,
+  topic,
+  mode,
+}) {
+  return callApi({
+    action: "create-room",
+    userName,
+    enableHLS,
+    title,
+    topic,
+    mode,
+  });
 }
 
-/**
- * Démarre un live ET rejoint immédiatement l'appel (hôte).
- */
-export async function startLive({ userName, enableHLS = false }) {
+export async function startLive({
+  userName,
+  enableHLS = false,
+  title,
+  topic,
+  mode,
+}) {
   const { roomUrl, roomName, roomId, token, hlsEnabled, inviteCode } =
-    await createRoomOnServer({ userName, enableHLS });
+    await createRoomOnServer({ userName, enableHLS, title, topic, mode });
 
   myRole = "host";
 
@@ -82,11 +95,11 @@ export async function stopHLSBroadcast() {
 }
 
 export async function resolveInviteCode(inviteCode) {
-  const { roomId, roomName } = await callApi({
+  const { roomId, roomName, status } = await callApi({
     action: "resolve-code",
     inviteCode,
   });
-  return { roomId, roomName };
+  return { roomId, roomName, status };
 }
 
 export async function joinLive({
@@ -95,7 +108,7 @@ export async function joinLive({
   userName,
   audioOnly = true,
 }) {
-  const { roomUrl, token, role } = await callApi({
+  const { roomUrl, token, role, status } = await callApi({
     action: "join-room",
     roomId,
     roomName,
@@ -126,7 +139,7 @@ export async function joinLive({
     console.warn("setLocalAudio/Video:", e);
   }
 
-  return { callObject, role, roomId, roomUrl };
+  return { callObject, role, roomId, roomUrl, status };
 }
 
 export async function joinLiveByCode({
@@ -142,9 +155,6 @@ export function getMyRole() {
   return myRole;
 }
 
-/**
- * À appeler quand Realtime signale une promotion / rétrogradation.
- */
 export function upgradeLocalRole(newRole) {
   myRole = newRole;
 }
@@ -177,20 +187,12 @@ export function subscribeToEvents({
   if (onError) callObject.on("error", onError);
 }
 
-/**
- * Retrouve le session_id Daily d'un participant via son user_id Supabase.
- */
 export function findParticipantSessionId(targetUserId) {
   const all = callObject?.participants() || {};
   const match = Object.values(all).find((p) => p.user_id === targetUserId);
   return match?.session_id || null;
 }
 
-/**
- * Change le rôle.
- * - co_host → envoie une demande (consentement)
- * - viewer → rétrogradation immédiate
- */
 export async function setParticipantRole({
   roomId,
   targetUserId,
@@ -216,7 +218,6 @@ export async function setParticipantRole({
   });
 }
 
-/** L'hôte propose à un spectateur de devenir co-hôte. */
 export async function requestCoHost(roomId, targetUserId) {
   return callRolesApi({
     action: "request",
@@ -225,7 +226,6 @@ export async function requestCoHost(roomId, targetUserId) {
   });
 }
 
-/** Le spectateur accepte ou refuse la proposition. */
 export async function respondCoHostRequest({
   requestId,
   accept,
@@ -241,12 +241,10 @@ export async function respondCoHostRequest({
   });
 }
 
-/** Alias : promotion = demande de consentement. */
 export async function promoteToCoHost(roomId, targetUserId, dailyRoomName) {
   return requestCoHost(roomId, targetUserId);
 }
 
-/** Rétrogradation immédiate (hôte seulement). */
 export async function demoteToViewer(roomId, targetUserId, dailyRoomName) {
   const targetSessionId = findParticipantSessionId(targetUserId);
   return callRolesApi({
@@ -257,6 +255,16 @@ export async function demoteToViewer(roomId, targetUserId, dailyRoomName) {
     targetSessionId,
     dailyRoomName: dailyRoomName || null,
   });
+}
+
+/** Met le débat en pause (hôte). */
+export async function pauseRoom(roomId) {
+  return callApi({ action: "pause-room", roomId });
+}
+
+/** Reprend le débat (hôte). */
+export async function resumeRoom(roomId) {
+  return callApi({ action: "resume-room", roomId });
 }
 
 export async function leaveLive({ roomName, isHost = false } = {}) {
