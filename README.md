@@ -450,3 +450,83 @@ votre projet Supabase — à corriger avant de lancer l'app publiquement.
   juriste avant un vrai lancement commercial
 
 
+
+# Intégration — Live multi-hôtes (Daily.co) + Cadeaux
+
+## Fichiers fournis (remplacent entièrement les précédents)
+
+| Fichier fourni | Remplace |
+|---|---|
+| `api-create-room.js` | `api/create-room.js` |
+| `api-live-roles.js` | nouveau : `api/live-roles.js` |
+| `api-gifts.js` | nouveau : `api/gifts.js` |
+| `webrtc.js` | `src/lib/webrtc.js` |
+| `liveRoles.js` | nouveau : `src/lib/liveRoles.js` |
+| `gifts.js` | nouveau : `src/lib/gifts.js` |
+| `supabase-add-multihost-gifts.sql` | nouveau, à exécuter après tes scripts existants |
+
+## Ordre d'exécution
+
+1. **SQL** d'abord (`supabase-add-multihost-gifts.sql`), après tes scripts
+   existants (`supabase-add-debates.sql`, `supabase-fix-debates-security.sql`).
+   Active le Realtime sur `gifts_sent` et `debate_participants` si pas déjà
+   fait (Database > Replication).
+2. Remplace les 4 fichiers JS ci-dessus.
+3. Ajoute les 2 nouveaux fichiers `api/live-roles.js` et `api/gifts.js`,
+   `src/lib/liveRoles.js` et `src/lib/gifts.js`.
+4. Adapte `DebateRoom.jsx` (voir plus bas — je n'ai pas encore ce fichier
+   en entier).
+
+## Correction de sécurité importante
+
+Avant ces fichiers, `hostId` était envoyé tel quel par le client à
+`/api/create-room` et jamais vérifié — n'importe qui pouvait se déclarer
+hôte d'un live. Corrigé : `host_id` vient désormais uniquement du token
+d'authentification Supabase (`requireUser`). Ça veut dire que les appels à
+`/api/create-room`, `/api/gifts` et `/api/live-roles` doivent maintenant
+tous porter un en-tête `Authorization: Bearer <token>` — c'est fait dans
+les fichiers fournis via `authHeaders()` (qui lit
+`supabase.auth.getSession()`), mais si tu as d'autres endroits dans le code
+qui appellent ces routes directement, il faudra faire pareil.
+
+## Ce qui manque encore côté toi pour finaliser
+
+Je n'ai pas le contenu complet de :
+
+- **`DebateRoom.jsx`** — au-delà du chat, je ne sais pas si tu affiches déjà
+  des `<video>` pour les flux distants (host/co-hôtes). Si non, il faut
+  ajouter un rendu qui boucle sur `getParticipants()` et attache chaque
+  `track` vidéo/audio à un élément `<video>`/`<audio>`, avec une grille
+  qui grossit selon le nombre de diffuseurs actifs.
+- **`CreateDebateModal.jsx`** — pour vérifier qu'il appelle bien
+  `startLive()` de `webrtc.js` (et pas un autre chemin de création).
+- **`supabase-add-debates.sql`** — pour confirmer qu'aucune policy
+  existante n'entre en conflit avec celle que j'ajoute sur
+  `debate_participants` (mise à jour du rôle).
+- Structure exacte de **`debate_messages`** : `useRoomChat` (dans
+  `useDebates.js`) utilise les colonnes `sender_id`/`sender_type`/`text`,
+  alors que `DebateRoom.jsx` insère `user_id`/`text` sans `sender_type`.
+  Si `debate_messages` a une contrainte NOT NULL sur `sender_type`, les
+  inserts de `DebateRoom.jsx` échouent silencieusement ou plantent — à
+  vérifier. Ça suggère aussi que `useDebates.js` (le hook complet) n'est
+  peut-être plus utilisé du tout par l'UI réelle (`DebatesTab`/`DebateRoom`
+  ont leur propre logique inline) — vaut le coup de vérifier s'il est mort
+  et à supprimer, pour ne pas maintenir deux implémentations qui divergent.
+
+## UI à ajouter dans DebateRoom (une fois le fichier complet en main)
+
+- Bouton "Inviter en direct" (visible si `isHost`) → liste des spectateurs
+  connectés (`getParticipants()`, filtrés sur ceux sans track vidéo/audio
+  actif) → `promoteToCoHost({ roomId, dailyRoomName, targetUserId })`
+- Bouton "Retirer" sur chaque vignette co-hôte (visible si `isHost`) →
+  `demoteToViewer(...)`
+- Écoute `subscribeRoles(roomId, ...)` : si le rôle reçu me concerne et
+  vaut `co_host`, appeler `upgradeLocalRole('co_host')` puis proposer
+  d'activer micro/caméra (`enableMic(true)`, `enableCamera(true)` —
+  fonctionnera réellement maintenant, Daily aura reçu la permission)
+- Palette de cadeaux (`fetchGiftCatalog`) + bouton d'envoi (`sendGift`) +
+  animation (`subscribeGifts`)
+
+Dis-moi quand tu as `DebateRoom.jsx` en entier et `CreateDebateModal.jsx`,
+je te fais le patch complet du composant plutôt que de te laisser
+l'assembler à la main.
