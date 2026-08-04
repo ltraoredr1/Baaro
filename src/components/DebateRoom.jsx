@@ -14,6 +14,8 @@ import {
   Star,
   Loader2,
   Sparkles,
+  Pause,
+  Play,
 } from "lucide-react";
 import { COLORS } from "../theme.js";
 import { supabase } from "../supabaseClient.js";
@@ -159,6 +161,10 @@ export function DebateRoom({
   const [roleActionError, setRoleActionError] = useState(null);
   const [pendingRequest, setPendingRequest] = useState(null);
   const [aiLoading, setAiLoading] = useState(false);
+  const [roomStatus, setRoomStatus] = useState("active");
+  const [pauseLoading, setPauseLoading] = useState(false);
+  const [pendingRequest, setPendingRequest] = useState(null);
+  const [aiLoading, setAiLoading] = useState(false);
 
   const isRoomOwner = !!(currentUserId && room?.host_id === currentUserId);
   const dbRole = currentUserId ? participantRoles[currentUserId] : null;
@@ -181,6 +187,27 @@ export function DebateRoom({
     scrollToBottom();
   }, [messages, scrollToBottom]);
 
+  // Continuer en arrière-plan
+  useEffect(() => {
+    let wakeLock = null;
+    const requestWakeLock = async () => {
+      try {
+        if (document.visibilityState === "visible" && "wakeLock" in navigator) {
+          wakeLock = await navigator.wakeLock.request("screen");
+        }
+      } catch (_) {}
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") requestWakeLock();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    requestWakeLock();
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      try { wakeLock?.release?.(); } catch (_) {}
+    };
+  }, []);
+
   useEffect(() => {
     let isMounted = true;
     let messagesChannel = null;
@@ -195,7 +222,7 @@ export function DebateRoom({
             "id, title, topic, mode, invite_code, status, created_at, host_id, daily_room_name"
           )
           .ilike("invite_code", inviteCode)
-          .eq("status", "active")
+          .in("status", ["active", "paused"])
           .maybeSingle();
 
         if (roomError || !roomData) {
@@ -208,6 +235,7 @@ export function DebateRoom({
 
         if (isMounted) {
           setRoom(roomData);
+          setRoomStatus(roomData.status || "active");
           setIsVoiceMode(
             roomData.mode === "audio" ||
               roomData.mode === "video" ||
@@ -402,6 +430,58 @@ export function DebateRoom({
             }
           )
           .subscribe();
+
+        if (currentUserId) {
+          const { data: myReq } = await supabase
+            .from("debate_role_requests")
+            .select("*")
+            .eq("room_id", roomData.id)
+            .eq("to_user_id", currentUserId)
+            .eq("status", "pending")
+            .maybeSingle();
+          if (myReq && isMounted) setPendingRequest(myReq);
+        }
+
+        roleReqChannel = supabase
+          .channel(`role_req_${roomData.id}`)
+          .on(
+            "postgres_changes",
+            {
+              event: "*",
+              schema: "public",
+              table: "debate_role_requests",
+              filter: `room_id=eq.${roomData.id}`,
+            },
+            (payload) => {
+              const row = payload.new;
+              if (!row) return;
+              if (row.to_user_id === currentUserId && row.status === "pending") {
+                setPendingRequest(row);
+              }
+              if (row.to_user_id === currentUserId && row.status !== "pending") {
+                setPendingRequest(null);
+              }
+            }
+          )
+          .subscribe();
+
+        roomChannel = supabase
+          .channel(`room_meta_${roomData.id}`)
+          .on(
+            "postgres_changes",
+            {
+              event: "UPDATE",
+              schema: "public",
+              table: "debate_rooms",
+              filter: `id=eq.${roomData.id}`,
+            },
+            (payload) => {
+              const st = payload.new?.status;
+              if (st) setRoomStatus(st);
+            }
+          )
+          .subscribe();
+
       } catch (err) {
         if (isMounted) setError(err.message);
       } finally {
@@ -550,14 +630,14 @@ export function DebateRoom({
   }, [dailyRoomName, isRoomOwner]);
 
   const toggleMic = () => {
-    if (!canBroadcast) return;
+    if (!canBroadcast || roomStatus === "paused") return;
     const next = !micOn;
     enableMic(next);
     setMicOn(next);
   };
 
   const toggleCam = () => {
-    if (!canBroadcast || room?.mode !== "video") return;
+    if (!canBroadcast || roomStatus === "paused" || room?.mode !== "video") return;
     const next = !camOn;
     enableCamera(next);
     setCamOn(next);
@@ -624,6 +704,89 @@ export function DebateRoom({
       setRoleActionError(err.message || "Erreur");
     } finally {
       setRoleActionLoading(null);
+    }
+  };
+
+
+  const handleRespondRequest = async (accept) => {
+    if (!pendingRequest || !room) return;
+    setRoleActionLoading("respond");
+    setRoleActionError(null);
+    try {
+      const sessionId = findParticipantSessionId(currentUserId);
+      await respondCoHostRequest({
+        requestId: pendingRequest.id,
+        accept,
+        targetSessionId: sessionId,
+        dailyRoomName: room.daily_room_name || dailyRoomName,
+      });
+      setPendingRequest(null);
+    } catch (err) {
+      setRoleActionError(err.message || "Erreur");
+    } finally {
+      setRoleActionLoading(null);
+    }
+  };
+
+  const handlePauseToggle = async () => {
+    if (!room || !isRoomOwner || pauseLoading) return;
+    setPauseLoading(true);
+    setRoleActionError(null);
+    try {
+      if (roomStatus === "paused") {
+        const data = await resumeRoom(room.id);
+        setRoomStatus(data.status || "active");
+      } else {
+        const data = await pauseRoom(room.id);
+        setRoomStatus(data.status || "paused");
+        enableMic(false);
+        setMicOn(false);
+        if (room.mode === "video") {
+          enableCamera(false);
+          setCamOn(false);
+        }
+      }
+    } catch (err) {
+      setRoleActionError(err.message || "Erreur pause/reprise");
+    } finally {
+      setPauseLoading(false);
+    }
+  };
+
+  const handleAskAI = async () => {
+    if (!room || !newMessage.trim() || aiLoading || !currentUserId) return;
+    const q = newMessage.trim();
+    setNewMessage("");
+    setAiLoading(true);
+    setRoleActionError(null);
+    try {
+      await supabase.from("debate_messages").insert({
+        room_id: room.id,
+        sender_id: currentUserId,
+        sender_type: "user",
+        text: "🤖 " + q,
+      });
+    } catch (e) {
+      console.error(e);
+    }
+    try {
+      const { data: sess } = await supabase.auth.getSession();
+      const token = sess?.session?.access_token;
+      const res = await fetch((API_BASE || "") + "/api/debate-ai", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: "Bearer " + token } : {}),
+        },
+        body: JSON.stringify({ roomId: room.id, question: q }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Erreur IA");
+    } catch (err) {
+      console.error(err);
+      setRoleActionError(err.message || "Erreur IA");
+    } finally {
+      setAiLoading(false);
     }
   };
 
@@ -744,8 +907,14 @@ export function DebateRoom({
             style={{ color: COLORS.ivory }}
           >
             <span className="truncate">{room?.title}</span>
-            <span className="text-[10px] px-2 py-0.5 rounded-full bg-green-500/20 text-green-400 font-normal shrink-0">
-              LIVE
+            <span
+              className={`text-[10px] px-2 py-0.5 rounded-full font-normal shrink-0 ${
+                roomStatus === "paused"
+                  ? "bg-amber-500/20 text-amber-400"
+                  : "bg-green-500/20 text-green-400"
+              }`}
+            >
+              {roomStatus === "paused" ? "PAUSE" : "LIVE"}
             </span>
             {isVoiceMode && (
               <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-400 font-normal flex items-center gap-1 shrink-0">
@@ -819,6 +988,62 @@ export function DebateRoom({
 
       {roleActionError && !isRoomOwner && (
         <p className="px-4 pt-2 text-xs text-red-400">{roleActionError}</p>
+      )}
+
+
+      {roomStatus === "paused" && (
+        <div
+          className="mx-4 mt-3 p-3 rounded-xl border flex items-center gap-2 flex-wrap"
+          style={{
+            background: "rgba(245,158,11,0.12)",
+            borderColor: "rgba(245,158,11,0.35)",
+          }}
+        >
+          <Pause size={16} style={{ color: COLORS.gold }} />
+          <p className="text-xs font-bold" style={{ color: COLORS.gold }}>
+            Débat en pause
+          </p>
+          <p className="text-[11px]" style={{ color: COLORS.muted }}>
+            — le live continue en arrière-plan, les messages restent actifs
+          </p>
+        </div>
+      )}
+
+      {pendingRequest && (
+        <div
+          className="mx-4 mt-3 p-4 rounded-2xl border flex flex-col gap-3"
+          style={{
+            background: "rgba(45,191,166,0.12)",
+            borderColor: "rgba(45,191,166,0.4)",
+          }}
+        >
+          <p className="text-sm font-bold" style={{ color: COLORS.ivory }}>
+            L'hôte te propose de devenir co-hôte
+          </p>
+          <p className="text-xs" style={{ color: COLORS.muted }}>
+            Tu pourras activer micro et caméra. Accepter ?
+          </p>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => handleRespondRequest(true)}
+              disabled={roleActionLoading === "respond"}
+              className="flex-1 py-2 rounded-xl font-bold text-sm disabled:opacity-50"
+              style={{ background: COLORS.gold, color: "#000" }}
+            >
+              Accepter
+            </button>
+            <button
+              type="button"
+              onClick={() => handleRespondRequest(false)}
+              disabled={roleActionLoading === "respond"}
+              className="flex-1 py-2 rounded-xl font-bold text-sm border disabled:opacity-50"
+              style={{ borderColor: COLORS.border, color: COLORS.ivory }}
+            >
+              Refuser
+            </button>
+          </div>
+        </div>
       )}
 
       {isVoiceMode && (
@@ -909,7 +1134,7 @@ export function DebateRoom({
               )}
 
               <div className="flex items-center justify-center gap-3">
-                {canBroadcast ? (
+                {canBroadcast && roomStatus !== "paused" ? (
                   <>
                     <button
                       onClick={toggleMic}
@@ -944,9 +1169,39 @@ export function DebateRoom({
                   </>
                 ) : (
                   <p className="text-[11px]" style={{ color: COLORS.muted }}>
-                    Spectateur — micro et caméra désactivés
+                    {roomStatus === "paused"
+                      ? "En pause — micro et caméra désactivés"
+                      : "Spectateur — micro et caméra désactivés"}
                   </p>
                 )}
+
+                {isRoomOwner && (
+                  <button
+                    type="button"
+                    onClick={handlePauseToggle}
+                    disabled={pauseLoading}
+                    className="p-3 rounded-full disabled:opacity-50"
+                    style={{
+                      background:
+                        roomStatus === "paused"
+                          ? "rgba(34,197,94,0.25)"
+                          : "rgba(245,158,11,0.25)",
+                      color: roomStatus === "paused" ? "#22c55e" : COLORS.gold,
+                    }}
+                    title={
+                      roomStatus === "paused"
+                        ? "Reprendre le débat"
+                        : "Mettre en pause"
+                    }
+                  >
+                    {roomStatus === "paused" ? (
+                      <Play size={18} />
+                    ) : (
+                      <Pause size={18} />
+                    )}
+                  </button>
+                )}
+
                 <button
                   onClick={handleLeaveVoice}
                   className="p-3 rounded-full"
