@@ -1,46 +1,76 @@
 // src/lib/webrtc.js
+// Corrections principales par rapport à l'original :
+// 1. Toutes les requêtes vers /api/create-room portent maintenant un
+//    en-tête Authorization: Bearer <token Supabase> — sans ça,
+//    requireUser() côté serveur ne pouvait jamais identifier l'appelant
+//    (le hostId envoyé dans le body était donc pris tel quel, falsifiable).
+// 2. roomId (l'id Supabase du salon, pas le nom Daily) circule maintenant
+//    de bout en bout : nécessaire pour resolve-code -> join-room et pour
+//    /api/live-roles.
+// 3. Nouvelles fonctions : becomeAwareOfRole (lit le rôle renvoyé par
+//    join-room), findParticipantSessionId (pour promouvoir un co-hôte).
+
 import DailyIframe from "@daily-co/daily-js";
+import { supabase } from "../supabaseClient.js";
 
 let callObject = null;
+let myRole = "viewer"; // renseigné au join-room / create-room
 
-/**
- * Démarre un live (hôte)
- */
-export async function startLive({ userName, enableHLS = false, hostId, debateId }) {
+async function authHeaders() {
+  const { data } = await supabase.auth.getSession();
+  const token = data?.session?.access_token;
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+async function callApi(body) {
   const res = await fetch("/api/create-room", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      action: "create-room",
-      userName,
-      enableHLS,
-      hostId,
-      debateId,
-    }),
+    headers: { "Content-Type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify(body),
   });
-
+  const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || "Impossible de créer le live");
+    throw new Error(data.error || "Erreur serveur");
   }
+  return data;
+}
 
-  const { roomUrl, roomName, token, hlsEnabled, inviteCode } = await res.json();
+/**
+ * Crée la room Daily + la ligne debate_rooms côté serveur, SANS rejoindre
+ * l'appel. À utiliser dans CreateDebateModal.jsx (qui ne doit pas ouvrir
+ * la caméra/micro avant que l'utilisateur soit vraiment dans DebateRoom).
+ * host_id vient désormais toujours du token d'authentification côté
+ * serveur — plus besoin (ni possibilité) de le passer ici.
+ */
+export async function createRoomOnServer({ userName, enableHLS = false }) {
+  return callApi({ action: "create-room", userName, enableHLS });
+}
+
+/**
+ * Démarre un live ET rejoint immédiatement l'appel (hôte). À utiliser si
+ * tu veux fusionner création + entrée en une étape ; DebateRoom.jsx utilise
+ * plutôt joinLiveByCode() pour tout le monde y compris l'hôte, une fois la
+ * room déjà créée par createRoomOnServer().
+ */
+export async function startLive({ userName, enableHLS = false }) {
+  const { roomUrl, roomName, roomId, token, hlsEnabled, inviteCode } =
+    await createRoomOnServer({ userName, enableHLS });
+
+  myRole = "host";
 
   callObject = DailyIframe.createCallObject({
     audioSource: true,
-    videoSource: false, // mode vocal = audio uniquement par défaut
+    videoSource: false,
   });
 
   await callObject.join({ url: roomUrl, token });
 
-  return { roomName, callObject, hlsEnabled, inviteCode };
+  return { roomName, roomId, callObject, hlsEnabled, inviteCode };
 }
 
 export async function startHLSBroadcast() {
   if (!callObject) throw new Error("Aucun live actif");
-  return callObject.startLiveStreaming({
-    layout: { preset: "default" },
-  });
+  return callObject.startLiveStreaming({ layout: { preset: "default" } });
 }
 
 export async function stopHLSBroadcast() {
@@ -49,51 +79,50 @@ export async function stopHLSBroadcast() {
 }
 
 export async function resolveInviteCode(inviteCode) {
-  const res = await fetch("/api/create-room", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action: "resolve-code", inviteCode }),
-  });
-
-  const data = await res.json();
-  if (!res.ok) {
-    throw new Error(data.error || "Code d'invitation invalide");
-  }
-  return data.roomName;
+  const { roomId, roomName } = await callApi({ action: "resolve-code", inviteCode });
+  return { roomId, roomName };
 }
 
-export async function joinLive({ roomName, userName, isHost = false, audioOnly = true }) {
-  const res = await fetch("/api/create-room", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      action: "join-room",
-      roomName,
-      userName,
-      isHost,
-    }),
+export async function joinLive({ roomId, roomName, userName, audioOnly = true }) {
+  const { roomUrl, token, role } = await callApi({
+    action: "join-room",
+    roomId,
+    roomName,
+    userName,
   });
 
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || "Impossible de rejoindre le live");
-  }
-
-  const { roomUrl, token } = await res.json();
+  myRole = role; // 'host' | 'co_host' | 'viewer', calculé côté serveur
 
   callObject = DailyIframe.createCallObject({
     audioSource: true,
+    // On ouvre toujours la source vidéo si le rôle le permet : un viewer
+    // promu co-hôte en cours de live n'aura pas besoin de rejoindre pour
+    // activer sa caméra (voir upgradeLocalMediaIfAllowed()).
     videoSource: !audioOnly,
   });
 
   await callObject.join({ url: roomUrl, token });
 
-  return callObject;
+  return { callObject, role };
 }
 
-export async function joinLiveByCode({ inviteCode, userName, isHost = false, audioOnly = true }) {
-  const roomName = await resolveInviteCode(inviteCode);
-  return joinLive({ roomName, userName, isHost, audioOnly });
+export async function joinLiveByCode({ inviteCode, userName, audioOnly = true }) {
+  const { roomId, roomName } = await resolveInviteCode(inviteCode);
+  return joinLive({ roomId, roomName, userName, audioOnly });
+}
+
+export function getMyRole() {
+  return myRole;
+}
+
+/**
+ * À appeler côté client quand on reçoit (via Supabase Realtime sur
+ * debate_participants) l'info qu'on vient d'être promu co-hôte : Daily a
+ * déjà reçu le canSend côté serveur (voir /api/live-roles), donc
+ * enableMic/enableCamera fonctionnera désormais réellement.
+ */
+export function upgradeLocalRole(newRole) {
+  myRole = newRole;
 }
 
 export function enableMic(enabled) {
@@ -120,6 +149,17 @@ export function subscribeToEvents({
   if (onError) callObject.on("error", onError);
 }
 
+/**
+ * Retrouve le session_id Daily d'un participant à partir de son user_id
+ * Supabase (le token porte désormais user_id, voir api/create-room.js).
+ * Nécessaire pour appeler /api/live-roles (promotion/rétrogradation).
+ */
+export function findParticipantSessionId(targetUserId) {
+  const all = callObject?.participants() || {};
+  const match = Object.values(all).find((p) => p.user_id === targetUserId);
+  return match?.session_id || null;
+}
+
 export async function leaveLive({ roomName, isHost = false } = {}) {
   if (callObject) {
     try {
@@ -130,13 +170,10 @@ export async function leaveLive({ roomName, isHost = false } = {}) {
     }
     callObject = null;
   }
+  myRole = "viewer";
 
   if (isHost && roomName) {
-    await fetch("/api/create-room", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "delete-room", roomName }),
-    }).catch(() => {});
+    await callApi({ action: "delete-room", roomName }).catch(() => {});
   }
 }
 
