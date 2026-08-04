@@ -112,6 +112,18 @@ export async function joinLive({ roomId, roomName, userName, audioOnly = true })
 
   await callObject.join({ url: roomUrl, token });
 
+  // Active micro/cam selon le rôle (sinon canSend côté token ne suffit pas
+  // toujours à démarrer la capture locale sur mobile)
+  const canSend = role === "host" || role === "co_host";
+  try {
+    await callObject.setLocalAudio(canSend);
+    if (!audioOnly) {
+      await callObject.setLocalVideo(canSend);
+    }
+  } catch (e) {
+    console.warn("setLocalAudio/Video:", e);
+  }
+
   return { callObject, role, roomId };
 }
 
@@ -145,6 +157,7 @@ export function enableCamera(enabled) {
 export function subscribeToEvents({
   onParticipantJoined,
   onParticipantLeft,
+  onParticipantUpdated,
   onTrackStarted,
   onTrackStopped,
   onError,
@@ -153,6 +166,7 @@ export function subscribeToEvents({
 
   if (onParticipantJoined) callObject.on("participant-joined", onParticipantJoined);
   if (onParticipantLeft) callObject.on("participant-left", onParticipantLeft);
+  if (onParticipantUpdated) callObject.on("participant-updated", onParticipantUpdated);
   if (onTrackStarted) callObject.on("track-started", onTrackStarted);
   if (onTrackStopped) callObject.on("track-stopped", onTrackStopped);
   if (onError) callObject.on("error", onError);
