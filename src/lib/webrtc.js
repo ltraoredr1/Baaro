@@ -176,17 +176,24 @@ export function findParticipantSessionId(targetUserId) {
  * Daily courant de la cible, si connu localement, pour une application
  * immédiate des permissions.
  */
-export async function setParticipantRole({ roomId, targetUserId, newRole }) {
-  const dailySessionId = findParticipantSessionId(targetUserId);
-  return callRolesApi({ roomId, targetUserId, newRole, dailySessionId });
+export async function setParticipantRole({ roomId, targetUserId, newRole, dailyRoomName }) {
+  const targetSessionId = findParticipantSessionId(targetUserId);
+  // Aligné sur api/live-roles.js : role, targetSessionId, dailyRoomName
+  return callRolesApi({
+    roomId,
+    targetUserId,
+    role: newRole,
+    targetSessionId,
+    dailyRoomName: dailyRoomName || null,
+  });
 }
 
-export async function promoteToCoHost(roomId, targetUserId) {
-  return setParticipantRole({ roomId, targetUserId, newRole: "co_host" });
+export async function promoteToCoHost(roomId, targetUserId, dailyRoomName) {
+  return setParticipantRole({ roomId, targetUserId, newRole: "co_host", dailyRoomName });
 }
 
-export async function demoteToViewer(roomId, targetUserId) {
-  return setParticipantRole({ roomId, targetUserId, newRole: "viewer" });
+export async function demoteToViewer(roomId, targetUserId, dailyRoomName) {
+  return setParticipantRole({ roomId, targetUserId, newRole: "viewer", dailyRoomName });
 }
 
 export async function leaveLive({ roomName, isHost = false } = {}) {
