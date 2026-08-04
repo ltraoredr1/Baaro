@@ -28,13 +28,28 @@ export function CreateDebateModal({ isOpen, onClose, currentUserId, onSuccess })
     setError(null);
 
     try {
+      // Récupère la session en cours (anonyme ou compte stable) pour
+      // pouvoir prouver l'identité de l'appelant côté serveur.
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session?.access_token) {
+        throw new Error(
+          "Session expirée ou introuvable. Rechargez la page et réessayez."
+        );
+      }
+
       let room = null;
 
       // ========== MODE AUDIO / VIDÉO ==========
       if (mode === "audio" || mode === "video") {
         const res = await fetch(`${API_BASE}/api/create-room`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${session.access_token}`,
+          },
           body: JSON.stringify({
             action: "create-room",
             userName: "Hôte",
@@ -43,9 +58,20 @@ export function CreateDebateModal({ isOpen, onClose, currentUserId, onSuccess })
           }),
         });
 
-        const dailyData = await res.json();
+        let dailyData;
+        try {
+          dailyData = await res.json();
+        } catch {
+          throw new Error(
+            `Réponse invalide du serveur (statut ${res.status}). Vérifiez api/create-room.js et les variables d'environnement côté serveur.`
+          );
+        }
+
         if (!res.ok) {
-          throw new Error(dailyData.error || "Impossible de créer la salle audio");
+          throw new Error(
+            dailyData.error ||
+              `Impossible de créer la salle audio/vidéo (statut ${res.status}).`
+          );
         }
 
         const inviteCode = dailyData.inviteCode;
