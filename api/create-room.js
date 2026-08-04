@@ -260,7 +260,24 @@ export default async function handler(req, res) {
           .eq("user_id", user.id);
       }
 
-      const role = await getRole(admin, roomId, user.id);
+      // Si l'utilisateur est l'hôte du salon, forcer role=host
+      // (corrige les lignes participants restées en viewer par erreur)
+      const { data: roomRow } = await admin
+        .from("debate_rooms")
+        .select("host_id")
+        .eq("id", roomId)
+        .maybeSingle();
+
+      let role = await getRole(admin, roomId, user.id);
+      if (roomRow?.host_id === user.id && role !== "host") {
+        await admin
+          .from("debate_participants")
+          .update({ role: "host" })
+          .eq("room_id", roomId)
+          .eq("user_id", user.id);
+        role = "host";
+      }
+
       const canSend = canSendForRole(role);
 
       const tokenRes = await fetch(`${DAILY_API_URL}/meeting-tokens`, {
