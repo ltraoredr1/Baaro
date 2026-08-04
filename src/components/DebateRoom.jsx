@@ -36,7 +36,14 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
   const [participants, setParticipants] = useState({});
   const [voiceError, setVoiceError] = useState(null);
   const [dailyRoomName, setDailyRoomName] = useState(null);
-  const [isHost, setIsHost] = useState(false);
+  // Rôle réel calculé côté serveur ('host' | 'co_host' | 'viewer'),
+  // renvoyé par joinLiveByCode()/joinLive(). Ne PAS le déduire localement
+  // de room.host_id : ça ne tient pas compte d'une promotion co-hôte.
+  const [myRole, setMyRole] = useState("viewer");
+  const canBroadcast = myRole === "host" || myRole === "co_host";
+  // Conservé pour l'UI (ex: bouton "terminer le live" réservé à l'hôte
+  // d'origine) — distinct de canBroadcast qui gère mic/caméra.
+  const isRoomOwner = room?.host_id === currentUserId;
 
   const messagesEndRef = useRef(null);
   const profilesCache = useRef({});
@@ -78,7 +85,6 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
         if (isMounted) {
           setRoom(roomData);
           setIsVoiceMode(roomData.mode === "audio" || roomData.mode === "video");
-          setIsHost(roomData.host_id === currentUserId);
           if (roomData.daily_room_name) {
             setDailyRoomName(roomData.daily_room_name);
           }
@@ -185,21 +191,24 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
         const userName =
           profilesCache.current[currentUserId]?.display_name || "Participant";
 
-        await joinLiveByCode({
+        // joinLiveByCode() ne prend plus de paramètre isHost : le rôle est
+        // désormais déterminé côté serveur (table debate_participants) et
+        // renvoyé ici. C'est cette valeur qu'il faut utiliser, pas une
+        // comparaison locale à room.host_id.
+        const { role } = await joinLiveByCode({
           inviteCode: room.invite_code,
           userName,
-          isHost: room.host_id === currentUserId,
           audioOnly: room.mode === "audio",
         });
 
-        // Micro activé par défaut pour l'hôte, coupé pour les autres
-        const shouldStartMic = room.host_id === currentUserId;
-        enableMic(shouldStartMic);
-        setMicOn(shouldStartMic);
+        setMyRole(role);
+        const shouldStartMedia = role === "host" || role === "co_host";
 
-        // Caméra activée par défaut pour l'hôte en mode vidéo, coupée pour les autres
+        enableMic(shouldStartMedia);
+        setMicOn(shouldStartMedia);
+
         if (room.mode === "video") {
-          enableCamera(shouldStartMic);
+          enableCamera(shouldStartMedia);
         }
 
         const updateParticipants = () => {
@@ -234,20 +243,22 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
   // Cleanup vocal au démontage
   useEffect(() => {
     return () => {
-      leaveLive({ roomName: dailyRoomName, isHost }).catch(() => {});
+      leaveLive({ roomName: dailyRoomName, isHost: isRoomOwner }).catch(() => {});
     };
-  }, [dailyRoomName, isHost]);
+  }, [dailyRoomName, isRoomOwner]);
 
   const toggleMic = () => {
+    if (!canBroadcast) return; // un viewer n'a pas la permission côté serveur de toute façon
     const next = !micOn;
     enableMic(next);
     setMicOn(next);
   };
 
   const handleLeaveVoice = async () => {
-    await leaveLive({ roomName: dailyRoomName, isHost });
+    await leaveLive({ roomName: dailyRoomName, isHost: isRoomOwner });
     voiceStarted.current = false;
     setMicOn(false);
+    setMyRole("viewer");
     setParticipants({});
     onBack();
   };
@@ -332,6 +343,11 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
                 <Volume2 size={10} /> VOCAL
               </span>
             )}
+            {myRole === "co_host" && (
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-teal-500/20 text-teal-300 font-normal">
+                CO-HÔTE
+              </span>
+            )}
           </h2>
           <p className="text-xs flex items-center gap-1" style={{ color: COLORS.muted }}>
             <Hash size={12} /> {room?.topic}
@@ -360,26 +376,33 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
             </p>
           ) : voiceError ? (
             <p className="text-xs text-red-400 break-all">{voiceError}</p>
-          ) : (
+          ) : canBroadcast ? (
             <p className="text-xs flex items-center gap-1.5" style={{ color: COLORS.teal }}>
               <Volume2 size={14} />
               Mode vocal actif
             </p>
+          ) : (
+            <p className="text-xs flex items-center gap-1.5" style={{ color: COLORS.muted }}>
+              <Volume2 size={14} />
+              Vous regardez en spectateur
+            </p>
           )}
 
           <div className="flex items-center gap-2">
-            <button
-              onClick={toggleMic}
-              disabled={voiceConnecting || !!voiceError}
-              className="p-3 rounded-full transition disabled:opacity-40"
-              style={{
-                background: micOn ? COLORS.gold : "rgba(239,68,68,0.2)",
-                color: micOn ? "#000" : "#ef4444",
-              }}
-              title={micOn ? "Couper le micro" : "Activer le micro"}
-            >
-              {micOn ? <Mic size={18} /> : <MicOff size={18} />}
-            </button>
+            {canBroadcast && (
+              <button
+                onClick={toggleMic}
+                disabled={voiceConnecting || !!voiceError}
+                className="p-3 rounded-full transition disabled:opacity-40"
+                style={{
+                  background: micOn ? COLORS.gold : "rgba(239,68,68,0.2)",
+                  color: micOn ? "#000" : "#ef4444",
+                }}
+                title={micOn ? "Couper le micro" : "Activer le micro"}
+              >
+                {micOn ? <Mic size={18} /> : <MicOff size={18} />}
+              </button>
+            )}
 
             <button
               onClick={handleLeaveVoice}
