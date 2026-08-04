@@ -101,14 +101,14 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
         // Messages
         const { data: msgsData } = await supabase
           .from("debate_messages")
-          .select("id, text, created_at, user_id")
+          .select("id, text, created_at, sender_id, sender_type")
           .eq("room_id", roomData.id)
           .order("created_at", { ascending: true })
           .limit(200);
 
         if (msgsData && isMounted) {
           const uniqueUserIds = [
-            ...new Set(msgsData.map((m) => m.user_id).filter(Boolean)),
+            ...new Set(msgsData.map((m) => m.sender_id).filter(Boolean)),
           ];
           let profilesMap = { ...profilesCache.current };
 
@@ -129,7 +129,7 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
           setMessages(
             msgsData.map((m) => ({
               ...m,
-              profile: profilesMap[m.user_id] || {
+              profile: profilesMap[m.sender_id] || {
                 display_name: "Membre",
                 flag: "🌍",
               },
@@ -164,15 +164,15 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
               filter: `room_id=eq.${roomData.id}`,
             },
             async (payload) => {
-              let profile = profilesCache.current[payload.new.user_id];
+              let profile = profilesCache.current[payload.new.sender_id];
               if (!profile && payload.new.user_id) {
                 const { data } = await supabase
                   .from("profiles")
                   .select("display_name, avatar_url, flag")
-                  .eq("user_id", payload.new.user_id)
+                  .eq("user_id", payload.new.sender_id)
                   .maybeSingle();
                 profile = data || { display_name: "Membre", flag: "🌍" };
-                profilesCache.current[payload.new.user_id] = profile;
+                profilesCache.current[payload.new.sender_id] = profile;
               }
               if (isMounted) {
                 setMessages((prev) => [
@@ -343,7 +343,8 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
     try {
       const { error } = await supabase.from("debate_messages").insert({
         room_id: room.id,
-        user_id: currentUserId,
+        sender_id: currentUserId,
+        sender_type: "user",
         text,
       });
       if (error) throw error;
@@ -362,10 +363,11 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
     setRoleActionError(null);
 
     try {
+      const dailyName = room.daily_room_name || dailyRoomName;
       if (currentRole === "co_host") {
-        await demoteToViewer(room.id, targetUserId);
+        await demoteToViewer(room.id, targetUserId, dailyName);
       } else {
-        await promoteToCoHost(room.id, targetUserId);
+        await promoteToCoHost(room.id, targetUserId, dailyName);
       }
     } catch (err) {
       setRoleActionError(err.message || "Erreur lors du changement de rôle");
@@ -578,7 +580,7 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
           </div>
         ) : (
           messages.map((msg) => {
-            const isMe = msg.user_id === currentUserId;
+            const isMe = msg.sender_id === currentUserId;
             const profile = isMe
               ? { display_name: "Moi", flag: "🌍" }
               : msg.profile;
