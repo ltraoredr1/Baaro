@@ -246,10 +246,12 @@ export default async function handler(req, res) {
         .maybeSingle();
 
       if (!existing) {
+        // En débat audio/vidéo, les arrivants peuvent parler tout de suite
+        // (co_host). L'hôte peut toujours rétrograder en viewer.
         await admin.from("debate_participants").insert({
           room_id: roomId,
           user_id: user.id,
-          role: "viewer",
+          role: "co_host",
         });
       } else {
         // réactive la participation si elle avait été marquée "left_at"
@@ -280,6 +282,7 @@ export default async function handler(req, res) {
 
       const canSend = canSendForRole(role);
 
+      const canBroadcast = role === "host" || role === "co_host";
       const tokenRes = await fetch(`${DAILY_API_URL}/meeting-tokens`, {
         method: "POST",
         headers: {
@@ -289,11 +292,11 @@ export default async function handler(req, res) {
         body: JSON.stringify({
           properties: {
             room_name: roomName,
-            user_name: userName || "Spectateur",
+            user_name: userName || "Participant",
             user_id: user.id,
-            is_owner: false,
-            start_video_off: true,
-            start_audio_off: true,
+            is_owner: role === "host",
+            start_video_off: !canBroadcast,
+            start_audio_off: !canBroadcast,
             permissions: { canSend }, // [] pour viewer -> bloqué au niveau du SFU Daily
           },
         }),
