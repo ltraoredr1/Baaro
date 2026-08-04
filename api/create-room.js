@@ -1,4 +1,17 @@
 // api/create-room.js
+// Corrections apportées à la version d'origine :
+// 1. requireUser() est maintenant OBLIGATOIRE (plus de mode anonyme
+//    silencieux) : host_id vient toujours de l'utilisateur authentifié,
+//    jamais de body.hostId (qui était falsifiable par le client).
+// 2. join-room exige aussi une authentification, upsert une ligne
+//    debate_participants (role='viewer' par défaut), et pose des
+//    permissions Daily réelles (canSend) selon le rôle en base — donc
+//    l'interdiction de diffuser pour un spectateur est maintenant
+//    appliquée par le serveur Daily (SFU), pas juste par la convention
+//    start_video_off côté client.
+// 3. Le token porte désormais user_id (le vrai user Supabase), utile pour
+//    retrouver le session_id Daily d'un participant depuis /api/live-roles.
+
 import { getAdminClient, requireUser } from "./_supabaseAdmin.js";
 
 const DAILY_API_URL = "https://api.daily.co/v1";
@@ -25,6 +38,22 @@ async function generateUniqueInviteCode(admin) {
   throw new Error("Impossible de générer un code d'invitation unique");
 }
 
+// Rôle du user pour ce salon (lit debate_participants ; 'viewer' si absent)
+async function getRole(admin, roomId, userId) {
+  const { data } = await admin
+    .from("debate_participants")
+    .select("role")
+    .eq("room_id", roomId)
+    .eq("user_id", userId)
+    .is("left_at", null)
+    .maybeSingle();
+  return data?.role || "viewer";
+}
+
+function canSendForRole(role) {
+  return role === "host" || role === "co_host" ? ["video", "audio"] : [];
+}
+
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -47,23 +76,14 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: e.message });
   }
 
-  let user = null;
+  let user;
   try {
     user = await requireUser(req, admin);
-  } catch {
-    // mode anonyme possible
+  } catch (e) {
+    return res.status(e.status || 401).json({ error: e.message });
   }
 
-  const {
-    action,
-    roomName,
-    userName,
-    isHost,
-    enableHLS,
-    hostId,
-    debateId,
-    inviteCode,
-  } = req.body || {};
+  const { action, roomName, roomId, userName, enableHLS, inviteCode } = req.body || {};
 
   try {
     // ---------- CREATE ROOM ----------
@@ -122,19 +142,20 @@ export default async function handler(req, res) {
           properties: {
             room_name: roomData.name,
             user_name: userName || "Hôte",
+            user_id: user.id,
             is_owner: true,
             start_video_off: false,
             start_audio_off: false,
+            permissions: { canSend: ["video", "audio"] },
             ...(streamingEndpoints
-              ? { permissions: { canAdmin: ["streaming"] } }
-              : {}),
+              ? { permissions: { canSend: ["video", "audio"], canAdmin: ["streaming", "participants"] } }
+              : { permissions: { canSend: ["video", "audio"], canAdmin: ["participants"] } }),
           },
         }),
       });
 
       if (!tokenRes.ok) {
         const err = await tokenRes.text();
-        // room déjà créée côté Daily : on la supprime pour ne pas la laisser orpheline
         await fetch(`${DAILY_API_URL}/rooms/${roomData.name}`, {
           method: "DELETE",
           headers: { Authorization: `Bearer ${DAILY_API_KEY}` },
@@ -145,14 +166,18 @@ export default async function handler(req, res) {
       const tokenData = await tokenRes.json();
       const code = await generateUniqueInviteCode(admin);
 
-      const { error: insertError } = await admin.from("debate_rooms").insert({
-        daily_room_name: roomData.name,
-        invite_code: code,
-        host_id: hostId || user?.id || null,
-        title: "Live BAARO",
-        status: "active",
-        max_participants: 10,
-      });
+      const { data: newRoom, error: insertError } = await admin
+        .from("debate_rooms")
+        .insert({
+          daily_room_name: roomData.name,
+          invite_code: code,
+          host_id: user.id, // toujours l'utilisateur authentifié, jamais body.hostId
+          title: "Live BAARO",
+          status: "active",
+          max_participants: 10,
+        })
+        .select()
+        .single();
 
       if (insertError) {
         await fetch(`${DAILY_API_URL}/rooms/${roomData.name}`, {
@@ -162,9 +187,17 @@ export default async function handler(req, res) {
         throw insertError;
       }
 
+      // L'hôte devient participant avec role='host' dès la création
+      await admin.from("debate_participants").insert({
+        room_id: newRoom.id,
+        user_id: user.id,
+        role: "host",
+      });
+
       return res.status(200).json({
         roomUrl: roomData.url,
         roomName: roomData.name,
+        roomId: newRoom.id,
         token: tokenData.token,
         inviteCode: code,
         hlsEnabled: !!streamingEndpoints,
@@ -179,7 +212,7 @@ export default async function handler(req, res) {
 
       const { data, error } = await admin
         .from("debate_rooms")
-        .select("daily_room_name, status, max_participants")
+        .select("id, daily_room_name, status, max_participants")
         .eq("invite_code", inviteCode.trim().toUpperCase())
         .maybeSingle();
 
@@ -189,6 +222,7 @@ export default async function handler(req, res) {
       }
 
       return res.status(200).json({
+        roomId: data.id,
         roomName: data.daily_room_name,
         maxParticipants: data.max_participants || 10,
       });
@@ -196,9 +230,36 @@ export default async function handler(req, res) {
 
     // ---------- JOIN ROOM ----------
     if (action === "join-room") {
-      if (!roomName) {
-        return res.status(400).json({ error: "roomName requis" });
+      if (!roomName || !roomId) {
+        return res.status(400).json({ error: "roomName et roomId requis" });
       }
+
+      // Upsert : garde le rôle existant si déjà présent (ex: host qui
+      // rejoint sa propre room après reconnexion), sinon crée en 'viewer'.
+      const { data: existing } = await admin
+        .from("debate_participants")
+        .select("role")
+        .eq("room_id", roomId)
+        .eq("user_id", user.id)
+        .maybeSingle();
+
+      if (!existing) {
+        await admin.from("debate_participants").insert({
+          room_id: roomId,
+          user_id: user.id,
+          role: "viewer",
+        });
+      } else {
+        // réactive la participation si elle avait été marquée "left_at"
+        await admin
+          .from("debate_participants")
+          .update({ left_at: null })
+          .eq("room_id", roomId)
+          .eq("user_id", user.id);
+      }
+
+      const role = await getRole(admin, roomId, user.id);
+      const canSend = canSendForRole(role);
 
       const tokenRes = await fetch(`${DAILY_API_URL}/meeting-tokens`, {
         method: "POST",
@@ -210,9 +271,11 @@ export default async function handler(req, res) {
           properties: {
             room_name: roomName,
             user_name: userName || "Spectateur",
-            is_owner: !!isHost,
+            user_id: user.id,
+            is_owner: false,
             start_video_off: true,
             start_audio_off: true,
+            permissions: { canSend }, // [] pour viewer -> bloqué au niveau du SFU Daily
           },
         }),
       });
@@ -227,6 +290,7 @@ export default async function handler(req, res) {
       return res.status(200).json({
         roomUrl: `https://${process.env.DAILY_DOMAIN || "baaro"}.daily.co/${roomName}`,
         token: tokenData.token,
+        role,
       });
     }
 
@@ -234,6 +298,17 @@ export default async function handler(req, res) {
     if (action === "delete-room") {
       if (!roomName) {
         return res.status(400).json({ error: "roomName requis" });
+      }
+
+      // Seul l'hôte peut terminer le live
+      const { data: room } = await admin
+        .from("debate_rooms")
+        .select("id, host_id")
+        .eq("daily_room_name", roomName)
+        .maybeSingle();
+
+      if (!room || room.host_id !== user.id) {
+        return res.status(403).json({ error: "Seul l'hôte peut terminer ce live" });
       }
 
       await fetch(`${DAILY_API_URL}/rooms/${roomName}`, {
