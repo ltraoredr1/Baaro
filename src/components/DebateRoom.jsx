@@ -13,9 +13,11 @@ import {
   Volume2,
   Star,
   Loader2,
+  Sparkles,
 } from "lucide-react";
 import { COLORS } from "../theme.js";
 import { supabase } from "../supabaseClient.js";
+import { API_BASE } from "../config.js";
 import {
   joinLiveByCode,
   leaveLive,
@@ -24,8 +26,10 @@ import {
   subscribeToEvents,
   getParticipants,
   upgradeLocalRole,
-  promoteToCoHost,
+  requestCoHost,
+  respondCoHostRequest,
   demoteToViewer,
+  findParticipantSessionId,
 } from "../lib/webrtc.js";
 
 /** Attache une MediaStreamTrack vidéo à un <video> */
@@ -61,9 +65,7 @@ function ParticipantTile({ participant, isVideoMode, isLocal, videoTrack }) {
     }
   }, [hasVideo, track]);
 
-  const name = isLocal
-    ? "Vous"
-    : participant?.user_name || "Participant";
+  const name = isLocal ? "Vous" : participant?.user_name || "Participant";
 
   return (
     <div
@@ -110,16 +112,20 @@ function ParticipantTile({ participant, isVideoMode, isLocal, videoTrack }) {
         }}
       >
         <span className="truncate">{name}</span>
-        {isLocal && (
-          <span className="text-[9px] opacity-70 shrink-0">MOI</span>
-        )}
+        {isLocal && <span className="text-[9px] opacity-70 shrink-0">MOI</span>}
       </div>
     </div>
   );
 }
 
-export function DebateRoom({ inviteCode, currentUserId: currentUserIdProp, onBack }) {
-  const [resolvedUserId, setResolvedUserId] = useState(currentUserIdProp || null);
+export function DebateRoom({
+  inviteCode,
+  currentUserId: currentUserIdProp,
+  onBack,
+}) {
+  const [resolvedUserId, setResolvedUserId] = useState(
+    currentUserIdProp || null
+  );
   const currentUserId = resolvedUserId || currentUserIdProp;
 
   useEffect(() => {
@@ -144,13 +150,15 @@ export function DebateRoom({ inviteCode, currentUserId: currentUserIdProp, onBac
   const [camOn, setCamOn] = useState(false);
   const [voiceConnecting, setVoiceConnecting] = useState(false);
   const [participants, setParticipants] = useState({});
-  const [videoTracks, setVideoTracks] = useState({}); // session_id -> MediaStreamTrack
+  const [videoTracks, setVideoTracks] = useState({});
   const [voiceError, setVoiceError] = useState(null);
   const [dailyRoomName, setDailyRoomName] = useState(null);
   const [myRole, setMyRole] = useState("viewer");
   const [participantRoles, setParticipantRoles] = useState({});
   const [roleActionLoading, setRoleActionLoading] = useState(null);
   const [roleActionError, setRoleActionError] = useState(null);
+  const [pendingRequest, setPendingRequest] = useState(null);
+  const [aiLoading, setAiLoading] = useState(false);
 
   const isRoomOwner = !!(currentUserId && room?.host_id === currentUserId);
   const dbRole = currentUserId ? participantRoles[currentUserId] : null;
@@ -177,6 +185,7 @@ export function DebateRoom({ inviteCode, currentUserId: currentUserIdProp, onBac
     let isMounted = true;
     let messagesChannel = null;
     let participantsChannel = null;
+    let roleReqChannel = null;
 
     const loadDebate = async () => {
       try {
@@ -199,8 +208,6 @@ export function DebateRoom({ inviteCode, currentUserId: currentUserIdProp, onBac
 
         if (isMounted) {
           setRoom(roomData);
-          // daily_room_name = live Daily créé → forcer le mode média
-          // même si la colonne mode est vide / "text" par erreur
           setIsVoiceMode(
             roomData.mode === "audio" ||
               roomData.mode === "video" ||
@@ -261,13 +268,23 @@ export function DebateRoom({ inviteCode, currentUserId: currentUserIdProp, onBac
             rolesMap[p.user_id] = p.role;
           });
           setParticipantRoles(rolesMap);
-          // Rôle en base = source de vérité (évite "Spectateur" à tort)
           const myDbRole = currentUserId ? rolesMap[currentUserId] : null;
           if (myDbRole === "host" || myDbRole === "co_host") {
             setMyRole(myDbRole);
           } else if (roomData.host_id === currentUserId) {
             setMyRole("host");
           }
+        }
+
+        if (currentUserId) {
+          const { data: myReq } = await supabase
+            .from("debate_role_requests")
+            .select("*")
+            .eq("room_id", roomData.id)
+            .eq("to_user_id", currentUserId)
+            .eq("status", "pending")
+            .maybeSingle();
+          if (myReq && isMounted) setPendingRequest(myReq);
         }
 
         messagesChannel = supabase
@@ -296,7 +313,10 @@ export function DebateRoom({ inviteCode, currentUserId: currentUserIdProp, onBac
                   ...prev,
                   {
                     ...payload.new,
-                    profile: profile || { display_name: "Membre", flag: "🌍" },
+                    profile: profile || {
+                      display_name: "Membre",
+                      flag: "🌍",
+                    },
                   },
                 ]);
               }
@@ -345,10 +365,39 @@ export function DebateRoom({ inviteCode, currentUserId: currentUserIdProp, onBac
                 const shouldBroadcast = row.role === "co_host";
                 enableMic(shouldBroadcast);
                 setMicOn(shouldBroadcast);
-                if (roomData.mode === "video") {
+                if (roomData.mode === "video" || roomData.daily_room_name) {
                   enableCamera(shouldBroadcast);
                   setCamOn(shouldBroadcast);
                 }
+              }
+            }
+          )
+          .subscribe();
+
+        roleReqChannel = supabase
+          .channel(`role_req_${roomData.id}`)
+          .on(
+            "postgres_changes",
+            {
+              event: "*",
+              schema: "public",
+              table: "debate_role_requests",
+              filter: `room_id=eq.${roomData.id}`,
+            },
+            (payload) => {
+              const row = payload.new;
+              if (!row) return;
+              if (
+                row.to_user_id === currentUserId &&
+                row.status === "pending"
+              ) {
+                setPendingRequest(row);
+              }
+              if (
+                row.to_user_id === currentUserId &&
+                row.status !== "pending"
+              ) {
+                setPendingRequest(null);
               }
             }
           )
@@ -366,6 +415,7 @@ export function DebateRoom({ inviteCode, currentUserId: currentUserIdProp, onBac
       isMounted = false;
       if (messagesChannel) supabase.removeChannel(messagesChannel);
       if (participantsChannel) supabase.removeChannel(participantsChannel);
+      if (roleReqChannel) supabase.removeChannel(roleReqChannel);
     };
   }, [inviteCode, currentUserId]);
 
@@ -392,13 +442,16 @@ export function DebateRoom({ inviteCode, currentUserId: currentUserIdProp, onBac
           audioOnly,
         });
 
-        // Source de vérité : host_id en base > rôle renvoyé par l'API
-        // (évite le cas où l'hôte se retrouve "viewer" et n'émet rien)
-        const isHostUser = !!(currentUserId && room.host_id === currentUserId);
-        const dbRole = currentUserId ? participantRoles[currentUserId] : null;
+        const isHostUser = !!(
+          currentUserId && room.host_id === currentUserId
+        );
+        const dbRoleNow = currentUserId
+          ? participantRoles[currentUserId]
+          : null;
         let role = apiRole || "viewer";
         if (isHostUser) role = "host";
-        else if (dbRole === "host" || dbRole === "co_host") role = dbRole;
+        else if (dbRoleNow === "host" || dbRoleNow === "co_host")
+          role = dbRoleNow;
         else if (apiRole === "host" || apiRole === "co_host") role = apiRole;
 
         setMyRole(role);
@@ -460,14 +513,14 @@ export function DebateRoom({ inviteCode, currentUserId: currentUserIdProp, onBac
           },
         });
 
-        // Pistes déjà présentes au moment du join
         const existing = getParticipants();
         const initial = {};
         Object.values(existing).forEach((p) => {
           const t = getVideoTrack(p);
           if (t && p.session_id) initial[p.session_id] = t;
         });
-        if (Object.keys(initial).length) setVideoTracks((prev) => ({ ...prev, ...initial }));
+        if (Object.keys(initial).length)
+          setVideoTracks((prev) => ({ ...prev, ...initial }));
 
         pollTimer = setInterval(updateParticipants, 2000);
       } catch (err) {
@@ -541,6 +594,39 @@ export function DebateRoom({ inviteCode, currentUserId: currentUserIdProp, onBac
     }
   };
 
+  const handleProposeCoHost = async (targetUserId) => {
+    if (!room || roleActionLoading) return;
+    setRoleActionLoading(targetUserId);
+    setRoleActionError(null);
+    try {
+      await requestCoHost(room.id, targetUserId);
+    } catch (err) {
+      setRoleActionError(err.message || "Erreur lors de la proposition");
+    } finally {
+      setRoleActionLoading(null);
+    }
+  };
+
+  const handleRespondRequest = async (accept) => {
+    if (!pendingRequest || !room) return;
+    setRoleActionLoading("respond");
+    setRoleActionError(null);
+    try {
+      const sessionId = findParticipantSessionId(currentUserId);
+      await respondCoHostRequest({
+        requestId: pendingRequest.id,
+        accept,
+        targetSessionId: sessionId,
+        dailyRoomName: room.daily_room_name || dailyRoomName,
+      });
+      setPendingRequest(null);
+    } catch (err) {
+      setRoleActionError(err.message || "Erreur");
+    } finally {
+      setRoleActionLoading(null);
+    }
+  };
+
   const handleToggleCoHost = async (targetUserId, currentRole) => {
     if (!room || roleActionLoading) return;
     setRoleActionLoading(targetUserId);
@@ -551,12 +637,51 @@ export function DebateRoom({ inviteCode, currentUserId: currentUserIdProp, onBac
       if (currentRole === "co_host") {
         await demoteToViewer(room.id, targetUserId, dailyName);
       } else {
-        await promoteToCoHost(room.id, targetUserId, dailyName);
+        await requestCoHost(room.id, targetUserId);
       }
     } catch (err) {
       setRoleActionError(err.message || "Erreur lors du changement de rôle");
     } finally {
       setRoleActionLoading(null);
+    }
+  };
+
+  const handleAskAI = async () => {
+    if (!room || !newMessage.trim() || aiLoading || !currentUserId) return;
+    const q = newMessage.trim();
+    setNewMessage("");
+    setAiLoading(true);
+    setRoleActionError(null);
+
+    try {
+      await supabase.from("debate_messages").insert({
+        room_id: room.id,
+        sender_id: currentUserId,
+        sender_type: "user",
+        text: "🤖 " + q,
+      });
+    } catch (e) {
+      console.error(e);
+    }
+
+    try {
+      const { data: sess } = await supabase.auth.getSession();
+      const token = sess?.session?.access_token;
+      const res = await fetch((API_BASE || "") + "/api/debate-ai", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: "Bearer " + token } : {}),
+        },
+        body: JSON.stringify({ roomId: room.id, question: q }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Erreur IA");
+    } catch (err) {
+      console.error(err);
+      setRoleActionError(err.message || "Erreur IA");
+    } finally {
+      setAiLoading(false);
     }
   };
 
@@ -655,6 +780,47 @@ export function DebateRoom({ inviteCode, currentUserId: currentUserIdProp, onBac
         </div>
       </div>
 
+      {pendingRequest && (
+        <div
+          className="mx-4 mt-3 p-4 rounded-2xl border flex flex-col gap-3"
+          style={{
+            background: "rgba(45,191,166,0.12)",
+            borderColor: "rgba(45,191,166,0.4)",
+          }}
+        >
+          <p className="text-sm font-bold" style={{ color: COLORS.ivory }}>
+            L’hôte te propose de devenir co-hôte
+          </p>
+          <p className="text-xs" style={{ color: COLORS.muted }}>
+            Tu pourras activer micro et caméra. Accepter ?
+          </p>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => handleRespondRequest(true)}
+              disabled={roleActionLoading === "respond"}
+              className="flex-1 py-2 rounded-xl font-bold text-sm disabled:opacity-50"
+              style={{ background: COLORS.gold, color: "#000" }}
+            >
+              Accepter
+            </button>
+            <button
+              type="button"
+              onClick={() => handleRespondRequest(false)}
+              disabled={roleActionLoading === "respond"}
+              className="flex-1 py-2 rounded-xl font-bold text-sm border disabled:opacity-50"
+              style={{ borderColor: COLORS.border, color: COLORS.ivory }}
+            >
+              Refuser
+            </button>
+          </div>
+        </div>
+      )}
+
+      {roleActionError && !isRoomOwner && (
+        <p className="px-4 pt-2 text-xs text-red-400">{roleActionError}</p>
+      )}
+
       {isVoiceMode && (
         <div
           className="px-4 py-3 border-b"
@@ -663,7 +829,10 @@ export function DebateRoom({ inviteCode, currentUserId: currentUserIdProp, onBac
           {voiceConnecting ? (
             <div
               className="flex flex-col items-center justify-center gap-3 py-10 rounded-2xl border"
-              style={{ background: COLORS.surface2, borderColor: COLORS.border }}
+              style={{
+                background: COLORS.surface2,
+                borderColor: COLORS.border,
+              }}
             >
               <Loader2
                 className="animate-spin"
@@ -848,7 +1017,7 @@ export function DebateRoom({ inviteCode, currentUserId: currentUserIdProp, onBac
                         ? "…"
                         : role === "co_host"
                           ? "Rétrograder"
-                          : "Co-hôte"}
+                          : "Proposer co-hôte"}
                     </button>
                   </div>
                 );
@@ -867,6 +1036,7 @@ export function DebateRoom({ inviteCode, currentUserId: currentUserIdProp, onBac
         ) : (
           messages.map((msg) => {
             const isMe = msg.sender_id === currentUserId;
+            const isAI = msg.sender_type === "ai";
             const profile = isMe
               ? { display_name: "Moi", flag: "🌍" }
               : msg.profile || { display_name: "Membre", flag: "🌍" };
@@ -880,11 +1050,15 @@ export function DebateRoom({ inviteCode, currentUserId: currentUserIdProp, onBac
                   <div
                     className="w-8 h-8 rounded-full flex items-center justify-center text-xs shrink-0 border overflow-hidden"
                     style={{
-                      borderColor: COLORS.borderGold,
+                      borderColor: isAI
+                        ? "rgba(167,139,250,0.5)"
+                        : COLORS.borderGold,
                       background: COLORS.surface2,
                     }}
                   >
-                    {profile.avatar_url ? (
+                    {isAI ? (
+                      "✨"
+                    ) : profile.avatar_url ? (
                       <img
                         src={profile.avatar_url}
                         className="w-full h-full object-cover"
@@ -900,16 +1074,25 @@ export function DebateRoom({ inviteCode, currentUserId: currentUserIdProp, onBac
                     isMe ? "rounded-tr-sm" : "rounded-tl-sm"
                   }`}
                   style={{
-                    background: isMe ? COLORS.gold : COLORS.surface2,
+                    background: isMe
+                      ? COLORS.gold
+                      : isAI
+                        ? "rgba(167,139,250,0.15)"
+                        : COLORS.surface2,
                     color: isMe ? "#000" : COLORS.ivory,
+                    border: isAI
+                      ? "1px solid rgba(167,139,250,0.4)"
+                      : undefined,
                   }}
                 >
                   {!isMe && (
                     <p
                       className="text-[10px] font-bold mb-1"
-                      style={{ color: COLORS.gold }}
+                      style={{ color: isAI ? "#a78bfa" : COLORS.gold }}
                     >
-                      {profile.display_name} {profile.flag}
+                      {isAI
+                        ? "✨ IA BAARO"
+                        : `${profile.display_name || "Membre"} ${profile.flag || ""}`}
                     </p>
                   )}
                   <p>{msg.text}</p>
@@ -940,7 +1123,7 @@ export function DebateRoom({ inviteCode, currentUserId: currentUserIdProp, onBac
           type="text"
           value={newMessage}
           onChange={(e) => setNewMessage(e.target.value)}
-          placeholder="Participez au débat..."
+          placeholder="Message ou question pour l'IA…"
           className="flex-1 px-4 py-3 rounded-xl border text-sm outline-none"
           style={{
             background: COLORS.surface2,
@@ -948,6 +1131,19 @@ export function DebateRoom({ inviteCode, currentUserId: currentUserIdProp, onBac
             color: COLORS.ivory,
           }}
         />
+        <button
+          type="button"
+          onClick={handleAskAI}
+          disabled={!newMessage.trim() || aiLoading}
+          title="Demander à l'IA"
+          className="p-3 rounded-xl disabled:opacity-50"
+          style={{
+            background: "rgba(167,139,250,0.25)",
+            color: "#a78bfa",
+          }}
+        >
+          <Sparkles size={18} className={aiLoading ? "animate-spin" : ""} />
+        </button>
         <button
           type="submit"
           disabled={!newMessage.trim()}
