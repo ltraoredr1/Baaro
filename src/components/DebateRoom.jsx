@@ -36,14 +36,21 @@ function attachVideoTrack(videoEl, participant) {
     trackInfo?.persistentTrack ||
     trackInfo?.track ||
     null;
+  const ok =
+    track &&
+    track.readyState !== "ended" &&
+    (trackInfo?.state === "playable" ||
+      trackInfo?.state === "loading" ||
+      trackInfo?.state === "sendable" ||
+      !trackInfo?.state);
 
-  if (track && trackInfo?.state === "playable") {
+  if (ok) {
     const stream = new MediaStream([track]);
     if (videoEl.srcObject !== stream) {
       videoEl.srcObject = stream;
       videoEl.play().catch(() => {});
     }
-  } else {
+  } else if (!track) {
     videoEl.srcObject = null;
   }
 }
@@ -51,10 +58,13 @@ function attachVideoTrack(videoEl, participant) {
 /** Tuile vidéo / avatar d'un participant */
 function ParticipantTile({ participant, isVideoMode, isLocal }) {
   const videoRef = useRef(null);
+  const v = participant?.tracks?.video;
   const hasVideo =
     isVideoMode &&
-    participant?.tracks?.video?.state === "playable" &&
-    (participant.tracks.video.persistentTrack || participant.tracks.video.track);
+    !!(v?.persistentTrack || v?.track) &&
+    v?.state !== "off" &&
+    v?.state !== "blocked" &&
+    v?.state !== "interrupted";
 
   useEffect(() => {
     if (hasVideo) {
@@ -386,6 +396,7 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
         subscribeToEvents({
           onParticipantJoined: updateParticipants,
           onParticipantLeft: updateParticipants,
+          onParticipantUpdated: updateParticipants,
           onTrackStarted: updateParticipants,
           onTrackStopped: updateParticipants,
           onError: (e) => {
