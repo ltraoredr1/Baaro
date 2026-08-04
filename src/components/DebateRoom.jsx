@@ -9,6 +9,7 @@ import {
   MicOff,
   PhoneOff,
   Volume2,
+  Star,
 } from "lucide-react";
 import { COLORS } from "../theme.js";
 import { supabase } from "../supabaseClient.js";
@@ -20,6 +21,9 @@ import {
   subscribeToEvents,
   getCallObject,
   getParticipants,
+  upgradeLocalRole,
+  promoteToCoHost,
+  demoteToViewer,
 } from "../lib/webrtc.js";
 
 export function DebateRoom({ inviteCode, currentUserId, onBack }) {
@@ -37,13 +41,17 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
   const [voiceError, setVoiceError] = useState(null);
   const [dailyRoomName, setDailyRoomName] = useState(null);
   // Rôle réel calculé côté serveur ('host' | 'co_host' | 'viewer'),
-  // renvoyé par joinLiveByCode()/joinLive(). Ne PAS le déduire localement
-  // de room.host_id : ça ne tient pas compte d'une promotion co-hôte.
+  // renvoyé par joinLiveByCode()/joinLive(), et tenu à jour ensuite par
+  // Realtime sur debate_participants (voir plus bas).
   const [myRole, setMyRole] = useState("viewer");
   const canBroadcast = myRole === "host" || myRole === "co_host";
-  // Conservé pour l'UI (ex: bouton "terminer le live" réservé à l'hôte
-  // d'origine) — distinct de canBroadcast qui gère mic/caméra.
   const isRoomOwner = room?.host_id === currentUserId;
+
+  // Rôles de tous les participants du salon (user_id -> role), utilisés
+  // pour afficher le panneau de promotion côté hôte.
+  const [participantRoles, setParticipantRoles] = useState({});
+  const [roleActionLoading, setRoleActionLoading] = useState(null); // user_id en cours d'action
+  const [roleActionError, setRoleActionError] = useState(null);
 
   const messagesEndRef = useRef(null);
   const profilesCache = useRef({});
@@ -57,14 +65,14 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
     scrollToBottom();
   }, [messages, scrollToBottom]);
 
-  // ===== Chargement de la salle + messages =====
+  // ===== Chargement de la salle + messages + rôles =====
   useEffect(() => {
     let isMounted = true;
-    let channel = null;
+    let messagesChannel = null;
+    let participantsChannel = null;
 
     const loadDebate = async () => {
       try {
-        // Recherche robuste (insensible à la casse + statut actif)
         const { data: roomData, error: roomError } = await supabase
           .from("debate_rooms")
           .select(
@@ -129,8 +137,23 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
           );
         }
 
+        // Rôles actuels de tous les participants du salon
+        const { data: rolesData } = await supabase
+          .from("debate_participants")
+          .select("user_id, role")
+          .eq("room_id", roomData.id)
+          .is("left_at", null);
+
+        if (isMounted) {
+          const rolesMap = {};
+          (rolesData || []).forEach((p) => {
+            rolesMap[p.user_id] = p.role;
+          });
+          setParticipantRoles(rolesMap);
+        }
+
         // Realtime messages
-        channel = supabase
+        messagesChannel = supabase
           .channel(`room_${roomData.id}`)
           .on(
             "postgres_changes",
@@ -163,6 +186,56 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
             }
           )
           .subscribe();
+
+        // Realtime rôles (promotions/rétrogradations, arrivées/départs)
+        participantsChannel = supabase
+          .channel(`room_participants_${roomData.id}`)
+          .on(
+            "postgres_changes",
+            {
+              event: "*",
+              schema: "public",
+              table: "debate_participants",
+              filter: `room_id=eq.${roomData.id}`,
+            },
+            (payload) => {
+              const row =
+                payload.new && Object.keys(payload.new).length
+                  ? payload.new
+                  : payload.old;
+              if (!row?.user_id) return;
+
+              if (payload.eventType === "DELETE") {
+                setParticipantRoles((prev) => {
+                  const copy = { ...prev };
+                  delete copy[row.user_id];
+                  return copy;
+                });
+                return;
+              }
+
+              setParticipantRoles((prev) => ({ ...prev, [row.user_id]: row.role }));
+
+              // Si c'est MON rôle qui vient de changer (promotion ou
+              // rétrogradation par l'hôte), applique-le immédiatement :
+              // le serveur a déjà mis à jour les permissions Daily.
+              if (
+                row.user_id === currentUserId &&
+                payload.eventType === "UPDATE" &&
+                row.role !== "host"
+              ) {
+                upgradeLocalRole(row.role);
+                setMyRole(row.role);
+                const shouldBroadcast = row.role === "co_host";
+                enableMic(shouldBroadcast);
+                setMicOn(shouldBroadcast);
+                if (isMounted && roomData.mode === "video") {
+                  enableCamera(shouldBroadcast);
+                }
+              }
+            }
+          )
+          .subscribe();
       } catch (err) {
         if (isMounted) setError(err.message);
       } finally {
@@ -174,7 +247,8 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
 
     return () => {
       isMounted = false;
-      if (channel) supabase.removeChannel(channel);
+      if (messagesChannel) supabase.removeChannel(messagesChannel);
+      if (participantsChannel) supabase.removeChannel(participantsChannel);
     };
   }, [inviteCode, currentUserId]);
 
@@ -191,10 +265,6 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
         const userName =
           profilesCache.current[currentUserId]?.display_name || "Participant";
 
-        // joinLiveByCode() ne prend plus de paramètre isHost : le rôle est
-        // désormais déterminé côté serveur (table debate_participants) et
-        // renvoyé ici. C'est cette valeur qu'il faut utiliser, pas une
-        // comparaison locale à room.host_id.
         const { role } = await joinLiveByCode({
           inviteCode: room.invite_code,
           userName,
@@ -248,7 +318,7 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
   }, [dailyRoomName, isRoomOwner]);
 
   const toggleMic = () => {
-    if (!canBroadcast) return; // un viewer n'a pas la permission côté serveur de toute façon
+    if (!canBroadcast) return;
     const next = !micOn;
     enableMic(next);
     setMicOn(next);
@@ -283,6 +353,27 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
     }
   };
 
+  // Promotion / rétrogradation, réservée à l'hôte d'origine du salon.
+  // La mise à jour de participantRoles/myRole pour la cible arrive via
+  // Realtime (voir ci-dessus) — pas besoin de le faire manuellement ici.
+  const handleToggleCoHost = async (targetUserId, currentRole) => {
+    if (!room || roleActionLoading) return;
+    setRoleActionLoading(targetUserId);
+    setRoleActionError(null);
+
+    try {
+      if (currentRole === "co_host") {
+        await demoteToViewer(room.id, targetUserId);
+      } else {
+        await promoteToCoHost(room.id, targetUserId);
+      }
+    } catch (err) {
+      setRoleActionError(err.message || "Erreur lors du changement de rôle");
+    } finally {
+      setRoleActionLoading(null);
+    }
+  };
+
   if (error) {
     return (
       <div
@@ -314,6 +405,12 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
   }
 
   const participantCount = Object.keys(participants).length;
+  // Participants Daily actifs, hors moi-même, pour le panneau de
+  // promotion (être connecté au vocal permet une application immédiate ;
+  // sinon le rôle change en base et s'appliquera à la prochaine connexion).
+  const otherParticipants = Object.values(participants).filter(
+    (p) => !p.local && p.user_id && p.user_id !== currentUserId
+  );
 
   return (
     <div className="flex flex-col h-full" style={{ background: COLORS.surface }}>
@@ -344,8 +441,8 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
               </span>
             )}
             {myRole === "co_host" && (
-              <span className="text-[10px] px-2 py-0.5 rounded-full bg-teal-500/20 text-teal-300 font-normal">
-                CO-HÔTE
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-teal-500/20 text-teal-300 font-normal flex items-center gap-1">
+                <Star size={10} /> CO-HÔTE
               </span>
             )}
           </h2>
@@ -413,6 +510,62 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
               <PhoneOff size={18} />
             </button>
           </div>
+        </div>
+      )}
+
+      {/* Panneau de promotion co-hôte — réservé à l'hôte d'origine */}
+      {isRoomOwner && isVoiceMode && (
+        <div className="px-4 py-3 border-b" style={{ borderColor: COLORS.border }}>
+          <p
+            className="text-[10px] font-bold uppercase tracking-wider mb-2"
+            style={{ color: COLORS.muted }}
+          >
+            Participants connectés au vocal
+          </p>
+
+          {roleActionError && (
+            <p className="text-xs text-red-400 mb-2">{roleActionError}</p>
+          )}
+
+          {otherParticipants.length === 0 ? (
+            <p className="text-xs" style={{ color: COLORS.muted }}>
+              Personne d'autre n'est encore connecté au vocal.
+            </p>
+          ) : (
+            <div className="flex flex-col gap-2 max-h-36 overflow-y-auto">
+              {otherParticipants.map((p) => {
+                const role = participantRoles[p.user_id] || "viewer";
+                const isLoadingThis = roleActionLoading === p.user_id;
+                return (
+                  <div
+                    key={p.session_id}
+                    className="flex items-center justify-between gap-2 text-xs"
+                  >
+                    <span
+                      className="flex items-center gap-1.5 truncate"
+                      style={{ color: COLORS.ivory }}
+                    >
+                      {role === "co_host" && (
+                        <Star size={12} style={{ color: COLORS.teal }} />
+                      )}
+                      {p.user_name || "Participant"}
+                    </span>
+                    <button
+                      onClick={() => handleToggleCoHost(p.user_id, role)}
+                      disabled={isLoadingThis}
+                      className="px-2.5 py-1.5 rounded-lg font-bold shrink-0 disabled:opacity-50"
+                      style={{
+                        background: role === "co_host" ? "rgba(239,68,68,0.15)" : COLORS.gold,
+                        color: role === "co_host" ? "#ef4444" : "#000",
+                      }}
+                    >
+                      {isLoadingThis ? "…" : role === "co_host" ? "Rétrograder" : "Promouvoir"}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 
