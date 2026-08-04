@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from "react";
-import { Swords, Plus, Hash, MessageSquare, Mic, Video } from "lucide-react";
+import { useState, useEffect } from "react";
+import { Swords, Plus, Hash, Users, MessageSquare, Mic, Video, KeyRound } from "lucide-react";
 import { COLORS } from "../theme.js";
 import { supabase } from "../supabaseClient.js";
 import { CreateDebateModal } from "./CreateDebateModal.jsx";
@@ -11,20 +11,24 @@ export default function DebatesTab({ currentUserId, onRewardPoints }) {
   const [error, setError] = useState(null);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [activeDebateCode, setActiveDebateCode] = useState(null);
+  const [joinCode, setJoinCode] = useState("");
+  const [joining, setJoining] = useState(false);
 
-  const fetchDebates = useCallback(async () => {
+  const fetchDebates = async () => {
     setLoading(true);
     setError(null);
     try {
+      // Avec RLS : on ne voit que les salles actives (policy corrigée)
+      // ou celles dont on est hôte / participant.
       const { data, error } = await supabase
         .from("debate_rooms")
-        .select("id, title, topic, mode, invite_code, status, created_at, host_id, max_participants")
+        .select("id, title, topic, mode, invite_code, status, created_at, host_id, daily_room_name")
         .eq("status", "active")
         .order("created_at", { ascending: false })
         .limit(50);
 
       if (error) {
-        console.error("Erreur fetch débats:", error);
+        console.error("Erreur Supabase:", error);
         setError(error.message);
         setDebates([]);
       } else {
@@ -36,118 +40,100 @@ export default function DebatesTab({ currentUserId, onRewardPoints }) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  };
 
-  // Chargement initial + Realtime
   useEffect(() => {
     fetchDebates();
-
     const channel = supabase
-      .channel("debates_realtime")
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "debate_rooms",
-        },
-        (payload) => {
-          console.log("Nouveau débat détecté:", payload.new);
-          // Ajoute directement sans tout recharger
-          if (payload.new?.status === "active") {
-            setDebates((prev) => {
-              const exists = prev.some((d) => d.id === payload.new.id);
-              if (exists) return prev;
-              return [payload.new, ...prev];
-            });
-          }
-        }
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "debate_rooms",
-        },
-        (payload) => {
-          console.log("Débat mis à jour:", payload.new);
-          if (payload.new?.status === "ended") {
-            setDebates((prev) => prev.filter((d) => d.id !== payload.new.id));
-          } else if (payload.new?.status === "active") {
-            setDebates((prev) => {
-              const idx = prev.findIndex((d) => d.id === payload.new.id);
-              if (idx >= 0) {
-                const copy = [...prev];
-                copy[idx] = { ...copy[idx], ...payload.new };
-                return copy;
-              }
-              return [payload.new, ...prev];
-            });
-          }
-        }
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "DELETE",
-          schema: "public",
-          table: "debate_rooms",
-        },
-        (payload) => {
-          setDebates((prev) => prev.filter((d) => d.id !== payload.old.id));
-        }
-      )
-      .subscribe((status) => {
-        console.log("Realtime débats status:", status);
-      });
-
+      .channel("debates_channel")
+      .on("postgres_changes", { event: "*", schema: "public", table: "debate_rooms" }, () => {
+        fetchDebates();
+      })
+      .subscribe();
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [fetchDebates]);
+  }, []);
 
-  // Mode plein écran
+  const handleJoinByCode = async () => {
+    const code = joinCode.trim().toUpperCase();
+    if (!code || joining) return;
+    setJoining(true);
+    setError(null);
+    try {
+      // RPC security definer : ajoute le participant et renvoie la salle
+      const { data, error } = await supabase.rpc("join_debate_by_code", {
+        p_code: code,
+      });
+      if (error) throw error;
+      if (!data) throw new Error("Code invalide");
+      setActiveDebateCode(data.invite_code || code);
+      setJoinCode("");
+      fetchDebates();
+    } catch (err) {
+      setError(err.message || "Impossible de rejoindre ce live");
+    } finally {
+      setJoining(false);
+    }
+  };
+
   if (activeDebateCode) {
     return (
-      <div className="fixed inset-0 z-50 flex flex-col" style={{ background: COLORS.surface }}>
-        <DebateRoom
-          inviteCode={activeDebateCode}
-          currentUserId={currentUserId}
-          onBack={() => {
-            setActiveDebateCode(null);
-            fetchDebates(); // rafraîchit la liste au retour
-          }}
-        />
-      </div>
+      <DebateRoom
+        inviteCode={activeDebateCode}
+        currentUserId={currentUserId}
+        onBack={() => {
+          setActiveDebateCode(null);
+          fetchDebates();
+        }}
+      />
     );
   }
 
   return (
     <>
       <div className="flex flex-col h-full p-4">
-        <div className="flex items-center justify-between mb-6">
+        <div className="flex items-center justify-between mb-4">
           <h2 className="text-xl font-bold flex items-center gap-2" style={{ color: COLORS.ivory }}>
             <Swords size={24} style={{ color: COLORS.gold }} />
             Débats en cours
           </h2>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={fetchDebates}
-              className="px-3 py-2 rounded-xl text-xs border"
-              style={{ borderColor: COLORS.border, color: COLORS.muted }}
-            >
-              Rafraîchir
-            </button>
-            <button
-              onClick={() => setIsCreateOpen(true)}
-              className="px-4 py-2 rounded-xl font-bold text-sm flex items-center gap-2"
-              style={{ background: COLORS.gold, color: "#000" }}
-            >
-              <Plus size={16} />
-              Créer
-            </button>
+          <button
+            onClick={() => setIsCreateOpen(true)}
+            className="px-4 py-2 rounded-xl font-bold text-sm flex items-center gap-2"
+            style={{ background: COLORS.gold, color: "#000" }}
+          >
+            <Plus size={16} />
+            Créer
+          </button>
+        </div>
+
+        {/* Rejoindre par code */}
+        <div
+          className="flex gap-2 mb-4 p-3 rounded-xl border"
+          style={{ background: COLORS.surface, borderColor: COLORS.border }}
+        >
+          <div className="flex items-center gap-2 flex-1">
+            <KeyRound size={16} style={{ color: COLORS.muted }} />
+            <input
+              type="text"
+              value={joinCode}
+              onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
+              placeholder="Code d'invitation"
+              maxLength={8}
+              className="flex-1 bg-transparent outline-none text-sm uppercase tracking-widest"
+              style={{ color: COLORS.ivory }}
+              onKeyDown={(e) => e.key === "Enter" && handleJoinByCode()}
+            />
           </div>
+          <button
+            onClick={handleJoinByCode}
+            disabled={!joinCode.trim() || joining}
+            className="px-4 py-2 rounded-lg text-xs font-bold disabled:opacity-50"
+            style={{ background: COLORS.teal, color: "#000" }}
+          >
+            {joining ? "..." : "Rejoindre"}
+          </button>
         </div>
 
         {error && (
@@ -180,9 +166,12 @@ export default function DebatesTab({ currentUserId, onRewardPoints }) {
               <p className="font-bold mb-2" style={{ color: COLORS.ivory }}>
                 Aucun débat actif
               </p>
+              <p className="text-xs mb-4" style={{ color: COLORS.muted }}>
+                Créez un live ou rejoignez avec un code d'invitation
+              </p>
               <button
                 onClick={() => setIsCreateOpen(true)}
-                className="px-6 py-3 rounded-xl font-bold text-sm mt-4"
+                className="px-6 py-3 rounded-xl font-bold text-sm mt-2"
                 style={{ background: COLORS.gold, color: "#000" }}
               >
                 Créer un débat
@@ -246,15 +235,10 @@ export default function DebatesTab({ currentUserId, onRewardPoints }) {
         currentUserId={currentUserId}
         onSuccess={(room) => {
           setIsCreateOpen(false);
-          // Ajoute immédiatement dans la liste + entre dans la salle
-          setDebates((prev) => {
-            const exists = prev.some((d) => d.id === room.id);
-            if (exists) return prev;
-            return [room, ...prev];
-          });
           setActiveDebateCode(room.invite_code);
+          fetchDebates();
         }}
       />
     </>
   );
-                }
+}
