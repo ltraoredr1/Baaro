@@ -309,8 +309,20 @@ export default async function handler(req, res) {
 
       const tokenData = await tokenRes.json();
 
+      // URL officielle Daily (évite un mauvais DAILY_DOMAIN)
+      let roomUrl = `https://${process.env.DAILY_DOMAIN || "baaro"}.daily.co/${roomName}`;
+      try {
+        const infoRes = await fetch(`${DAILY_API_URL}/rooms/${roomName}`, {
+          headers: { Authorization: `Bearer ${DAILY_API_KEY}` },
+        });
+        if (infoRes.ok) {
+          const info = await infoRes.json();
+          if (info.url) roomUrl = info.url;
+        }
+      } catch (_) {}
+
       return res.status(200).json({
-        roomUrl: `https://${process.env.DAILY_DOMAIN || "baaro"}.daily.co/${roomName}`,
+        roomUrl,
         token: tokenData.token,
         role,
       });
