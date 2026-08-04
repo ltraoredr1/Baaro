@@ -208,12 +208,14 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
           onTrackStopped: updateParticipants,
           onError: (e) => {
             console.error("Daily error:", e);
-            setVoiceError("Erreur audio. Réessaie.");
+            setVoiceError(JSON.stringify(e, Object.getOwnPropertyNames(e)) || String(e));
           },
         });
       } catch (err) {
         console.error("Erreur vocal:", err);
-        setVoiceError(err.message || "Impossible de rejoindre l'audio");
+        setVoiceError(
+          JSON.stringify(err, Object.getOwnPropertyNames(err)) || String(err)
+        );
         voiceStarted.current = false;
       } finally {
         setVoiceConnecting(false);
@@ -351,7 +353,7 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
               Connexion audio…
             </p>
           ) : voiceError ? (
-            <p className="text-xs text-red-400">{voiceError}</p>
+            <p className="text-xs text-red-400 break-all">{voiceError}</p>
           ) : (
             <p className="text-xs flex items-center gap-1.5" style={{ color: COLORS.teal }}>
               <Volume2 size={14} />
