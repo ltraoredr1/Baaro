@@ -83,7 +83,7 @@ export default async function handler(req, res) {
     return res.status(e.status || 401).json({ error: e.message });
   }
 
-  const { action, roomName, roomId, userName, enableHLS, inviteCode } = req.body || {};
+  const { action, roomName, roomId, userName, enableHLS, inviteCode, title, topic, mode } = req.body || {};
 
   try {
     // ---------- CREATE ROOM ----------
@@ -172,7 +172,9 @@ export default async function handler(req, res) {
           daily_room_name: roomData.name,
           invite_code: code,
           host_id: user.id, // toujours l'utilisateur authentifié, jamais body.hostId
-          title: "Live BAARO",
+          title: (title && String(title).trim()) || "Live BAARO",
+          topic: (topic && String(topic).trim()) || null,
+          mode: mode === "audio" || mode === "video" ? mode : "video",
           status: "active",
           max_participants: 10,
         })
