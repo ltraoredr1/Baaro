@@ -45,11 +45,19 @@ export default async function handler(req, res) {
     return res.status(e.status || 401).json({ error: e.message });
   }
 
-  const { roomId, targetUserId, targetSessionId, role, dailyRoomName } = req.body || {};
+  const body = req.body || {};
+  const roomId = body.roomId;
+  const targetUserId = body.targetUserId;
+  // Accepte les deux conventions de nommage (client / anciennes versions)
+  const targetSessionId = body.targetSessionId || body.dailySessionId || null;
+  const role = body.role || body.newRole;
+  const dailyRoomName = body.dailyRoomName || body.roomName || null;
 
-  if (!roomId || !targetUserId || !targetSessionId || !role || !dailyRoomName) {
-    return res.status(400).json({ error: "Paramètres manquants" });
+  if (!roomId || !targetUserId || !role) {
+    return res.status(400).json({ error: "Paramètres manquants (roomId, targetUserId, role)" });
   }
+  // targetSessionId et dailyRoomName sont optionnels : sans eux on met
+  // à jour la base seulement ; le canSend Daily s'appliquera au prochain join.
 
   if (!["co_host", "viewer"].includes(role)) {
     return res.status(400).json({ error: "Rôle invalide (co_host ou viewer uniquement)" });
@@ -86,37 +94,35 @@ export default async function handler(req, res) {
 
     if (updateError) throw updateError;
 
-    // 3. Appliquer immédiatement côté Daily (SFU), sans attendre un
-    //    rechargement de token par le participant visé.
-    const canSend = role === "co_host" ? ["video", "audio"] : [];
-
-    const permRes = await fetch(
-      `${DAILY_API_URL}/rooms/${dailyRoomName}/update-permissions`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${DAILY_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          data: {
-            [targetSessionId]: { canSend },
+    // 3. Appliquer immédiatement côté Daily (SFU) si on a session + room name
+    if (targetSessionId && dailyRoomName) {
+      const canSend = role === "co_host" ? ["video", "audio"] : [];
+      const permRes = await fetch(
+        `${DAILY_API_URL}/rooms/${dailyRoomName}/update-permissions`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${DAILY_API_KEY}`,
+            "Content-Type": "application/json",
           },
-        }),
-      }
-    );
+          body: JSON.stringify({
+            data: {
+              [targetSessionId]: { canSend },
+            },
+          }),
+        }
+      );
 
-    if (!permRes.ok) {
-      const err = await permRes.text();
-      // Le rôle est déjà changé en base ; on log l'échec Daily mais on ne
-      // rollback pas le rôle — au pire le participant retrouvera le bon
-      // canSend à sa prochaine reconnexion (join-room recalcule le rôle).
-      console.error("Erreur update-permissions Daily:", err);
-      return res.status(200).json({
-        ok: true,
-        role,
-        warning: "Rôle mis à jour, mais la coupure/activation immédiate du flux a échoué. Le participant devra peut-être recharger.",
-      });
+      if (!permRes.ok) {
+        const err = await permRes.text();
+        console.error("Erreur update-permissions Daily:", err);
+        return res.status(200).json({
+          ok: true,
+          role,
+          warning:
+            "Rôle mis à jour, mais la coupure/activation immédiate du flux a échoué. Le participant devra peut-être recharger.",
+        });
+      }
     }
 
     return res.status(200).json({ ok: true, role });
