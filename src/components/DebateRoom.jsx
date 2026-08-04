@@ -28,51 +28,38 @@ import {
   demoteToViewer,
 } from "../lib/webrtc.js";
 
-/** Attache la piste vidéo Daily à un élément <video> */
-function attachVideoTrack(videoEl, participant) {
-  if (!videoEl || !participant) return;
-  const trackInfo = participant.tracks?.video;
-  const track =
-    trackInfo?.persistentTrack ||
-    trackInfo?.track ||
-    null;
-  const ok =
-    track &&
-    track.readyState !== "ended" &&
-    (trackInfo?.state === "playable" ||
-      trackInfo?.state === "loading" ||
-      trackInfo?.state === "sendable" ||
-      !trackInfo?.state);
-
-  if (ok) {
+/** Attache une MediaStreamTrack vidéo à un <video> */
+function attachTrackToVideo(videoEl, track) {
+  if (!videoEl || !track) return;
+  try {
     const stream = new MediaStream([track]);
-    if (videoEl.srcObject !== stream) {
-      videoEl.srcObject = stream;
-      videoEl.play().catch(() => {});
-    }
-  } else if (!track) {
-    videoEl.srcObject = null;
+    videoEl.srcObject = stream;
+    const p = videoEl.play();
+    if (p && typeof p.catch === "function") p.catch(() => {});
+  } catch (e) {
+    console.warn("attachTrackToVideo", e);
   }
 }
 
+function getVideoTrack(participant) {
+  if (!participant?.tracks?.video) return null;
+  const v = participant.tracks.video;
+  return v.persistentTrack || v.track || null;
+}
+
 /** Tuile vidéo / avatar d'un participant */
-function ParticipantTile({ participant, isVideoMode, isLocal }) {
+function ParticipantTile({ participant, isVideoMode, isLocal, videoTrack }) {
   const videoRef = useRef(null);
-  const v = participant?.tracks?.video;
-  const hasVideo =
-    isVideoMode &&
-    !!(v?.persistentTrack || v?.track) &&
-    v?.state !== "off" &&
-    v?.state !== "blocked" &&
-    v?.state !== "interrupted";
+  const track = videoTrack || getVideoTrack(participant);
+  const hasVideo = isVideoMode && !!track && track.readyState !== "ended";
 
   useEffect(() => {
-    if (hasVideo) {
-      attachVideoTrack(videoRef.current, participant);
+    if (hasVideo && videoRef.current) {
+      attachTrackToVideo(videoRef.current, track);
     } else if (videoRef.current) {
       videoRef.current.srcObject = null;
     }
-  }, [participant, hasVideo]);
+  }, [hasVideo, track]);
 
   const name = isLocal
     ? "Vous"
@@ -93,7 +80,7 @@ function ParticipantTile({ participant, isVideoMode, isLocal }) {
           ref={videoRef}
           autoPlay
           playsInline
-          muted={isLocal}
+          muted={!!isLocal}
           className="absolute inset-0 w-full h-full object-cover"
           style={{ transform: isLocal ? "scaleX(-1)" : undefined }}
         />
@@ -143,6 +130,7 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
   const [camOn, setCamOn] = useState(false);
   const [voiceConnecting, setVoiceConnecting] = useState(false);
   const [participants, setParticipants] = useState({});
+  const [videoTracks, setVideoTracks] = useState({}); // session_id -> MediaStreamTrack
   const [voiceError, setVoiceError] = useState(null);
   const [dailyRoomName, setDailyRoomName] = useState(null);
   const [myRole, setMyRole] = useState("viewer");
@@ -192,8 +180,12 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
 
         if (isMounted) {
           setRoom(roomData);
+          // daily_room_name = live Daily créé → forcer le mode média
+          // même si la colonne mode est vide / "text" par erreur
           setIsVoiceMode(
-            roomData.mode === "audio" || roomData.mode === "video"
+            roomData.mode === "audio" ||
+              roomData.mode === "video" ||
+              !!roomData.daily_room_name
           );
           if (roomData.daily_room_name) {
             setDailyRoomName(roomData.daily_room_name);
@@ -365,10 +357,13 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
         const userName =
           profilesCache.current[currentUserId]?.display_name || "Participant";
 
+        const audioOnly =
+          room.mode === "audio" ||
+          (room.mode !== "video" && !room.daily_room_name);
         const { role: apiRole } = await joinLiveByCode({
           inviteCode: room.invite_code,
           userName,
-          audioOnly: room.mode === "audio",
+          audioOnly,
         });
 
         // Source de vérité : host_id en base > rôle renvoyé par l'API
@@ -395,10 +390,37 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
 
         subscribeToEvents({
           onParticipantJoined: updateParticipants,
-          onParticipantLeft: updateParticipants,
+          onParticipantLeft: (ev) => {
+            updateParticipants();
+            const sid = ev?.participant?.session_id;
+            if (sid) {
+              setVideoTracks((prev) => {
+                const n = { ...prev };
+                delete n[sid];
+                return n;
+              });
+            }
+          },
           onParticipantUpdated: updateParticipants,
-          onTrackStarted: updateParticipants,
-          onTrackStopped: updateParticipants,
+          onTrackStarted: (ev) => {
+            updateParticipants();
+            if (ev?.track?.kind === "video" && ev?.participant?.session_id) {
+              setVideoTracks((prev) => ({
+                ...prev,
+                [ev.participant.session_id]: ev.track,
+              }));
+            }
+          },
+          onTrackStopped: (ev) => {
+            updateParticipants();
+            if (ev?.track?.kind === "video" && ev?.participant?.session_id) {
+              setVideoTracks((prev) => {
+                const n = { ...prev };
+                delete n[ev.participant.session_id];
+                return n;
+              });
+            }
+          },
           onError: (e) => {
             console.error("Daily error:", e);
             setVoiceError(
@@ -406,6 +428,15 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
             );
           },
         });
+
+        // Pistes déjà présentes au moment du join
+        const existing = getParticipants();
+        const initial = {};
+        Object.values(existing).forEach((p) => {
+          const t = getVideoTrack(p);
+          if (t && p.session_id) initial[p.session_id] = t;
+        });
+        if (Object.keys(initial).length) setVideoTracks((prev) => ({ ...prev, ...initial }));
 
         pollTimer = setInterval(updateParticipants, 2000);
       } catch (err) {
@@ -531,7 +562,9 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
   const participantList = Object.values(participants);
   const localParticipant = participantList.find((p) => p.local);
   const remoteParticipants = participantList.filter((p) => !p.local);
-  const isVideoMode = room?.mode === "video";
+  const isVideoMode =
+    room?.mode === "video" ||
+    (!!room?.daily_room_name && room?.mode !== "audio");
   const otherForRoles = remoteParticipants.filter(
     (p) => p.user_id && p.user_id !== currentUserId
   );
@@ -634,6 +667,7 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
                     participant={localParticipant}
                     isVideoMode={isVideoMode}
                     isLocal
+                    videoTrack={videoTracks[localParticipant.session_id]}
                   />
                 )}
                 {remoteParticipants.map((p) => (
@@ -642,6 +676,7 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
                     participant={p}
                     isVideoMode={isVideoMode}
                     isLocal={false}
+                    videoTrack={videoTracks[p.session_id]}
                   />
                 ))}
               </div>
