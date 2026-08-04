@@ -53,8 +53,10 @@ export function CreateDebateModal({ isOpen, onClose, currentUserId, onSuccess })
           body: JSON.stringify({
             action: "create-room",
             userName: "Hôte",
-            hostId: currentUserId,
             enableHLS: false,
+            title: title.trim(),
+            topic: topic.trim(),
+            mode,
           }),
         });
 
@@ -77,26 +79,49 @@ export function CreateDebateModal({ isOpen, onClose, currentUserId, onSuccess })
         const inviteCode = dailyData.inviteCode;
         const dailyRoomName = dailyData.roomName;
 
-        const { data: updatedRoom, error: updateError } = await supabase
+        // create-room a déjà créé la ligne + participant host.
+        // On met à jour title/topic/mode (idempotent).
+        let updatedRoom = null;
+        const { data: upd, error: updateError } = await supabase
           .from("debate_rooms")
           .update({
             title: title.trim(),
             topic: topic.trim(),
             mode: mode,
-            daily_room_name: dailyRoomName,
             max_participants: 10,
           })
           .eq("invite_code", inviteCode)
           .select()
-          .single();
+          .maybeSingle();
 
-        if (updateError) throw updateError;
+        if (updateError) {
+          console.warn("Update room meta:", updateError);
+        }
+        updatedRoom = upd;
+
+        if (!updatedRoom && dailyData.roomId) {
+          const { data: fetched } = await supabase
+            .from("debate_rooms")
+            .select("*")
+            .eq("id", dailyData.roomId)
+            .maybeSingle();
+          updatedRoom = fetched;
+        }
+
+        if (!updatedRoom) {
+          // Fallback minimal pour ouvrir DebateRoom
+          updatedRoom = {
+            id: dailyData.roomId,
+            invite_code: inviteCode,
+            daily_room_name: dailyRoomName,
+            title: title.trim(),
+            topic: topic.trim(),
+            mode,
+            status: "active",
+            host_id: currentUserId,
+          };
+        }
         room = updatedRoom;
-
-        await supabase.from("debate_participants").upsert({
-          room_id: room.id,
-          user_id: currentUserId,
-        });
       }
 
       // ========== MODE TEXTE ==========
