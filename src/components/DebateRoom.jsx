@@ -7,9 +7,12 @@ import {
   MessageSquare,
   Mic,
   MicOff,
+  Video,
+  VideoOff,
   PhoneOff,
   Volume2,
   Star,
+  Loader2,
 } from "lucide-react";
 import { COLORS } from "../theme.js";
 import { supabase } from "../supabaseClient.js";
@@ -19,12 +22,104 @@ import {
   enableMic,
   enableCamera,
   subscribeToEvents,
-  getCallObject,
   getParticipants,
   upgradeLocalRole,
   promoteToCoHost,
   demoteToViewer,
 } from "../lib/webrtc.js";
+
+/** Attache la piste vidéo Daily à un élément <video> */
+function attachVideoTrack(videoEl, participant) {
+  if (!videoEl || !participant) return;
+  const trackInfo = participant.tracks?.video;
+  const track =
+    trackInfo?.persistentTrack ||
+    trackInfo?.track ||
+    null;
+
+  if (track && trackInfo?.state === "playable") {
+    const stream = new MediaStream([track]);
+    if (videoEl.srcObject !== stream) {
+      videoEl.srcObject = stream;
+      videoEl.play().catch(() => {});
+    }
+  } else {
+    videoEl.srcObject = null;
+  }
+}
+
+/** Tuile vidéo / avatar d'un participant */
+function ParticipantTile({ participant, isVideoMode, isLocal }) {
+  const videoRef = useRef(null);
+  const hasVideo =
+    isVideoMode &&
+    participant?.tracks?.video?.state === "playable" &&
+    (participant.tracks.video.persistentTrack || participant.tracks.video.track);
+
+  useEffect(() => {
+    if (hasVideo) {
+      attachVideoTrack(videoRef.current, participant);
+    } else if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+  }, [participant, hasVideo]);
+
+  const name = isLocal
+    ? "Vous"
+    : participant?.user_name || "Participant";
+
+  return (
+    <div
+      className="relative rounded-2xl overflow-hidden border flex items-center justify-center"
+      style={{
+        background: COLORS.surface2,
+        borderColor: COLORS.border,
+        minHeight: isLocal ? 160 : 140,
+        aspectRatio: "16/10",
+      }}
+    >
+      {hasVideo ? (
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted={isLocal}
+          className="absolute inset-0 w-full h-full object-cover"
+          style={{ transform: isLocal ? "scaleX(-1)" : undefined }}
+        />
+      ) : (
+        <div className="flex flex-col items-center gap-2 z-10">
+          <div
+            className="w-14 h-14 rounded-full flex items-center justify-center text-xl font-bold border"
+            style={{
+              background: COLORS.surface,
+              borderColor: COLORS.borderGold,
+              color: COLORS.gold,
+            }}
+          >
+            {(name || "?")[0].toUpperCase()}
+          </div>
+          {!isVideoMode && (
+            <Volume2 size={14} style={{ color: COLORS.muted }} />
+          )}
+        </div>
+      )}
+
+      <div
+        className="absolute bottom-0 left-0 right-0 px-2 py-1.5 flex items-center gap-1.5 text-[11px] font-bold"
+        style={{
+          background: "linear-gradient(transparent, rgba(0,0,0,0.75))",
+          color: "#fff",
+        }}
+      >
+        <span className="truncate">{name}</span>
+        {isLocal && (
+          <span className="text-[9px] opacity-70 shrink-0">MOI</span>
+        )}
+      </div>
+    </div>
+  );
+}
 
 export function DebateRoom({ inviteCode, currentUserId, onBack }) {
   const [room, setRoom] = useState(null);
@@ -33,24 +128,19 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  // Vocal
   const [isVoiceMode, setIsVoiceMode] = useState(false);
   const [micOn, setMicOn] = useState(false);
+  const [camOn, setCamOn] = useState(false);
   const [voiceConnecting, setVoiceConnecting] = useState(false);
   const [participants, setParticipants] = useState({});
   const [voiceError, setVoiceError] = useState(null);
   const [dailyRoomName, setDailyRoomName] = useState(null);
-  // Rôle réel calculé côté serveur ('host' | 'co_host' | 'viewer'),
-  // renvoyé par joinLiveByCode()/joinLive(), et tenu à jour ensuite par
-  // Realtime sur debate_participants (voir plus bas).
   const [myRole, setMyRole] = useState("viewer");
   const canBroadcast = myRole === "host" || myRole === "co_host";
   const isRoomOwner = room?.host_id === currentUserId;
 
-  // Rôles de tous les participants du salon (user_id -> role), utilisés
-  // pour afficher le panneau de promotion côté hôte.
   const [participantRoles, setParticipantRoles] = useState({});
-  const [roleActionLoading, setRoleActionLoading] = useState(null); // user_id en cours d'action
+  const [roleActionLoading, setRoleActionLoading] = useState(null);
   const [roleActionError, setRoleActionError] = useState(null);
 
   const messagesEndRef = useRef(null);
@@ -65,7 +155,6 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
     scrollToBottom();
   }, [messages, scrollToBottom]);
 
-  // ===== Chargement de la salle + messages + rôles =====
   useEffect(() => {
     let isMounted = true;
     let messagesChannel = null;
@@ -92,13 +181,14 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
 
         if (isMounted) {
           setRoom(roomData);
-          setIsVoiceMode(roomData.mode === "audio" || roomData.mode === "video");
+          setIsVoiceMode(
+            roomData.mode === "audio" || roomData.mode === "video"
+          );
           if (roomData.daily_room_name) {
             setDailyRoomName(roomData.daily_room_name);
           }
         }
 
-        // Messages
         const { data: msgsData } = await supabase
           .from("debate_messages")
           .select("id, text, created_at, sender_id, sender_type")
@@ -137,7 +227,6 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
           );
         }
 
-        // Rôles actuels de tous les participants du salon
         const { data: rolesData } = await supabase
           .from("debate_participants")
           .select("user_id, role")
@@ -152,7 +241,6 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
           setParticipantRoles(rolesMap);
         }
 
-        // Realtime messages
         messagesChannel = supabase
           .channel(`room_${roomData.id}`)
           .on(
@@ -165,7 +253,7 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
             },
             async (payload) => {
               let profile = profilesCache.current[payload.new.sender_id];
-              if (!profile && payload.new.user_id) {
+              if (!profile && payload.new.sender_id) {
                 const { data } = await supabase
                   .from("profiles")
                   .select("display_name, avatar_url, flag")
@@ -187,7 +275,6 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
           )
           .subscribe();
 
-        // Realtime rôles (promotions/rétrogradations, arrivées/départs)
         participantsChannel = supabase
           .channel(`room_participants_${roomData.id}`)
           .on(
@@ -214,11 +301,11 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
                 return;
               }
 
-              setParticipantRoles((prev) => ({ ...prev, [row.user_id]: row.role }));
+              setParticipantRoles((prev) => ({
+                ...prev,
+                [row.user_id]: row.role,
+              }));
 
-              // Si c'est MON rôle qui vient de changer (promotion ou
-              // rétrogradation par l'hôte), applique-le immédiatement :
-              // le serveur a déjà mis à jour les permissions Daily.
               if (
                 row.user_id === currentUserId &&
                 payload.eventType === "UPDATE" &&
@@ -229,8 +316,9 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
                 const shouldBroadcast = row.role === "co_host";
                 enableMic(shouldBroadcast);
                 setMicOn(shouldBroadcast);
-                if (isMounted && roomData.mode === "video") {
+                if (roomData.mode === "video") {
                   enableCamera(shouldBroadcast);
+                  setCamOn(shouldBroadcast);
                 }
               }
             }
@@ -252,9 +340,10 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
     };
   }, [inviteCode, currentUserId]);
 
-  // ===== Connexion vocale automatique si mode audio/video =====
   useEffect(() => {
     if (!room || !isVoiceMode || voiceStarted.current || !inviteCode) return;
+
+    let pollTimer = null;
 
     const startVoice = async () => {
       setVoiceConnecting(true);
@@ -279,10 +368,11 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
 
         if (room.mode === "video") {
           enableCamera(shouldStartMedia);
+          setCamOn(shouldStartMedia);
         }
 
         const updateParticipants = () => {
-          setParticipants(getParticipants());
+          setParticipants({ ...getParticipants() });
         };
         updateParticipants();
 
@@ -293,9 +383,13 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
           onTrackStopped: updateParticipants,
           onError: (e) => {
             console.error("Daily error:", e);
-            setVoiceError(JSON.stringify(e, Object.getOwnPropertyNames(e)) || String(e));
+            setVoiceError(
+              JSON.stringify(e, Object.getOwnPropertyNames(e)) || String(e)
+            );
           },
         });
+
+        pollTimer = setInterval(updateParticipants, 2000);
       } catch (err) {
         console.error("Erreur vocal:", err);
         setVoiceError(
@@ -308,12 +402,17 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
     };
 
     startVoice();
+
+    return () => {
+      if (pollTimer) clearInterval(pollTimer);
+    };
   }, [room, isVoiceMode, inviteCode, currentUserId]);
 
-  // Cleanup vocal au démontage
   useEffect(() => {
     return () => {
-      leaveLive({ roomName: dailyRoomName, isHost: isRoomOwner }).catch(() => {});
+      leaveLive({ roomName: dailyRoomName, isHost: isRoomOwner }).catch(
+        () => {}
+      );
     };
   }, [dailyRoomName, isRoomOwner]);
 
@@ -324,10 +423,18 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
     setMicOn(next);
   };
 
+  const toggleCam = () => {
+    if (!canBroadcast || room?.mode !== "video") return;
+    const next = !camOn;
+    enableCamera(next);
+    setCamOn(next);
+  };
+
   const handleLeaveVoice = async () => {
     await leaveLive({ roomName: dailyRoomName, isHost: isRoomOwner });
     voiceStarted.current = false;
     setMicOn(false);
+    setCamOn(false);
     setMyRole("viewer");
     setParticipants({});
     onBack();
@@ -354,9 +461,6 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
     }
   };
 
-  // Promotion / rétrogradation, réservée à l'hôte d'origine du salon.
-  // La mise à jour de participantRoles/myRole pour la cible arrive via
-  // Realtime (voir ci-dessus) — pas besoin de le faire manuellement ici.
   const handleToggleCoHost = async (targetUserId, currentRole) => {
     if (!room || roleActionLoading) return;
     setRoleActionLoading(targetUserId);
@@ -406,17 +510,16 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
     );
   }
 
-  const participantCount = Object.keys(participants).length;
-  // Participants Daily actifs, hors moi-même, pour le panneau de
-  // promotion (être connecté au vocal permet une application immédiate ;
-  // sinon le rôle change en base et s'appliquera à la prochaine connexion).
-  const otherParticipants = Object.values(participants).filter(
-    (p) => !p.local && p.user_id && p.user_id !== currentUserId
+  const participantList = Object.values(participants);
+  const localParticipant = participantList.find((p) => p.local);
+  const remoteParticipants = participantList.filter((p) => !p.local);
+  const isVideoMode = room?.mode === "video";
+  const otherForRoles = remoteParticipants.filter(
+    (p) => p.user_id && p.user_id !== currentUserId
   );
 
   return (
     <div className="flex flex-col h-full" style={{ background: COLORS.surface }}>
-      {/* Header */}
       <div
         className="flex items-center gap-3 p-4 border-b"
         style={{ borderColor: COLORS.border }}
@@ -428,114 +531,207 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
         >
           <ArrowLeft size={20} />
         </button>
-        <div className="flex-1">
+        <div className="flex-1 min-w-0">
           <h2
-            className="font-bold text-sm flex items-center gap-2"
+            className="font-bold text-sm flex items-center gap-2 flex-wrap"
             style={{ color: COLORS.ivory }}
           >
-            {room?.title}
-            <span className="text-[10px] px-2 py-0.5 rounded-full bg-green-500/20 text-green-400 font-normal">
+            <span className="truncate">{room?.title}</span>
+            <span className="text-[10px] px-2 py-0.5 rounded-full bg-green-500/20 text-green-400 font-normal shrink-0">
               LIVE
             </span>
             {isVoiceMode && (
-              <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-400 font-normal flex items-center gap-1">
-                <Volume2 size={10} /> VOCAL
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-400 font-normal flex items-center gap-1 shrink-0">
+                <Volume2 size={10} />
+                {isVideoMode ? "VIDÉO" : "VOCAL"}
               </span>
             )}
             {myRole === "co_host" && (
-              <span className="text-[10px] px-2 py-0.5 rounded-full bg-teal-500/20 text-teal-300 font-normal flex items-center gap-1">
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-teal-500/20 text-teal-300 font-normal flex items-center gap-1 shrink-0">
                 <Star size={10} /> CO-HÔTE
               </span>
             )}
           </h2>
-          <p className="text-xs flex items-center gap-1" style={{ color: COLORS.muted }}>
+          <p
+            className="text-xs flex items-center gap-1"
+            style={{ color: COLORS.muted }}
+          >
             <Hash size={12} /> {room?.topic}
+            {room?.invite_code && (
+              <span className="ml-2 opacity-70">· Code {room.invite_code}</span>
+            )}
           </p>
         </div>
         <div
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-full"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-full shrink-0"
           style={{ background: COLORS.surface2 }}
         >
           <Users size={14} style={{ color: COLORS.gold }} />
           <span className="text-xs" style={{ color: COLORS.ivory }}>
-            {participantCount || "–"}
+            {participantList.length || "–"}
           </span>
         </div>
       </div>
 
-      {/* Barre vocale */}
       {isVoiceMode && (
         <div
-          className="px-4 py-3 border-b flex items-center justify-between gap-3"
-          style={{ borderColor: COLORS.border, background: COLORS.surface2 }}
+          className="px-4 py-3 border-b"
+          style={{ borderColor: COLORS.border }}
         >
           {voiceConnecting ? (
-            <p className="text-xs" style={{ color: COLORS.muted }}>
-              Connexion audio…
-            </p>
-          ) : voiceError ? (
-            <p className="text-xs text-red-400 break-all">{voiceError}</p>
-          ) : canBroadcast ? (
-            <p className="text-xs flex items-center gap-1.5" style={{ color: COLORS.teal }}>
-              <Volume2 size={14} />
-              Mode vocal actif
-            </p>
-          ) : (
-            <p className="text-xs flex items-center gap-1.5" style={{ color: COLORS.muted }}>
-              <Volume2 size={14} />
-              Vous regardez en spectateur
-            </p>
-          )}
-
-          <div className="flex items-center gap-2">
-            {canBroadcast && (
-              <button
-                onClick={toggleMic}
-                disabled={voiceConnecting || !!voiceError}
-                className="p-3 rounded-full transition disabled:opacity-40"
-                style={{
-                  background: micOn ? COLORS.gold : "rgba(239,68,68,0.2)",
-                  color: micOn ? "#000" : "#ef4444",
-                }}
-                title={micOn ? "Couper le micro" : "Activer le micro"}
-              >
-                {micOn ? <Mic size={18} /> : <MicOff size={18} />}
-              </button>
-            )}
-
-            <button
-              onClick={handleLeaveVoice}
-              className="p-3 rounded-full"
-              style={{ background: "rgba(239,68,68,0.25)", color: "#ef4444" }}
-              title="Quitter le live"
+            <div
+              className="flex flex-col items-center justify-center gap-3 py-10 rounded-2xl border"
+              style={{ background: COLORS.surface2, borderColor: COLORS.border }}
             >
-              <PhoneOff size={18} />
-            </button>
-          </div>
+              <Loader2
+                className="animate-spin"
+                size={32}
+                style={{ color: COLORS.gold }}
+              />
+              <p className="text-sm font-bold" style={{ color: COLORS.ivory }}>
+                Connexion au live…
+              </p>
+              <p className="text-xs" style={{ color: COLORS.muted }}>
+                Autorisez le micro
+                {isVideoMode ? " et la caméra" : ""} si demandé
+              </p>
+            </div>
+          ) : voiceError ? (
+            <div className="p-4 rounded-xl bg-red-500/15 border border-red-500/40">
+              <p className="text-xs text-red-400 break-all">{voiceError}</p>
+            </div>
+          ) : (
+            <>
+              <div
+                className={`grid gap-2 mb-3 ${
+                  remoteParticipants.length === 0
+                    ? "grid-cols-1"
+                    : remoteParticipants.length === 1
+                      ? "grid-cols-2"
+                      : "grid-cols-2 sm:grid-cols-3"
+                }`}
+              >
+                {localParticipant && (
+                  <ParticipantTile
+                    participant={localParticipant}
+                    isVideoMode={isVideoMode}
+                    isLocal
+                  />
+                )}
+                {remoteParticipants.map((p) => (
+                  <ParticipantTile
+                    key={p.session_id}
+                    participant={p}
+                    isVideoMode={isVideoMode}
+                    isLocal={false}
+                  />
+                ))}
+              </div>
+
+              {remoteParticipants.length === 0 && (
+                <div
+                  className="text-center py-3 mb-2 rounded-xl border"
+                  style={{
+                    background: "rgba(245,158,11,0.08)",
+                    borderColor: "rgba(245,158,11,0.25)",
+                  }}
+                >
+                  <p
+                    className="text-xs font-bold mb-1"
+                    style={{ color: COLORS.gold }}
+                  >
+                    En attente d’autres participants…
+                  </p>
+                  <p className="text-[11px]" style={{ color: COLORS.muted }}>
+                    Partagez le code{" "}
+                    <span
+                      className="font-mono font-bold"
+                      style={{ color: COLORS.ivory }}
+                    >
+                      {room?.invite_code}
+                    </span>{" "}
+                    pour les inviter
+                  </p>
+                </div>
+              )}
+
+              <div className="flex items-center justify-center gap-3">
+                {canBroadcast ? (
+                  <>
+                    <button
+                      onClick={toggleMic}
+                      className="p-3 rounded-full"
+                      style={{
+                        background: micOn
+                          ? COLORS.gold
+                          : "rgba(239,68,68,0.25)",
+                        color: micOn ? "#000" : "#ef4444",
+                      }}
+                      title={micOn ? "Couper le micro" : "Activer le micro"}
+                    >
+                      {micOn ? <Mic size={18} /> : <MicOff size={18} />}
+                    </button>
+                    {isVideoMode && (
+                      <button
+                        onClick={toggleCam}
+                        className="p-3 rounded-full"
+                        style={{
+                          background: camOn
+                            ? COLORS.gold
+                            : "rgba(239,68,68,0.25)",
+                          color: camOn ? "#000" : "#ef4444",
+                        }}
+                        title={
+                          camOn ? "Couper la caméra" : "Activer la caméra"
+                        }
+                      >
+                        {camOn ? <Video size={18} /> : <VideoOff size={18} />}
+                      </button>
+                    )}
+                  </>
+                ) : (
+                  <p className="text-[11px]" style={{ color: COLORS.muted }}>
+                    Spectateur — micro et caméra désactivés
+                  </p>
+                )}
+                <button
+                  onClick={handleLeaveVoice}
+                  className="p-3 rounded-full"
+                  style={{
+                    background: "rgba(239,68,68,0.25)",
+                    color: "#ef4444",
+                  }}
+                  title="Quitter le live"
+                >
+                  <PhoneOff size={18} />
+                </button>
+              </div>
+            </>
+          )}
         </div>
       )}
 
-      {/* Panneau de promotion co-hôte — réservé à l'hôte d'origine */}
-      {isRoomOwner && isVoiceMode && (
-        <div className="px-4 py-3 border-b" style={{ borderColor: COLORS.border }}>
+      {isRoomOwner && isVoiceMode && !voiceConnecting && (
+        <div
+          className="px-4 py-3 border-b"
+          style={{ borderColor: COLORS.border }}
+        >
           <p
             className="text-[10px] font-bold uppercase tracking-wider mb-2"
             style={{ color: COLORS.muted }}
           >
-            Participants connectés au vocal
+            Participants connectés
           </p>
-
           {roleActionError && (
             <p className="text-xs text-red-400 mb-2">{roleActionError}</p>
           )}
-
-          {otherParticipants.length === 0 ? (
+          {otherForRoles.length === 0 ? (
             <p className="text-xs" style={{ color: COLORS.muted }}>
-              Personne d'autre n'est encore connecté au vocal.
+              Personne d’autre n’est encore connecté.
             </p>
           ) : (
             <div className="flex flex-col gap-2 max-h-36 overflow-y-auto">
-              {otherParticipants.map((p) => {
+              {otherForRoles.map((p) => {
                 const role = participantRoles[p.user_id] || "viewer";
                 const isLoadingThis = roleActionLoading === p.user_id;
                 return (
@@ -557,11 +753,18 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
                       disabled={isLoadingThis}
                       className="px-2.5 py-1.5 rounded-lg font-bold shrink-0 disabled:opacity-50"
                       style={{
-                        background: role === "co_host" ? "rgba(239,68,68,0.15)" : COLORS.gold,
+                        background:
+                          role === "co_host"
+                            ? "rgba(239,68,68,0.15)"
+                            : COLORS.gold,
                         color: role === "co_host" ? "#ef4444" : "#000",
                       }}
                     >
-                      {isLoadingThis ? "…" : role === "co_host" ? "Rétrograder" : "Promouvoir"}
+                      {isLoadingThis
+                        ? "…"
+                        : role === "co_host"
+                          ? "Rétrograder"
+                          : "Co-hôte"}
                     </button>
                   </div>
                 );
@@ -571,7 +774,6 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
         </div>
       )}
 
-      {/* Messages */}
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
         {messages.length === 0 ? (
           <div className="text-center py-10" style={{ color: COLORS.muted }}>
@@ -583,7 +785,7 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
             const isMe = msg.sender_id === currentUserId;
             const profile = isMe
               ? { display_name: "Moi", flag: "🌍" }
-              : msg.profile;
+              : msg.profile || { display_name: "Membre", flag: "🌍" };
 
             return (
               <div
@@ -645,7 +847,6 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Input chat */}
       <form
         onSubmit={handleSendMessage}
         className="p-4 border-t flex gap-2"
