@@ -118,7 +118,21 @@ function ParticipantTile({ participant, isVideoMode, isLocal, videoTrack }) {
   );
 }
 
-export function DebateRoom({ inviteCode, currentUserId, onBack }) {
+export function DebateRoom({ inviteCode, currentUserId: currentUserIdProp, onBack }) {
+  const [resolvedUserId, setResolvedUserId] = useState(currentUserIdProp || null);
+  const currentUserId = resolvedUserId || currentUserIdProp;
+
+  useEffect(() => {
+    if (currentUserIdProp) {
+      setResolvedUserId(currentUserIdProp);
+      return;
+    }
+    (async () => {
+      const { data } = await supabase.auth.getUser();
+      if (data?.user?.id) setResolvedUserId(data.user.id);
+    })();
+  }, [currentUserIdProp]);
+
   const [room, setRoom] = useState(null);
   const [messages, setMessages] = useState([]);
   const [newMessage, setNewMessage] = useState("");
@@ -134,9 +148,14 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
   const [voiceError, setVoiceError] = useState(null);
   const [dailyRoomName, setDailyRoomName] = useState(null);
   const [myRole, setMyRole] = useState("viewer");
-  const isRoomOwner = room?.host_id === currentUserId;
+  const isRoomOwner = !!(currentUserId && room?.host_id === currentUserId);
+  const dbRole = currentUserId ? participantRoles[currentUserId] : null;
   const canBroadcast =
-    isRoomOwner || myRole === "host" || myRole === "co_host";
+    isRoomOwner ||
+    myRole === "host" ||
+    myRole === "co_host" ||
+    dbRole === "host" ||
+    dbRole === "co_host";
 
   const [participantRoles, setParticipantRoles] = useState({});
   const [roleActionLoading, setRoleActionLoading] = useState(null);
@@ -242,6 +261,13 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
             rolesMap[p.user_id] = p.role;
           });
           setParticipantRoles(rolesMap);
+          // Rôle en base = source de vérité (évite "Spectateur" à tort)
+          const myDbRole = currentUserId ? rolesMap[currentUserId] : null;
+          if (myDbRole === "host" || myDbRole === "co_host") {
+            setMyRole(myDbRole);
+          } else if (roomData.host_id === currentUserId) {
+            setMyRole("host");
+          }
         }
 
         messagesChannel = supabase
@@ -368,8 +394,13 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
 
         // Source de vérité : host_id en base > rôle renvoyé par l'API
         // (évite le cas où l'hôte se retrouve "viewer" et n'émet rien)
-        const isHostUser = room.host_id === currentUserId;
-        const role = isHostUser ? "host" : apiRole || "viewer";
+        const isHostUser = !!(currentUserId && room.host_id === currentUserId);
+        const dbRole = currentUserId ? participantRoles[currentUserId] : null;
+        let role = apiRole || "viewer";
+        if (isHostUser) role = "host";
+        else if (dbRole === "host" || dbRole === "co_host") role = dbRole;
+        else if (apiRole === "host" || apiRole === "co_host") role = apiRole;
+
         setMyRole(role);
         upgradeLocalRole(role);
 
