@@ -148,6 +148,10 @@ export function DebateRoom({ inviteCode, currentUserId: currentUserIdProp, onBac
   const [voiceError, setVoiceError] = useState(null);
   const [dailyRoomName, setDailyRoomName] = useState(null);
   const [myRole, setMyRole] = useState("viewer");
+  const [participantRoles, setParticipantRoles] = useState({});
+  const [roleActionLoading, setRoleActionLoading] = useState(null);
+  const [roleActionError, setRoleActionError] = useState(null);
+
   const isRoomOwner = !!(currentUserId && room?.host_id === currentUserId);
   const dbRole = currentUserId ? participantRoles[currentUserId] : null;
   const canBroadcast =
@@ -156,10 +160,6 @@ export function DebateRoom({ inviteCode, currentUserId: currentUserIdProp, onBac
     myRole === "co_host" ||
     dbRole === "host" ||
     dbRole === "co_host";
-
-  const [participantRoles, setParticipantRoles] = useState({});
-  const [roleActionLoading, setRoleActionLoading] = useState(null);
-  const [roleActionError, setRoleActionError] = useState(null);
 
   const messagesEndRef = useRef(null);
   const profilesCache = useRef({});
