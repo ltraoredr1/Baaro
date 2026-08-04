@@ -62,6 +62,9 @@ export function SettingsTab({
   const [secureLoading, setSecureLoading] = useState(false);
   const [secureOauthLoading, setSecureOauthLoading] = useState(null); // "facebook" | "twitter" | null
   const [secureMessage, setSecureMessage] = useState("");
+  // Affiche un bouton "Se connecter à ce compte existant" quand l'e-mail
+  // saisi appartient déjà à un autre utilisateur.
+  const [showLoginFallback, setShowLoginFallback] = useState(false);
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => {
@@ -74,6 +77,7 @@ export function SettingsTab({
     if (secureLoading) return;
     setSecureLoading(true);
     setSecureMessage("");
+    setShowLoginFallback(false);
 
     try {
       // updateUser() sur une session invité la transforme en compte stable
@@ -82,13 +86,79 @@ export function SettingsTab({
         email: secureEmail,
         password: securePassword,
       });
-      if (error) throw error;
+
+      if (error) {
+        // Cas précis : l'e-mail appartient déjà à un AUTRE compte existant.
+        // Supabase bloque volontairement la liaison pour éviter le vol de
+        // compte — on propose donc de se connecter à ce compte à la place.
+        if (error.message?.toLowerCase().includes("already been registered")) {
+          setSecureMessage(
+            "⚠️ Un compte existe déjà avec cet e-mail. Vous pouvez vous y connecter, mais l'historique de cette session invité (publications, points) ne sera pas transféré automatiquement vers ce compte."
+          );
+          setShowLoginFallback(true);
+          return;
+        }
+        throw error;
+      }
 
       setSecureMessage(
         "✅ Vérifiez votre boîte mail pour confirmer l'adresse — votre compte deviendra stable une fois le lien cliqué."
       );
     } catch (err) {
       setSecureMessage("❌ " + (err.message || "Erreur"));
+    } finally {
+      setSecureLoading(false);
+    }
+  };
+
+  // Bascule vers le compte existant qui possède déjà cet e-mail.
+  // Important : on quitte d'abord la session anonyme (signOut) avant de
+  // se reconnecter, sinon Supabase reste accroché à l'ancienne session.
+  const handleLoginToExistingAccount = async () => {
+    if (secureLoading) return;
+    setSecureLoading(true);
+    setSecureMessage("");
+
+    try {
+      await supabase.auth.signOut();
+      const { error } = await supabase.auth.signInWithPassword({
+        email: secureEmail,
+        password: securePassword,
+      });
+      if (error) throw error;
+      // onAuthStateChange dans App.jsx détecte la nouvelle session et
+      // recharge automatiquement les données utilisateur.
+    } catch (err) {
+      setSecureMessage(
+        "❌ " +
+          (err.message?.toLowerCase().includes("invalid login credentials")
+            ? "Mot de passe incorrect pour ce compte. Si vous l'avez oublié, utilisez la réinitialisation par e-mail."
+            : err.message || "Erreur de connexion")
+      );
+    } finally {
+      setSecureLoading(false);
+    }
+  };
+
+  // Envoie un e-mail de réinitialisation de mot de passe pour le compte
+  // existant, utile si handleLoginToExistingAccount échoue faute de
+  // connaître le bon mot de passe.
+  const handleResetPassword = async () => {
+    if (secureLoading || !secureEmail) return;
+    setSecureLoading(true);
+    setSecureMessage("");
+
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(
+        secureEmail,
+        { redirectTo: window.location.origin }
+      );
+      if (error) throw error;
+      setSecureMessage(
+        "✅ E-mail de réinitialisation envoyé. Suivez le lien pour définir un nouveau mot de passe, puis reconnectez-vous."
+      );
+    } catch (err) {
+      setSecureMessage("❌ " + (err.message || "Erreur lors de l'envoi"));
     } finally {
       setSecureLoading(false);
     }
@@ -216,8 +286,14 @@ export function SettingsTab({
               style={{
                 background: secureMessage.startsWith("✅")
                   ? "rgba(45,191,166,0.15)"
+                  : secureMessage.startsWith("⚠️")
+                  ? "rgba(217,174,82,0.15)"
                   : "rgba(239,68,68,0.15)",
-                color: secureMessage.startsWith("✅") ? COLORS.teal : "#F87171",
+                color: secureMessage.startsWith("✅")
+                  ? COLORS.teal
+                  : secureMessage.startsWith("⚠️")
+                  ? COLORS.gold
+                  : "#F87171",
               }}
             >
               {secureMessage}
@@ -256,7 +332,10 @@ export function SettingsTab({
               type="email"
               placeholder="Email"
               value={secureEmail}
-              onChange={(e) => setSecureEmail(e.target.value)}
+              onChange={(e) => {
+                setSecureEmail(e.target.value);
+                setShowLoginFallback(false);
+              }}
               required
               className="w-full rounded-xl p-3 text-sm outline-none border"
               style={{
@@ -291,6 +370,31 @@ export function SettingsTab({
               {secureLoading ? "…" : "Sécuriser avec cet e-mail"}
             </button>
           </form>
+
+          {/* Repli affiché uniquement si l'e-mail appartient déjà à un
+              autre compte (détecté dans handleSecureWithEmail) */}
+          {showLoginFallback && (
+            <div className="flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={handleLoginToExistingAccount}
+                disabled={secureLoading}
+                className="w-full py-3 rounded-xl font-bold text-sm border disabled:opacity-50"
+                style={{ borderColor: COLORS.borderGold, color: COLORS.gold }}
+              >
+                {secureLoading ? "…" : "Se connecter à ce compte existant"}
+              </button>
+              <button
+                type="button"
+                onClick={handleResetPassword}
+                disabled={secureLoading}
+                className="w-full text-xs underline text-center disabled:opacity-50"
+                style={{ color: COLORS.muted }}
+              >
+                Mot de passe oublié ? Recevoir un lien de réinitialisation
+              </button>
+            </div>
+          )}
         </div>
       )}
 
