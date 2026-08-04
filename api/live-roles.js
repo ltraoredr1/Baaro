@@ -1,4 +1,8 @@
 // api/live-roles.js
+// - action: "request"  → l'hôte propose un co-hôte (consentement)
+// - action: "respond"  → le spectateur accepte ou refuse
+// - action: "set-role" → l'hôte rétrograde un co-hôte en viewer
+
 import { getAdminClient, requireUser } from "./_supabaseAdmin.js";
 
 const DAILY_API_URL = "https://api.daily.co/v1";
@@ -30,7 +34,7 @@ export default async function handler(req, res) {
   }
 
   const body = req.body || {};
-  const action = body.action || "set-role"; // request | respond | set-role
+  const action = body.action || "set-role";
 
   try {
     if (action === "request") {
@@ -39,7 +43,6 @@ export default async function handler(req, res) {
     if (action === "respond") {
       return await handleRespond(admin, user, body, res, DAILY_API_KEY);
     }
-    // Rétrogradation directe (hôte seulement) ou legacy
     return await handleSetRole(admin, user, body, res, DAILY_API_KEY);
   } catch (error) {
     console.error("Erreur /api/live-roles :", error);
@@ -58,7 +61,9 @@ async function getActiveRoom(admin, roomId) {
 }
 
 async function handleRequest(admin, user, body, res) {
-  const { roomId, targetUserId } = body;
+  const roomId = body.roomId;
+  const targetUserId = body.targetUserId;
+
   if (!roomId || !targetUserId) {
     return res.status(400).json({ error: "roomId et targetUserId requis" });
   }
@@ -90,7 +95,6 @@ async function handleRequest(admin, user, body, res) {
     return res.status(400).json({ error: "Cette personne est déjà co-hôte ou hôte" });
   }
 
-  // Annuler d'éventuelles demandes pending précédentes
   await admin
     .from("debate_role_requests")
     .update({ status: "cancelled", responded_at: new Date().toISOString() })
@@ -116,7 +120,11 @@ async function handleRequest(admin, user, body, res) {
 }
 
 async function handleRespond(admin, user, body, res, DAILY_API_KEY) {
-  const { requestId, accept, targetSessionId, dailyRoomName } = body;
+  const requestId = body.requestId;
+  const accept = body.accept;
+  const targetSessionId = body.targetSessionId || body.dailySessionId || null;
+  const dailyRoomName = body.dailyRoomName || body.roomName || null;
+
   if (!requestId || typeof accept !== "boolean") {
     return res.status(400).json({ error: "requestId et accept requis" });
   }
@@ -153,7 +161,6 @@ async function handleRespond(admin, user, body, res, DAILY_API_KEY) {
     return res.status(200).json({ ok: true, status: "refused" });
   }
 
-  // Acceptation → promotion serveur
   const { error: updErr } = await admin
     .from("debate_participants")
     .update({ role: "co_host" })
@@ -167,19 +174,19 @@ async function handleRespond(admin, user, body, res, DAILY_API_KEY) {
     .update({ status: "accepted", responded_at: new Date().toISOString() })
     .eq("id", requestId);
 
-  // Permissions Daily immédiates
-  const sessionId = targetSessionId || null;
   const roomName = dailyRoomName || room.daily_room_name;
-  if (sessionId && roomName && DAILY_API_KEY) {
+  if (targetSessionId && roomName && DAILY_API_KEY) {
     try {
-      await fetch(`\( {DAILY_API_URL}/rooms/ \){roomName}/update-permissions`, {
+      await fetch(DAILY_API_URL + "/rooms/" + roomName + "/update-permissions", {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${DAILY_API_KEY}`,
+          Authorization: "Bearer " + DAILY_API_KEY,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          data: { [sessionId]: { canSend: ["video", "audio"] } },
+          data: {
+            [targetSessionId]: { canSend: ["video", "audio"] },
+          },
         }),
       });
     } catch (e) {
@@ -191,12 +198,10 @@ async function handleRespond(admin, user, body, res, DAILY_API_KEY) {
 }
 
 async function handleSetRole(admin, user, body, res, DAILY_API_KEY) {
-  // Uniquement pour RÉTROGRADER (viewer). La promotion passe par request/respond.
   const roomId = body.roomId;
   const targetUserId = body.targetUserId;
   const role = body.role || body.newRole;
-  const targetSessionId =
-    body.targetSessionId || body.dailySessionId || null;
+  const targetSessionId = body.targetSessionId || body.dailySessionId || null;
   const dailyRoomName = body.dailyRoomName || body.roomName || null;
 
   if (!roomId || !targetUserId || !role) {
@@ -204,12 +209,14 @@ async function handleSetRole(admin, user, body, res, DAILY_API_KEY) {
       .status(400)
       .json({ error: "Paramètres manquants (roomId, targetUserId, role)" });
   }
+
   if (role !== "viewer") {
     return res.status(400).json({
       error:
         "Pour promouvoir en co-hôte, utilise action: 'request' (consentement requis)",
     });
   }
+
   if (targetUserId === user.id) {
     return res.status(400).json({ error: "Impossible de modifier son propre rôle" });
   }
@@ -231,7 +238,6 @@ async function handleSetRole(admin, user, body, res, DAILY_API_KEY) {
 
   if (updateError) throw updateError;
 
-  // Annuler demandes pending
   await admin
     .from("debate_role_requests")
     .update({ status: "cancelled", responded_at: new Date().toISOString() })
@@ -239,19 +245,25 @@ async function handleSetRole(admin, user, body, res, DAILY_API_KEY) {
     .eq("to_user_id", targetUserId)
     .eq("status", "pending");
 
-  if (targetSessionId && (dailyRoomName || room.daily_room_name) && DAILY_API_KEY) {
-    const name = dailyRoomName || room.daily_room_name;
-    await fetch(`\( {DAILY_API_URL}/rooms/ \){name}/update-permissions`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${DAILY_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        data: { [targetSessionId]: { canSend: [] } },
-      }),
-    }).catch((e) => console.error("Daily:", e));
+  const name = dailyRoomName || room.daily_room_name;
+  if (targetSessionId && name && DAILY_API_KEY) {
+    try {
+      await fetch(DAILY_API_URL + "/rooms/" + name + "/update-permissions", {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer " + DAILY_API_KEY,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          data: {
+            [targetSessionId]: { canSend: [] },
+          },
+        }),
+      });
+    } catch (e) {
+      console.error("Daily:", e);
+    }
   }
 
   return res.status(200).json({ ok: true, role: "viewer" });
-             }
+}
