@@ -136,8 +136,9 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
   const [voiceError, setVoiceError] = useState(null);
   const [dailyRoomName, setDailyRoomName] = useState(null);
   const [myRole, setMyRole] = useState("viewer");
-  const canBroadcast = myRole === "host" || myRole === "co_host";
   const isRoomOwner = room?.host_id === currentUserId;
+  const canBroadcast =
+    isRoomOwner || myRole === "host" || myRole === "co_host";
 
   const [participantRoles, setParticipantRoles] = useState({});
   const [roleActionLoading, setRoleActionLoading] = useState(null);
@@ -354,13 +355,19 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
         const userName =
           profilesCache.current[currentUserId]?.display_name || "Participant";
 
-        const { role } = await joinLiveByCode({
+        const { role: apiRole } = await joinLiveByCode({
           inviteCode: room.invite_code,
           userName,
           audioOnly: room.mode === "audio",
         });
 
+        // Source de vérité : host_id en base > rôle renvoyé par l'API
+        // (évite le cas où l'hôte se retrouve "viewer" et n'émet rien)
+        const isHostUser = room.host_id === currentUserId;
+        const role = isHostUser ? "host" : apiRole || "viewer";
         setMyRole(role);
+        upgradeLocalRole(role);
+
         const shouldStartMedia = role === "host" || role === "co_host";
 
         enableMic(shouldStartMedia);
