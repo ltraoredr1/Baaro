@@ -132,6 +132,16 @@ export default async function handler(req, res) {
         }),
       });
 
+      if (!tokenRes.ok) {
+        const err = await tokenRes.text();
+        // room déjà créée côté Daily : on la supprime pour ne pas la laisser orpheline
+        await fetch(`${DAILY_API_URL}/rooms/${roomData.name}`, {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${DAILY_API_KEY}` },
+        }).catch(() => {});
+        return res.status(tokenRes.status).json({ error: `Erreur création token Daily: ${err}` });
+      }
+
       const tokenData = await tokenRes.json();
       const code = await generateUniqueInviteCode(admin);
 
@@ -145,7 +155,7 @@ export default async function handler(req, res) {
       });
 
       if (insertError) {
-        await fetch(`\( {DAILY_API_URL}/rooms/ \){roomData.name}`, {
+        await fetch(`${DAILY_API_URL}/rooms/${roomData.name}`, {
           method: "DELETE",
           headers: { Authorization: `Bearer ${DAILY_API_KEY}` },
         }).catch(() => {});
@@ -215,7 +225,7 @@ export default async function handler(req, res) {
       const tokenData = await tokenRes.json();
 
       return res.status(200).json({
-        roomUrl: `https://\( {process.env.DAILY_DOMAIN || "baaro"}.daily.co/ \){roomName}`,
+        roomUrl: `https://${process.env.DAILY_DOMAIN || "baaro"}.daily.co/${roomName}`,
         token: tokenData.token,
       });
     }
@@ -226,7 +236,7 @@ export default async function handler(req, res) {
         return res.status(400).json({ error: "roomName requis" });
       }
 
-      await fetch(`\( {DAILY_API_URL}/rooms/ \){roomName}`, {
+      await fetch(`${DAILY_API_URL}/rooms/${roomName}`, {
         method: "DELETE",
         headers: { Authorization: `Bearer ${DAILY_API_KEY}` },
       });
