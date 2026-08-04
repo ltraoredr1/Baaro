@@ -213,6 +213,7 @@ export function DebateRoom({
     let messagesChannel = null;
     let participantsChannel = null;
     let roleReqChannel = null;
+    let roomChannel = null;
 
     const loadDebate = async () => {
       try {
@@ -315,172 +316,180 @@ export function DebateRoom({
           if (myReq && isMounted) setPendingRequest(myReq);
         }
 
-        messagesChannel = supabase
-          .channel(`room_${roomData.id}`)
-          .on(
-            "postgres_changes",
-            {
-              event: "INSERT",
-              schema: "public",
-              table: "debate_messages",
-              filter: `room_id=eq.${roomData.id}`,
-            },
-            async (payload) => {
-              let profile = profilesCache.current[payload.new.sender_id];
-              if (!profile && payload.new.sender_id) {
-                const { data } = await supabase
-                  .from("profiles")
-                  .select("display_name, avatar_url, flag")
-                  .eq("user_id", payload.new.sender_id)
-                  .maybeSingle();
-                profile = data || { display_name: "Membre", flag: "🌍" };
-                profilesCache.current[payload.new.sender_id] = profile;
-              }
-              if (isMounted) {
-                setMessages((prev) => [
-                  ...prev,
-                  {
-                    ...payload.new,
-                    profile: profile || {
-                      display_name: "Membre",
-                      flag: "🌍",
+        // Realtime : créer les channels de façon isolée (évite l'erreur
+        // "cannot add postgres_changes after subscribe" en Strict Mode /
+        // double montage). Les erreurs Realtime ne bloquent pas la salle.
+        try {
+          const msgChName = `room_msgs_${roomData.id}`;
+          try { supabase.removeChannel(supabase.channel(msgChName)); } catch (_) {}
+          messagesChannel = supabase
+            .channel(msgChName)
+            .on(
+              "postgres_changes",
+              {
+                event: "INSERT",
+                schema: "public",
+                table: "debate_messages",
+                filter: `room_id=eq.${roomData.id}`,
+              },
+              async (payload) => {
+                let profile = profilesCache.current[payload.new.sender_id];
+                if (!profile && payload.new.sender_id) {
+                  const { data } = await supabase
+                    .from("profiles")
+                    .select("display_name, avatar_url, flag")
+                    .eq("user_id", payload.new.sender_id)
+                    .maybeSingle();
+                  profile = data || { display_name: "Membre", flag: "🌍" };
+                  profilesCache.current[payload.new.sender_id] = profile;
+                }
+                if (isMounted) {
+                  setMessages((prev) => [
+                    ...prev,
+                    {
+                      ...payload.new,
+                      profile: profile || {
+                        display_name: "Membre",
+                        flag: "🌍",
+                      },
                     },
-                  },
-                ]);
-              }
-            }
-          )
-          .subscribe();
-
-        participantsChannel = supabase
-          .channel(`room_participants_${roomData.id}`)
-          .on(
-            "postgres_changes",
-            {
-              event: "*",
-              schema: "public",
-              table: "debate_participants",
-              filter: `room_id=eq.${roomData.id}`,
-            },
-            (payload) => {
-              const row =
-                payload.new && Object.keys(payload.new).length
-                  ? payload.new
-                  : payload.old;
-              if (!row?.user_id) return;
-
-              if (payload.eventType === "DELETE") {
-                setParticipantRoles((prev) => {
-                  const copy = { ...prev };
-                  delete copy[row.user_id];
-                  return copy;
-                });
-                return;
-              }
-
-              setParticipantRoles((prev) => ({
-                ...prev,
-                [row.user_id]: row.role,
-              }));
-
-              if (
-                row.user_id === currentUserId &&
-                payload.eventType === "UPDATE" &&
-                row.role !== "host"
-              ) {
-                upgradeLocalRole(row.role);
-                setMyRole(row.role);
-                const shouldBroadcast = row.role === "co_host";
-                enableMic(shouldBroadcast);
-                setMicOn(shouldBroadcast);
-                if (roomData.mode === "video" || roomData.daily_room_name) {
-                  enableCamera(shouldBroadcast);
-                  setCamOn(shouldBroadcast);
+                  ]);
                 }
               }
-            }
-          )
-          .subscribe();
-
-        roleReqChannel = supabase
-          .channel(`role_req_${roomData.id}`)
-          .on(
-            "postgres_changes",
-            {
-              event: "*",
-              schema: "public",
-              table: "debate_role_requests",
-              filter: `room_id=eq.${roomData.id}`,
-            },
-            (payload) => {
-              const row = payload.new;
-              if (!row) return;
-              if (
-                row.to_user_id === currentUserId &&
-                row.status === "pending"
-              ) {
-                setPendingRequest(row);
-              }
-              if (
-                row.to_user_id === currentUserId &&
-                row.status !== "pending"
-              ) {
-                setPendingRequest(null);
-              }
-            }
-          )
-          .subscribe();
-
-        if (currentUserId) {
-          const { data: myReq } = await supabase
-            .from("debate_role_requests")
-            .select("*")
-            .eq("room_id", roomData.id)
-            .eq("to_user_id", currentUserId)
-            .eq("status", "pending")
-            .maybeSingle();
-          if (myReq && isMounted) setPendingRequest(myReq);
+            );
+          messagesChannel.subscribe();
+        } catch (e) {
+          console.warn("Realtime messages:", e);
         }
 
-        roleReqChannel = supabase
-          .channel(`role_req_${roomData.id}`)
-          .on(
-            "postgres_changes",
-            {
-              event: "*",
-              schema: "public",
-              table: "debate_role_requests",
-              filter: `room_id=eq.${roomData.id}`,
-            },
-            (payload) => {
-              const row = payload.new;
-              if (!row) return;
-              if (row.to_user_id === currentUserId && row.status === "pending") {
-                setPendingRequest(row);
-              }
-              if (row.to_user_id === currentUserId && row.status !== "pending") {
-                setPendingRequest(null);
-              }
-            }
-          )
-          .subscribe();
+        try {
+          const partChName = `room_parts_${roomData.id}`;
+          try { supabase.removeChannel(supabase.channel(partChName)); } catch (_) {}
+          participantsChannel = supabase
+            .channel(partChName)
+            .on(
+              "postgres_changes",
+              {
+                event: "*",
+                schema: "public",
+                table: "debate_participants",
+                filter: `room_id=eq.${roomData.id}`,
+              },
+              (payload) => {
+                const row =
+                  payload.new && Object.keys(payload.new).length
+                    ? payload.new
+                    : payload.old;
+                if (!row?.user_id) return;
 
-        roomChannel = supabase
-          .channel(`room_meta_${roomData.id}`)
-          .on(
-            "postgres_changes",
-            {
-              event: "UPDATE",
-              schema: "public",
-              table: "debate_rooms",
-              filter: `id=eq.${roomData.id}`,
-            },
-            (payload) => {
-              const st = payload.new?.status;
-              if (st) setRoomStatus(st);
-            }
-          )
-          .subscribe();
+                if (payload.eventType === "DELETE") {
+                  setParticipantRoles((prev) => {
+                    const copy = { ...prev };
+                    delete copy[row.user_id];
+                    return copy;
+                  });
+                  return;
+                }
+
+                setParticipantRoles((prev) => ({
+                  ...prev,
+                  [row.user_id]: row.role,
+                }));
+
+                if (
+                  row.user_id === currentUserId &&
+                  payload.eventType === "UPDATE" &&
+                  row.role !== "host"
+                ) {
+                  upgradeLocalRole(row.role);
+                  setMyRole(row.role);
+                  const shouldBroadcast = row.role === "co_host";
+                  enableMic(shouldBroadcast);
+                  setMicOn(shouldBroadcast);
+                  if (roomData.mode === "video" || roomData.daily_room_name) {
+                    enableCamera(shouldBroadcast);
+                    setCamOn(shouldBroadcast);
+                  }
+                }
+              }
+            );
+          participantsChannel.subscribe();
+        } catch (e) {
+          console.warn("Realtime participants:", e);
+        }
+
+        if (currentUserId) {
+          try {
+            const { data: myReq } = await supabase
+              .from("debate_role_requests")
+              .select("*")
+              .eq("room_id", roomData.id)
+              .eq("to_user_id", currentUserId)
+              .eq("status", "pending")
+              .maybeSingle();
+            if (myReq && isMounted) setPendingRequest(myReq);
+          } catch (e) {
+            console.warn("role request fetch:", e);
+          }
+        }
+
+        try {
+          const roleChName = `role_req_${roomData.id}`;
+          try { supabase.removeChannel(supabase.channel(roleChName)); } catch (_) {}
+          roleReqChannel = supabase
+            .channel(roleChName)
+            .on(
+              "postgres_changes",
+              {
+                event: "*",
+                schema: "public",
+                table: "debate_role_requests",
+                filter: `room_id=eq.${roomData.id}`,
+              },
+              (payload) => {
+                const row = payload.new;
+                if (!row) return;
+                if (
+                  row.to_user_id === currentUserId &&
+                  row.status === "pending"
+                ) {
+                  setPendingRequest(row);
+                }
+                if (
+                  row.to_user_id === currentUserId &&
+                  row.status !== "pending"
+                ) {
+                  setPendingRequest(null);
+                }
+              }
+            );
+          roleReqChannel.subscribe();
+        } catch (e) {
+          console.warn("Realtime role_requests:", e);
+        }
+
+        try {
+          const metaChName = `room_meta_${roomData.id}`;
+          try { supabase.removeChannel(supabase.channel(metaChName)); } catch (_) {}
+          roomChannel = supabase
+            .channel(metaChName)
+            .on(
+              "postgres_changes",
+              {
+                event: "UPDATE",
+                schema: "public",
+                table: "debate_rooms",
+                filter: `id=eq.${roomData.id}`,
+              },
+              (payload) => {
+                const st = payload.new?.status;
+                if (st) setRoomStatus(st);
+              }
+            );
+          roomChannel.subscribe();
+        } catch (e) {
+          console.warn("Realtime room meta:", e);
+        }
 
       } catch (err) {
         if (isMounted) setError(err.message);
@@ -496,6 +505,7 @@ export function DebateRoom({
       if (messagesChannel) supabase.removeChannel(messagesChannel);
       if (participantsChannel) supabase.removeChannel(participantsChannel);
       if (roleReqChannel) supabase.removeChannel(roleReqChannel);
+      if (roomChannel) supabase.removeChannel(roomChannel);
     };
   }, [inviteCode, currentUserId]);
 
