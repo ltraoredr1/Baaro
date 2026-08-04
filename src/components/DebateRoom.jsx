@@ -16,6 +16,7 @@ import {
   joinLiveByCode,
   leaveLive,
   enableMic,
+  enableCamera,
   subscribeToEvents,
   getCallObject,
   getParticipants,
@@ -195,6 +196,11 @@ export function DebateRoom({ inviteCode, currentUserId, onBack }) {
         const shouldStartMic = room.host_id === currentUserId;
         enableMic(shouldStartMic);
         setMicOn(shouldStartMic);
+
+        // Caméra activée par défaut pour l'hôte en mode vidéo, coupée pour les autres
+        if (room.mode === "video") {
+          enableCamera(shouldStartMic);
+        }
 
         const updateParticipants = () => {
           setParticipants(getParticipants());
