@@ -70,7 +70,9 @@ export async function startLive({ userName, enableHLS = false }) {
   callObject = DailyIframe.createCallObject({
     audioSource: true,
     videoSource: false,
+    subscribeToTracksAutomatically: true,
   });
+  try { callObject.setSubscribeToTracksAutomatically(true); } catch (_) {}
 
   await callObject.join({ url: roomUrl, token });
 
@@ -104,27 +106,29 @@ export async function joinLive({ roomId, roomName, userName, audioOnly = true })
 
   callObject = DailyIframe.createCallObject({
     audioSource: true,
-    // On ouvre toujours la source vidéo si le rôle le permet : un viewer
-    // promu co-hôte en cours de live n'aura pas besoin de rejoindre pour
-    // activer sa caméra (voir upgradeLocalRole() + DebateRoom.jsx).
     videoSource: !audioOnly,
+    subscribeToTracksAutomatically: true,
   });
+
+  // S'assurer que les pistes distantes sont bien reçues
+  try {
+    callObject.setSubscribeToTracksAutomatically(true);
+  } catch (_) {}
 
   await callObject.join({ url: roomUrl, token });
 
-  // Active micro/cam selon le rôle (sinon canSend côté token ne suffit pas
-  // toujours à démarrer la capture locale sur mobile)
+  // Active micro/cam selon le rôle
   const canSend = role === "host" || role === "co_host";
   try {
-    await callObject.setLocalAudio(canSend);
+    await callObject.setLocalAudio(!!canSend);
     if (!audioOnly) {
-      await callObject.setLocalVideo(canSend);
+      await callObject.setLocalVideo(!!canSend);
     }
   } catch (e) {
     console.warn("setLocalAudio/Video:", e);
   }
 
-  return { callObject, role, roomId };
+  return { callObject, role, roomId, roomUrl };
 }
 
 export async function joinLiveByCode({ inviteCode, userName, audioOnly = true }) {
