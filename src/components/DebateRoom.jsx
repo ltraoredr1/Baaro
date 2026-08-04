@@ -163,8 +163,8 @@ export function DebateRoom({
   const [aiLoading, setAiLoading] = useState(false);
   const [roomStatus, setRoomStatus] = useState("active");
   const [pauseLoading, setPauseLoading] = useState(false);
-  const [pendingRequest, setPendingRequest] = useState(null);
-  const [aiLoading, setAiLoading] = useState(false);
+  
+  
 
   const isRoomOwner = !!(currentUserId && room?.host_id === currentUserId);
   const dbRole = currentUserId ? participantRoles[currentUserId] : null;
@@ -708,25 +708,7 @@ export function DebateRoom({
   };
 
 
-  const handleRespondRequest = async (accept) => {
-    if (!pendingRequest || !room) return;
-    setRoleActionLoading("respond");
-    setRoleActionError(null);
-    try {
-      const sessionId = findParticipantSessionId(currentUserId);
-      await respondCoHostRequest({
-        requestId: pendingRequest.id,
-        accept,
-        targetSessionId: sessionId,
-        dailyRoomName: room.daily_room_name || dailyRoomName,
-      });
-      setPendingRequest(null);
-    } catch (err) {
-      setRoleActionError(err.message || "Erreur");
-    } finally {
-      setRoleActionLoading(null);
-    }
-  };
+;
 
   const handlePauseToggle = async () => {
     if (!room || !isRoomOwner || pauseLoading) return;
@@ -809,44 +791,7 @@ export function DebateRoom({
     }
   };
 
-  const handleAskAI = async () => {
-    if (!room || !newMessage.trim() || aiLoading || !currentUserId) return;
-    const q = newMessage.trim();
-    setNewMessage("");
-    setAiLoading(true);
-    setRoleActionError(null);
-
-    try {
-      await supabase.from("debate_messages").insert({
-        room_id: room.id,
-        sender_id: currentUserId,
-        sender_type: "user",
-        text: "🤖 " + q,
-      });
-    } catch (e) {
-      console.error(e);
-    }
-
-    try {
-      const { data: sess } = await supabase.auth.getSession();
-      const token = sess?.session?.access_token;
-      const res = await fetch((API_BASE || "") + "/api/debate-ai", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(token ? { Authorization: "Bearer " + token } : {}),
-        },
-        body: JSON.stringify({ roomId: room.id, question: q }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Erreur IA");
-    } catch (err) {
-      console.error(err);
-      setRoleActionError(err.message || "Erreur IA");
-    } finally {
-      setAiLoading(false);
-    }
-  };
+;
 
   if (error) {
     return (
