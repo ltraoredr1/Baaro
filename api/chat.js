@@ -31,7 +31,7 @@ export default async function handler(req, res) {
         body.sessionId ||
         context?.user_id ||
         context?.handle ||
-        `session-\( {Date.now()}- \){Math.random().toString(36).slice(2, 9)}`;
+        "session-" + Date.now() + "-" + Math.random().toString(36).slice(2, 9);
 
       const response = await fetch(n8nUrl, {
         method: "POST",
@@ -85,13 +85,13 @@ export default async function handler(req, res) {
     const safeMaxTokens = Math.min(Number(max_tokens) || 1200, 2000);
     let systemPrompt =
       customSystem ||
-      `Tu es l'assistant officiel de BAARO. Réponds toujours en français, de façon claire et utile.`;
+      "Tu es l'assistant officiel de BAARO. Réponds toujours en français, de façon claire et utile.";
 
     if (context && typeof context === "object") {
-      systemPrompt += `\nContexte: \( {context.display_name || "Membre"}, points= \){context.points ?? 0}`;
+      systemPrompt += "\nContexte: " + (context.display_name || "Membre") + ", points=" + (context.points ?? 0);
     }
     if (mode === "cohost") {
-      systemPrompt += `\nTu es co-animatrice d'un live. 1 à 3 phrases max.`;
+      systemPrompt += "\nTu es co-animatrice d'un live. 1 à 3 phrases max.";
     }
 
     const response = await fetch("https://api.anthropic.com/v1/messages", {
