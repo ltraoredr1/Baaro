@@ -7,6 +7,7 @@ import {
   Languages,
   Image as ImageIcon,
   BarChart2,
+  X,
 } from "lucide-react";
 import { COLORS } from "../theme.js";
 import { useToast } from "./ToastContext.jsx";
@@ -18,6 +19,10 @@ import { checkRateLimit, rateLimitMessage } from "../lib/rateLimit.js";
 // pas par offset : reste rapide et correct même si de nouveaux posts
 // arrivent pendant que quelqu'un scrolle.
 const PAGE_SIZE = 20;
+
+// Limites d'upload média
+const MAX_IMAGE_SIZE = 10 * 1024 * 1024; // 10 Mo
+const MAX_VIDEO_SIZE = 50 * 1024 * 1024; // 50 Mo
 
 function applyCursor(query, cursor) {
   if (!cursor) return query;
@@ -43,6 +48,12 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
   const [user, setUser] = useState(null);
   const [submitting, setSubmitting] = useState(false);
 
+  // ===== Média (photo/vidéo) en cours de composition =====
+  const [mediaFile, setMediaFile] = useState(null);
+  const [mediaPreview, setMediaPreview] = useState(null);
+  const [uploadingMedia, setUploadingMedia] = useState(false);
+  const fileInputRef = useRef(null);
+
   // Curseur = (created_at, id) du dernier post affiché. En ref pour ne
   // pas déclencher de re-render et rester à jour dans loadMorePosts.
   const cursorRef = useRef(null);
@@ -59,6 +70,14 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
     };
     getUser();
   }, [showToast]);
+
+  // Nettoyage de l'URL de prévisualisation créée avec URL.createObjectURL,
+  // pour éviter les fuites mémoire quand on change/retire le fichier.
+  useEffect(() => {
+    return () => {
+      if (mediaPreview) URL.revokeObjectURL(mediaPreview);
+    };
+  }, [mediaPreview]);
 
   // ===== Une page de posts, jointure profiles incluse =====
   const fetchPostsPage = useCallback(async (cursor) => {
@@ -247,9 +266,71 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
     };
   }, [loadPosts]);
 
+  // ===== Sélection d'un fichier média (photo ou vidéo) =====
+  const handleFileSelect = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const isVideo = file.type.startsWith("video");
+    const isImage = file.type.startsWith("image");
+
+    if (!isVideo && !isImage) {
+      showToast("Format non supporté (image ou vidéo uniquement)", "error");
+      e.target.value = "";
+      return;
+    }
+
+    const maxSize = isVideo ? MAX_VIDEO_SIZE : MAX_IMAGE_SIZE;
+    if (file.size > maxSize) {
+      showToast(
+        `Fichier trop lourd (max ${isVideo ? "50" : "10"} Mo)`,
+        "error"
+      );
+      e.target.value = "";
+      return;
+    }
+
+    if (mediaPreview) URL.revokeObjectURL(mediaPreview);
+    setMediaFile(file);
+    setMediaPreview(URL.createObjectURL(file));
+    e.target.value = ""; // permet de reselectionner le même fichier plus tard
+  };
+
+  const handleRemoveMedia = () => {
+    if (mediaPreview) URL.revokeObjectURL(mediaPreview);
+    setMediaFile(null);
+    setMediaPreview(null);
+  };
+
+  // ===== Upload du fichier vers le bucket Supabase Storage "media" =====
+  const uploadMedia = async (file, authorId) => {
+    const ext = file.name.split(".").pop() || "bin";
+    const safeExt = ext.toLowerCase().replace(/[^a-z0-9]/g, "") || "bin";
+    const path = `${authorId}/${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2, 8)}.${safeExt}`;
+
+    const { error: uploadError } = await supabase.storage
+      .from("media")
+      .upload(path, file, {
+        cacheControl: "3600",
+        upsert: false,
+        contentType: file.type,
+      });
+
+    if (uploadError) throw uploadError;
+
+    const { data } = supabase.storage.from("media").getPublicUrl(path);
+
+    return {
+      media_url: data.publicUrl,
+      media_type: file.type.startsWith("video") ? "video" : "image",
+    };
+  };
+
   const handleCreatePost = async (e) => {
     e.preventDefault();
-    if (!newText.trim() || submitting) return;
+    if ((!newText.trim() && !mediaFile) || submitting) return;
 
     const limit = checkRateLimit("create_post", { max: 5, windowMs: 60_000 });
     if (!limit.allowed) {
@@ -265,9 +346,21 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
 
     setSubmitting(true);
     try {
+      let mediaData = {};
+
+      if (mediaFile) {
+        setUploadingMedia(true);
+        try {
+          mediaData = await uploadMedia(mediaFile, authorId);
+        } finally {
+          setUploadingMedia(false);
+        }
+      }
+
       const { error } = await supabase.from("posts").insert({
         author_id: authorId,
         text: newText + (mood ? ` (Humeur: ${mood})` : ""),
+        ...mediaData,
       });
 
       if (error) throw error;
@@ -275,6 +368,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
       setNewText("");
       setMood("");
       setShowPoll(false);
+      handleRemoveMedia();
 
       onRewardPoints?.(15);
       showPointsReward?.(15, "Publication créée !");
@@ -438,6 +532,33 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
           />
         </div>
 
+        {/* Prévisualisation du média sélectionné */}
+        {mediaPreview && (
+          <div className="relative mb-3 rounded-xl overflow-hidden border" style={{ borderColor: COLORS.border }}>
+            {mediaFile?.type.startsWith("video") ? (
+              <video
+                src={mediaPreview}
+                controls
+                className="w-full max-h-64 object-cover bg-black"
+              />
+            ) : (
+              <img
+                src={mediaPreview}
+                alt="Prévisualisation"
+                className="w-full max-h-64 object-cover"
+              />
+            )}
+            <button
+              type="button"
+              onClick={handleRemoveMedia}
+              className="absolute top-2 right-2 bg-black/70 hover:bg-black/90 rounded-full p-1.5 text-white transition"
+              aria-label="Retirer le média"
+            >
+              <X size={14} />
+            </button>
+          </div>
+        )}
+
         {showPoll && (
           <div
             className="mb-3 p-3 rounded-xl border text-xs"
@@ -456,10 +577,18 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
           style={{ borderColor: COLORS.border }}
         >
           <div className="flex items-center gap-2">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*,video/*"
+              onChange={handleFileSelect}
+              className="hidden"
+            />
             <button
               type="button"
-              onClick={() => showToast("Upload d'image en développement", "info")}
-              className="p-2 rounded-lg hover:bg-white/5 text-amber-400 flex items-center gap-1 text-xs"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploadingMedia}
+              className="p-2 rounded-lg hover:bg-white/5 text-amber-400 flex items-center gap-1 text-xs disabled:opacity-40"
             >
               <ImageIcon size={16} />
               <span className="hidden sm:inline">Média</span>
@@ -487,14 +616,20 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
 
           <button
             type="submit"
-            disabled={!newText.trim() || submitting}
+            disabled={(!newText.trim() && !mediaFile) || submitting}
             className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold shadow-lg transition disabled:opacity-40"
             style={{
               background: "linear-gradient(135deg, #D9AE52 0%, #2DBFA6 100%)",
               color: COLORS.bg,
             }}
           >
-            <span>{submitting ? "..." : "Publier"}</span>
+            <span>
+              {uploadingMedia
+                ? "Envoi du média..."
+                : submitting
+                ? "..."
+                : "Publier"}
+            </span>
             <span className="text-[10px] px-1.5 py-0.5 rounded-full font-extrabold bg-black/20 text-white">
               +15 pts
             </span>
@@ -564,7 +699,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
                 {post.media_url && (
                   <div className="rounded-xl overflow-hidden">
                     {post.media_type?.startsWith("video") ? (
-                      <video src={post.media_url} controls className="w-full max-h-80 object-cover" />
+                      <video src={post.media_url} controls className="w-full max-h-80 object-cover bg-black" />
                     ) : (
                       <img src={post.media_url} alt="" className="w-full max-h-80 object-cover" />
                     )}
