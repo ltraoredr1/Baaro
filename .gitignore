@@ -3,3 +3,8 @@ dist
 .env
 .env.local
 .vercel
+# Archives de correctifs (ne jamais committer)
+*.zip
+Baaro-*.zip
+baaro-*.zip
+BAARO-*.zip
