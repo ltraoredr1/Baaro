@@ -449,9 +449,25 @@ export function MessagesTab({ onRewardPoints, userId: propUserId }) {
 
   // ---- Envoi fichier ----
   const handleFileSelect = async (e) => {
-    const file = e.target.files?.[0];
-    e.target.value = "";
-    if (!file || !activeChat || !currentUserId) return;
+    const files = e.target?.files;
+    const file = files?.[0];
+    // Reset pour pouvoir resélectionner le même fichier
+    try {
+      e.target.value = "";
+    } catch (_) {}
+
+    if (!file) {
+      console.warn("Aucun fichier sélectionné");
+      return;
+    }
+    if (!activeChat) {
+      alert("Ouvre une conversation d'abord");
+      return;
+    }
+    if (!currentUserId) {
+      alert("Tu n'es pas connecté");
+      return;
+    }
 
     setUploading(true);
     try {
@@ -462,8 +478,8 @@ export function MessagesTab({ onRewardPoints, userId: propUserId }) {
         conversation_id: activeChat.id,
         sender_id: currentUserId,
         recipient_id: activeChat.otherUserId,
-        text: uploaded.fileName,
-        type: msgType,
+        text: uploaded.fileName || "Fichier",
+        type: msgType === "voice" ? "audio" : msgType,
         media_url: uploaded.url,
         media_mime: uploaded.mime,
         media_size: uploaded.size,
@@ -472,11 +488,46 @@ export function MessagesTab({ onRewardPoints, userId: propUserId }) {
       if (error) throw error;
       if (typeof onRewardPoints === "function") onRewardPoints(2);
     } catch (err) {
-      console.error(err);
-      alert(err.message || "Échec de l'envoi du fichier");
+      console.error("Upload fichier:", err);
+      alert(
+        "Échec envoi fichier :\n" +
+          (err?.message || String(err)) +
+          "\n\nVérifie le bucket chat-media et les policies Storage."
+      );
     } finally {
       setUploading(false);
     }
+  };
+
+  const openFilePicker = () => {
+    if (uploading || recording) return;
+    const input = fileInputRef.current;
+    if (!input) {
+      alert("Sélecteur de fichiers indisponible");
+      return;
+    }
+    // Astuce mobile : certains navigateurs ignorent .click() sur input hidden
+    input.style.display = "block";
+    input.style.position = "fixed";
+    input.style.left = "0";
+    input.style.top = "0";
+    input.style.opacity = "0.01";
+    input.style.width = "1px";
+    input.style.height = "1px";
+    input.style.zIndex = "9999";
+    try {
+      input.click();
+    } catch (err) {
+      console.error(err);
+      alert("Impossible d'ouvrir le sélecteur de fichiers");
+    }
+    setTimeout(() => {
+      if (input) {
+        input.style.display = "none";
+        input.style.opacity = "";
+        input.style.position = "";
+      }
+    }, 1000);
   };
 
   // ---- Message vocal ----
@@ -1015,19 +1066,32 @@ export function MessagesTab({ onRewardPoints, userId: propUserId }) {
               <input
                 ref={fileInputRef}
                 type="file"
-                className="hidden"
-                accept="*/*"
+                accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.zip,.rar,.csv"
                 onChange={handleFileSelect}
+                style={{
+                  display: "none",
+                  position: "absolute",
+                  width: 1,
+                  height: 1,
+                  opacity: 0,
+                }}
               />
               <button
                 type="button"
-                onClick={() => fileInputRef.current?.click()}
+                onClick={openFilePicker}
                 disabled={uploading || recording}
-                className="p-2.5 rounded-xl border disabled:opacity-40"
-                style={{ borderColor: COLORS.border, color: COLORS.muted }}
+                className="p-2.5 rounded-xl border disabled:opacity-40 relative"
+                style={{
+                  borderColor: COLORS.border,
+                  color: uploading ? COLORS.gold : COLORS.muted,
+                }}
                 title="Joindre un fichier"
               >
-                <Paperclip size={18} />
+                {uploading ? (
+                  <span className="text-[10px] font-bold animate-pulse">…</span>
+                ) : (
+                  <Paperclip size={18} />
+                )}
               </button>
 
               <button
