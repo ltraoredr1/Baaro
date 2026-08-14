@@ -2,6 +2,8 @@
 // - join / create Daily
 // - co-hôte avec consentement (request / respond)
 // - pause / resume room
+// - audio distant correctement attaché
+// - helpers enableMic / enableCamera robustes
 
 import DailyIframe from "@daily-co/daily-js";
 import { supabase } from "../supabaseClient.js";
@@ -160,11 +162,55 @@ export function upgradeLocalRole(newRole) {
 }
 
 export function enableMic(enabled) {
-  callObject?.setLocalAudio(enabled);
+  if (!callObject) return Promise.resolve();
+  return callObject.setLocalAudio(!!enabled);
 }
 
 export function enableCamera(enabled) {
-  callObject?.setLocalVideo(enabled);
+  if (!callObject) return Promise.resolve();
+  return callObject.setLocalVideo(!!enabled);
+}
+
+/** Attache une piste audio distante à un élément <audio> caché */
+export function attachRemoteAudio(sessionId, track) {
+  if (!track || track.kind !== "audio") return null;
+  let audio = document.getElementById(`baaro-audio-${sessionId}`);
+  if (!audio) {
+    audio = document.createElement("audio");
+    audio.id = `baaro-audio-${sessionId}`;
+    audio.autoplay = true;
+    audio.playsInline = true;
+    audio.setAttribute("playsinline", "");
+    audio.style.display = "none";
+    document.body.appendChild(audio);
+  }
+  try {
+    audio.srcObject = new MediaStream([track]);
+    const p = audio.play();
+    if (p && typeof p.catch === "function") p.catch(() => {});
+  } catch (e) {
+    console.warn("attachRemoteAudio", e);
+  }
+  return audio;
+}
+
+export function detachRemoteAudio(sessionId) {
+  const audio = document.getElementById(`baaro-audio-${sessionId}`);
+  if (audio) {
+    try {
+      audio.srcObject = null;
+      audio.remove();
+    } catch (_) {}
+  }
+}
+
+export function detachAllRemoteAudio() {
+  document.querySelectorAll('[id^="baaro-audio-"]').forEach((el) => {
+    try {
+      el.srcObject = null;
+      el.remove();
+    } catch (_) {}
+  });
 }
 
 export function subscribeToEvents({
@@ -174,6 +220,7 @@ export function subscribeToEvents({
   onTrackStarted,
   onTrackStopped,
   onError,
+  onActiveSpeakerChange,
 }) {
   if (!callObject) return;
 
@@ -185,6 +232,8 @@ export function subscribeToEvents({
   if (onTrackStarted) callObject.on("track-started", onTrackStarted);
   if (onTrackStopped) callObject.on("track-stopped", onTrackStopped);
   if (onError) callObject.on("error", onError);
+  if (onActiveSpeakerChange)
+    callObject.on("active-speaker-change", onActiveSpeakerChange);
 }
 
 export function findParticipantSessionId(targetUserId) {
@@ -268,6 +317,7 @@ export async function resumeRoom(roomId) {
 }
 
 export async function leaveLive({ roomName, isHost = false } = {}) {
+  detachAllRemoteAudio();
   if (callObject) {
     try {
       await callObject.leave();
