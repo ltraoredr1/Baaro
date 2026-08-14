@@ -30,6 +30,8 @@ import {
   mimeToMessageType,
   formatFileSize,
   formatDuration,
+  getBestAudioMime,
+  getReadableUrl,
 } from "../lib/chatMedia.js";
 import {
   createCallRoom,
@@ -481,10 +483,13 @@ export function MessagesTab({ onRewardPoints, userId: propUserId }) {
   const startRecording = async () => {
     if (recording) return;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-        ? "audio/webm;codecs=opus"
-        : "audio/webm";
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+        },
+      });
+      const mime = getBestAudioMime();
       const recorder = new MediaRecorder(stream, { mimeType: mime });
       recordChunksRef.current = [];
       recorder.ondataavailable = (ev) => {
@@ -505,7 +510,7 @@ export function MessagesTab({ onRewardPoints, userId: propUserId }) {
         setUploading(true);
         try {
           const uploaded = await uploadVoiceBlob(blob, currentUserId, duration);
-          await supabase.from("messages").insert({
+          const { error } = await supabase.from("messages").insert({
             conversation_id: activeChat.id,
             sender_id: currentUserId,
             recipient_id: activeChat.otherUserId,
@@ -515,8 +520,9 @@ export function MessagesTab({ onRewardPoints, userId: propUserId }) {
             media_mime: uploaded.mime,
             media_size: uploaded.size,
             media_duration: uploaded.duration,
-            file_name: "voice.webm",
+            file_name: uploaded.fileName || "voice.m4a",
           });
+          if (error) throw error;
           if (typeof onRewardPoints === "function") onRewardPoints(2);
         } catch (err) {
           console.error(err);
@@ -529,7 +535,7 @@ export function MessagesTab({ onRewardPoints, userId: propUserId }) {
       };
       mediaRecorderRef.current = recorder;
       recordStartRef.current = Date.now();
-      recorder.start();
+      recorder.start(250);
       setRecording(true);
       setRecordSeconds(0);
       recordTimerRef.current = setInterval(() => {
@@ -537,7 +543,9 @@ export function MessagesTab({ onRewardPoints, userId: propUserId }) {
       }, 1000);
     } catch (err) {
       console.error(err);
-      alert("Micro inaccessible. Autorise le micro dans ton navigateur.");
+      alert(
+        "Micro inaccessible. Autorise le micro dans les paramètres du navigateur / de l'app."
+      );
     }
   };
 
@@ -551,16 +559,31 @@ export function MessagesTab({ onRewardPoints, userId: propUserId }) {
   const startOutgoingCall = async (type = "voice") => {
     if (!activeChat || !currentUserId) return;
     try {
-      const { roomName, url, token } = await createCallRoom({
+      const res = await createCallRoom({
         userName: activeChat.otherUserName || "BAARO",
       });
-      const record = await createCallRecord({
-        conversationId: activeChat.id,
-        callerId: currentUserId,
-        calleeId: activeChat.otherUserId,
-        type,
-        dailyRoomName: roomName,
-      });
+      const roomName = res.roomName;
+      const url = res.url || res.roomUrl;
+      const token = res.token;
+      if (!roomName || !url || !token) {
+        throw new Error(
+          "Réponse Daily incomplète. Vérifie DAILY_API_KEY et DAILY_DOMAIN sur Vercel."
+        );
+      }
+      let record = null;
+      try {
+        record = await createCallRecord({
+          conversationId: activeChat.id,
+          callerId: currentUserId,
+          calleeId: activeChat.otherUserId,
+          type,
+          dailyRoomName: roomName,
+        });
+      } catch (dbErr) {
+        console.warn("Table calls absente ou RLS :", dbErr.message);
+        // On continue quand même l'appel même si l'historique échoue
+        record = { id: null, daily_room_name: roomName };
+      }
       setCallState({
         mode: "outgoing",
         callType: type,
@@ -576,54 +599,94 @@ export function MessagesTab({ onRewardPoints, userId: propUserId }) {
       });
     } catch (err) {
       console.error(err);
-      alert(err.message || "Impossible de démarrer l'appel. Vérifie DAILY_API_KEY.");
+      const msg = err.message || String(err);
+      if (/DAILY_API_KEY/i.test(msg) || /non configurés/i.test(msg)) {
+        alert(
+          "Appels non configurés.\n\nAjoute DAILY_API_KEY (et DAILY_DOMAIN) dans les variables d'environnement Vercel, puis redéploie."
+        );
+      } else {
+        alert("Impossible de démarrer l'appel :\n" + msg);
+      }
     }
   };
 
   // ---- Rendu d'un message ----
   const renderMessageContent = (msg, isMe) => {
     const type = msg.type || "text";
+    const url = msg.media_url;
 
-    if (type === "voice" && msg.media_url) {
+    if ((type === "voice" || type === "audio") && url) {
       return (
-        <div className="flex flex-col gap-1 min-w-[160px]">
-          <audio controls src={msg.media_url} className="w-full max-w-[220px]" preload="metadata" />
-          {msg.media_duration != null && (
-            <span className={`text-[10px] ${isMe ? "text-black/60" : "text-gray-400"}`}>
-              {formatDuration(msg.media_duration)}
-            </span>
-          )}
+        <div className="flex flex-col gap-1.5 min-w-[180px]">
+          <audio
+            controls
+            playsInline
+            preload="metadata"
+            src={url}
+            className="w-full max-w-[240px]"
+            style={{ minHeight: 36 }}
+            onError={async (e) => {
+              // Tente de régénérer une signed URL si lecture échoue
+              try {
+                const pathMatch = url.match(/chat-media\/(.+?)(?:\?|$)/);
+                if (pathMatch) {
+                  const fresh = await getReadableUrl(decodeURIComponent(pathMatch[1]));
+                  if (fresh && e.currentTarget) e.currentTarget.src = fresh;
+                }
+              } catch (_) {}
+            }}
+          />
+          <div className="flex items-center justify-between gap-2">
+            {msg.media_duration != null && (
+              <span className={`text-[10px] ${isMe ? "text-black/60" : "text-gray-400"}`}>
+                🎤 {formatDuration(msg.media_duration)}
+              </span>
+            )}
+            <a
+              href={url}
+              target="_blank"
+              rel="noreferrer"
+              download={msg.file_name || "vocal"}
+              className={`text-[10px] underline ${isMe ? "text-black/50" : "text-gray-400"}`}
+            >
+              Télécharger
+            </a>
+          </div>
         </div>
       );
     }
 
-    if (type === "image" && msg.media_url) {
+    if (type === "image" && url) {
       return (
-        <a href={msg.media_url} target="_blank" rel="noreferrer">
+        <a href={url} target="_blank" rel="noreferrer">
           <img
-            src={msg.media_url}
+            src={url}
             alt={msg.file_name || "image"}
             className="max-w-[220px] max-h-[280px] rounded-xl object-cover"
+            onError={(e) => {
+              e.currentTarget.style.display = "none";
+            }}
           />
         </a>
       );
     }
 
-    if (type === "video" && msg.media_url) {
+    if (type === "video" && url) {
       return (
         <video
           controls
-          src={msg.media_url}
+          playsInline
+          src={url}
           className="max-w-[240px] max-h-[280px] rounded-xl"
           preload="metadata"
         />
       );
     }
 
-    if ((type === "file" || type === "audio") && msg.media_url) {
+    if (type === "file" && url) {
       return (
         <a
-          href={msg.media_url}
+          href={url}
           target="_blank"
           rel="noreferrer"
           download={msg.file_name}
