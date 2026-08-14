@@ -1,24 +1,50 @@
 // src/lib/chatMedia.js
 // Upload fichiers / messages vocaux vers Supabase Storage (bucket chat-media)
+// Version corrigée : signed URLs systématiques + formats audio mobiles
 
 import { supabase } from "../supabaseClient.js";
 
 const BUCKET = "chat-media";
 const MAX_FILE_SIZE = 80 * 1024 * 1024; // 80 Mo
 const MAX_VOICE_DURATION = 180; // 3 minutes
+const SIGNED_TTL = 60 * 60 * 24 * 30; // 30 jours
+
+/**
+ * Obtient une URL lisible (signed si bucket privé, publique sinon)
+ */
+export async function getReadableUrl(pathOrUrl) {
+  if (!pathOrUrl) return null;
+  // Déjà une URL absolue
+  if (pathOrUrl.startsWith("http://") || pathOrUrl.startsWith("https://")) {
+    return pathOrUrl;
+  }
+  // C'est un path storage → signed URL
+  const { data, error } = await supabase.storage
+    .from(BUCKET)
+    .createSignedUrl(pathOrUrl, SIGNED_TTL);
+  if (error) {
+    // Fallback public
+    const { data: pub } = supabase.storage.from(BUCKET).getPublicUrl(pathOrUrl);
+    return pub?.publicUrl || null;
+  }
+  return data.signedUrl;
+}
 
 /**
  * Upload un fichier (image, vidéo, doc, audio…)
- * @returns {Promise<{ url: string, path: string, mime: string, size: number, fileName: string }>}
  */
-export async function uploadChatFile(file, userId, onProgress) {
+export async function uploadChatFile(file, userId) {
   if (!file) throw new Error("Aucun fichier");
   if (!userId) throw new Error("Utilisateur non connecté");
   if (file.size > MAX_FILE_SIZE) {
-    throw new Error(`Fichier trop volumineux (max ${Math.round(MAX_FILE_SIZE / 1024 / 1024)} Mo)`);
+    throw new Error(
+      `Fichier trop volumineux (max ${Math.round(MAX_FILE_SIZE / 1024 / 1024)} Mo)`
+    );
   }
 
-  const ext = (file.name.split(".").pop() || "bin").toLowerCase().replace(/[^a-z0-9]/g, "");
+  const ext = (file.name.split(".").pop() || "bin")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
   const safeName = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${ext || "bin"}`;
   const path = `${userId}/${safeName}`;
 
@@ -28,22 +54,25 @@ export async function uploadChatFile(file, userId, onProgress) {
     contentType: file.type || "application/octet-stream",
   });
 
-  if (error) throw error;
-
-  // URL publique (si bucket public) ou signed (si privé)
-  const { data: pub } = supabase.storage.from(BUCKET).getPublicUrl(data.path);
-  let url = pub?.publicUrl;
-
-  // Si bucket privé, générer une signed URL longue (7 jours)
-  if (!url || url.includes("undefined")) {
-    const { data: signed, error: signErr } = await supabase.storage
-      .from(BUCKET)
-      .createSignedUrl(data.path, 60 * 60 * 24 * 7);
-    if (signErr) throw signErr;
-    url = signed.signedUrl;
+  if (error) {
+    console.error("Upload error:", error);
+    throw new Error(error.message || "Échec upload (vérifie le bucket chat-media)");
   }
 
-  if (typeof onProgress === "function") onProgress(100);
+  // Toujours générer une signed URL (marche bucket public ET privé)
+  let url;
+  const { data: signed, error: signErr } = await supabase.storage
+    .from(BUCKET)
+    .createSignedUrl(data.path, SIGNED_TTL);
+
+  if (!signErr && signed?.signedUrl) {
+    url = signed.signedUrl;
+  } else {
+    const { data: pub } = supabase.storage.from(BUCKET).getPublicUrl(data.path);
+    url = pub?.publicUrl;
+  }
+
+  if (!url) throw new Error("Impossible d'obtenir l'URL du fichier");
 
   return {
     url,
@@ -55,6 +84,37 @@ export async function uploadChatFile(file, userId, onProgress) {
 }
 
 /**
+ * Choisit le meilleur MIME pour MediaRecorder (compatible mobile)
+ */
+export function getBestAudioMime() {
+  const candidates = [
+    "audio/mp4",
+    "audio/aac",
+    "audio/webm;codecs=opus",
+    "audio/webm",
+    "audio/ogg;codecs=opus",
+  ];
+  if (typeof MediaRecorder === "undefined") return "audio/webm";
+  for (const m of candidates) {
+    try {
+      if (MediaRecorder.isTypeSupported(m)) return m;
+    } catch (_) {}
+  }
+  return "audio/webm";
+}
+
+/**
+ * Extension selon MIME
+ */
+function extFromMime(mime) {
+  if (!mime) return "webm";
+  if (mime.includes("mp4") || mime.includes("aac") || mime.includes("m4a")) return "m4a";
+  if (mime.includes("ogg")) return "ogg";
+  if (mime.includes("mpeg") || mime.includes("mp3")) return "mp3";
+  return "webm";
+}
+
+/**
  * Upload d'un Blob audio (message vocal)
  */
 export async function uploadVoiceBlob(blob, userId, durationSeconds = 0) {
@@ -63,11 +123,9 @@ export async function uploadVoiceBlob(blob, userId, durationSeconds = 0) {
     throw new Error(`Message vocal trop long (max ${MAX_VOICE_DURATION}s)`);
   }
 
-  const file = new File(
-    [blob],
-    `voice_${Date.now()}.webm`,
-    { type: blob.type || "audio/webm" }
-  );
+  const mime = blob.type || getBestAudioMime();
+  const ext = extFromMime(mime);
+  const file = new File([blob], `voice_${Date.now()}.${ext}`, { type: mime });
 
   const result = await uploadChatFile(file, userId);
   return {
@@ -76,19 +134,13 @@ export async function uploadVoiceBlob(blob, userId, durationSeconds = 0) {
   };
 }
 
-/**
- * Détermine le type de message à partir du MIME
- */
 export function mimeToMessageType(mime = "") {
   if (mime.startsWith("image/")) return "image";
   if (mime.startsWith("video/")) return "video";
-  if (mime.startsWith("audio/")) return "audio";
+  if (mime.startsWith("audio/")) return "voice"; // les audios = voice pour l'UI
   return "file";
 }
 
-/**
- * Format taille lisible
- */
 export function formatFileSize(bytes) {
   if (!bytes || bytes < 0) return "0 o";
   if (bytes < 1024) return `${bytes} o`;
@@ -96,9 +148,6 @@ export function formatFileSize(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} Mo`;
 }
 
-/**
- * Format durée mm:ss
- */
 export function formatDuration(seconds) {
   const s = Math.max(0, Math.floor(seconds || 0));
   const m = Math.floor(s / 60);
