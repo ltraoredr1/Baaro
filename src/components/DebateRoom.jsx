@@ -16,6 +16,9 @@ import {
   Sparkles,
   Pause,
   Play,
+  Copy,
+  Check,
+  Hand,
 } from "lucide-react";
 import { COLORS } from "../theme.js";
 import { supabase } from "../supabaseClient.js";
@@ -32,20 +35,12 @@ import {
   respondCoHostRequest,
   demoteToViewer,
   findParticipantSessionId,
+  attachRemoteAudio,
+  detachRemoteAudio,
+  detachAllRemoteAudio,
+  pauseRoom,
+  resumeRoom,
 } from "../lib/webrtc.js";
-
-/** Attache une MediaStreamTrack vidéo à un <video> */
-function attachTrackToVideo(videoEl, track) {
-  if (!videoEl || !track) return;
-  try {
-    const stream = new MediaStream([track]);
-    videoEl.srcObject = stream;
-    const p = videoEl.play();
-    if (p && typeof p.catch === "function") p.catch(() => {});
-  } catch (e) {
-    console.warn("attachTrackToVideo", e);
-  }
-}
 
 function getVideoTrack(participant) {
   if (!participant?.tracks?.video) return null;
@@ -54,16 +49,34 @@ function getVideoTrack(participant) {
 }
 
 /** Tuile vidéo / avatar d'un participant */
-function ParticipantTile({ participant, isVideoMode, isLocal, videoTrack }) {
+function ParticipantTile({
+  participant,
+  isVideoMode,
+  isLocal,
+  videoTrack,
+  isSpeaking = false,
+  compact = false,
+}) {
   const videoRef = useRef(null);
   const track = videoTrack || getVideoTrack(participant);
-  const hasVideo = isVideoMode && !!track && track.readyState !== "ended";
+  const hasVideo =
+    isVideoMode && !!track && track.readyState !== "ended";
 
   useEffect(() => {
-    if (hasVideo && videoRef.current) {
-      attachTrackToVideo(videoRef.current, track);
-    } else if (videoRef.current) {
-      videoRef.current.srcObject = null;
+    const videoEl = videoRef.current;
+    if (!videoEl) return;
+
+    if (hasVideo && track) {
+      const stream = new MediaStream([track]);
+      const current = videoEl.srcObject;
+      const currentTrack = current?.getVideoTracks?.()?.[0];
+      if (currentTrack !== track) {
+        videoEl.srcObject = stream;
+      }
+      const p = videoEl.play();
+      if (p && typeof p.catch === "function") p.catch(() => {});
+    } else {
+      videoEl.srcObject = null;
     }
   }, [hasVideo, track]);
 
@@ -71,12 +84,13 @@ function ParticipantTile({ participant, isVideoMode, isLocal, videoTrack }) {
 
   return (
     <div
-      className="relative rounded-2xl overflow-hidden border flex items-center justify-center"
+      className="relative rounded-2xl overflow-hidden border flex items-center justify-center transition-all"
       style={{
         background: COLORS.surface2,
-        borderColor: COLORS.border,
-        minHeight: isLocal ? 160 : 140,
-        aspectRatio: "16/10",
+        borderColor: isSpeaking ? COLORS.gold : COLORS.border,
+        boxShadow: isSpeaking ? `0 0 0 2px ${COLORS.gold}55` : "none",
+        minHeight: compact ? 80 : isLocal ? 160 : 140,
+        aspectRatio: compact ? "4/3" : "16/10",
       }}
     >
       {hasVideo ? (
@@ -89,18 +103,20 @@ function ParticipantTile({ participant, isVideoMode, isLocal, videoTrack }) {
           style={{ transform: isLocal ? "scaleX(-1)" : undefined }}
         />
       ) : (
-        <div className="flex flex-col items-center gap-2 z-10">
+        <div className="flex flex-col items-center gap-1 z-10">
           <div
-            className="w-14 h-14 rounded-full flex items-center justify-center text-xl font-bold border"
+            className={`rounded-full flex items-center justify-center font-bold border ${
+              compact ? "w-10 h-10 text-sm" : "w-14 h-14 text-xl"
+            }`}
             style={{
               background: COLORS.surface,
-              borderColor: COLORS.borderGold,
+              borderColor: isSpeaking ? COLORS.gold : COLORS.borderGold,
               color: COLORS.gold,
             }}
           >
             {(name || "?")[0].toUpperCase()}
           </div>
-          {!isVideoMode && (
+          {!isVideoMode && !compact && (
             <Volume2 size={14} style={{ color: COLORS.muted }} />
           )}
         </div>
@@ -114,7 +130,14 @@ function ParticipantTile({ participant, isVideoMode, isLocal, videoTrack }) {
         }}
       >
         <span className="truncate">{name}</span>
-        {isLocal && <span className="text-[9px] opacity-70 shrink-0">MOI</span>}
+        {isLocal && (
+          <span className="text-[9px] opacity-70 shrink-0">MOI</span>
+        )}
+        {isSpeaking && (
+          <span className="ml-auto text-[9px] shrink-0" style={{ color: COLORS.gold }}>
+            ● parle
+          </span>
+        )}
       </div>
     </div>
   );
@@ -163,8 +186,10 @@ export function DebateRoom({
   const [aiLoading, setAiLoading] = useState(false);
   const [roomStatus, setRoomStatus] = useState("active");
   const [pauseLoading, setPauseLoading] = useState(false);
-  
-  
+  const [activeSpeakerId, setActiveSpeakerId] = useState(null);
+  const [speakRequestSent, setSpeakRequestSent] = useState(false);
+  const [speakRequestLoading, setSpeakRequestLoading] = useState(false);
+  const [codeCopied, setCodeCopied] = useState(false);
 
   const isRoomOwner = !!(currentUserId && room?.host_id === currentUserId);
   const dbRole = currentUserId ? participantRoles[currentUserId] : null;
@@ -187,7 +212,6 @@ export function DebateRoom({
     scrollToBottom();
   }, [messages, scrollToBottom]);
 
-  // Continuer en arrière-plan
   useEffect(() => {
     let wakeLock = null;
     const requestWakeLock = async () => {
@@ -204,7 +228,9 @@ export function DebateRoom({
     requestWakeLock();
     return () => {
       document.removeEventListener("visibilitychange", onVisibility);
-      try { wakeLock?.release?.(); } catch (_) {}
+      try {
+        wakeLock?.release?.();
+      } catch (_) {}
     };
   }, []);
 
@@ -316,12 +342,11 @@ export function DebateRoom({
           if (myReq && isMounted) setPendingRequest(myReq);
         }
 
-        // Realtime : créer les channels de façon isolée (évite l'erreur
-        // "cannot add postgres_changes after subscribe" en Strict Mode /
-        // double montage). Les erreurs Realtime ne bloquent pas la salle.
         try {
           const msgChName = `room_msgs_${roomData.id}`;
-          try { supabase.removeChannel(supabase.channel(msgChName)); } catch (_) {}
+          try {
+            supabase.removeChannel(supabase.channel(msgChName));
+          } catch (_) {}
           messagesChannel = supabase
             .channel(msgChName)
             .on(
@@ -364,7 +389,9 @@ export function DebateRoom({
 
         try {
           const partChName = `room_parts_${roomData.id}`;
-          try { supabase.removeChannel(supabase.channel(partChName)); } catch (_) {}
+          try {
+            supabase.removeChannel(supabase.channel(partChName));
+          } catch (_) {}
           participantsChannel = supabase
             .channel(partChName)
             .on(
@@ -410,6 +437,7 @@ export function DebateRoom({
                     enableCamera(shouldBroadcast);
                     setCamOn(shouldBroadcast);
                   }
+                  if (shouldBroadcast) setSpeakRequestSent(false);
                 }
               }
             );
@@ -418,24 +446,11 @@ export function DebateRoom({
           console.warn("Realtime participants:", e);
         }
 
-        if (currentUserId) {
-          try {
-            const { data: myReq } = await supabase
-              .from("debate_role_requests")
-              .select("*")
-              .eq("room_id", roomData.id)
-              .eq("to_user_id", currentUserId)
-              .eq("status", "pending")
-              .maybeSingle();
-            if (myReq && isMounted) setPendingRequest(myReq);
-          } catch (e) {
-            console.warn("role request fetch:", e);
-          }
-        }
-
         try {
           const roleChName = `role_req_${roomData.id}`;
-          try { supabase.removeChannel(supabase.channel(roleChName)); } catch (_) {}
+          try {
+            supabase.removeChannel(supabase.channel(roleChName));
+          } catch (_) {}
           roleReqChannel = supabase
             .channel(roleChName)
             .on(
@@ -470,7 +485,9 @@ export function DebateRoom({
 
         try {
           const metaChName = `room_meta_${roomData.id}`;
-          try { supabase.removeChannel(supabase.channel(metaChName)); } catch (_) {}
+          try {
+            supabase.removeChannel(supabase.channel(metaChName));
+          } catch (_) {}
           roomChannel = supabase
             .channel(metaChName)
             .on(
@@ -490,7 +507,6 @@ export function DebateRoom({
         } catch (e) {
           console.warn("Realtime room meta:", e);
         }
-
       } catch (err) {
         if (isMounted) setError(err.message);
       } finally {
@@ -549,11 +565,11 @@ export function DebateRoom({
 
         const shouldStartMedia = role === "host" || role === "co_host";
 
-        enableMic(shouldStartMedia);
+        await enableMic(shouldStartMedia);
         setMicOn(shouldStartMedia);
 
         if (room.mode === "video") {
-          enableCamera(shouldStartMedia);
+          await enableCamera(shouldStartMedia);
           setCamOn(shouldStartMedia);
         }
 
@@ -573,44 +589,77 @@ export function DebateRoom({
                 delete n[sid];
                 return n;
               });
+              detachRemoteAudio(sid);
             }
           },
           onParticipantUpdated: updateParticipants,
           onTrackStarted: (ev) => {
             updateParticipants();
-            if (ev?.track?.kind === "video" && ev?.participant?.session_id) {
+            const { track, participant } = ev || {};
+            if (!track || !participant?.session_id) return;
+
+            if (track.kind === "video") {
               setVideoTracks((prev) => ({
                 ...prev,
-                [ev.participant.session_id]: ev.track,
+                [participant.session_id]: track,
               }));
+            }
+
+            if (track.kind === "audio" && !participant.local) {
+              attachRemoteAudio(participant.session_id, track);
             }
           },
           onTrackStopped: (ev) => {
             updateParticipants();
-            if (ev?.track?.kind === "video" && ev?.participant?.session_id) {
+            const { track, participant } = ev || {};
+            if (!track || !participant?.session_id) return;
+
+            if (track.kind === "video") {
               setVideoTracks((prev) => {
                 const n = { ...prev };
-                delete n[ev.participant.session_id];
+                delete n[participant.session_id];
                 return n;
               });
             }
+            if (track.kind === "audio" && !participant.local) {
+              detachRemoteAudio(participant.session_id);
+            }
+          },
+          onActiveSpeakerChange: (ev) => {
+            setActiveSpeakerId(ev?.activeSpeaker?.peerId || null);
           },
           onError: (e) => {
             console.error("Daily error:", e);
-            setVoiceError(
-              JSON.stringify(e, Object.getOwnPropertyNames(e)) || String(e)
-            );
+            const msg =
+              e?.errorMsg ||
+              e?.error?.msg ||
+              JSON.stringify(e, Object.getOwnPropertyNames(e)) ||
+              String(e);
+            if (/permission|NotAllowed|denied|blocked/i.test(msg)) {
+              setVoiceError(
+                "Autorisez le micro et la caméra dans les paramètres du navigateur / de l’application, puis réessayez."
+              );
+            } else {
+              setVoiceError(msg);
+            }
           },
         });
 
         const existing = getParticipants();
-        const initial = {};
+        const initialVideo = {};
         Object.values(existing).forEach((p) => {
           const t = getVideoTrack(p);
-          if (t && p.session_id) initial[p.session_id] = t;
+          if (t && p.session_id) initialVideo[p.session_id] = t;
+
+          const audioTrack =
+            p?.tracks?.audio?.persistentTrack || p?.tracks?.audio?.track;
+          if (audioTrack && !p.local && p.session_id) {
+            attachRemoteAudio(p.session_id, audioTrack);
+          }
         });
-        if (Object.keys(initial).length)
-          setVideoTracks((prev) => ({ ...prev, ...initial }));
+        if (Object.keys(initialVideo).length) {
+          setVideoTracks((prev) => ({ ...prev, ...initialVideo }));
+        }
 
         pollTimer = setInterval(updateParticipants, 2000);
       } catch (err) {
@@ -633,24 +682,98 @@ export function DebateRoom({
 
   useEffect(() => {
     return () => {
+      detachAllRemoteAudio();
       leaveLive({ roomName: dailyRoomName, isHost: isRoomOwner }).catch(
         () => {}
       );
     };
   }, [dailyRoomName, isRoomOwner]);
 
-  const toggleMic = () => {
+  const toggleMic = async () => {
     if (!canBroadcast || roomStatus === "paused") return;
     const next = !micOn;
-    enableMic(next);
-    setMicOn(next);
+    try {
+      await enableMic(next);
+      setMicOn(next);
+      setTimeout(() => setParticipants({ ...getParticipants() }), 250);
+    } catch (e) {
+      console.warn("toggleMic", e);
+      setVoiceError("Impossible d’activer/désactiver le micro");
+    }
   };
 
-  const toggleCam = () => {
-    if (!canBroadcast || roomStatus === "paused" || room?.mode !== "video") return;
+  const toggleCam = async () => {
+    if (!canBroadcast || roomStatus === "paused" || room?.mode !== "video")
+      return;
     const next = !camOn;
-    enableCamera(next);
-    setCamOn(next);
+    try {
+      await enableCamera(next);
+      setCamOn(next);
+      setTimeout(() => {
+        setParticipants({ ...getParticipants() });
+        const parts = getParticipants();
+        const local = Object.values(parts).find((p) => p.local);
+        if (local) {
+          const t = getVideoTrack(local);
+          if (t) {
+            setVideoTracks((prev) => ({
+              ...prev,
+              [local.session_id]: t,
+            }));
+          }
+        }
+      }, 350);
+    } catch (e) {
+      console.warn("toggleCam", e);
+      setVoiceError("Impossible d’activer/désactiver la caméra");
+    }
+  };
+
+  const handleCopyCode = async () => {
+    if (!room?.invite_code) return;
+    try {
+      await navigator.clipboard.writeText(room.invite_code);
+      setCodeCopied(true);
+      setTimeout(() => setCodeCopied(false), 2000);
+    } catch (_) {
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = room.invite_code;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        ta.remove();
+        setCodeCopied(true);
+        setTimeout(() => setCodeCopied(false), 2000);
+      } catch (e) {
+        console.warn("copy failed", e);
+      }
+    }
+  };
+
+  const handleRequestToSpeak = async () => {
+    if (!room || !currentUserId || speakRequestSent || speakRequestLoading)
+      return;
+    setSpeakRequestLoading(true);
+    setRoleActionError(null);
+    try {
+      const displayName =
+        profilesCache.current[currentUserId]?.display_name || "Un spectateur";
+      const { error } = await supabase.from("debate_messages").insert({
+        room_id: room.id,
+        sender_id: currentUserId,
+        sender_type: "user",
+        text: `🙋 ${displayName} demande à parler`,
+      });
+      if (error) throw error;
+      setSpeakRequestSent(true);
+    } catch (err) {
+      setRoleActionError(
+        err.message || "Impossible d’envoyer la demande"
+      );
+    } finally {
+      setSpeakRequestLoading(false);
+    }
   };
 
   const handleLeaveVoice = async () => {
@@ -660,6 +783,9 @@ export function DebateRoom({
     setCamOn(false);
     setMyRole("viewer");
     setParticipants({});
+    setVideoTracks({});
+    setActiveSpeakerId(null);
+    setSpeakRequestSent(false);
     onBack();
   };
 
@@ -684,19 +810,6 @@ export function DebateRoom({
     }
   };
 
-  const handleProposeCoHost = async (targetUserId) => {
-    if (!room || roleActionLoading) return;
-    setRoleActionLoading(targetUserId);
-    setRoleActionError(null);
-    try {
-      await requestCoHost(room.id, targetUserId);
-    } catch (err) {
-      setRoleActionError(err.message || "Erreur lors de la proposition");
-    } finally {
-      setRoleActionLoading(null);
-    }
-  };
-
   const handleRespondRequest = async (accept) => {
     if (!pendingRequest || !room) return;
     setRoleActionLoading("respond");
@@ -716,9 +829,6 @@ export function DebateRoom({
       setRoleActionLoading(null);
     }
   };
-
-
-;
 
   const handlePauseToggle = async () => {
     if (!room || !isRoomOwner || pauseLoading) return;
@@ -801,8 +911,6 @@ export function DebateRoom({
     }
   };
 
-;
-
   if (error) {
     return (
       <div
@@ -842,6 +950,7 @@ export function DebateRoom({
   const otherForRoles = remoteParticipants.filter(
     (p) => p.user_id && p.user_id !== currentUserId
   );
+  const usePipLayout = remoteParticipants.length === 1;
 
   return (
     <div className="flex flex-col h-full" style={{ background: COLORS.surface }}>
@@ -883,15 +992,34 @@ export function DebateRoom({
               </span>
             )}
           </h2>
-          <p
-            className="text-xs flex items-center gap-1"
+          <div
+            className="text-xs flex items-center gap-1 flex-wrap mt-0.5"
             style={{ color: COLORS.muted }}
           >
             <Hash size={12} /> {room?.topic}
             {room?.invite_code && (
-              <span className="ml-2 opacity-70">· Code {room.invite_code}</span>
+              <button
+                type="button"
+                onClick={handleCopyCode}
+                className="ml-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-lg border text-[11px] font-bold"
+                style={{
+                  borderColor: codeCopied ? COLORS.teal : COLORS.border,
+                  color: codeCopied ? COLORS.teal : COLORS.gold,
+                  background: "rgba(255,255,255,0.03)",
+                }}
+              >
+                {codeCopied ? (
+                  <>
+                    <Check size={12} /> Copié
+                  </>
+                ) : (
+                  <>
+                    <Copy size={12} /> {room.invite_code}
+                  </>
+                )}
+              </button>
             )}
-          </p>
+          </div>
         </div>
         <div
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-full shrink-0"
@@ -945,7 +1073,6 @@ export function DebateRoom({
         <p className="px-4 pt-2 text-xs text-red-400">{roleActionError}</p>
       )}
 
-
       {roomStatus === "paused" && (
         <div
           className="mx-4 mt-3 p-3 rounded-xl border flex items-center gap-2 flex-wrap"
@@ -961,43 +1088,6 @@ export function DebateRoom({
           <p className="text-[11px]" style={{ color: COLORS.muted }}>
             — le live continue en arrière-plan, les messages restent actifs
           </p>
-        </div>
-      )}
-
-      {pendingRequest && (
-        <div
-          className="mx-4 mt-3 p-4 rounded-2xl border flex flex-col gap-3"
-          style={{
-            background: "rgba(45,191,166,0.12)",
-            borderColor: "rgba(45,191,166,0.4)",
-          }}
-        >
-          <p className="text-sm font-bold" style={{ color: COLORS.ivory }}>
-            L'hôte te propose de devenir co-hôte
-          </p>
-          <p className="text-xs" style={{ color: COLORS.muted }}>
-            Tu pourras activer micro et caméra. Accepter ?
-          </p>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={() => handleRespondRequest(true)}
-              disabled={roleActionLoading === "respond"}
-              className="flex-1 py-2 rounded-xl font-bold text-sm disabled:opacity-50"
-              style={{ background: COLORS.gold, color: "#000" }}
-            >
-              Accepter
-            </button>
-            <button
-              type="button"
-              onClick={() => handleRespondRequest(false)}
-              disabled={roleActionLoading === "respond"}
-              className="flex-1 py-2 rounded-xl font-bold text-sm border disabled:opacity-50"
-              style={{ borderColor: COLORS.border, color: COLORS.ivory }}
-            >
-              Refuser
-            </button>
-          </div>
         </div>
       )}
 
@@ -1033,33 +1123,66 @@ export function DebateRoom({
             </div>
           ) : (
             <>
-              <div
-                className={`grid gap-2 mb-3 ${
-                  remoteParticipants.length === 0
-                    ? "grid-cols-1"
-                    : remoteParticipants.length === 1
-                      ? "grid-cols-2"
-                      : "grid-cols-2 sm:grid-cols-3"
-                }`}
-              >
-                {localParticipant && (
+              {usePipLayout ? (
+                <div className="relative mb-3 rounded-2xl overflow-hidden" style={{ minHeight: 220 }}>
                   <ParticipantTile
-                    participant={localParticipant}
-                    isVideoMode={isVideoMode}
-                    isLocal
-                    videoTrack={videoTracks[localParticipant.session_id]}
-                  />
-                )}
-                {remoteParticipants.map((p) => (
-                  <ParticipantTile
-                    key={p.session_id}
-                    participant={p}
+                    participant={remoteParticipants[0]}
                     isVideoMode={isVideoMode}
                     isLocal={false}
-                    videoTrack={videoTracks[p.session_id]}
+                    videoTrack={videoTracks[remoteParticipants[0].session_id]}
+                    isSpeaking={
+                      activeSpeakerId === remoteParticipants[0].session_id
+                    }
                   />
-                ))}
-              </div>
+                  {localParticipant && (
+                    <div
+                      className="absolute bottom-2 right-2 w-[30%] max-w-[120px] shadow-lg rounded-xl overflow-hidden border"
+                      style={{ borderColor: COLORS.borderGold }}
+                    >
+                      <ParticipantTile
+                        participant={localParticipant}
+                        isVideoMode={isVideoMode}
+                        isLocal
+                        videoTrack={videoTracks[localParticipant.session_id]}
+                        isSpeaking={
+                          activeSpeakerId === localParticipant.session_id
+                        }
+                        compact
+                      />
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div
+                  className={`grid gap-2 mb-3 ${
+                    remoteParticipants.length === 0
+                      ? "grid-cols-1"
+                      : "grid-cols-2 sm:grid-cols-3"
+                  }`}
+                >
+                  {localParticipant && (
+                    <ParticipantTile
+                      participant={localParticipant}
+                      isVideoMode={isVideoMode}
+                      isLocal
+                      videoTrack={videoTracks[localParticipant.session_id]}
+                      isSpeaking={
+                        activeSpeakerId === localParticipant.session_id
+                      }
+                    />
+                  )}
+                  {remoteParticipants.map((p) => (
+                    <ParticipantTile
+                      key={p.session_id}
+                      participant={p}
+                      isVideoMode={isVideoMode}
+                      isLocal={false}
+                      videoTrack={videoTracks[p.session_id]}
+                      isSpeaking={activeSpeakerId === p.session_id}
+                    />
+                  ))}
+                </div>
+              )}
 
               {remoteParticipants.length === 0 && (
                 <div
@@ -1073,22 +1196,33 @@ export function DebateRoom({
                     className="text-xs font-bold mb-1"
                     style={{ color: COLORS.gold }}
                   >
-                    En attente d’autres participants…
+                    Personne d’autre pour l’instant
                   </p>
-                  <p className="text-[11px]" style={{ color: COLORS.muted }}>
-                    Partagez le code{" "}
-                    <span
-                      className="font-mono font-bold"
-                      style={{ color: COLORS.ivory }}
+                  <p className="text-[11px] mb-2" style={{ color: COLORS.muted }}>
+                    Partage le code pour inviter
+                  </p>
+                  {room?.invite_code && (
+                    <button
+                      type="button"
+                      onClick={handleCopyCode}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold"
+                      style={{ background: COLORS.gold, color: "#000" }}
                     >
-                      {room?.invite_code}
-                    </span>{" "}
-                    pour les inviter
-                  </p>
+                      {codeCopied ? (
+                        <>
+                          <Check size={14} /> Code copié
+                        </>
+                      ) : (
+                        <>
+                          <Copy size={14} /> {room.invite_code}
+                        </>
+                      )}
+                    </button>
+                  )}
                 </div>
               )}
 
-              <div className="flex items-center justify-center gap-3">
+              <div className="flex items-center justify-center gap-3 flex-wrap">
                 {canBroadcast && roomStatus !== "paused" ? (
                   <>
                     <button
@@ -1122,12 +1256,30 @@ export function DebateRoom({
                       </button>
                     )}
                   </>
-                ) : (
+                ) : roomStatus === "paused" ? (
                   <p className="text-[11px]" style={{ color: COLORS.muted }}>
-                    {roomStatus === "paused"
-                      ? "En pause — micro et caméra désactivés"
-                      : "Spectateur — micro et caméra désactivés"}
+                    En pause — micro et caméra désactivés
                   </p>
+                ) : (
+                  <div className="flex flex-col items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={handleRequestToSpeak}
+                      disabled={speakRequestSent || speakRequestLoading}
+                      className="px-5 py-2.5 rounded-xl font-bold text-sm disabled:opacity-60 flex items-center gap-2"
+                      style={{ background: COLORS.gold, color: "#000" }}
+                    >
+                      <Hand size={16} />
+                      {speakRequestLoading
+                        ? "Envoi…"
+                        : speakRequestSent
+                          ? "Demande envoyée ✓"
+                          : "Demander à parler"}
+                    </button>
+                    <p className="text-[11px]" style={{ color: COLORS.muted }}>
+                      L’hôte verra ta demande dans le chat
+                    </p>
+                  </div>
                 )}
 
                 {isRoomOwner && (
@@ -1141,7 +1293,8 @@ export function DebateRoom({
                         roomStatus === "paused"
                           ? "rgba(34,197,94,0.25)"
                           : "rgba(245,158,11,0.25)",
-                      color: roomStatus === "paused" ? "#22c55e" : COLORS.gold,
+                      color:
+                        roomStatus === "paused" ? "#22c55e" : COLORS.gold,
                     }}
                     title={
                       roomStatus === "paused"
@@ -1183,7 +1336,7 @@ export function DebateRoom({
             className="text-[10px] font-bold uppercase tracking-wider mb-2"
             style={{ color: COLORS.muted }}
           >
-            Participants connectés
+            Participants — proposer co-hôte
           </p>
           {roleActionError && (
             <p className="text-xs text-red-400 mb-2">{roleActionError}</p>
@@ -1247,6 +1400,9 @@ export function DebateRoom({
           messages.map((msg) => {
             const isMe = msg.sender_id === currentUserId;
             const isAI = msg.sender_type === "ai";
+            const isSpeakRequest =
+              typeof msg.text === "string" &&
+              msg.text.includes("demande à parler");
             const profile = isMe
               ? { display_name: "Moi", flag: "🌍" }
               : msg.profile || { display_name: "Membre", flag: "🌍" };
@@ -1262,12 +1418,16 @@ export function DebateRoom({
                     style={{
                       borderColor: isAI
                         ? "rgba(167,139,250,0.5)"
-                        : COLORS.borderGold,
+                        : isSpeakRequest
+                          ? COLORS.gold
+                          : COLORS.borderGold,
                       background: COLORS.surface2,
                     }}
                   >
                     {isAI ? (
                       "✨"
+                    ) : isSpeakRequest ? (
+                      "🙋"
                     ) : profile.avatar_url ? (
                       <img
                         src={profile.avatar_url}
@@ -1288,17 +1448,25 @@ export function DebateRoom({
                       ? COLORS.gold
                       : isAI
                         ? "rgba(167,139,250,0.15)"
-                        : COLORS.surface2,
+                        : isSpeakRequest
+                          ? "rgba(217,174,82,0.15)"
+                          : COLORS.surface2,
                     color: isMe ? "#000" : COLORS.ivory,
                     border: isAI
                       ? "1px solid rgba(167,139,250,0.4)"
-                      : undefined,
+                      : isSpeakRequest
+                        ? `1px solid ${COLORS.gold}55`
+                        : undefined,
                   }}
                 >
                   {!isMe && (
                     <p
                       className="text-[10px] font-bold mb-1"
-                      style={{ color: isAI ? "#a78bfa" : COLORS.gold }}
+                      style={{
+                        color: isAI
+                          ? "#a78bfa"
+                          : COLORS.gold,
+                      }}
                     >
                       {isAI
                         ? "✨ IA BAARO"
