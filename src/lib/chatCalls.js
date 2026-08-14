@@ -13,7 +13,8 @@ async function authHeaders() {
 }
 
 async function callApi(body) {
-  const res = await fetch("/api/chat-call", {
+  const base = (typeof import.meta !== "undefined" && import.meta.env?.VITE_API_BASE_URL) || "";
+  const res = await fetch(`${base}/api/chat-call`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -22,7 +23,14 @@ async function callApi(body) {
     body: JSON.stringify(body),
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || "Erreur serveur appel");
+  if (!res.ok) {
+    throw new Error(
+      data.error ||
+        (res.status === 503
+          ? "Appels non configurés (DAILY_API_KEY manquante sur Vercel)"
+          : `Erreur serveur appel (${res.status})`)
+    );
+  }
   return data;
 }
 
