@@ -414,7 +414,7 @@ export function MessagesTab({ onRewardPoints, userId: propUserId }) {
   // --- Nouvelle conversation (amis + recherche) ---
   if (showNewChat) {
     return (
-      <div className="flex flex-col h-full max-w-2xl mx-auto w-full pb-20">
+      <div className="flex flex-col h-full max-w-2xl mx-auto w-full" style={{ paddingBottom: "calc(6rem + env(safe-area-inset-bottom, 0px))" }}>
         <div className="flex items-center justify-between mb-4 px-1">
           <h2 className="text-lg font-bold" style={{ color: COLORS.ivory }}>
             Nouvelle conversation
@@ -540,7 +540,7 @@ export function MessagesTab({ onRewardPoints, userId: propUserId }) {
   // --- Conversation active ---
   if (activeChat) {
     return (
-      <div className="flex flex-col h-[calc(100dvh-140px)] max-w-2xl mx-auto w-full">
+      <div className="flex flex-col max-w-2xl mx-auto w-full" style={{ height: "calc(100dvh - 130px)", maxHeight: "calc(100dvh - 130px)" }}>
         <div
           className="flex items-center gap-3 p-3 border-b"
           style={{ borderColor: COLORS.border }}
@@ -574,7 +574,7 @@ export function MessagesTab({ onRewardPoints, userId: propUserId }) {
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+        <div className="flex-1 overflow-y-auto p-4 space-y-3 min-h-0">
           {messages.length === 0 && (
             <p className="text-center text-sm py-10" style={{ color: COLORS.muted }}>
               Début de la conversation — dis bonjour 👋
@@ -616,8 +616,12 @@ export function MessagesTab({ onRewardPoints, userId: propUserId }) {
 
         <form
           onSubmit={handleSendMessage}
-          className="p-3 border-t flex gap-2"
-          style={{ borderColor: COLORS.border }}
+          className="p-3 border-t flex gap-2 shrink-0"
+          style={{
+            borderColor: COLORS.border,
+            paddingBottom: "calc(5.5rem + env(safe-area-inset-bottom, 0px))",
+            background: COLORS.bg || "#0B1220",
+          }}
         >
           <input
             type="text"
@@ -646,7 +650,7 @@ export function MessagesTab({ onRewardPoints, userId: propUserId }) {
 
   // --- Liste des conversations ---
   return (
-    <div className="flex flex-col h-full max-w-2xl mx-auto w-full pb-20 p-4">
+    <div className="flex flex-col h-full max-w-2xl mx-auto w-full p-4" style={{ paddingBottom: "calc(6rem + env(safe-area-inset-bottom, 0px))" }}>
       <div className="flex items-center justify-between mb-5">
         <h2
           className="text-xl font-bold flex items-center gap-2"
