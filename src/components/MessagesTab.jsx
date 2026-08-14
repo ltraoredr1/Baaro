@@ -8,6 +8,14 @@ import {
   Search,
   Users,
   UserPlus,
+  Paperclip,
+  Mic,
+  MicOff,
+  Phone,
+  Video,
+  FileText,
+  Download,
+  Image as ImageIcon,
 } from "lucide-react";
 import { COLORS } from "../theme.js";
 import { supabase } from "../supabaseClient.js";
@@ -16,9 +24,23 @@ import {
   getFollowing,
   getFollowers,
 } from "../supabaseClient.js";
+import {
+  uploadChatFile,
+  uploadVoiceBlob,
+  mimeToMessageType,
+  formatFileSize,
+  formatDuration,
+} from "../lib/chatMedia.js";
+import {
+  createCallRoom,
+  createCallRecord,
+  joinCallRoom,
+  updateCallStatus,
+} from "../lib/chatCalls.js";
+import { ChatCallModal } from "./ChatCallModal.jsx";
 
 /**
- * Messages + liste d'amis + recherche pour démarrer un chat
+ * Messages + liste d'amis + recherche + vocaux + fichiers + appels
  */
 export function MessagesTab({ onRewardPoints, userId: propUserId }) {
   const [currentUserId, setCurrentUserId] = useState(propUserId || null);
@@ -28,14 +50,26 @@ export function MessagesTab({ onRewardPoints, userId: propUserId }) {
   const [newMessage, setNewMessage] = useState("");
   const [loading, setLoading] = useState(true);
   const [showNewChat, setShowNewChat] = useState(false);
-  const [pickerTab, setPickerTab] = useState("friends"); // friends | search
+  const [pickerTab, setPickerTab] = useState("friends");
   const [friends, setFriends] = useState([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState([]);
   const [searching, setSearching] = useState(false);
   const [loadingFriends, setLoadingFriends] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [recordSeconds, setRecordSeconds] = useState(0);
+
+  // Appels
+  const [callState, setCallState] = useState(null); // { mode, callType, callRecord, roomUrl, token, otherUser, isCaller }
+
   const messagesEndRef = useRef(null);
   const profilesCache = useRef({});
+  const fileInputRef = useRef(null);
+  const mediaRecorderRef = useRef(null);
+  const recordChunksRef = useRef([]);
+  const recordTimerRef = useRef(null);
+  const recordStartRef = useRef(null);
 
   useEffect(() => {
     if (propUserId) {
@@ -79,7 +113,6 @@ export function MessagesTab({ onRewardPoints, userId: propUserId }) {
       );
       await fetchProfiles(otherIds);
 
-      // Derniers messages (best-effort)
       const enriched = await Promise.all(
         rows.map(async (c) => {
           const otherId =
@@ -91,7 +124,7 @@ export function MessagesTab({ onRewardPoints, userId: propUserId }) {
           };
           const { data: msgs } = await supabase
             .from("messages")
-            .select("text, created_at, sender_id")
+            .select("text, created_at, sender_id, type, file_name")
             .eq("conversation_id", c.id)
             .order("created_at", { ascending: false })
             .limit(1);
@@ -109,7 +142,6 @@ export function MessagesTab({ onRewardPoints, userId: propUserId }) {
         })
       );
 
-      // Trier par dernier message
       enriched.sort((a, b) => {
         const ta = a.lastMsg?.created_at || a.created_at || "";
         const tb = b.lastMsg?.created_at || b.created_at || "";
@@ -140,12 +172,63 @@ export function MessagesTab({ onRewardPoints, userId: propUserId }) {
     };
   }, [currentUserId, fetchConversations]);
 
+  // Écoute appels entrants
+  useEffect(() => {
+    if (!currentUserId) return;
+    const channel = supabase
+      .channel(`calls-incoming-${currentUserId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "calls",
+          filter: `callee_id=eq.${currentUserId}`,
+        },
+        async (payload) => {
+          const call = payload.new;
+          if (call.status !== "ringing") return;
+          // Récupérer token + room
+          try {
+            const profile = profilesCache.current[call.caller_id] || {};
+            if (!profilesCache.current[call.caller_id]) {
+              await fetchProfiles([call.caller_id]);
+            }
+            const p = profilesCache.current[call.caller_id] || profile;
+            const { token, url } = await joinCallRoom({
+              roomName: call.daily_room_name,
+              userName: p.display_name || "BAARO",
+            });
+            setCallState({
+              mode: "incoming",
+              callType: call.type,
+              callRecord: call,
+              roomUrl: url,
+              token,
+              otherUser: {
+                name: p.display_name || "Membre",
+                avatar: p.avatar_url,
+                flag: p.flag || "🌍",
+              },
+              isCaller: false,
+            });
+          } catch (e) {
+            console.error("Incoming call error:", e);
+          }
+        }
+      )
+      .subscribe();
+    return () => supabase.removeChannel(channel);
+  }, [currentUserId, fetchProfiles]);
+
   useEffect(() => {
     if (!activeChat?.id) return;
     const fetchMessages = async () => {
       const { data, error } = await supabase
         .from("messages")
-        .select("id, text, created_at, sender_id")
+        .select(
+          "id, text, created_at, sender_id, type, media_url, media_mime, media_size, media_duration, file_name, thumbnail_url"
+        )
         .eq("conversation_id", activeChat.id)
         .order("created_at", { ascending: true })
         .limit(200);
@@ -185,11 +268,7 @@ export function MessagesTab({ onRewardPoints, userId: propUserId }) {
     setLoadingFriends(true);
     try {
       const [{ data: friendIds }, { data: followingIds }, { data: followerIds }] =
-        await Promise.all([
-          getFriends(),
-          getFollowing(),
-          getFollowers(),
-        ]);
+        await Promise.all([getFriends(), getFollowing(), getFollowers()]);
 
       const ids = [
         ...new Set([
@@ -278,7 +357,6 @@ export function MessagesTab({ onRewardPoints, userId: propUserId }) {
     };
 
     try {
-      // 1) Chercher conversation existante (deux sens)
       const { data: existingList, error: findErr } = await supabase
         .from("conversations")
         .select("id, user1_id, user2_id")
@@ -289,7 +367,6 @@ export function MessagesTab({ onRewardPoints, userId: propUserId }) {
 
       if (findErr) {
         console.error("find conversation:", findErr);
-        // Table absente ?
         if (/relation .*conversations.* does not exist/i.test(findErr.message)) {
           alert(
             "Table conversations absente. Exécute supabase-fix-conversations.sql dans Supabase."
@@ -305,7 +382,6 @@ export function MessagesTab({ onRewardPoints, userId: propUserId }) {
         return;
       }
 
-      // 2) Créer (ordre stable des uuid)
       const u1 = currentUserId < otherUserId ? currentUserId : otherUserId;
       const u2 = currentUserId < otherUserId ? otherUserId : currentUserId;
 
@@ -317,7 +393,6 @@ export function MessagesTab({ onRewardPoints, userId: propUserId }) {
 
       if (error) {
         console.error("create conversation:", error);
-        // Race : déjà créée entre-temps
         if (error.code === "23505") {
           const { data: again } = await supabase
             .from("conversations")
@@ -334,8 +409,7 @@ export function MessagesTab({ onRewardPoints, userId: propUserId }) {
         }
         alert(
           "Impossible de créer la conversation\n\n" +
-            (error.message || error.code || "Erreur inconnue") +
-            "\n\nVérifie que tu as exécuté supabase-fix-conversations.sql"
+            (error.message || error.code || "Erreur inconnue")
         );
         return;
       }
@@ -349,8 +423,9 @@ export function MessagesTab({ onRewardPoints, userId: propUserId }) {
     }
   };
 
+  // ---- Envoi texte ----
   const handleSendMessage = async (e) => {
-    e.preventDefault();
+    e?.preventDefault?.();
     if (!newMessage.trim() || !activeChat || !currentUserId) return;
     const text = newMessage.trim();
     setNewMessage("");
@@ -360,6 +435,7 @@ export function MessagesTab({ onRewardPoints, userId: propUserId }) {
         sender_id: currentUserId,
         recipient_id: activeChat.otherUserId,
         text,
+        type: "text",
       });
       if (error) throw error;
       if (typeof onRewardPoints === "function") onRewardPoints(1);
@@ -367,6 +443,209 @@ export function MessagesTab({ onRewardPoints, userId: propUserId }) {
       console.error("Erreur envoi:", err);
       setNewMessage(text);
     }
+  };
+
+  // ---- Envoi fichier ----
+  const handleFileSelect = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file || !activeChat || !currentUserId) return;
+
+    setUploading(true);
+    try {
+      const uploaded = await uploadChatFile(file, currentUserId);
+      const msgType = mimeToMessageType(uploaded.mime);
+
+      const { error } = await supabase.from("messages").insert({
+        conversation_id: activeChat.id,
+        sender_id: currentUserId,
+        recipient_id: activeChat.otherUserId,
+        text: uploaded.fileName,
+        type: msgType,
+        media_url: uploaded.url,
+        media_mime: uploaded.mime,
+        media_size: uploaded.size,
+        file_name: uploaded.fileName,
+      });
+      if (error) throw error;
+      if (typeof onRewardPoints === "function") onRewardPoints(2);
+    } catch (err) {
+      console.error(err);
+      alert(err.message || "Échec de l'envoi du fichier");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  // ---- Message vocal ----
+  const startRecording = async () => {
+    if (recording) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : "audio/webm";
+      const recorder = new MediaRecorder(stream, { mimeType: mime });
+      recordChunksRef.current = [];
+      recorder.ondataavailable = (ev) => {
+        if (ev.data.size > 0) recordChunksRef.current.push(ev.data);
+      };
+      recorder.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        clearInterval(recordTimerRef.current);
+        const duration = Math.round(
+          (Date.now() - (recordStartRef.current || Date.now())) / 1000
+        );
+        const blob = new Blob(recordChunksRef.current, { type: mime });
+        if (blob.size < 500) {
+          setRecording(false);
+          setRecordSeconds(0);
+          return;
+        }
+        setUploading(true);
+        try {
+          const uploaded = await uploadVoiceBlob(blob, currentUserId, duration);
+          await supabase.from("messages").insert({
+            conversation_id: activeChat.id,
+            sender_id: currentUserId,
+            recipient_id: activeChat.otherUserId,
+            text: "🎤 Message vocal",
+            type: "voice",
+            media_url: uploaded.url,
+            media_mime: uploaded.mime,
+            media_size: uploaded.size,
+            media_duration: uploaded.duration,
+            file_name: "voice.webm",
+          });
+          if (typeof onRewardPoints === "function") onRewardPoints(2);
+        } catch (err) {
+          console.error(err);
+          alert(err.message || "Échec envoi vocal");
+        } finally {
+          setUploading(false);
+          setRecording(false);
+          setRecordSeconds(0);
+        }
+      };
+      mediaRecorderRef.current = recorder;
+      recordStartRef.current = Date.now();
+      recorder.start();
+      setRecording(true);
+      setRecordSeconds(0);
+      recordTimerRef.current = setInterval(() => {
+        setRecordSeconds((s) => s + 1);
+      }, 1000);
+    } catch (err) {
+      console.error(err);
+      alert("Micro inaccessible. Autorise le micro dans ton navigateur.");
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && recording) {
+      mediaRecorderRef.current.stop();
+    }
+  };
+
+  // ---- Appels ----
+  const startOutgoingCall = async (type = "voice") => {
+    if (!activeChat || !currentUserId) return;
+    try {
+      const { roomName, url, token } = await createCallRoom({
+        userName: activeChat.otherUserName || "BAARO",
+      });
+      const record = await createCallRecord({
+        conversationId: activeChat.id,
+        callerId: currentUserId,
+        calleeId: activeChat.otherUserId,
+        type,
+        dailyRoomName: roomName,
+      });
+      setCallState({
+        mode: "outgoing",
+        callType: type,
+        callRecord: record,
+        roomUrl: url,
+        token,
+        otherUser: {
+          name: activeChat.otherUserName,
+          avatar: activeChat.otherUserAvatar,
+          flag: activeChat.otherUserFlag,
+        },
+        isCaller: true,
+      });
+    } catch (err) {
+      console.error(err);
+      alert(err.message || "Impossible de démarrer l'appel. Vérifie DAILY_API_KEY.");
+    }
+  };
+
+  // ---- Rendu d'un message ----
+  const renderMessageContent = (msg, isMe) => {
+    const type = msg.type || "text";
+
+    if (type === "voice" && msg.media_url) {
+      return (
+        <div className="flex flex-col gap-1 min-w-[160px]">
+          <audio controls src={msg.media_url} className="w-full max-w-[220px]" preload="metadata" />
+          {msg.media_duration != null && (
+            <span className={`text-[10px] ${isMe ? "text-black/60" : "text-gray-400"}`}>
+              {formatDuration(msg.media_duration)}
+            </span>
+          )}
+        </div>
+      );
+    }
+
+    if (type === "image" && msg.media_url) {
+      return (
+        <a href={msg.media_url} target="_blank" rel="noreferrer">
+          <img
+            src={msg.media_url}
+            alt={msg.file_name || "image"}
+            className="max-w-[220px] max-h-[280px] rounded-xl object-cover"
+          />
+        </a>
+      );
+    }
+
+    if (type === "video" && msg.media_url) {
+      return (
+        <video
+          controls
+          src={msg.media_url}
+          className="max-w-[240px] max-h-[280px] rounded-xl"
+          preload="metadata"
+        />
+      );
+    }
+
+    if ((type === "file" || type === "audio") && msg.media_url) {
+      return (
+        <a
+          href={msg.media_url}
+          target="_blank"
+          rel="noreferrer"
+          download={msg.file_name}
+          className="flex items-center gap-2 underline-offset-2 hover:underline"
+        >
+          <FileText size={18} />
+          <div className="min-w-0">
+            <p className="text-sm font-medium truncate max-w-[160px]">
+              {msg.file_name || "Fichier"}
+            </p>
+            {msg.media_size != null && (
+              <p className={`text-[10px] ${isMe ? "text-black/60" : "text-gray-400"}`}>
+                {formatFileSize(msg.media_size)}
+              </p>
+            )}
+          </div>
+          <Download size={14} />
+        </a>
+      );
+    }
+
+    return <p className="whitespace-pre-wrap break-words">{msg.text}</p>;
   };
 
   const renderUserRow = (user, badge) => (
@@ -411,10 +690,13 @@ export function MessagesTab({ onRewardPoints, userId: propUserId }) {
     </button>
   );
 
-  // --- Nouvelle conversation (amis + recherche) ---
+  // --- Nouvelle conversation ---
   if (showNewChat) {
     return (
-      <div className="flex flex-col h-full max-w-2xl mx-auto w-full" style={{ paddingBottom: "calc(6rem + env(safe-area-inset-bottom, 0px))" }}>
+      <div
+        className="flex flex-col h-full max-w-2xl mx-auto w-full"
+        style={{ paddingBottom: "calc(6rem + env(safe-area-inset-bottom, 0px))" }}
+      >
         <div className="flex items-center justify-between mb-4 px-1">
           <h2 className="text-lg font-bold" style={{ color: COLORS.ivory }}>
             Nouvelle conversation
@@ -428,18 +710,14 @@ export function MessagesTab({ onRewardPoints, userId: propUserId }) {
           </button>
         </div>
 
-        {/* Sous-onglets */}
         <div className="flex gap-2 mb-4">
           <button
             onClick={() => setPickerTab("friends")}
             className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-bold border"
             style={{
               background:
-                pickerTab === "friends"
-                  ? "rgba(217,174,82,0.2)"
-                  : "rgba(255,255,255,0.03)",
-              borderColor:
-                pickerTab === "friends" ? COLORS.borderGold : COLORS.border,
+                pickerTab === "friends" ? "rgba(217,174,82,0.2)" : "rgba(255,255,255,0.03)",
+              borderColor: pickerTab === "friends" ? COLORS.borderGold : COLORS.border,
               color: pickerTab === "friends" ? COLORS.gold : COLORS.muted,
             }}
           >
@@ -451,11 +729,8 @@ export function MessagesTab({ onRewardPoints, userId: propUserId }) {
             className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-bold border"
             style={{
               background:
-                pickerTab === "search"
-                  ? "rgba(217,174,82,0.2)"
-                  : "rgba(255,255,255,0.03)",
-              borderColor:
-                pickerTab === "search" ? COLORS.borderGold : COLORS.border,
+                pickerTab === "search" ? "rgba(217,174,82,0.2)" : "rgba(255,255,255,0.03)",
+              borderColor: pickerTab === "search" ? COLORS.borderGold : COLORS.border,
               color: pickerTab === "search" ? COLORS.gold : COLORS.muted,
             }}
           >
@@ -504,9 +779,7 @@ export function MessagesTab({ onRewardPoints, userId: propUserId }) {
                   </p>
                 </div>
               )}
-              {friends.map((u) =>
-                renderUserRow(u, u.isFriend ? "Ami" : "Suivi")
-              )}
+              {friends.map((u) => renderUserRow(u, u.isFriend ? "Ami" : "Suivi"))}
             </>
           )}
 
@@ -540,218 +813,337 @@ export function MessagesTab({ onRewardPoints, userId: propUserId }) {
   // --- Conversation active ---
   if (activeChat) {
     return (
-      <div className="flex flex-col max-w-2xl mx-auto w-full" style={{ height: "calc(100dvh - 130px)", maxHeight: "calc(100dvh - 130px)" }}>
-        <div
-          className="flex items-center gap-3 p-3 border-b"
-          style={{ borderColor: COLORS.border }}
-        >
-          <button
-            onClick={() => {
-              setActiveChat(null);
-              setMessages([]);
-              fetchConversations();
-            }}
-            className="p-2 rounded-full hover:bg-white/10"
-            style={{ color: COLORS.ivory }}
-          >
-            <ArrowLeft size={20} />
-          </button>
-          <div className="w-9 h-9 rounded-full bg-white/10 flex items-center justify-center overflow-hidden text-sm">
-            {activeChat.otherUserAvatar ? (
-              <img
-                src={activeChat.otherUserAvatar}
-                className="w-full h-full object-cover"
-                alt=""
-              />
-            ) : (
-              activeChat.otherUserFlag || "🌍"
-            )}
-          </div>
-          <div className="min-w-0">
-            <p className="font-bold text-sm truncate" style={{ color: COLORS.ivory }}>
-              {activeChat.otherUserName}
-            </p>
-          </div>
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-4 space-y-3 min-h-0">
-          {messages.length === 0 && (
-            <p className="text-center text-sm py-10" style={{ color: COLORS.muted }}>
-              Début de la conversation — dis bonjour 👋
-            </p>
-          )}
-          {messages.map((msg) => {
-            const isMe = msg.sender_id === currentUserId;
-            return (
-              <div
-                key={msg.id}
-                className={`flex ${isMe ? "justify-end" : "justify-start"}`}
-              >
-                <div
-                  className={`max-w-[75%] px-4 py-2.5 rounded-2xl text-sm ${
-                    isMe ? "rounded-tr-sm" : "rounded-tl-sm"
-                  }`}
-                  style={{
-                    background: isMe ? COLORS.gold : COLORS.surface2,
-                    color: isMe ? "#000" : COLORS.ivory,
-                  }}
-                >
-                  <p className="whitespace-pre-wrap break-words">{msg.text}</p>
-                  <p
-                    className={`text-[10px] mt-1 ${
-                      isMe ? "text-black/60" : "text-gray-400"
-                    }`}
-                  >
-                    {new Date(msg.created_at).toLocaleTimeString([], {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })}
-                  </p>
-                </div>
-              </div>
-            );
-          })}
-          <div ref={messagesEndRef} />
-        </div>
-
-        <form
-          onSubmit={handleSendMessage}
-          className="p-3 border-t flex gap-2 shrink-0"
-          style={{
-            borderColor: COLORS.border,
-            paddingBottom: "calc(5.5rem + env(safe-area-inset-bottom, 0px))",
-            background: COLORS.bg || "#0B1220",
-          }}
-        >
-          <input
-            type="text"
-            value={newMessage}
-            onChange={(e) => setNewMessage(e.target.value)}
-            placeholder="Votre message…"
-            className="flex-1 px-4 py-3 rounded-xl border text-sm outline-none"
-            style={{
-              background: COLORS.surface2,
-              borderColor: COLORS.border,
-              color: COLORS.ivory,
-            }}
+      <>
+        {callState && (
+          <ChatCallModal
+            mode={callState.mode}
+            callType={callState.callType}
+            callRecord={callState.callRecord}
+            roomUrl={callState.roomUrl}
+            token={callState.token}
+            otherUser={callState.otherUser}
+            isCaller={callState.isCaller}
+            onClose={() => setCallState(null)}
           />
-          <button
-            type="submit"
-            disabled={!newMessage.trim()}
-            className="p-3 rounded-xl disabled:opacity-50"
-            style={{ background: COLORS.gold, color: "#000" }}
+        )}
+
+        <div
+          className="flex flex-col max-w-2xl mx-auto w-full"
+          style={{ height: "calc(100dvh - 130px)", maxHeight: "calc(100dvh - 130px)" }}
+        >
+          {/* Header */}
+          <div
+            className="flex items-center gap-2 p-3 border-b"
+            style={{ borderColor: COLORS.border }}
           >
-            <Send size={18} />
-          </button>
-        </form>
-      </div>
+            <button
+              onClick={() => {
+                setActiveChat(null);
+                setMessages([]);
+                fetchConversations();
+              }}
+              className="p-2 rounded-full hover:bg-white/10"
+              style={{ color: COLORS.ivory }}
+            >
+              <ArrowLeft size={20} />
+            </button>
+            <div className="w-9 h-9 rounded-full bg-white/10 flex items-center justify-center overflow-hidden text-sm">
+              {activeChat.otherUserAvatar ? (
+                <img
+                  src={activeChat.otherUserAvatar}
+                  className="w-full h-full object-cover"
+                  alt=""
+                />
+              ) : (
+                activeChat.otherUserFlag || "🌍"
+              )}
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="font-bold text-sm truncate" style={{ color: COLORS.ivory }}>
+                {activeChat.otherUserName}
+              </p>
+            </div>
+            {/* Boutons appel */}
+            <button
+              onClick={() => startOutgoingCall("voice")}
+              className="p-2 rounded-full hover:bg-white/10"
+              style={{ color: COLORS.teal }}
+              title="Appel vocal"
+            >
+              <Phone size={18} />
+            </button>
+            <button
+              onClick={() => startOutgoingCall("video")}
+              className="p-2 rounded-full hover:bg-white/10"
+              style={{ color: COLORS.gold }}
+              title="Appel vidéo"
+            >
+              <Video size={18} />
+            </button>
+          </div>
+
+          {/* Messages */}
+          <div className="flex-1 overflow-y-auto p-4 space-y-3 min-h-0">
+            {messages.length === 0 && (
+              <p className="text-center text-sm py-10" style={{ color: COLORS.muted }}>
+                Début de la conversation — dis bonjour 👋
+              </p>
+            )}
+            {messages.map((msg) => {
+              const isMe = msg.sender_id === currentUserId;
+              return (
+                <div
+                  key={msg.id}
+                  className={`flex ${isMe ? "justify-end" : "justify-start"}`}
+                >
+                  <div
+                    className={`max-w-[80%] px-3 py-2.5 rounded-2xl text-sm ${
+                      isMe ? "rounded-tr-sm" : "rounded-tl-sm"
+                    }`}
+                    style={{
+                      background: isMe ? COLORS.gold : COLORS.surface2,
+                      color: isMe ? "#000" : COLORS.ivory,
+                    }}
+                  >
+                    {renderMessageContent(msg, isMe)}
+                    <p
+                      className={`text-[10px] mt-1 ${
+                        isMe ? "text-black/60" : "text-gray-400"
+                      }`}
+                    >
+                      {new Date(msg.created_at).toLocaleTimeString([], {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
+                    </p>
+                  </div>
+                </div>
+              );
+            })}
+            <div ref={messagesEndRef} />
+          </div>
+
+          {/* Barre d'envoi */}
+          <div
+            className="p-3 border-t shrink-0"
+            style={{
+              borderColor: COLORS.border,
+              paddingBottom: "calc(5.5rem + env(safe-area-inset-bottom, 0px))",
+              background: COLORS.bg || "#0B1220",
+            }}
+          >
+            {recording && (
+              <div className="flex items-center justify-between mb-2 px-1">
+                <span className="text-xs font-bold animate-pulse" style={{ color: "#EF4444" }}>
+                  ● Enregistrement {formatDuration(recordSeconds)}
+                </span>
+                <button
+                  type="button"
+                  onClick={stopRecording}
+                  className="text-xs font-bold px-3 py-1 rounded-full"
+                  style={{ background: "#EF4444", color: "#fff" }}
+                >
+                  Envoyer
+                </button>
+              </div>
+            )}
+
+            <form onSubmit={handleSendMessage} className="flex gap-2 items-center">
+              <input
+                ref={fileInputRef}
+                type="file"
+                className="hidden"
+                accept="*/*"
+                onChange={handleFileSelect}
+              />
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploading || recording}
+                className="p-2.5 rounded-xl border disabled:opacity-40"
+                style={{ borderColor: COLORS.border, color: COLORS.muted }}
+                title="Joindre un fichier"
+              >
+                <Paperclip size={18} />
+              </button>
+
+              <button
+                type="button"
+                onMouseDown={startRecording}
+                onMouseUp={stopRecording}
+                onTouchStart={startRecording}
+                onTouchEnd={stopRecording}
+                disabled={uploading}
+                className="p-2.5 rounded-xl border disabled:opacity-40"
+                style={{
+                  borderColor: recording ? "#EF4444" : COLORS.border,
+                  color: recording ? "#EF4444" : COLORS.muted,
+                  background: recording ? "rgba(239,68,68,0.15)" : "transparent",
+                }}
+                title="Maintenir pour enregistrer un vocal"
+              >
+                {recording ? <MicOff size={18} /> : <Mic size={18} />}
+              </button>
+
+              <input
+                type="text"
+                value={newMessage}
+                onChange={(e) => setNewMessage(e.target.value)}
+                placeholder={uploading ? "Envoi…" : "Votre message…"}
+                disabled={uploading || recording}
+                className="flex-1 px-4 py-3 rounded-xl border text-sm outline-none disabled:opacity-50"
+                style={{
+                  background: COLORS.surface2,
+                  borderColor: COLORS.border,
+                  color: COLORS.ivory,
+                }}
+              />
+              <button
+                type="submit"
+                disabled={!newMessage.trim() || uploading || recording}
+                className="p-3 rounded-xl disabled:opacity-50"
+                style={{ background: COLORS.gold, color: "#000" }}
+              >
+                <Send size={18} />
+              </button>
+            </form>
+          </div>
+        </div>
+      </>
     );
   }
 
   // --- Liste des conversations ---
   return (
-    <div className="flex flex-col h-full max-w-2xl mx-auto w-full p-4" style={{ paddingBottom: "calc(6rem + env(safe-area-inset-bottom, 0px))" }}>
-      <div className="flex items-center justify-between mb-5">
-        <h2
-          className="text-xl font-bold flex items-center gap-2"
-          style={{ color: COLORS.ivory }}
-        >
-          <MessageCircle size={24} style={{ color: COLORS.gold }} />
-          Messages
-        </h2>
+    <>
+      {callState && (
+        <ChatCallModal
+          mode={callState.mode}
+          callType={callState.callType}
+          callRecord={callState.callRecord}
+          roomUrl={callState.roomUrl}
+          token={callState.token}
+          otherUser={callState.otherUser}
+          isCaller={callState.isCaller}
+          onClose={() => setCallState(null)}
+        />
+      )}
+
+      <div
+        className="flex flex-col h-full max-w-2xl mx-auto w-full p-4"
+        style={{ paddingBottom: "calc(6rem + env(safe-area-inset-bottom, 0px))" }}
+      >
+        <div className="flex items-center justify-between mb-5">
+          <h2
+            className="text-xl font-bold flex items-center gap-2"
+            style={{ color: COLORS.ivory }}
+          >
+            <MessageCircle size={24} style={{ color: COLORS.gold }} />
+            Messages
+          </h2>
+          <button
+            onClick={() => {
+              setShowNewChat(true);
+              setPickerTab("friends");
+              setSearchQuery("");
+            }}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-full text-sm font-bold"
+            style={{ background: "rgba(217,174,82,0.2)", color: COLORS.gold }}
+          >
+            <Plus size={16} />
+            Nouveau
+          </button>
+        </div>
+
         <button
           onClick={() => {
             setShowNewChat(true);
             setPickerTab("friends");
-            setSearchQuery("");
           }}
-          className="flex items-center gap-1.5 px-3 py-2 rounded-full text-sm font-bold"
-          style={{ background: "rgba(217,174,82,0.2)", color: COLORS.gold }}
+          className="mb-4 w-full flex items-center gap-3 p-3 rounded-2xl border text-left"
+          style={{ background: "rgba(255,255,255,0.03)", borderColor: COLORS.border }}
         >
-          <Plus size={16} />
-          Nouveau
+          <Users size={18} style={{ color: COLORS.gold }} />
+          <div>
+            <p className="text-sm font-semibold" style={{ color: COLORS.ivory }}>
+              Écrire à un ami
+            </p>
+            <p className="text-xs" style={{ color: COLORS.muted }}>
+              Liste d’amis ou recherche par nom / @handle
+            </p>
+          </div>
         </button>
-      </div>
 
-      {/* Accès rapide amis */}
-      <button
-        onClick={() => {
-          setShowNewChat(true);
-          setPickerTab("friends");
-        }}
-        className="mb-4 w-full flex items-center gap-3 p-3 rounded-2xl border text-left"
-        style={{ background: "rgba(255,255,255,0.03)", borderColor: COLORS.border }}
-      >
-        <Users size={18} style={{ color: COLORS.gold }} />
-        <div>
-          <p className="text-sm font-semibold" style={{ color: COLORS.ivory }}>
-            Écrire à un ami
+        {loading && (
+          <p className="text-center py-10 text-sm" style={{ color: COLORS.muted }}>
+            Chargement…
           </p>
-          <p className="text-xs" style={{ color: COLORS.muted }}>
-            Liste d’amis ou recherche par nom / @handle
-          </p>
+        )}
+
+        {!loading && conversations.length === 0 && (
+          <div className="text-center py-16" style={{ color: COLORS.muted }}>
+            <MessageCircle size={40} className="mx-auto mb-3 opacity-30" />
+            <p className="text-sm mb-2">Aucune conversation</p>
+            <button
+              onClick={() => setShowNewChat(true)}
+              className="text-sm font-bold"
+              style={{ color: COLORS.gold }}
+            >
+              Commencer un chat
+            </button>
+          </div>
+        )}
+
+        <div className="space-y-2">
+          {conversations.map((c) => {
+            let preview = "Nouvelle conversation";
+            if (c.lastMsg) {
+              if (c.lastMsg.type === "voice") preview = "🎤 Message vocal";
+              else if (c.lastMsg.type === "image") preview = "📷 Photo";
+              else if (c.lastMsg.type === "video") preview = "🎬 Vidéo";
+              else if (c.lastMsg.type === "file") preview = `📎 ${c.lastMsg.file_name || "Fichier"}`;
+              else preview = c.lastMsg.text || preview;
+            }
+            return (
+              <button
+                key={c.id}
+                type="button"
+                onClick={() => setActiveChat(c)}
+                className="w-full p-3 rounded-2xl border text-left hover:border-amber-400/40 transition flex items-center gap-3"
+                style={{ background: COLORS.surface, borderColor: COLORS.border }}
+              >
+                <div className="w-12 h-12 rounded-full bg-white/10 flex items-center justify-center overflow-hidden text-lg shrink-0">
+                  {c.otherUserAvatar ? (
+                    <img
+                      src={c.otherUserAvatar}
+                      className="w-full h-full object-cover"
+                      alt=""
+                    />
+                  ) : (
+                    c.otherUserFlag
+                  )}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="font-semibold text-sm truncate" style={{ color: COLORS.ivory }}>
+                    {c.otherUserName}
+                  </p>
+                  <p className="text-xs truncate" style={{ color: COLORS.muted }}>
+                    {preview}
+                  </p>
+                </div>
+                {c.lastMsg?.created_at && (
+                  <span className="text-[10px] shrink-0" style={{ color: COLORS.muted }}>
+                    {new Date(c.lastMsg.created_at).toLocaleTimeString([], {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </div>
-      </button>
-
-      {loading && (
-        <p className="text-center py-10 text-sm" style={{ color: COLORS.muted }}>
-          Chargement…
-        </p>
-      )}
-
-      {!loading && conversations.length === 0 && (
-        <div className="text-center py-16" style={{ color: COLORS.muted }}>
-          <MessageCircle size={40} className="mx-auto mb-3 opacity-30" />
-          <p className="text-sm mb-2">Aucune conversation</p>
-          <button
-            onClick={() => setShowNewChat(true)}
-            className="text-sm font-bold"
-            style={{ color: COLORS.gold }}
-          >
-            Commencer un chat
-          </button>
-        </div>
-      )}
-
-      <div className="space-y-2">
-        {conversations.map((c) => (
-          <button
-            key={c.id}
-            type="button"
-            onClick={() => setActiveChat(c)}
-            className="w-full p-3 rounded-2xl border text-left hover:border-amber-400/40 transition flex items-center gap-3"
-            style={{ background: COLORS.surface, borderColor: COLORS.border }}
-          >
-            <div className="w-12 h-12 rounded-full bg-white/10 flex items-center justify-center overflow-hidden text-lg shrink-0">
-              {c.otherUserAvatar ? (
-                <img
-                  src={c.otherUserAvatar}
-                  className="w-full h-full object-cover"
-                  alt=""
-                />
-              ) : (
-                c.otherUserFlag
-              )}
-            </div>
-            <div className="min-w-0 flex-1">
-              <p className="font-semibold text-sm truncate" style={{ color: COLORS.ivory }}>
-                {c.otherUserName}
-              </p>
-              <p className="text-xs truncate" style={{ color: COLORS.muted }}>
-                {c.lastMsg?.text || "Nouvelle conversation"}
-              </p>
-            </div>
-            {c.lastMsg?.created_at && (
-              <span className="text-[10px] shrink-0" style={{ color: COLORS.muted }}>
-                {new Date(c.lastMsg.created_at).toLocaleTimeString([], {
-                  hour: "2-digit",
-                  minute: "2-digit",
-                })}
-              </span>
-            )}
-          </button>
-        ))}
       </div>
-    </div>
+    </>
   );
 }
