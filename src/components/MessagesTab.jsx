@@ -261,18 +261,15 @@ export function MessagesTab({ onRewardPoints, userId: propUserId }) {
   }, [searchQuery, showNewChat, pickerTab, currentUserId]);
 
   const createOrOpenConversation = async (otherUserId, name, avatar, flag) => {
-    if (!currentUserId || !otherUserId) return;
+    if (!currentUserId || !otherUserId) {
+      alert("Tu n'es pas connecté");
+      return;
+    }
+    if (otherUserId === currentUserId) {
+      alert("Tu ne peux pas discuter avec toi-même");
+      return;
+    }
 
-    // Chercher conversation existante (dans les deux sens)
-    const { data: existingList } = await supabase
-      .from("conversations")
-      .select("id")
-      .or(
-        `and(user1_id.eq.${currentUserId},user2_id.eq.${otherUserId}),and(user1_id.eq.${otherUserId},user2_id.eq.${currentUserId})`
-      )
-      .limit(1);
-
-    const existing = existingList?.[0];
     const chatData = {
       otherUserId,
       otherUserName: name || "Membre",
@@ -280,32 +277,76 @@ export function MessagesTab({ onRewardPoints, userId: propUserId }) {
       otherUserFlag: flag || "🌍",
     };
 
-    if (existing) {
-      setActiveChat({ id: existing.id, ...chatData });
+    try {
+      // 1) Chercher conversation existante (deux sens)
+      const { data: existingList, error: findErr } = await supabase
+        .from("conversations")
+        .select("id, user1_id, user2_id")
+        .or(
+          `and(user1_id.eq.${currentUserId},user2_id.eq.${otherUserId}),and(user1_id.eq.${otherUserId},user2_id.eq.${currentUserId})`
+        )
+        .limit(1);
+
+      if (findErr) {
+        console.error("find conversation:", findErr);
+        // Table absente ?
+        if (/relation .*conversations.* does not exist/i.test(findErr.message)) {
+          alert(
+            "Table conversations absente. Exécute supabase-fix-conversations.sql dans Supabase."
+          );
+          return;
+        }
+      }
+
+      const existing = existingList?.[0];
+      if (existing) {
+        setActiveChat({ id: existing.id, ...chatData });
+        setShowNewChat(false);
+        return;
+      }
+
+      // 2) Créer (ordre stable des uuid)
+      const u1 = currentUserId < otherUserId ? currentUserId : otherUserId;
+      const u2 = currentUserId < otherUserId ? otherUserId : currentUserId;
+
+      const { data: newConv, error } = await supabase
+        .from("conversations")
+        .insert({ user1_id: u1, user2_id: u2 })
+        .select("id")
+        .single();
+
+      if (error) {
+        console.error("create conversation:", error);
+        // Race : déjà créée entre-temps
+        if (error.code === "23505") {
+          const { data: again } = await supabase
+            .from("conversations")
+            .select("id")
+            .or(
+              `and(user1_id.eq.${u1},user2_id.eq.${u2}),and(user1_id.eq.${u2},user2_id.eq.${u1})`
+            )
+            .limit(1);
+          if (again?.[0]) {
+            setActiveChat({ id: again[0].id, ...chatData });
+            setShowNewChat(false);
+            return;
+          }
+        }
+        alert(
+          "Impossible de créer la conversation\n\n" +
+            (error.message || error.code || "Erreur inconnue") +
+            "\n\nVérifie que tu as exécuté supabase-fix-conversations.sql"
+        );
+        return;
+      }
+
+      setActiveChat({ id: newConv.id, ...chatData });
       setShowNewChat(false);
-      return;
+      fetchConversations();
+    } catch (e) {
+      console.error(e);
+      alert("Erreur : " + (e.message || String(e)));
     }
-
-    // user1 = plus petit uuid pour respecter unique (optionnel)
-    const [u1, u2] =
-      currentUserId < otherUserId
-        ? [currentUserId, otherUserId]
-        : [otherUserId, currentUserId];
-
-    const { data: newConv, error } = await supabase
-      .from("conversations")
-      .insert({ user1_id: u1, user2_id: u2 })
-      .select()
-      .single();
-
-    if (error) {
-      console.error(error);
-      alert("Impossible de créer la conversation : " + error.message);
-      return;
-    }
-    setActiveChat({ id: newConv.id, ...chatData });
-    setShowNewChat(false);
-    fetchConversations();
   };
 
   const handleSendMessage = async (e) => {
