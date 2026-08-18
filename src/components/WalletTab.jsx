@@ -8,10 +8,12 @@ import {
   Coins,
   ArrowRightLeft,
   Clock,
+  ShieldAlert,
 } from "lucide-react";
 import { COLORS } from "../theme.js";
 import { useToast } from "./ToastContext.jsx";
-import { useApp } from "../contexts/AppContext.jsx";
+import { useWallet } from "../hooks/useWallet.js";
+import { GuestBanner } from "./GuestBanner.jsx";
 
 const DAILY_TASKS = [
   { id: "t1", title: "Publier une pensée ou un article", pts: 5, actionKey: "publish_post", done: false },
@@ -21,7 +23,7 @@ const DAILY_TASKS = [
 ];
 
 export function WalletTab({ onNavigateToCrypto }) {
-  const { pointsBalance, baroBalance, earnPoints } = useApp();
+  const { pointsBalance, baroBalance, earnPoints, isAnonymous } = useWallet();
   const { showToast, showPointsReward } = useToast();
   const [dailyClaimed, setDailyClaimed] = useState(false);
   const [referralCode] = useState("BAARO-REF-8921");
@@ -30,8 +32,11 @@ export function WalletTab({ onNavigateToCrypto }) {
 
   const handleClaimDaily = async () => {
     if (dailyClaimed) return;
+    if (isAnonymous) {
+      showToast("Créez un compte pour réclamer le bonus quotidien", "info");
+      return;
+    }
     setDailyClaimed(true);
-    // Pas encore d'action "daily_bonus" côté API — message informatif
     showToast("Bonus quotidien bientôt disponible côté serveur", "info");
   };
 
@@ -42,6 +47,11 @@ export function WalletTab({ onNavigateToCrypto }) {
 
   const handleCompleteTask = async (task) => {
     if (task.done) return;
+
+    if (isAnonymous) {
+      showToast("Créez un compte pour gagner des points", "info");
+      return;
+    }
 
     if (!task.actionKey) {
       showToast("Cette mission se valide automatiquement dans l'app", "info");
@@ -71,6 +81,8 @@ export function WalletTab({ onNavigateToCrypto }) {
 
   return (
     <div className="flex flex-col gap-6 max-w-3xl mx-auto w-full pb-20">
+      <GuestBanner />
+
       {/* Solde */}
       <div
         className="glass-card rounded-3xl p-6 border shadow-2xl relative overflow-hidden gold-glow"
@@ -82,12 +94,23 @@ export function WalletTab({ onNavigateToCrypto }) {
       >
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 relative z-10">
           <div>
-            <span
-              className="text-xs uppercase tracking-widest font-mono"
-              style={{ color: COLORS.muted }}
-            >
-              Solde Réseau Mondial
-            </span>
+            <div className="flex items-center gap-2">
+              <span
+                className="text-xs uppercase tracking-widest font-mono"
+                style={{ color: COLORS.muted }}
+              >
+                Solde Réseau Mondial
+              </span>
+              {isAnonymous && (
+                <span
+                  className="text-[10px] px-2 py-0.5 rounded-full font-bold flex items-center gap-1"
+                  style={{ background: "rgba(236,72,153,0.2)", color: COLORS.rose }}
+                >
+                  <ShieldAlert size={10} />
+                  Invité
+                </span>
+              )}
+            </div>
             <h2 className="text-4xl font-extrabold font-mono text-gradient-gold mt-1">
               {pointsBalance}{" "}
               <span
@@ -258,6 +281,7 @@ export function WalletTab({ onNavigateToCrypto }) {
                     background: COLORS.surface2,
                     borderColor: COLORS.borderGold,
                     color: COLORS.gold,
+                    opacity: isAnonymous ? 0.6 : 1,
                   }}
                 >
                   +{task.pts} pts
@@ -326,4 +350,4 @@ export function WalletTab({ onNavigateToCrypto }) {
       </div>
     </div>
   );
-            }
+}
