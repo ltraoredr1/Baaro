@@ -1,4 +1,5 @@
 import { getAdminClient, requireUser } from "./_supabaseAdmin.js";
+import { rateLimit } from "./_rateLimit.js";
 
 // ============================================================
 // Configuration des gains et limites
@@ -7,32 +8,33 @@ import { getAdminClient, requireUser } from "./_supabaseAdmin.js";
 const DAILY_EARN_CAP = 100; // points max par jour et par compte
 const MIN_ACCOUNT_AGE_MS_FOR_CASHOUT = 3 * 24 * 60 * 60 * 1000; // 3 jours
 const POINTS_PER_BARO = 100;
+const WELCOME_BONUS = 0; // Solde initial = 0 (sécurisé). Mettre 50 si tu veux un bonus serveur.
 
 // Actions de gain autorisées (le client ne peut envoyer que ces clés)
 const EARN_ACTIONS = {
   // Posts
-  like_post:          { pts: 2,  label: "Interaction sur une publication" },
-  publish_post:       { pts: 5,  label: "Nouvelle publication" },
-  publish_post_media: { pts: 8,  label: "Publication avec média" },
-  comment:            { pts: 1,  label: "Commentaire ajouté" },
-  watch_video:        { pts: 1,  label: "Vue générée" },
-  subscribe:          { pts: 5,  label: "Abonnement activé" },
+  like_post: { pts: 2, label: "Interaction sur une publication" },
+  publish_post: { pts: 5, label: "Nouvelle publication" },
+  publish_post_media: { pts: 8, label: "Publication avec média" },
+  comment: { pts: 1, label: "Commentaire ajouté" },
+  watch_video: { pts: 1, label: "Vue générée" },
+  subscribe: { pts: 5, label: "Abonnement activé" },
 
-  // Vidéos (sécurisées)
-  like_video:         { pts: 2,  label: "Vidéo aimée" },
-  publish_video:      { pts: 25, label: "Vidéo publiée" },
-  repost_video:       { pts: 5,  label: "Repost vidéo" },
-  tip_video:          { pts: 5,  label: "Tip envoyé" },
-  comment_video:      { pts: 2,  label: "Commentaire vidéo" },
+  // Vidéos
+  like_video: { pts: 2, label: "Vidéo aimée" },
+  publish_video: { pts: 25, label: "Vidéo publiée" },
+  repost_video: { pts: 5, label: "Repost vidéo" },
+  tip_video: { pts: 5, label: "Tip envoyé" },
+  comment_video: { pts: 2, label: "Commentaire vidéo" },
 };
 
 // Options de rachat
 // cash: true → soumis aux règles d'éligibilité (âge + restricted)
 const REDEEM_OPTIONS = {
-  r1: { cost: 500,  label: "Carte cadeau partenaire — 5 €",          cash: true  },
-  r2: { cost: 1000, label: "Virement via Stripe Connect — 10 €",     cash: true  },
-  r3: { cost: 300,  label: "Badge Créateur Premium (statut)",        cash: false },
-  r4: { cost: 150,  label: "Boost de visibilité 48h",                cash: false },
+  r1: { cost: 500, label: "Carte cadeau partenaire — 5 €", cash: true },
+  r2: { cost: 1000, label: "Virement via Stripe Connect — 10 €", cash: true },
+  r3: { cost: 300, label: "Badge Créateur Premium (statut)", cash: false },
+  r4: { cost: 150, label: "Boost de visibilité 48h", cash: false },
 };
 
 // ============================================================
@@ -43,11 +45,6 @@ function jsonError(res, status, message) {
   return res.status(status).json({ error: message });
 }
 
-// Les comptes invités (anonymes) peuvent liker/commenter, mais ne gagnent
-// jamais de points, ne rachètent rien et ne convertissent jamais en BARO.
-// Vérifié ici côté serveur : le frontend seul ne suffit pas (contournable
-// depuis la console du navigateur, comme le "Sécurité du portefeuille" du
-// README l'explique déjà pour les montants).
 function isAnonymous(user) {
   return user?.is_anonymous === true;
 }
@@ -71,7 +68,7 @@ async function getOrCreateWallet(admin, userId) {
   if (!wallet) {
     const { data: created, error } = await admin
       .from("wallets")
-      .insert({ user_id: userId, balance: 1284 })
+      .insert({ user_id: userId, balance: WELCOME_BONUS })
       .select()
       .single();
 
@@ -140,8 +137,7 @@ async function cashoutEligibility(admin, user) {
 // ============================================================
 
 async function handleEarn(admin, user, body, res) {
-  // Compte invité : l'action (like, commentaire...) reste possible côté app,
-  // mais aucun point n'est crédité ici.
+  // Compte invité : l'action reste possible côté app, mais aucun point n'est crédité.
   if (isAnonymous(user)) {
     const wallet = await getOrCreateWallet(admin, user.id);
     return res.status(200).json({
@@ -299,7 +295,7 @@ async function handleConvert(admin, user, body, res) {
 // ============================================================
 
 export default async function handler(req, res) {
-  // CORS simple (utile en local et pour Capacitor)
+  // CORS — à resserrer en production (remplacer * par ton domaine)
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
@@ -310,6 +306,13 @@ export default async function handler(req, res) {
 
   if (req.method !== "POST") {
     return jsonError(res, 405, "Méthode non autorisée");
+  }
+
+  // Rate limit
+  const limit = rateLimit(req, { key: "wallet", max: 30, windowMs: 60_000 });
+  if (!limit.ok) {
+    Object.entries(limit.headers || {}).forEach(([k, v]) => res.setHeader(k, v));
+    return res.status(limit.status).json(limit.body);
   }
 
   let admin;
@@ -329,8 +332,8 @@ export default async function handler(req, res) {
   const body = req.body || {};
 
   try {
-    if (body.action === "earn")    return await handleEarn(admin, user, body, res);
-    if (body.action === "redeem")  return await handleRedeem(admin, user, body, res);
+    if (body.action === "earn") return await handleEarn(admin, user, body, res);
+    if (body.action === "redeem") return await handleRedeem(admin, user, body, res);
     if (body.action === "convert") return await handleConvert(admin, user, body, res);
 
     return jsonError(res, 400, "Action inconnue");
