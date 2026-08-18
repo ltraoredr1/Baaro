@@ -1,0 +1,38 @@
+# Patch SettingsTab — bouton « Revoir l'intro »
+
+Dans `src/components/SettingsTab.jsx` :
+
+## 1. Props
+
+Ajoute la prop optionnelle :
+
+```jsx
+export function SettingsTab({
+  userProfile,
+  setUserProfile,
+  currentTheme,
+  onSelectTheme,
+  onReplayOnboarding, // ← nouveau
+}) {
+```
+
+## 2. Bouton (à placer avant le bouton Déconnexion)
+
+```jsx
+{onReplayOnboarding && (
+  <button
+    type="button"
+    onClick={onReplayOnboarding}
+    className="w-full py-3 rounded-xl text-sm font-semibold border transition"
+    style={{
+      background: COLORS.surface2,
+      borderColor: COLORS.borderGold,
+      color: COLORS.gold,
+    }}
+  >
+    Revoir l'introduction BAARO
+  </button>
+)}
+```
+
+C'est tout. `App.jsx` (v6) passe déjà `onReplayOnboarding`.
