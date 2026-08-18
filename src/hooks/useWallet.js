@@ -2,10 +2,9 @@ import { useApp } from "../contexts/AppContext.jsx";
 
 /**
  * Hook pratique pour accéder au portefeuille BAARO.
- * Utilise le contexte global (source unique de vérité).
  *
  * Usage :
- *   const { pointsBalance, earnPoints, convertToBaro } = useWallet();
+ *   const { pointsBalance, remainingToday, earnPoints } = useWallet();
  */
 export function useWallet() {
   const {
@@ -17,6 +16,10 @@ export function useWallet() {
     setPointsBalance,
     setBaroBalance,
     isAnonymous,
+    earnedToday,
+    remainingToday,
+    dailyCap,
+    refreshWalletStatus,
   } = useApp();
 
   return {
@@ -28,5 +31,9 @@ export function useWallet() {
     setPointsBalance,
     setBaroBalance,
     isAnonymous,
+    earnedToday,
+    remainingToday,
+    dailyCap,
+    refreshWalletStatus,
   };
 }
