@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { supabase } from "../supabaseClient";
-import { User, Award, Check, Palette, LogOut, ShieldCheck } from "lucide-react";
+import { User, Award, Check, Palette, LogOut, ShieldCheck, Sparkles } from "lucide-react";
 import { COLORS } from "../theme.js";
 
 const SUBSCRIPTION_TIERS = [
@@ -41,6 +41,7 @@ export function SettingsTab({
   setUserProfile,
   currentTheme,
   onSelectTheme,
+  onReplayOnboarding,
 }) {
   const [displayName, setDisplayName] = useState(
     userProfile?.display_name || "Membre BAARO"
@@ -60,10 +61,8 @@ export function SettingsTab({
   const [secureEmail, setSecureEmail] = useState("");
   const [securePassword, setSecurePassword] = useState("");
   const [secureLoading, setSecureLoading] = useState(false);
-  const [secureOauthLoading, setSecureOauthLoading] = useState(null); // "facebook" | "twitter" | null
+  const [secureOauthLoading, setSecureOauthLoading] = useState(null);
   const [secureMessage, setSecureMessage] = useState("");
-  // Affiche un bouton "Se connecter à ce compte existant" quand l'e-mail
-  // saisi appartient déjà à un autre utilisateur.
   const [showLoginFallback, setShowLoginFallback] = useState(false);
 
   useEffect(() => {
@@ -80,17 +79,12 @@ export function SettingsTab({
     setShowLoginFallback(false);
 
     try {
-      // updateUser() sur une session invité la transforme en compte stable
-      // SANS changer l'id — historique, posts, likes, wallet restent liés.
       const { error } = await supabase.auth.updateUser({
         email: secureEmail,
         password: securePassword,
       });
 
       if (error) {
-        // Cas précis : l'e-mail appartient déjà à un AUTRE compte existant.
-        // Supabase bloque volontairement la liaison pour éviter le vol de
-        // compte — on propose donc de se connecter à ce compte à la place.
         if (error.message?.toLowerCase().includes("already been registered")) {
           setSecureMessage(
             "⚠️ Un compte existe déjà avec cet e-mail. Vous pouvez vous y connecter, mais l'historique de cette session invité (publications, points) ne sera pas transféré automatiquement vers ce compte."
@@ -111,9 +105,6 @@ export function SettingsTab({
     }
   };
 
-  // Bascule vers le compte existant qui possède déjà cet e-mail.
-  // Important : on quitte d'abord la session anonyme (signOut) avant de
-  // se reconnecter, sinon Supabase reste accroché à l'ancienne session.
   const handleLoginToExistingAccount = async () => {
     if (secureLoading) return;
     setSecureLoading(true);
@@ -126,8 +117,6 @@ export function SettingsTab({
         password: securePassword,
       });
       if (error) throw error;
-      // onAuthStateChange dans App.jsx détecte la nouvelle session et
-      // recharge automatiquement les données utilisateur.
     } catch (err) {
       setSecureMessage(
         "❌ " +
@@ -140,19 +129,15 @@ export function SettingsTab({
     }
   };
 
-  // Envoie un e-mail de réinitialisation de mot de passe pour le compte
-  // existant, utile si handleLoginToExistingAccount échoue faute de
-  // connaître le bon mot de passe.
   const handleResetPassword = async () => {
     if (secureLoading || !secureEmail) return;
     setSecureLoading(true);
     setSecureMessage("");
 
     try {
-      const { error } = await supabase.auth.resetPasswordForEmail(
-        secureEmail,
-        { redirectTo: window.location.origin }
-      );
+      const { error } = await supabase.auth.resetPasswordForEmail(secureEmail, {
+        redirectTo: window.location.origin,
+      });
       if (error) throw error;
       setSecureMessage(
         "✅ E-mail de réinitialisation envoyé. Suivez le lien pour définir un nouveau mot de passe, puis reconnectez-vous."
@@ -170,15 +155,11 @@ export function SettingsTab({
     setSecureMessage("");
 
     try {
-      // linkIdentity() attache le fournisseur OAuth à la session invité
-      // actuelle (même id), contrairement à signInWithOAuth() qui créerait
-      // un compte séparé.
       const { error } = await supabase.auth.linkIdentity({
         provider,
         options: { redirectTo: window.location.origin },
       });
       if (error) throw error;
-      // La page redirige vers le fournisseur, puis revient sur l'app.
     } catch (err) {
       setSecureMessage("❌ " + (err.message || "Erreur"));
       setSecureOauthLoading(null);
@@ -275,9 +256,9 @@ export function SettingsTab({
           </h3>
           <p className="text-sm" style={{ color: COLORS.muted }}>
             Vous utilisez un compte invité : vos publications et abonnements
-            existent, mais vous ne gagnez pas de points et vous perdrez tout
-            en changeant d'appareil. Ajoutez un e-mail ou un réseau pour
-            garder le même compte partout et débloquer les gains.
+            existent, mais vous ne gagnez pas de points et vous perdrez tout en
+            changeant d&apos;appareil. Ajoutez un e-mail ou un réseau pour garder le
+            même compte partout et débloquer les gains.
           </p>
 
           {secureMessage && (
@@ -287,13 +268,13 @@ export function SettingsTab({
                 background: secureMessage.startsWith("✅")
                   ? "rgba(45,191,166,0.15)"
                   : secureMessage.startsWith("⚠️")
-                  ? "rgba(217,174,82,0.15)"
-                  : "rgba(239,68,68,0.15)",
+                    ? "rgba(217,174,82,0.15)"
+                    : "rgba(239,68,68,0.15)",
                 color: secureMessage.startsWith("✅")
                   ? COLORS.teal
                   : secureMessage.startsWith("⚠️")
-                  ? COLORS.gold
-                  : "#F87171",
+                    ? COLORS.gold
+                    : "#F87171",
               }}
             >
               {secureMessage}
@@ -315,7 +296,11 @@ export function SettingsTab({
               onClick={() => handleSecureWithOAuth("twitter")}
               disabled={!!secureOauthLoading}
               className="w-full py-3 rounded-xl font-semibold text-sm transition disabled:opacity-50"
-              style={{ background: "#000000", color: "#fff", border: "1px solid " + COLORS.border }}
+              style={{
+                background: "#000000",
+                color: "#fff",
+                border: "1px solid " + COLORS.border,
+              }}
             >
               {secureOauthLoading === "twitter" ? "Connexion..." : "Lier X"}
             </button>
@@ -323,7 +308,9 @@ export function SettingsTab({
 
           <div className="flex items-center gap-3">
             <div className="flex-1 h-px" style={{ background: COLORS.border }} />
-            <span className="text-xs" style={{ color: COLORS.muted }}>ou par e-mail</span>
+            <span className="text-xs" style={{ color: COLORS.muted }}>
+              ou par e-mail
+            </span>
             <div className="flex-1 h-px" style={{ background: COLORS.border }} />
           </div>
 
@@ -371,8 +358,6 @@ export function SettingsTab({
             </button>
           </form>
 
-          {/* Repli affiché uniquement si l'e-mail appartient déjà à un
-              autre compte (détecté dans handleSecureWithEmail) */}
           {showLoginFallback && (
             <div className="flex flex-col gap-2">
               <button
@@ -551,8 +536,7 @@ export function SettingsTab({
               className="p-3 rounded-xl border text-center text-xs font-bold"
               style={{
                 background: t.bg,
-                borderColor:
-                  currentTheme === t.id ? COLORS.gold : COLORS.border,
+                borderColor: currentTheme === t.id ? COLORS.gold : COLORS.border,
                 color: COLORS.ivory,
               }}
             >
@@ -594,17 +578,11 @@ export function SettingsTab({
               >
                 <div className="flex justify-between items-center mb-2">
                   <span className="font-bold text-sm">{tier.name}</span>
-                  <span
-                    className="text-sm font-bold"
-                    style={{ color: COLORS.gold }}
-                  >
+                  <span className="text-sm font-bold" style={{ color: COLORS.gold }}>
                     {tier.price}
                   </span>
                 </div>
-                <ul
-                  className="text-xs space-y-1 mb-3"
-                  style={{ color: COLORS.muted }}
-                >
+                <ul className="text-xs space-y-1 mb-3" style={{ color: COLORS.muted }}>
                   {tier.features.map((f, i) => (
                     <li key={i} className="flex items-center gap-1.5">
                       <Check size={12} style={{ color: COLORS.teal }} />
@@ -628,6 +606,23 @@ export function SettingsTab({
           })}
         </div>
       </div>
+
+      {/* Revoir l'introduction */}
+      {onReplayOnboarding && (
+        <button
+          type="button"
+          onClick={onReplayOnboarding}
+          className="flex items-center justify-center gap-2 w-full py-3 rounded-xl text-sm font-semibold border transition"
+          style={{
+            background: COLORS.surface2,
+            borderColor: COLORS.borderGold,
+            color: COLORS.gold,
+          }}
+        >
+          <Sparkles size={16} />
+          Revoir l&apos;introduction BAARO
+        </button>
+      )}
 
       {/* Déconnexion */}
       <button
