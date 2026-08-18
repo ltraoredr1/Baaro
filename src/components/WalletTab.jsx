@@ -9,6 +9,7 @@ import {
   ArrowRightLeft,
   Clock,
   ShieldAlert,
+  Gauge,
 } from "lucide-react";
 import { COLORS } from "../theme.js";
 import { useToast } from "./ToastContext.jsx";
@@ -23,7 +24,15 @@ const DAILY_TASKS = [
 ];
 
 export function WalletTab({ onNavigateToCrypto }) {
-  const { pointsBalance, baroBalance, earnPoints, isAnonymous } = useWallet();
+  const {
+    pointsBalance,
+    baroBalance,
+    earnPoints,
+    isAnonymous,
+    earnedToday,
+    remainingToday,
+    dailyCap,
+  } = useWallet();
   const { showToast, showPointsReward } = useToast();
   const [dailyClaimed, setDailyClaimed] = useState(false);
   const [referralCode] = useState("BAARO-REF-8921");
@@ -58,6 +67,11 @@ export function WalletTab({ onNavigateToCrypto }) {
       return;
     }
 
+    if (remainingToday <= 0) {
+      showToast("Plafond quotidien atteint — revenez demain", "info");
+      return;
+    }
+
     const result = await earnPoints(task.actionKey);
     if (result.ok) {
       setTasks((prev) =>
@@ -78,6 +92,8 @@ export function WalletTab({ onNavigateToCrypto }) {
       showToast(result.error || "Impossible d'attribuer les points", "error");
     }
   };
+
+  const capPercent = dailyCap > 0 ? Math.min(100, (earnedToday / dailyCap) * 100) : 0;
 
   return (
     <div className="flex flex-col gap-6 max-w-3xl mx-auto w-full pb-20">
@@ -157,15 +173,53 @@ export function WalletTab({ onNavigateToCrypto }) {
           </div>
         </div>
 
+        {/* Plafond quotidien */}
+        {!isAnonymous && (
+          <div
+            className="mt-5 p-3 rounded-xl border flex flex-col gap-2"
+            style={{ background: COLORS.surface, borderColor: COLORS.border }}
+          >
+            <div className="flex items-center justify-between text-xs">
+              <div className="flex items-center gap-1.5" style={{ color: COLORS.muted }}>
+                <Gauge size={14} style={{ color: COLORS.gold }} />
+                <span>Plafond quotidien</span>
+              </div>
+              <span className="font-mono font-bold" style={{ color: COLORS.gold }}>
+                {earnedToday} / {dailyCap} pts
+              </span>
+            </div>
+            <div
+              className="w-full h-2 rounded-full overflow-hidden"
+              style={{ background: COLORS.surface2 }}
+            >
+              <div
+                className="h-full rounded-full transition-all duration-500"
+                style={{
+                  width: `${capPercent}%`,
+                  background:
+                    remainingToday <= 0
+                      ? COLORS.rose
+                      : "linear-gradient(90deg, #D9AE52 0%, #2DBFA6 100%)",
+                }}
+              />
+            </div>
+            <p className="text-[11px]" style={{ color: COLORS.muted }}>
+              {remainingToday > 0
+                ? `Il vous reste ${remainingToday} pts à gagner aujourd'hui`
+                : "Plafond atteint — revenez demain"}
+            </p>
+          </div>
+        )}
+
         <div
-          className="mt-6 pt-4 border-t flex flex-col gap-1.5"
+          className="mt-4 pt-4 border-t flex flex-col gap-1.5"
           style={{ borderColor: COLORS.border }}
         >
           <div
             className="flex justify-between text-xs font-medium"
             style={{ color: COLORS.muted }}
           >
-            <span>Progression</span>
+            <span>Progression vers 500 pts</span>
             <span>{pointsBalance} / 500 pts</span>
           </div>
           <div
@@ -281,7 +335,7 @@ export function WalletTab({ onNavigateToCrypto }) {
                     background: COLORS.surface2,
                     borderColor: COLORS.borderGold,
                     color: COLORS.gold,
-                    opacity: isAnonymous ? 0.6 : 1,
+                    opacity: isAnonymous || remainingToday <= 0 ? 0.55 : 1,
                   }}
                 >
                   +{task.pts} pts
