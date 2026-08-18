@@ -19,6 +19,11 @@ export function AppProvider({ children }) {
   const [loading, setLoading] = useState(true);
   const [isAnonymous, setIsAnonymous] = useState(false);
 
+  // Plafond quotidien
+  const [earnedToday, setEarnedToday] = useState(0);
+  const [remainingToday, setRemainingToday] = useState(100);
+  const [dailyCap, setDailyCap] = useState(100);
+
   // Auth listener
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -41,7 +46,35 @@ export function AppProvider({ children }) {
     return () => subscription.unsubscribe();
   }, []);
 
-  // Charge profil + soldes (lecture seule) quand userId change
+  // Appel générique à /api/wallet
+  const callWallet = useCallback(async (action, payload = {}) => {
+    const {
+      data: { session: currentSession },
+    } = await supabase.auth.getSession();
+    if (!currentSession?.access_token) {
+      return { ok: false, error: "Non authentifié" };
+    }
+
+    try {
+      const res = await fetch(`${API_BASE}/api/wallet`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${currentSession.access_token}`,
+        },
+        body: JSON.stringify({ action, ...payload }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return { ok: false, error: data.error || "Erreur serveur" };
+      }
+      return { ok: true, ...data };
+    } catch {
+      return { ok: false, error: "Impossible de joindre le serveur" };
+    }
+  }, []);
+
+  // Charge profil + status wallet (serveur) quand userId change
   useEffect(() => {
     if (!userId) return;
 
@@ -78,32 +111,14 @@ export function AppProvider({ children }) {
           });
         }
 
-        // Wallet — LECTURE SEULE (création et écriture uniquement via /api/wallet)
-        const { data: wallet } = await supabase
-          .from("wallets")
-          .select("balance")
-          .eq("user_id", userId)
-          .maybeSingle();
-
-        if (wallet) {
-          setPointsBalance(Number(wallet.balance) || 0);
-        } else {
-          // Le wallet n'existe pas encore : on force un appel serveur
-          // qui le créera avec balance = 0 (sécurisé)
-          setPointsBalance(0);
-        }
-
-        // BARO — LECTURE SEULE
-        const { data: crypto } = await supabase
-          .from("crypto_holdings")
-          .select("holdings")
-          .eq("user_id", userId)
-          .maybeSingle();
-
-        if (crypto) {
-          setBaroBalance(Number(crypto.holdings) || 0);
-        } else {
-          setBaroBalance(0);
+        // Status wallet côté serveur (crée le wallet + bonus bienvenue si besoin)
+        const status = await callWallet("status");
+        if (status.ok) {
+          if (typeof status.balance === "number") setPointsBalance(status.balance);
+          if (typeof status.holdings === "number") setBaroBalance(status.holdings);
+          if (typeof status.earnedToday === "number") setEarnedToday(status.earnedToday);
+          if (typeof status.remainingToday === "number") setRemainingToday(status.remainingToday);
+          if (typeof status.dailyCap === "number") setDailyCap(status.dailyCap);
         }
 
         // Register device (anti-abus)
@@ -128,41 +143,16 @@ export function AppProvider({ children }) {
         console.error("[BAARO] Erreur chargement données utilisateur:", err);
       }
     })();
-  }, [userId]);
-
-  // Appel générique à /api/wallet
-  const callWallet = useCallback(async (action, payload = {}) => {
-    const {
-      data: { session: currentSession },
-    } = await supabase.auth.getSession();
-    if (!currentSession?.access_token) {
-      return { ok: false, error: "Non authentifié" };
-    }
-
-    try {
-      const res = await fetch(`${API_BASE}/api/wallet`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${currentSession.access_token}`,
-        },
-        body: JSON.stringify({ action, ...payload }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        return { ok: false, error: data.error || "Erreur serveur" };
-      }
-      return { ok: true, ...data };
-    } catch {
-      return { ok: false, error: "Impossible de joindre le serveur" };
-    }
-  }, []);
+  }, [userId, callWallet]);
 
   const earnPoints = useCallback(
     async (actionKey, detail = "") => {
       const result = await callWallet("earn", { actionKey, detail });
-      if (result.ok && typeof result.balance === "number") {
-        setPointsBalance(result.balance);
+      if (result.ok) {
+        if (typeof result.balance === "number") setPointsBalance(result.balance);
+        if (typeof result.earnedToday === "number") setEarnedToday(result.earnedToday);
+        if (typeof result.remainingToday === "number") setRemainingToday(result.remainingToday);
+        if (typeof result.dailyCap === "number") setDailyCap(result.dailyCap);
       }
       return result;
     },
@@ -192,6 +182,18 @@ export function AppProvider({ children }) {
     [callWallet]
   );
 
+  const refreshWalletStatus = useCallback(async () => {
+    const status = await callWallet("status");
+    if (status.ok) {
+      if (typeof status.balance === "number") setPointsBalance(status.balance);
+      if (typeof status.holdings === "number") setBaroBalance(status.holdings);
+      if (typeof status.earnedToday === "number") setEarnedToday(status.earnedToday);
+      if (typeof status.remainingToday === "number") setRemainingToday(status.remainingToday);
+      if (typeof status.dailyCap === "number") setDailyCap(status.dailyCap);
+    }
+    return status;
+  }, [callWallet]);
+
   const updateProfile = useCallback(
     async (updates) => {
       if (!userId) return { ok: false, error: "Non authentifié" };
@@ -217,9 +219,13 @@ export function AppProvider({ children }) {
     setBaroBalance,
     loading,
     isAnonymous,
+    earnedToday,
+    remainingToday,
+    dailyCap,
     earnPoints,
     redeemReward,
     convertToBaro,
+    refreshWalletStatus,
     updateProfile,
   };
 
