@@ -8,7 +8,7 @@ import { rateLimit } from "./_rateLimit.js";
 const DAILY_EARN_CAP = 100; // points max par jour et par compte
 const MIN_ACCOUNT_AGE_MS_FOR_CASHOUT = 3 * 24 * 60 * 60 * 1000; // 3 jours
 const POINTS_PER_BARO = 100;
-const WELCOME_BONUS = 0; // Solde initial = 0 (sécurisé). Mettre 50 si tu veux un bonus serveur.
+const WELCOME_BONUS = 50; // Bonus de bienvenue (uniquement comptes non-anonymes, une seule fois)
 
 // Actions de gain autorisées (le client ne peut envoyer que ces clés)
 const EARN_ACTIONS = {
@@ -29,7 +29,6 @@ const EARN_ACTIONS = {
 };
 
 // Options de rachat
-// cash: true → soumis aux règles d'éligibilité (âge + restricted)
 const REDEEM_OPTIONS = {
   r1: { cost: 500, label: "Carte cadeau partenaire — 5 €", cash: true },
   r2: { cost: 1000, label: "Virement via Stripe Connect — 10 €", cash: true },
@@ -58,7 +57,13 @@ async function getProfile(admin, userId) {
   return data;
 }
 
-async function getOrCreateWallet(admin, userId) {
+/**
+ * Crée le wallet si besoin.
+ * - Compte anonyme → balance 0
+ * - Compte réel → balance WELCOME_BONUS (une seule fois à la création)
+ */
+async function getOrCreateWallet(admin, user, opts = {}) {
+  const userId = user.id;
   let { data: wallet } = await admin
     .from("wallets")
     .select("*")
@@ -66,14 +71,30 @@ async function getOrCreateWallet(admin, userId) {
     .maybeSingle();
 
   if (!wallet) {
+    const initialBalance =
+      !isAnonymous(user) && WELCOME_BONUS > 0 ? WELCOME_BONUS : 0;
+
     const { data: created, error } = await admin
       .from("wallets")
-      .insert({ user_id: userId, balance: WELCOME_BONUS })
+      .insert({ user_id: userId, balance: initialBalance })
       .select()
       .single();
 
     if (error) throw error;
     wallet = created;
+
+    // Journaliser le bonus de bienvenue
+    if (initialBalance > 0) {
+      await admin.from("transactions").insert({
+        user_id: userId,
+        label: "Bonus de bienvenue",
+        pts: initialBalance,
+      });
+    }
+
+    if (opts.markWelcome) {
+      opts.welcomeGranted = initialBalance;
+    }
   }
   return wallet;
 }
@@ -92,7 +113,6 @@ async function todaysEarnedTotal(admin, userId) {
   return (data || []).reduce((sum, tx) => sum + Number(tx.pts), 0);
 }
 
-// Mise à jour atomique du solde (protection contre les courses)
 async function applyBalanceDelta(admin, userId, previousBalance, delta) {
   const newBalance = Number(previousBalance) + delta;
 
@@ -100,7 +120,7 @@ async function applyBalanceDelta(admin, userId, previousBalance, delta) {
     .from("wallets")
     .update({ balance: newBalance, updated_at: new Date().toISOString() })
     .eq("user_id", userId)
-    .eq("balance", previousBalance) // optimistic locking
+    .eq("balance", previousBalance)
     .select()
     .single();
 
@@ -136,15 +156,41 @@ async function cashoutEligibility(admin, user) {
 // Handlers
 // ============================================================
 
+async function handleStatus(admin, user, res) {
+  const wallet = await getOrCreateWallet(admin, user);
+  const earnedToday = await todaysEarnedTotal(admin, user.id);
+  const remaining = Math.max(0, DAILY_EARN_CAP - earnedToday);
+
+  let holdings = 0;
+  const { data: crypto } = await admin
+    .from("crypto_holdings")
+    .select("holdings")
+    .eq("user_id", user.id)
+    .maybeSingle();
+  if (crypto) holdings = Number(crypto.holdings) || 0;
+
+  return res.status(200).json({
+    ok: true,
+    balance: Number(wallet.balance),
+    holdings,
+    earnedToday,
+    dailyCap: DAILY_EARN_CAP,
+    remainingToday: remaining,
+    isAnonymous: isAnonymous(user),
+  });
+}
+
 async function handleEarn(admin, user, body, res) {
-  // Compte invité : l'action reste possible côté app, mais aucun point n'est crédité.
   if (isAnonymous(user)) {
-    const wallet = await getOrCreateWallet(admin, user.id);
+    const wallet = await getOrCreateWallet(admin, user);
     return res.status(200).json({
       ok: true,
       balance: Number(wallet.balance),
       transaction: null,
       note: "Compte invité : aucun point gagné",
+      earnedToday: 0,
+      remainingToday: 0,
+      dailyCap: DAILY_EARN_CAP,
     });
   }
 
@@ -166,7 +212,7 @@ async function handleEarn(admin, user, body, res) {
 
   const pts = Math.min(rule.pts, DAILY_EARN_CAP - earnedToday);
 
-  const wallet = await getOrCreateWallet(admin, user.id);
+  const wallet = await getOrCreateWallet(admin, user);
   const newBalance = await applyBalanceDelta(admin, user.id, wallet.balance, pts);
 
   if (newBalance === null) {
@@ -179,10 +225,15 @@ async function handleEarn(admin, user, body, res) {
     .select()
     .single();
 
+  const newEarnedToday = earnedToday + pts;
+
   return res.status(200).json({
     ok: true,
     balance: newBalance,
     transaction: tx,
+    earnedToday: newEarnedToday,
+    remainingToday: Math.max(0, DAILY_EARN_CAP - newEarnedToday),
+    dailyCap: DAILY_EARN_CAP,
   });
 }
 
@@ -201,7 +252,7 @@ async function handleRedeem(admin, user, body, res) {
     if (!check.ok) return jsonError(res, 403, check.reason);
   }
 
-  const wallet = await getOrCreateWallet(admin, user.id);
+  const wallet = await getOrCreateWallet(admin, user);
   if (Number(wallet.balance) < opt.cost) {
     return jsonError(res, 400, "Solde insuffisant");
   }
@@ -243,7 +294,7 @@ async function handleConvert(admin, user, body, res) {
   const check = await cashoutEligibility(admin, user);
   if (!check.ok) return jsonError(res, 403, check.reason);
 
-  const wallet = await getOrCreateWallet(admin, user.id);
+  const wallet = await getOrCreateWallet(admin, user);
   if (Number(wallet.balance) < pts) {
     return jsonError(res, 400, "Solde insuffisant");
   }
@@ -295,7 +346,6 @@ async function handleConvert(admin, user, body, res) {
 // ============================================================
 
 export default async function handler(req, res) {
-  // CORS — à resserrer en production (remplacer * par ton domaine)
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
@@ -308,8 +358,7 @@ export default async function handler(req, res) {
     return jsonError(res, 405, "Méthode non autorisée");
   }
 
-  // Rate limit
-  const limit = rateLimit(req, { key: "wallet", max: 30, windowMs: 60_000 });
+  const limit = rateLimit(req, { key: "wallet", max: 40, windowMs: 60_000 });
   if (!limit.ok) {
     Object.entries(limit.headers || {}).forEach(([k, v]) => res.setHeader(k, v));
     return res.status(limit.status).json(limit.body);
@@ -332,6 +381,7 @@ export default async function handler(req, res) {
   const body = req.body || {};
 
   try {
+    if (body.action === "status") return await handleStatus(admin, user, res);
     if (body.action === "earn") return await handleEarn(admin, user, body, res);
     if (body.action === "redeem") return await handleRedeem(admin, user, body, res);
     if (body.action === "convert") return await handleConvert(admin, user, body, res);
