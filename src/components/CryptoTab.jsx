@@ -8,6 +8,7 @@ import {
   QrCode,
   Copy,
   X,
+  ShieldAlert,
 } from "lucide-react";
 import {
   ResponsiveContainer,
@@ -19,7 +20,8 @@ import {
 } from "recharts";
 import { COLORS } from "../theme.js";
 import { useToast } from "./ToastContext.jsx";
-import { useApp } from "../contexts/AppContext.jsx";
+import { useWallet } from "../hooks/useWallet.js";
+import { GuestBanner } from "./GuestBanner.jsx";
 
 const PRICE_HISTORY = [
   { t: "J-6", price: 0.82 },
@@ -32,7 +34,7 @@ const PRICE_HISTORY = [
 ];
 
 export function CryptoTab() {
-  const { pointsBalance, baroBalance, convertToBaro } = useApp();
+  const { pointsBalance, baroBalance, convertToBaro, isAnonymous } = useWallet();
   const { showToast } = useToast();
   const [exchangeModalOpen, setExchangeModalOpen] = useState(false);
   const [qrModalOpen, setQrModalOpen] = useState(false);
@@ -46,6 +48,12 @@ export function CryptoTab() {
 
   const handleSwap = async (e) => {
     e.preventDefault();
+
+    if (isAnonymous) {
+      showToast("Créez un compte pour convertir en BARO", "info");
+      return;
+    }
+
     const val = parseFloat(amountInput);
     if (isNaN(val) || val <= 0) {
       showToast("Montant invalide", "error");
@@ -92,6 +100,8 @@ export function CryptoTab() {
 
   return (
     <div className="flex flex-col gap-6 max-w-4xl mx-auto w-full pb-20">
+      <GuestBanner />
+
       {/* Hero BARO */}
       <div
         className="glass-card rounded-3xl p-6 border shadow-2xl relative overflow-hidden teal-glow"
@@ -116,6 +126,15 @@ export function CryptoTab() {
               >
                 Mainnet v1
               </span>
+              {isAnonymous && (
+                <span
+                  className="text-[10px] px-2 py-0.5 rounded-full font-bold flex items-center gap-1"
+                  style={{ background: "rgba(236,72,153,0.2)", color: COLORS.rose }}
+                >
+                  <ShieldAlert size={10} />
+                  Invité
+                </span>
+              )}
             </div>
             <h2 className="text-4xl font-extrabold font-mono text-gradient-teal mt-1">
               {Number(baroBalance).toFixed(2)}{" "}
@@ -142,9 +161,19 @@ export function CryptoTab() {
             </button>
 
             <button
-              onClick={() => setExchangeModalOpen(true)}
+              onClick={() => {
+                if (isAnonymous) {
+                  showToast("Créez un compte pour convertir en BARO", "info");
+                  return;
+                }
+                setExchangeModalOpen(true);
+              }}
               className="flex-1 md:flex-none flex items-center justify-center gap-2 px-5 py-3 rounded-2xl text-xs font-bold shadow-xl transition gold-glow"
-              style={{ background: COLORS.gold, color: COLORS.bg }}
+              style={{
+                background: COLORS.gold,
+                color: COLORS.bg,
+                opacity: isAnonymous ? 0.7 : 1,
+              }}
             >
               <ArrowRightLeft size={16} />
               <span>Convertir Points → BARO</span>
@@ -249,9 +278,7 @@ export function CryptoTab() {
           </div>
 
           <button
-            onClick={() =>
-              showToast("Staking bientôt disponible", "info")
-            }
+            onClick={() => showToast("Staking bientôt disponible", "info")}
             className="w-full py-2.5 rounded-xl text-xs font-bold border transition hover:border-amber-400"
             style={{
               background: COLORS.surface2,
@@ -328,6 +355,71 @@ export function CryptoTab() {
         </div>
       </div>
 
+      {/* Modal conversion */}
+      {exchangeModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md"
+          onClick={() => setExchangeModalOpen(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-sm glass-card rounded-3xl p-6 border shadow-2xl flex flex-col gap-5"
+            style={{ borderColor: COLORS.borderGold }}
+          >
+            <div className="flex justify-between items-center">
+              <h3 className="text-base font-bold text-gradient-gold">
+                Convertir en BARO
+              </h3>
+              <button
+                onClick={() => setExchangeModalOpen(false)}
+                style={{ color: COLORS.muted }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSwap} className="flex flex-col gap-4">
+              <div>
+                <label
+                  className="text-xs mb-1.5 block"
+                  style={{ color: COLORS.muted }}
+                >
+                  Points à convertir (solde : {pointsBalance} pts)
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={amountInput}
+                  onChange={(e) => setAmountInput(e.target.value)}
+                  className="w-full px-4 py-3 rounded-xl border bg-transparent outline-none text-sm font-mono"
+                  style={{
+                    borderColor: COLORS.border,
+                    color: COLORS.ivory,
+                  }}
+                />
+                <p className="text-[11px] mt-1.5" style={{ color: COLORS.muted }}>
+                  ≈ {(parseFloat(amountInput || 0) / POINTS_PER_BARO).toFixed(3)}{" "}
+                  BARO
+                </p>
+              </div>
+
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full py-3 rounded-xl text-sm font-bold transition disabled:opacity-50"
+                style={{
+                  background: "linear-gradient(135deg, #D9AE52 0%, #2DBFA6 100%)",
+                  color: COLORS.bg,
+                }}
+              >
+                {loading ? "Conversion…" : "Confirmer la conversion"}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* Modal QR */}
       {qrModalOpen && (
         <div
@@ -343,7 +435,10 @@ export function CryptoTab() {
               <h3 className="text-base font-bold text-gradient-teal">
                 Recevoir des BARO
               </h3>
-              <button onClick={() => setQrModalOpen(false)} style={{ color: COLORS.muted }}>
+              <button
+                onClick={() => setQrModalOpen(false)}
+                style={{ color: COLORS.muted }}
+              >
                 <X size={18} />
               </button>
             </div>
@@ -368,71 +463,14 @@ export function CryptoTab() {
                 className="p-1 rounded hover:bg-white/5"
                 style={{ color: COLORS.teal }}
               >
-                <Copy size={16} />
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Modal conversion */}
-      {exchangeModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
-          <div
-            className="w-full max-w-md glass-card rounded-3xl p-6 border shadow-2xl flex flex-col gap-5"
-            style={{ borderColor: COLORS.borderGold }}
-          >
-            <div className="flex justify-between items-center">
-              <h3 className="text-lg font-bold text-gradient-gold">
-                Convertir en BARO
-              </h3>
-              <button
-                onClick={() => setExchangeModalOpen(false)}
-                className="text-xs px-2 py-1 rounded border"
-                style={{ borderColor: COLORS.border, color: COLORS.muted }}
-              >
-                Fermer
+                <Copy size={14} />
               </button>
             </div>
 
-            <form onSubmit={handleSwap} className="flex flex-col gap-4">
-              <div>
-                <label className="text-xs mb-1 block" style={{ color: COLORS.muted }}>
-                  Points à convertir (solde : {pointsBalance})
-                </label>
-                <input
-                  type="number"
-                  min="1"
-                  step="1"
-                  value={amountInput}
-                  onChange={(e) => setAmountInput(e.target.value)}
-                  className="w-full px-4 py-3 rounded-xl border bg-transparent outline-none text-sm font-mono"
-                  style={{ borderColor: COLORS.border, color: COLORS.ivory }}
-                />
-              </div>
-
-              <div
-                className="p-3 rounded-xl text-xs"
-                style={{ background: COLORS.surface, color: COLORS.muted }}
-              >
-                Vous recevrez environ{" "}
-                <strong style={{ color: COLORS.teal }}>
-                  {(parseFloat(amountInput || 0) / POINTS_PER_BARO).toFixed(2)} BARO
-                </strong>
-              </div>
-
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full py-3 rounded-xl font-bold text-sm disabled:opacity-50"
-                style={{
-                  background: "linear-gradient(135deg, #D9AE52 0%, #2DBFA6 100%)",
-                  color: COLORS.bg,
-                }}
-              >
-                {loading ? "Conversion..." : "Confirmer la conversion"}
-              </button>
-            </form>
+            <p className="text-[11px]" style={{ color: COLORS.muted }}>
+              Adresse de démonstration — le vrai wallet on-chain arrivera plus
+              tard.
+            </p>
           </div>
         </div>
       )}
