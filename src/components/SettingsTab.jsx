@@ -1,7 +1,18 @@
 import { useState, useEffect } from "react";
 import { supabase } from "../supabaseClient";
-import { User, Award, Check, Palette, LogOut, ShieldCheck, Sparkles } from "lucide-react";
+import {
+  User,
+  Award,
+  Check,
+  Palette,
+  LogOut,
+  ShieldCheck,
+  Sparkles,
+  FileText,
+} from "lucide-react";
 import { COLORS } from "../theme.js";
+import { PrivacyPage } from "./PrivacyPage.jsx";
+import { PushSettings } from "./PushSettings.jsx";
 
 const SUBSCRIPTION_TIERS = [
   {
@@ -55,8 +66,8 @@ export function SettingsTab({
   const [editFlag, setEditFlag] = useState(flag);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
+  const [showPrivacy, setShowPrivacy] = useState(false);
 
-  // ===== Sécurisation du compte (invité -> compte stable, même id) =====
   const [isAnonymousUser, setIsAnonymousUser] = useState(false);
   const [secureEmail, setSecureEmail] = useState("");
   const [securePassword, setSecurePassword] = useState("");
@@ -70,6 +81,10 @@ export function SettingsTab({
       setIsAnonymousUser(data?.user?.is_anonymous === true);
     });
   }, []);
+
+  if (showPrivacy) {
+    return <PrivacyPage onBack={() => setShowPrivacy(false)} />;
+  }
 
   const handleSecureWithEmail = async (e) => {
     e.preventDefault();
@@ -87,7 +102,7 @@ export function SettingsTab({
       if (error) {
         if (error.message?.toLowerCase().includes("already been registered")) {
           setSecureMessage(
-            "⚠️ Un compte existe déjà avec cet e-mail. Vous pouvez vous y connecter, mais l'historique de cette session invité (publications, points) ne sera pas transféré automatiquement vers ce compte."
+            "⚠️ Un compte existe déjà avec cet e-mail. Vous pouvez vous y connecter, mais l'historique de cette session invité ne sera pas transféré automatiquement."
           );
           setShowLoginFallback(true);
           return;
@@ -121,7 +136,7 @@ export function SettingsTab({
       setSecureMessage(
         "❌ " +
           (err.message?.toLowerCase().includes("invalid login credentials")
-            ? "Mot de passe incorrect pour ce compte. Si vous l'avez oublié, utilisez la réinitialisation par e-mail."
+            ? "Mot de passe incorrect pour ce compte."
             : err.message || "Erreur de connexion")
       );
     } finally {
@@ -139,9 +154,7 @@ export function SettingsTab({
         redirectTo: window.location.origin,
       });
       if (error) throw error;
-      setSecureMessage(
-        "✅ E-mail de réinitialisation envoyé. Suivez le lien pour définir un nouveau mot de passe, puis reconnectez-vous."
-      );
+      setSecureMessage("✅ E-mail de réinitialisation envoyé.");
     } catch (err) {
       setSecureMessage("❌ " + (err.message || "Erreur lors de l'envoi"));
     } finally {
@@ -238,14 +251,10 @@ export function SettingsTab({
         </div>
       )}
 
-      {/* Sécurisation du compte (invités uniquement) */}
       {isAnonymousUser && (
         <div
           className="rounded-2xl p-5 border flex flex-col gap-4"
-          style={{
-            background: COLORS.surface,
-            borderColor: COLORS.borderGold,
-          }}
+          style={{ background: COLORS.surface, borderColor: COLORS.borderGold }}
         >
           <h3
             className="text-base font-bold flex items-center gap-2"
@@ -255,10 +264,8 @@ export function SettingsTab({
             Sécuriser mon compte
           </h3>
           <p className="text-sm" style={{ color: COLORS.muted }}>
-            Vous utilisez un compte invité : vos publications et abonnements
-            existent, mais vous ne gagnez pas de points et vous perdrez tout en
-            changeant d&apos;appareil. Ajoutez un e-mail ou un réseau pour garder le
-            même compte partout et débloquer les gains.
+            Compte invité : sécurisez avec email ou réseau social pour gagner des
+            points et conserver votre historique.
           </p>
 
           {secureMessage && (
@@ -304,14 +311,6 @@ export function SettingsTab({
             >
               {secureOauthLoading === "twitter" ? "Connexion..." : "Lier X"}
             </button>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <div className="flex-1 h-px" style={{ background: COLORS.border }} />
-            <span className="text-xs" style={{ color: COLORS.muted }}>
-              ou par e-mail
-            </span>
-            <div className="flex-1 h-px" style={{ background: COLORS.border }} />
           </div>
 
           <form onSubmit={handleSecureWithEmail} className="flex flex-col gap-3">
@@ -367,16 +366,16 @@ export function SettingsTab({
                 className="w-full py-3 rounded-xl font-bold text-sm border disabled:opacity-50"
                 style={{ borderColor: COLORS.borderGold, color: COLORS.gold }}
               >
-                {secureLoading ? "…" : "Se connecter à ce compte existant"}
+                Se connecter à ce compte existant
               </button>
               <button
                 type="button"
                 onClick={handleResetPassword}
                 disabled={secureLoading}
-                className="w-full text-xs underline text-center disabled:opacity-50"
+                className="w-full text-xs underline text-center"
                 style={{ color: COLORS.muted }}
               >
-                Mot de passe oublié ? Recevoir un lien de réinitialisation
+                Mot de passe oublié ?
               </button>
             </div>
           )}
@@ -386,19 +385,12 @@ export function SettingsTab({
       {/* Profil */}
       <div
         className="rounded-2xl p-5 border flex flex-col gap-4"
-        style={{
-          background: COLORS.surface,
-          borderColor: COLORS.borderGold,
-        }}
+        style={{ background: COLORS.surface, borderColor: COLORS.borderGold }}
       >
-        <h3
-          className="text-base font-bold flex items-center gap-2"
-          style={{ color: COLORS.gold }}
-        >
+        <h3 className="text-base font-bold flex items-center gap-2" style={{ color: COLORS.gold }}>
           <User size={18} />
           Profil
         </h3>
-
         {!isEditing ? (
           <div className="space-y-3">
             <div className="flex items-center gap-3">
@@ -430,63 +422,42 @@ export function SettingsTab({
           </div>
         ) : (
           <form onSubmit={handleSaveProfile} className="space-y-3">
-            <div>
-              <label
-                className="text-xs font-semibold block mb-1"
-                style={{ color: COLORS.muted }}
-              >
-                Nom
-              </label>
-              <input
-                type="text"
-                value={editDisplayName}
-                onChange={(e) => setEditDisplayName(e.target.value)}
-                className="w-full rounded-xl p-3 text-sm outline-none border"
-                style={{
-                  background: COLORS.surface2,
-                  borderColor: COLORS.border,
-                  color: COLORS.ivory,
-                }}
-              />
-            </div>
-            <div>
-              <label
-                className="text-xs font-semibold block mb-1"
-                style={{ color: COLORS.muted }}
-              >
-                Drapeau
-              </label>
-              <input
-                type="text"
-                value={editFlag}
-                onChange={(e) => setEditFlag(e.target.value)}
-                className="w-full rounded-xl p-3 text-sm outline-none border"
-                style={{
-                  background: COLORS.surface2,
-                  borderColor: COLORS.border,
-                  color: COLORS.ivory,
-                }}
-              />
-            </div>
-            <div>
-              <label
-                className="text-xs font-semibold block mb-1"
-                style={{ color: COLORS.muted }}
-              >
-                Bio
-              </label>
-              <textarea
-                value={editBio}
-                onChange={(e) => setEditBio(e.target.value)}
-                rows={2}
-                className="w-full rounded-xl p-3 text-sm outline-none border resize-none"
-                style={{
-                  background: COLORS.surface2,
-                  borderColor: COLORS.border,
-                  color: COLORS.ivory,
-                }}
-              />
-            </div>
+            <input
+              type="text"
+              value={editDisplayName}
+              onChange={(e) => setEditDisplayName(e.target.value)}
+              placeholder="Nom"
+              className="w-full rounded-xl p-3 text-sm outline-none border"
+              style={{
+                background: COLORS.surface2,
+                borderColor: COLORS.border,
+                color: COLORS.ivory,
+              }}
+            />
+            <input
+              type="text"
+              value={editFlag}
+              onChange={(e) => setEditFlag(e.target.value)}
+              placeholder="Drapeau"
+              className="w-full rounded-xl p-3 text-sm outline-none border"
+              style={{
+                background: COLORS.surface2,
+                borderColor: COLORS.border,
+                color: COLORS.ivory,
+              }}
+            />
+            <textarea
+              value={editBio}
+              onChange={(e) => setEditBio(e.target.value)}
+              rows={2}
+              placeholder="Bio"
+              className="w-full rounded-xl p-3 text-sm outline-none border resize-none"
+              style={{
+                background: COLORS.surface2,
+                borderColor: COLORS.border,
+                color: COLORS.ivory,
+              }}
+            />
             <div className="flex gap-2">
               <button
                 type="submit"
@@ -512,15 +483,9 @@ export function SettingsTab({
       {/* Thèmes */}
       <div
         className="rounded-2xl p-5 border flex flex-col gap-4"
-        style={{
-          background: COLORS.surface,
-          borderColor: COLORS.borderTeal,
-        }}
+        style={{ background: COLORS.surface, borderColor: COLORS.borderTeal }}
       >
-        <h3
-          className="text-base font-bold flex items-center gap-2"
-          style={{ color: COLORS.teal }}
-        >
+        <h3 className="text-base font-bold flex items-center gap-2" style={{ color: COLORS.teal }}>
           <Palette size={18} />
           Thème
         </h3>
@@ -552,15 +517,9 @@ export function SettingsTab({
       {/* Abonnements */}
       <div
         className="rounded-2xl p-5 border flex flex-col gap-4"
-        style={{
-          background: COLORS.surface,
-          borderColor: COLORS.border,
-        }}
+        style={{ background: COLORS.surface, borderColor: COLORS.border }}
       >
-        <h3
-          className="text-base font-bold flex items-center gap-2"
-          style={{ color: COLORS.gold }}
-        >
+        <h3 className="text-base font-bold flex items-center gap-2" style={{ color: COLORS.gold }}>
           <Award size={18} />
           Abonnements
         </h3>
@@ -607,7 +566,9 @@ export function SettingsTab({
         </div>
       </div>
 
-      {/* Revoir l'introduction */}
+      {/* Notifications push */}
+      <PushSettings />
+
       {onReplayOnboarding && (
         <button
           type="button"
@@ -624,7 +585,20 @@ export function SettingsTab({
         </button>
       )}
 
-      {/* Déconnexion */}
+      <button
+        type="button"
+        onClick={() => setShowPrivacy(true)}
+        className="flex items-center justify-center gap-2 w-full py-3 rounded-xl text-sm font-semibold border transition"
+        style={{
+          background: COLORS.surface2,
+          borderColor: COLORS.borderTeal,
+          color: COLORS.teal,
+        }}
+      >
+        <FileText size={16} />
+        Politique de confidentialité
+      </button>
+
       <button
         onClick={handleLogout}
         className="flex items-center justify-center gap-2 w-full py-3 rounded-xl text-sm font-bold border"
