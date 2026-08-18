@@ -96,8 +96,8 @@ export function Navigation({ activeTab, setActiveTab }) {
                       item.badge === "PRO"
                         ? COLORS.purple
                         : item.badge === "P2P"
-                        ? COLORS.teal
-                        : COLORS.gold,
+                          ? COLORS.teal
+                          : COLORS.gold,
                     color: COLORS.bg,
                   }}
                 >
@@ -109,7 +109,7 @@ export function Navigation({ activeTab, setActiveTab }) {
         })}
       </nav>
 
-      {/* Menu Plus (mobile) */}
+      {/* Menu Plus (mobile) — au-dessus de la barre */}
       {moreOpen && (
         <div
           className="md:hidden fixed inset-0 z-[60] flex flex-col justify-end"
@@ -117,18 +117,16 @@ export function Navigation({ activeTab, setActiveTab }) {
           onClick={() => setMoreOpen(false)}
         >
           <div
-            className="rounded-t-3xl border-t p-4 pb-8"
+            className="rounded-t-3xl border-t p-4"
             style={{
               background: COLORS.surface || "#111A2C",
               borderColor: COLORS.borderGold,
+              paddingBottom: "calc(1rem + env(safe-area-inset-bottom, 0px) + 4.5rem)",
             }}
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between mb-4">
-              <h3
-                className="font-bold text-sm"
-                style={{ color: COLORS.ivory }}
-              >
+              <h3 className="font-bold text-sm" style={{ color: COLORS.ivory }}>
                 Plus
               </h3>
               <button
@@ -152,9 +150,7 @@ export function Navigation({ activeTab, setActiveTab }) {
                       background: isActive
                         ? "rgba(217,174,82,0.15)"
                         : "rgba(255,255,255,0.03)",
-                      borderColor: isActive
-                        ? COLORS.borderGold
-                        : COLORS.border,
+                      borderColor: isActive ? COLORS.borderGold : COLORS.border,
                       color: isActive ? COLORS.gold : COLORS.ivory,
                     }}
                   >
@@ -170,54 +166,66 @@ export function Navigation({ activeTab, setActiveTab }) {
         </div>
       )}
 
-      {/* Mobile bottom bar */}
+      {/*
+        Mobile bottom bar
+        - Collée au bas avec safe-area (iPhone home indicator)
+        - Hauteur stable → padding global via .mobile-nav-spacer
+      */}
       <nav
-        className="md:hidden fixed bottom-3 left-3 right-3 z-50 glass-panel rounded-2xl border p-1.5 shadow-2xl flex items-center justify-around"
+        className="md:hidden fixed left-0 right-0 z-50 border-t glass-panel"
         style={{
+          bottom: 0,
           borderColor: COLORS.borderGold,
-          background: "rgba(11, 18, 32, 0.92)",
+          background: "rgba(11, 18, 32, 0.96)",
+          paddingBottom: "env(safe-area-inset-bottom, 0px)",
+          paddingLeft: "max(0.5rem, env(safe-area-inset-left, 0px))",
+          paddingRight: "max(0.5rem, env(safe-area-inset-right, 0px))",
         }}
       >
-        {MAIN_ITEMS.map((item) => {
-          const Icon = item.icon;
-          const isActive = activeTab === item.id;
-          return (
-            <button
-              key={item.id}
-              onClick={() => goTo(item.id)}
-              className="flex flex-col items-center gap-0.5 p-2 rounded-xl transition relative"
-              style={{ color: isActive ? COLORS.gold : COLORS.muted }}
-            >
-              <Icon
-                size={20}
+        <div className="flex items-center justify-around px-1 py-1.5 max-w-lg mx-auto">
+          {MAIN_ITEMS.map((item) => {
+            const Icon = item.icon;
+            const isActive = activeTab === item.id;
+            return (
+              <button
+                key={item.id}
+                onClick={() => goTo(item.id)}
+                className="flex flex-col items-center gap-0.5 px-2 py-1.5 rounded-xl transition relative min-w-[3rem]"
                 style={{ color: isActive ? COLORS.gold : COLORS.muted }}
-              />
-              <span className="text-[10px] font-medium leading-none">
-                {item.label}
-              </span>
-              {isActive && (
-                <span
-                  className="absolute -bottom-1 w-4 h-1 rounded-full"
-                  style={{ background: COLORS.gold }}
+              >
+                <Icon
+                  size={20}
+                  style={{ color: isActive ? COLORS.gold : COLORS.muted }}
                 />
-              )}
-            </button>
-          );
-        })}
-        <button
-          onClick={() => setMoreOpen(true)}
-          className="flex flex-col items-center gap-0.5 p-2 rounded-xl transition relative"
-          style={{ color: isMoreActive || moreOpen ? COLORS.teal : COLORS.muted }}
-        >
-          <Settings size={20} />
-          <span className="text-[10px] font-medium leading-none">Plus</span>
-          {(isMoreActive || moreOpen) && (
-            <span
-              className="absolute -bottom-1 w-4 h-1 rounded-full"
-              style={{ background: COLORS.teal }}
-            />
-          )}
-        </button>
+                <span className="text-[10px] font-medium leading-none">
+                  {item.label}
+                </span>
+                {isActive && (
+                  <span
+                    className="absolute bottom-0 w-4 h-0.5 rounded-full"
+                    style={{ background: COLORS.gold }}
+                  />
+                )}
+              </button>
+            );
+          })}
+          <button
+            onClick={() => setMoreOpen(true)}
+            className="flex flex-col items-center gap-0.5 px-2 py-1.5 rounded-xl transition relative min-w-[3rem]"
+            style={{
+              color: isMoreActive || moreOpen ? COLORS.teal : COLORS.muted,
+            }}
+          >
+            <Settings size={20} />
+            <span className="text-[10px] font-medium leading-none">Plus</span>
+            {(isMoreActive || moreOpen) && (
+              <span
+                className="absolute bottom-0 w-4 h-0.5 rounded-full"
+                style={{ background: COLORS.teal }}
+              />
+            )}
+          </button>
+        </div>
       </nav>
     </>
   );
