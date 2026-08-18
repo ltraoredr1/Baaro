@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { supabase } from "../supabaseClient";
 import { TurnstileWidget } from "../Turnstile.jsx";
 import { COLORS } from "../theme.js";
+import { captureRefFromUrl, getPendingRef } from "../lib/referralApi.js";
 
 export default function AuthScreen() {
   const [mode, setMode] = useState("anonymous"); // "anonymous" | "email"
@@ -9,11 +10,16 @@ export default function AuthScreen() {
   const [password, setPassword] = useState("");
   const [isLogin, setIsLogin] = useState(true);
   const [loading, setLoading] = useState(false);
-  const [oauthLoading, setOauthLoading] = useState(null); // "facebook" | "twitter" | null
+  const [oauthLoading, setOauthLoading] = useState(null);
   const [error, setError] = useState(null);
   const [captchaToken, setCaptchaToken] = useState(null);
+  const [pendingRef, setPendingRef] = useState(null);
 
-  // Connexion anonyme (flux principal)
+  useEffect(() => {
+    captureRefFromUrl();
+    setPendingRef(getPendingRef());
+  }, []);
+
   const handleAnonymous = async (token) => {
     if (loading) return;
     setLoading(true);
@@ -26,11 +32,8 @@ export default function AuthScreen() {
       );
 
       if (authError) throw authError;
-
-      // Le reste (création profil + register-device) est géré dans App / useSession
-      if (!data?.session) {
-        throw new Error("Session non créée");
-      }
+      if (!data?.session) throw new Error("Session non créée");
+      // Le parrainage s'appliquera après sécurisation du compte (email/OAuth)
     } catch (err) {
       console.error(err);
       setError(
@@ -42,7 +45,6 @@ export default function AuthScreen() {
     }
   };
 
-  // Connexion / inscription email
   const handleEmailSubmit = async (e) => {
     e.preventDefault();
     if (loading) return;
@@ -69,6 +71,7 @@ export default function AuthScreen() {
         });
         if (authError) throw authError;
       }
+      // useApplyPendingReferral dans l'app appliquera le code après session
     } catch (err) {
       setError(err.message || "Erreur d'authentification");
     } finally {
@@ -76,7 +79,6 @@ export default function AuthScreen() {
     }
   };
 
-  // Connexion Facebook / X (OAuth) — redirige vers le fournisseur puis revient sur l'app
   const handleOAuth = async (provider) => {
     if (loading || oauthLoading) return;
     setOauthLoading(provider);
@@ -90,8 +92,6 @@ export default function AuthScreen() {
         },
       });
       if (authError) throw authError;
-      // La page redirige vers le fournisseur ; le retour est géré par
-      // onAuthStateChange dans App.jsx, rien à faire de plus ici.
     } catch (err) {
       setError(err.message || "Erreur de connexion");
       setOauthLoading(null);
@@ -110,10 +110,12 @@ export default function AuthScreen() {
           borderColor: COLORS.borderGold || "#D9AE52",
         }}
       >
-        {/* Logo / Titre */}
         <div className="text-center mb-8">
           <div className="text-4xl mb-2">🌍</div>
-          <h1 className="text-2xl font-bold" style={{ color: COLORS.gold || "#D9AE52" }}>
+          <h1
+            className="text-2xl font-bold"
+            style={{ color: COLORS.gold || "#D9AE52" }}
+          >
             BAARO
           </h1>
           <p className="text-sm mt-1" style={{ color: COLORS.muted || "#94a3b8" }}>
@@ -121,14 +123,30 @@ export default function AuthScreen() {
           </p>
         </div>
 
-        {/* Mode anonyme (principal) */}
+        {pendingRef && (
+          <div
+            className="mb-5 p-3 rounded-xl text-xs text-center border"
+            style={{
+              background: "rgba(45,191,166,0.1)",
+              borderColor: COLORS.borderTeal,
+              color: COLORS.teal,
+            }}
+          >
+            Code parrain détecté : <strong className="font-mono">{pendingRef}</strong>
+            <br />
+            Il sera appliqué après création d&apos;un compte (email ou réseau social).
+          </div>
+        )}
+
         {mode === "anonymous" && (
           <div className="flex flex-col gap-5">
-            <p className="text-sm text-center" style={{ color: COLORS.ivory || "#f1f5f9" }}>
+            <p
+              className="text-sm text-center"
+              style={{ color: COLORS.ivory || "#f1f5f9" }}
+            >
               Entrez en un clic. Aucun compte requis.
             </p>
 
-            {/* Turnstile */}
             <div className="flex justify-center">
               <TurnstileWidget
                 onVerify={(token) => {
@@ -139,7 +157,10 @@ export default function AuthScreen() {
             </div>
 
             {loading && (
-              <div className="text-center text-sm" style={{ color: COLORS.muted }}>
+              <div
+                className="text-center text-sm"
+                style={{ color: COLORS.muted }}
+              >
                 Connexion en cours...
               </div>
             )}
@@ -150,33 +171,43 @@ export default function AuthScreen() {
               </div>
             )}
 
-            {/* Séparateur */}
             <div className="flex items-center gap-3">
-              <div className="flex-1 h-px" style={{ background: COLORS.border || "#334155" }} />
+              <div
+                className="flex-1 h-px"
+                style={{ background: COLORS.border || "#334155" }}
+              />
               <span className="text-xs" style={{ color: COLORS.muted || "#94a3b8" }}>
                 ou
               </span>
-              <div className="flex-1 h-px" style={{ background: COLORS.border || "#334155" }} />
+              <div
+                className="flex-1 h-px"
+                style={{ background: COLORS.border || "#334155" }}
+              />
             </div>
 
-            {/* Boutons OAuth */}
             <div className="flex flex-col gap-3">
               <button
                 type="button"
                 onClick={() => handleOAuth("facebook")}
                 disabled={!!oauthLoading}
-                className="w-full py-3 rounded-xl font-semibold text-sm transition disabled:opacity-50 flex items-center justify-center gap-2"
+                className="w-full py-3 rounded-xl font-semibold text-sm transition disabled:opacity-50"
                 style={{ background: "#1877F2", color: "#fff" }}
               >
-                {oauthLoading === "facebook" ? "Connexion..." : "Continuer avec Facebook"}
+                {oauthLoading === "facebook"
+                  ? "Connexion..."
+                  : "Continuer avec Facebook"}
               </button>
 
               <button
                 type="button"
                 onClick={() => handleOAuth("twitter")}
                 disabled={!!oauthLoading}
-                className="w-full py-3 rounded-xl font-semibold text-sm transition disabled:opacity-50 flex items-center justify-center gap-2"
-                style={{ background: "#000000", color: "#fff", border: "1px solid #334155" }}
+                className="w-full py-3 rounded-xl font-semibold text-sm transition disabled:opacity-50"
+                style={{
+                  background: "#000000",
+                  color: "#fff",
+                  border: "1px solid #334155",
+                }}
               >
                 {oauthLoading === "twitter" ? "Connexion..." : "Continuer avec X"}
               </button>
@@ -192,7 +223,6 @@ export default function AuthScreen() {
           </div>
         )}
 
-        {/* Mode email */}
         {mode === "email" && (
           <form onSubmit={handleEmailSubmit} className="flex flex-col gap-4">
             <input
@@ -239,11 +269,14 @@ export default function AuthScreen() {
               {loading
                 ? "Chargement..."
                 : isLogin
-                ? "Se connecter"
-                : "Créer un compte"}
+                  ? "Se connecter"
+                  : "Créer un compte"}
             </button>
 
-            <div className="flex justify-between text-xs" style={{ color: COLORS.muted }}>
+            <div
+              className="flex justify-between text-xs"
+              style={{ color: COLORS.muted }}
+            >
               <button
                 type="button"
                 onClick={() => setIsLogin(!isLogin)}
