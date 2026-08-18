@@ -1,44 +1,37 @@
 import { getAdminClient, requireUser } from "./_supabaseAdmin.js";
 import { rateLimit } from "./_rateLimit.js";
+import { applyCors } from "./_cors.js";
 
 // ============================================================
 // Configuration des gains et limites
 // ============================================================
 
-const DAILY_EARN_CAP = 100; // points max par jour et par compte
-const MIN_ACCOUNT_AGE_MS_FOR_CASHOUT = 3 * 24 * 60 * 60 * 1000; // 3 jours
+const DAILY_EARN_CAP = 100;
+const MIN_ACCOUNT_AGE_MS_FOR_CASHOUT = 3 * 24 * 60 * 60 * 1000;
 const POINTS_PER_BARO = 100;
-const WELCOME_BONUS = 50; // Bonus de bienvenue (uniquement comptes non-anonymes, une seule fois)
+const WELCOME_BONUS = 50;
 
-// Actions de gain autorisées (le client ne peut envoyer que ces clés)
 const EARN_ACTIONS = {
-  // Posts
   like_post: { pts: 2, label: "Interaction sur une publication" },
   publish_post: { pts: 5, label: "Nouvelle publication" },
   publish_post_media: { pts: 8, label: "Publication avec média" },
   comment: { pts: 1, label: "Commentaire ajouté" },
   watch_video: { pts: 1, label: "Vue générée" },
   subscribe: { pts: 5, label: "Abonnement activé" },
-
-  // Vidéos
   like_video: { pts: 2, label: "Vidéo aimée" },
   publish_video: { pts: 25, label: "Vidéo publiée" },
   repost_video: { pts: 5, label: "Repost vidéo" },
   tip_video: { pts: 5, label: "Tip envoyé" },
   comment_video: { pts: 2, label: "Commentaire vidéo" },
+  daily_bonus: { pts: 10, label: "Bonus quotidien" },
 };
 
-// Options de rachat
 const REDEEM_OPTIONS = {
   r1: { cost: 500, label: "Carte cadeau partenaire — 5 €", cash: true },
   r2: { cost: 1000, label: "Virement via Stripe Connect — 10 €", cash: true },
   r3: { cost: 300, label: "Badge Créateur Premium (statut)", cash: false },
   r4: { cost: 150, label: "Boost de visibilité 48h", cash: false },
 };
-
-// ============================================================
-// Helpers
-// ============================================================
 
 function jsonError(res, status, message) {
   return res.status(status).json({ error: message });
@@ -57,12 +50,7 @@ async function getProfile(admin, userId) {
   return data;
 }
 
-/**
- * Crée le wallet si besoin.
- * - Compte anonyme → balance 0
- * - Compte réel → balance WELCOME_BONUS (une seule fois à la création)
- */
-async function getOrCreateWallet(admin, user, opts = {}) {
+async function getOrCreateWallet(admin, user) {
   const userId = user.id;
   let { data: wallet } = await admin
     .from("wallets")
@@ -83,17 +71,12 @@ async function getOrCreateWallet(admin, user, opts = {}) {
     if (error) throw error;
     wallet = created;
 
-    // Journaliser le bonus de bienvenue
     if (initialBalance > 0) {
       await admin.from("transactions").insert({
         user_id: userId,
         label: "Bonus de bienvenue",
         pts: initialBalance,
       });
-    }
-
-    if (opts.markWelcome) {
-      opts.welcomeGranted = initialBalance;
     }
   }
   return wallet;
@@ -111,6 +94,21 @@ async function todaysEarnedTotal(admin, userId) {
     .gte("created_at", since.toISOString());
 
   return (data || []).reduce((sum, tx) => sum + Number(tx.pts), 0);
+}
+
+/** Vérifie si le bonus quotidien a déjà été pris aujourd'hui */
+async function hasClaimedDailyBonus(admin, userId) {
+  const since = new Date();
+  since.setHours(0, 0, 0, 0);
+
+  const { count } = await admin
+    .from("transactions")
+    .select("*", { count: "exact", head: true })
+    .eq("user_id", userId)
+    .eq("label", "Bonus quotidien")
+    .gte("created_at", since.toISOString());
+
+  return (count || 0) > 0;
 }
 
 async function applyBalanceDelta(admin, userId, previousBalance, delta) {
@@ -133,9 +131,7 @@ async function cashoutEligibility(admin, user) {
     return { ok: false, reason: "Créez un compte pour accéder aux rachats" };
   }
   const profile = await getProfile(admin, user.id);
-  if (!profile) {
-    return { ok: false, reason: "Profil introuvable" };
-  }
+  if (!profile) return { ok: false, reason: "Profil introuvable" };
   if (profile.restricted) {
     return {
       ok: false,
@@ -152,14 +148,11 @@ async function cashoutEligibility(admin, user) {
   return { ok: true };
 }
 
-// ============================================================
-// Handlers
-// ============================================================
-
 async function handleStatus(admin, user, res) {
   const wallet = await getOrCreateWallet(admin, user);
   const earnedToday = await todaysEarnedTotal(admin, user.id);
   const remaining = Math.max(0, DAILY_EARN_CAP - earnedToday);
+  const dailyClaimed = await hasClaimedDailyBonus(admin, user.id);
 
   let holdings = 0;
   const { data: crypto } = await admin
@@ -176,6 +169,7 @@ async function handleStatus(admin, user, res) {
     earnedToday,
     dailyCap: DAILY_EARN_CAP,
     remainingToday: remaining,
+    dailyClaimed,
     isAnonymous: isAnonymous(user),
   });
 }
@@ -199,11 +193,24 @@ async function handleEarn(admin, user, body, res) {
     return jsonError(res, 400, "Action de gain inconnue");
   }
 
+  // Bonus quotidien : une seule fois par jour
+  if (body.actionKey === "daily_bonus") {
+    const already = await hasClaimedDailyBonus(admin, user.id);
+    if (already) {
+      return jsonError(res, 429, "Bonus quotidien déjà réclamé aujourd'hui");
+    }
+  }
+
   const detail =
     typeof body.detail === "string"
       ? body.detail.slice(0, 80).replace(/[\r\n]/g, " ")
       : "";
-  const label = detail ? `${rule.label} — ${detail}` : rule.label;
+  const label =
+    body.actionKey === "daily_bonus"
+      ? "Bonus quotidien"
+      : detail
+        ? `${rule.label} — ${detail}`
+        : rule.label;
 
   const earnedToday = await todaysEarnedTotal(admin, user.id);
   if (earnedToday >= DAILY_EARN_CAP) {
@@ -234,6 +241,7 @@ async function handleEarn(admin, user, body, res) {
     earnedToday: newEarnedToday,
     remainingToday: Math.max(0, DAILY_EARN_CAP - newEarnedToday),
     dailyCap: DAILY_EARN_CAP,
+    dailyClaimed: body.actionKey === "daily_bonus" ? true : undefined,
   });
 }
 
@@ -243,9 +251,7 @@ async function handleRedeem(admin, user, body, res) {
   }
 
   const opt = REDEEM_OPTIONS[body.optionId];
-  if (!opt) {
-    return jsonError(res, 400, "Récompense inconnue");
-  }
+  if (!opt) return jsonError(res, 400, "Récompense inconnue");
 
   if (opt.cash) {
     const check = await cashoutEligibility(admin, user);
@@ -263,7 +269,6 @@ async function handleRedeem(admin, user, body, res) {
     wallet.balance,
     -opt.cost
   );
-
   if (newBalance === null) {
     return jsonError(res, 409, "Conflit de solde, réessayez");
   }
@@ -301,7 +306,6 @@ async function handleConvert(admin, user, body, res) {
 
   const baro = Number((pts / POINTS_PER_BARO).toFixed(3));
   const newBalance = await applyBalanceDelta(admin, user.id, wallet.balance, -pts);
-
   if (newBalance === null) {
     return jsonError(res, 409, "Conflit de solde, réessayez");
   }
@@ -328,7 +332,6 @@ async function handleConvert(admin, user, body, res) {
   }
 
   const newHoldings = Number(holdingsRow.holdings) + baro;
-
   await admin
     .from("crypto_holdings")
     .update({ holdings: newHoldings, updated_at: new Date().toISOString() })
@@ -341,18 +344,8 @@ async function handleConvert(admin, user, body, res) {
   });
 }
 
-// ============================================================
-// Point d'entrée
-// ============================================================
-
 export default async function handler(req, res) {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
-
-  if (req.method === "OPTIONS") {
-    return res.status(200).end();
-  }
+  if (applyCors(req, res)) return;
 
   if (req.method !== "POST") {
     return jsonError(res, 405, "Méthode non autorisée");
@@ -385,7 +378,6 @@ export default async function handler(req, res) {
     if (body.action === "earn") return await handleEarn(admin, user, body, res);
     if (body.action === "redeem") return await handleRedeem(admin, user, body, res);
     if (body.action === "convert") return await handleConvert(admin, user, body, res);
-
     return jsonError(res, 400, "Action inconnue");
   } catch (e) {
     console.error("Erreur /api/wallet :", e);
