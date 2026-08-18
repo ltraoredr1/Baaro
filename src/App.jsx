@@ -15,6 +15,8 @@ import { GlobalSearchModal } from "./components/GlobalSearchModal.jsx";
 import { ErrorBoundary } from "./components/ErrorBoundary.jsx";
 import { OnboardingModal } from "./components/OnboardingModal.jsx";
 import AuthScreen from "./components/AuthScreen.jsx";
+import { useApplyPendingReferral } from "./hooks/useApplyPendingReferral.js";
+import { useToast } from "./components/ToastContext.jsx";
 import { COLORS } from "./theme.js";
 
 const DebatesTab = lazy(() => import("./components/DebatesTab.jsx"));
@@ -47,7 +49,7 @@ function TabFallback() {
       className="flex items-center justify-center py-20 text-sm"
       style={{ color: COLORS.muted }}
     >
-      Chargement de l'onglet…
+      Chargement de l&apos;onglet…
     </div>
   );
 }
@@ -61,6 +63,10 @@ function MainAppContent() {
     earnPoints,
     setUserProfile,
   } = useApp();
+  const { showToast } = useToast();
+
+  // Applique auto le code parrain après passage en compte réel
+  useApplyPendingReferral({ showToast });
 
   const [activeTab, setActiveTab] = useState("feed");
   const [lang, setLang] = useState("fr");
@@ -68,6 +74,7 @@ function MainAppContent() {
   const [inspectingProfileId, setInspectingProfileId] = useState(null);
   const [notifDrawerOpen, setNotifDrawerOpen] = useState(false);
   const [searchModalOpen, setSearchModalOpen] = useState(false);
+  const [forceOnboarding, setForceOnboarding] = useState(false);
 
   const themeBg = THEME_BG_MAP[currentTheme] || THEME_BG_MAP.midnight;
 
@@ -76,8 +83,10 @@ function MainAppContent() {
       className="min-h-screen flex flex-col transition-colors duration-500"
       style={{ background: themeBg, color: COLORS.ivory }}
     >
-      {/* Onboarding (1ère visite) */}
-      <OnboardingModal />
+      <OnboardingModal
+        forceOpen={forceOnboarding}
+        onClose={() => setForceOnboarding(false)}
+      />
 
       <Header
         lang={lang}
@@ -116,23 +125,10 @@ function MainAppContent() {
             )}
 
             {activeTab === "wallet" && (
-              <WalletTab
-                userId={userId}
-                pointsBalance={pointsBalance}
-                baroBalance={baroBalance}
-                onRewardPoints={earnPoints}
-                onNavigateToCrypto={() => setActiveTab("crypto")}
-              />
+              <WalletTab onNavigateToCrypto={() => setActiveTab("crypto")} />
             )}
 
-            {activeTab === "crypto" && (
-              <CryptoTab
-                userId={userId}
-                pointsBalance={pointsBalance}
-                baroBalance={baroBalance}
-                onRewardPoints={earnPoints}
-              />
-            )}
+            {activeTab === "crypto" && <CryptoTab />}
 
             {activeTab === "debates" && (
               <Suspense fallback={<TabFallback />}>
@@ -168,6 +164,7 @@ function MainAppContent() {
                 setUserProfile={setUserProfile}
                 currentTheme={currentTheme}
                 onSelectTheme={setCurrentTheme}
+                onReplayOnboarding={() => setForceOnboarding(true)}
               />
             )}
           </ErrorBoundary>
@@ -202,13 +199,7 @@ function MainAppContent() {
 export default function App() {
   const { session, loading } = useApp();
 
-  if (loading) {
-    return <LoadingScreen />;
-  }
-
-  if (!session) {
-    return <AuthScreen />;
-  }
-
+  if (loading) return <LoadingScreen />;
+  if (!session) return <AuthScreen />;
   return <MainAppContent />;
 }
