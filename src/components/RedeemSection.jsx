@@ -3,6 +3,8 @@ import { Gift, BadgeCheck, Rocket, CreditCard, Landmark } from "lucide-react";
 import { COLORS } from "../theme.js";
 import { useToast } from "./ToastContext.jsx";
 import { useWallet } from "../hooks/useWallet.js";
+import { supabase } from "../supabaseClient";
+import { API_BASE } from "../config.js";
 
 const REWARDS = [
   {
@@ -25,19 +27,44 @@ const REWARDS = [
     id: "r1",
     cost: 500,
     label: "Carte cadeau partenaire — 5 €",
-    desc: "Compte réel + 3 jours d'ancienneté requis",
+    desc: "Paiement Stripe · compte réel + 3 jours",
     cash: true,
     icon: CreditCard,
   },
   {
     id: "r2",
     cost: 1000,
-    label: "Virement Stripe — 10 €",
-    desc: "Compte réel + 3 jours d'ancienneté requis",
+    label: "Virement — 10 €",
+    desc: "Paiement Stripe · compte réel + 3 jours",
     cash: true,
     icon: Landmark,
   },
 ];
+
+async function createStripeSession(optionId) {
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  if (!session?.access_token) {
+    return { ok: false, error: "Non authentifié" };
+  }
+
+  try {
+    const res = await fetch(`${API_BASE}/api/stripe-redeem`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({ action: "create-session", optionId }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { ok: false, error: data.error || "Erreur serveur" };
+    return { ok: true, ...data };
+  } catch {
+    return { ok: false, error: "Impossible de joindre le serveur" };
+  }
+}
 
 export function RedeemSection() {
   const { pointsBalance, redeemReward, isAnonymous, refreshWalletStatus } =
@@ -58,15 +85,38 @@ export function RedeemSection() {
       return;
     }
 
-    if (
-      !window.confirm(
-        `Échanger ${opt.cost} pts contre « ${opt.label} » ?`
-      )
-    ) {
+    if (!window.confirm(`Échanger ${opt.cost} pts contre « ${opt.label} » ?`)) {
       return;
     }
 
     setLoadingId(opt.id);
+
+    // --- Rachats cash → Stripe (ou simulation) ---
+    if (opt.cash) {
+      const result = await createStripeSession(opt.id);
+      setLoadingId(null);
+
+      if (!result.ok) {
+        showToast(result.error || "Échange impossible", "error");
+        return;
+      }
+
+      if (result.mode === "stripe" && result.url) {
+        showToast("Redirection vers le paiement…", "info");
+        window.location.href = result.url;
+        return;
+      }
+
+      // Mode simulation
+      showToast(
+        result.message || "Simulation : points débités (configure Stripe en prod)",
+        "success"
+      );
+      await refreshWalletStatus?.();
+      return;
+    }
+
+    // --- Rachats non-cash → API wallet classique ---
     const result = await redeemReward(opt.id);
     setLoadingId(null);
 
@@ -95,8 +145,7 @@ export function RedeemSection() {
 
       {isAnonymous && (
         <p className="text-xs" style={{ color: COLORS.rose }}>
-          Compte invité : les rachats sont désactivés. Sécurisez votre compte
-          dans Réglages.
+          Compte invité : les rachats sont désactivés.
         </p>
       )}
 
