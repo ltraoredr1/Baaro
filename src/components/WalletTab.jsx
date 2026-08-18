@@ -1,9 +1,7 @@
 import { useState, useEffect } from "react";
 import {
   Gift,
-  Share2,
   CheckCircle,
-  Copy,
   Zap,
   Coins,
   ArrowRightLeft,
@@ -15,6 +13,8 @@ import { COLORS } from "../theme.js";
 import { useToast } from "./ToastContext.jsx";
 import { useWallet } from "../hooks/useWallet.js";
 import { GuestBanner } from "./GuestBanner.jsx";
+import { ReferralSection } from "./ReferralSection.jsx";
+import { RedeemSection } from "./RedeemSection.jsx";
 
 const DAILY_TASKS = [
   { id: "t1", title: "Publier une pensée ou un article", pts: 5, actionKey: "publish_post", done: false },
@@ -37,11 +37,9 @@ export function WalletTab({ onNavigateToCrypto }) {
   const { showToast, showPointsReward } = useToast();
   const [dailyClaimed, setDailyClaimed] = useState(false);
   const [claimLoading, setClaimLoading] = useState(false);
-  const [referralCode] = useState("BAARO-REF-8921");
   const [tasks, setTasks] = useState(DAILY_TASKS);
   const [pointsLog, setPointsLog] = useState([]);
 
-  // Sync dailyClaimed depuis le serveur au montage
   useEffect(() => {
     (async () => {
       const status = await refreshWalletStatus?.();
@@ -82,11 +80,6 @@ export function WalletTab({ onNavigateToCrypto }) {
       showToast(result.error || "Impossible de réclamer le bonus", "error");
       if (result.error?.includes("déjà réclamé")) setDailyClaimed(true);
     }
-  };
-
-  const handleCopyReferral = () => {
-    navigator.clipboard.writeText(`https://baaro.app/register?ref=${referralCode}`);
-    showToast("Lien de parrainage copié !", "success");
   };
 
   const handleCompleteTask = async (task) => {
@@ -131,6 +124,7 @@ export function WalletTab({ onNavigateToCrypto }) {
     <div className="flex flex-col gap-6 max-w-3xl mx-auto w-full pb-20">
       <GuestBanner />
 
+      {/* Solde */}
       <div
         className="glass-card rounded-3xl p-6 border shadow-2xl relative overflow-hidden gold-glow"
         style={{
@@ -253,43 +247,11 @@ export function WalletTab({ onNavigateToCrypto }) {
         </div>
       </div>
 
-      {/* Parrainage */}
-      <div
-        className="glass-card rounded-2xl p-5 border flex flex-col md:flex-row justify-between items-center gap-4"
-        style={{ borderColor: COLORS.borderTeal }}
-      >
-        <div className="flex items-center gap-3">
-          <div
-            className="w-12 h-12 rounded-2xl flex items-center justify-center teal-glow"
-            style={{ background: COLORS.tealGlow, color: COLORS.teal }}
-          >
-            <Share2 size={24} />
-          </div>
-          <div>
-            <h3 className="text-sm font-bold" style={{ color: COLORS.ivory }}>
-              Programme de Parrainage
-            </h3>
-            <p className="text-xs" style={{ color: COLORS.muted }}>
-              Gagnez des points pour chaque ami invité
-            </p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2 w-full md:w-auto">
-          <div
-            className="px-3 py-2 rounded-xl border font-mono text-xs font-bold"
-            style={{ background: COLORS.surface, borderColor: COLORS.border, color: COLORS.gold }}
-          >
-            {referralCode}
-          </div>
-          <button
-            onClick={handleCopyReferral}
-            className="p-2.5 rounded-xl border hover:border-amber-400 transition"
-            style={{ background: COLORS.surface2, borderColor: COLORS.borderGold, color: COLORS.gold }}
-          >
-            <Copy size={16} />
-          </button>
-        </div>
-      </div>
+      {/* Parrainage réel */}
+      <ReferralSection />
+
+      {/* Récompenses / rachats */}
+      <RedeemSection />
 
       {/* Missions */}
       <div
