@@ -13,10 +13,10 @@ import { ProfileModal } from "./components/ProfileModal.jsx";
 import { NotificationDrawer } from "./components/NotificationDrawer.jsx";
 import { GlobalSearchModal } from "./components/GlobalSearchModal.jsx";
 import { ErrorBoundary } from "./components/ErrorBoundary.jsx";
+import { OnboardingModal } from "./components/OnboardingModal.jsx";
 import AuthScreen from "./components/AuthScreen.jsx";
 import { COLORS } from "./theme.js";
 
-// Tabs lourds chargés à la demande
 const DebatesTab = lazy(() => import("./components/DebatesTab.jsx"));
 const OfflineTab = lazy(() => import("./components/OfflineTab.jsx"));
 const AiAssistantTab = lazy(() => import("./components/AiAssistantTab.jsx"));
@@ -43,7 +43,10 @@ function LoadingScreen({ message = "Chargement de BAARO..." }) {
 
 function TabFallback() {
   return (
-    <div className="flex items-center justify-center py-20 text-sm" style={{ color: COLORS.muted }}>
+    <div
+      className="flex items-center justify-center py-20 text-sm"
+      style={{ color: COLORS.muted }}
+    >
       Chargement de l'onglet…
     </div>
   );
@@ -73,6 +76,9 @@ function MainAppContent() {
       className="min-h-screen flex flex-col transition-colors duration-500"
       style={{ background: themeBg, color: COLORS.ivory }}
     >
+      {/* Onboarding (1ère visite) */}
+      <OnboardingModal />
+
       <Header
         lang={lang}
         setLang={setLang}
