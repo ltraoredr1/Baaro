@@ -65,7 +65,6 @@ function MainAppContent() {
   } = useApp();
   const { showToast } = useToast();
 
-  // Applique auto le code parrain après passage en compte réel
   useApplyPendingReferral({ showToast });
 
   const [activeTab, setActiveTab] = useState("feed");
@@ -104,7 +103,8 @@ function MainAppContent() {
           <Navigation activeTab={activeTab} setActiveTab={setActiveTab} />
         </div>
 
-        <main className="md:col-span-3">
+        {/* mobile-nav-spacer = padding bas pour ne pas passer sous la barre */}
+        <main className="md:col-span-3 mobile-nav-spacer">
           <ErrorBoundary>
             {activeTab === "feed" && (
               <FeedTab
