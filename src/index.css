@@ -95,3 +95,20 @@ html, body, #root {
   pointer-events: none;
   user-select: none;
 }
+
+/* ============================================================
+   Espace réservé à la barre de navigation mobile (fixe en bas)
+   ============================================================ */
+:root {
+  --mobile-nav-height: 4.25rem;
+}
+
+.mobile-nav-spacer {
+  padding-bottom: calc(var(--mobile-nav-height) + 0.75rem + env(safe-area-inset-bottom, 0px));
+}
+
+@media (min-width: 768px) {
+  .mobile-nav-spacer {
+    padding-bottom: 1.5rem;
+  }
+}
