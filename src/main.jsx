@@ -4,7 +4,11 @@ import App from "./App.jsx";
 import { AppProvider } from "./contexts/AppContext.jsx";
 import { ToastProvider } from "./components/ToastContext.jsx";
 import { ErrorBoundary } from "./components/ErrorBoundary.jsx";
+import { captureRefFromUrl } from "./lib/referralApi.js";
 import "./index.css";
+
+// Capture ?ref=XXX dès le chargement (avant auth)
+captureRefFromUrl();
 
 ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>
@@ -18,11 +22,8 @@ ReactDOM.createRoot(document.getElementById("root")).render(
   </React.StrictMode>
 );
 
-// Service Worker PWA (optionnel — ne bloque pas si absent)
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("/service-worker.js").catch(() => {
-      // L'installation reste possible sans le mode hors-ligne si ça échoue.
-    });
+    navigator.serviceWorker.register("/service-worker.js").catch(() => {});
   });
 }
