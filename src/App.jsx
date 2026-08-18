@@ -1,6 +1,5 @@
-import { useState, useCallback, useEffect } from "react";
-import { supabase } from "./supabaseClient";
-import { ToastProvider } from "./components/ToastContext.jsx";
+import { useState, lazy, Suspense } from "react";
+import { useApp } from "./contexts/AppContext.jsx";
 import { Header } from "./components/Header.jsx";
 import { Navigation } from "./components/Navigation.jsx";
 import { FeedTab } from "./components/FeedTab.jsx";
@@ -8,16 +7,19 @@ import { VideosTab } from "./components/VideosTab.jsx";
 import { MessagesTab } from "./components/MessagesTab.jsx";
 import { WalletTab } from "./components/WalletTab.jsx";
 import { CryptoTab } from "./components/CryptoTab.jsx";
-import DebatesTab from "./components/DebatesTab.jsx";
-import { OfflineTab } from "./components/OfflineTab.jsx";
-import { AiAssistantTab } from "./components/AiAssistantTab.jsx";
+import { FriendsTab } from "./components/FriendsTab.jsx";
 import { SettingsTab } from "./components/SettingsTab.jsx";
 import { ProfileModal } from "./components/ProfileModal.jsx";
 import { NotificationDrawer } from "./components/NotificationDrawer.jsx";
 import { GlobalSearchModal } from "./components/GlobalSearchModal.jsx";
-import { FriendsTab } from "./components/FriendsTab.jsx";
-import { COLORS } from "./theme.js";
+import { ErrorBoundary } from "./components/ErrorBoundary.jsx";
 import AuthScreen from "./components/AuthScreen.jsx";
+import { COLORS } from "./theme.js";
+
+// Tabs lourds chargés à la demande
+const DebatesTab = lazy(() => import("./components/DebatesTab.jsx"));
+const OfflineTab = lazy(() => import("./components/OfflineTab.jsx"));
+const AiAssistantTab = lazy(() => import("./components/AiAssistantTab.jsx"));
 
 const THEME_BG_MAP = {
   midnight: "#0B1220",
@@ -25,127 +27,46 @@ const THEME_BG_MAP = {
   emerald: "#061A14",
 };
 
-function MainAppContent({ session }) {
+function LoadingScreen({ message = "Chargement de BAARO..." }) {
+  return (
+    <div
+      className="min-h-screen flex items-center justify-center"
+      style={{ background: "#0B1220", color: "white" }}
+    >
+      <div className="text-center">
+        <div className="text-4xl mb-4 animate-pulse">⏳</div>
+        <p>{message}</p>
+      </div>
+    </div>
+  );
+}
+
+function TabFallback() {
+  return (
+    <div className="flex items-center justify-center py-20 text-sm" style={{ color: COLORS.muted }}>
+      Chargement de l'onglet…
+    </div>
+  );
+}
+
+function MainAppContent() {
+  const {
+    userId,
+    userProfile,
+    pointsBalance,
+    baroBalance,
+    earnPoints,
+    setUserProfile,
+  } = useApp();
+
   const [activeTab, setActiveTab] = useState("feed");
   const [lang, setLang] = useState("fr");
-  const [pointsBalance, setPointsBalance] = useState(0);
-  const [baroBalance, setBaroBalance] = useState(0);
+  const [currentTheme, setCurrentTheme] = useState("midnight");
   const [inspectingProfileId, setInspectingProfileId] = useState(null);
   const [notifDrawerOpen, setNotifDrawerOpen] = useState(false);
   const [searchModalOpen, setSearchModalOpen] = useState(false);
-  const [currentTheme, setCurrentTheme] = useState("midnight");
-  const [userId, setUserId] = useState(null);
-  const [userProfile, setUserProfile] = useState({
-    display_name: "Membre BAARO",
-    handle: "@membre",
-    flag: "🌍",
-    bio: "",
-  });
-  const [loadingData, setLoadingData] = useState(true);
-
-  useEffect(() => {
-    if (!session?.user) return;
-
-    const loadUserData = async () => {
-      setLoadingData(true);
-      const uid = session.user.id;
-      setUserId(uid);
-
-      try {
-        // ===== 3 REQUÊTES EN PARALLÈLE (au lieu de séquentielles) =====
-        const [profileRes, walletRes, cryptoRes] = await Promise.all([
-          supabase
-            .from("profiles")
-            .select("display_name, handle, flag, bio")
-            .eq("user_id", uid)
-            .maybeSingle(),
-          supabase
-            .from("wallets")
-            .select("balance")
-            .eq("user_id", uid)
-            .maybeSingle(),
-          supabase
-            .from("crypto_holdings")
-            .select("holdings")
-            .eq("user_id", uid)
-            .maybeSingle(),
-        ]);
-
-        let profile = profileRes.data;
-
-        if (!profile) {
-          const defaultHandle = `@user_${uid.slice(0, 8)}`;
-          const { data: created } = await supabase
-            .from("profiles")
-            .upsert({
-              user_id: uid,
-              display_name: "Membre BAARO",
-              handle: defaultHandle,
-              flag: "🌍",
-              bio: "",
-            })
-            .select()
-            .single();
-          profile = created;
-        }
-
-        if (profile) {
-          setUserProfile({
-            display_name: profile.display_name || "Membre BAARO",
-            handle: profile.handle || "@membre",
-            flag: profile.flag || "🌍",
-            bio: profile.bio || "",
-          });
-        }
-
-        if (walletRes.data) {
-          setPointsBalance(Number(walletRes.data.balance) || 0);
-        } else {
-          await supabase.from("wallets").upsert({
-            user_id: uid,
-            balance: 1284,
-          });
-          setPointsBalance(1284);
-        }
-
-        if (cryptoRes.data) {
-          setBaroBalance(Number(cryptoRes.data.holdings) || 0);
-        }
-      } catch (error) {
-        console.error("Erreur chargement données utilisateur:", error);
-      } finally {
-        setLoadingData(false);
-      }
-    };
-
-    loadUserData();
-  }, [session]);
-
-  const handleRewardPoints = useCallback((ptsOrNewBalance) => {
-    if (typeof ptsOrNewBalance !== "number") return;
-
-    if (ptsOrNewBalance > 50) {
-      setPointsBalance(ptsOrNewBalance);
-    } else {
-      setPointsBalance((prev) => prev + ptsOrNewBalance);
-    }
-  }, []);
 
   const themeBg = THEME_BG_MAP[currentTheme] || THEME_BG_MAP.midnight;
-
-  if (loadingData) {
-    return (
-      <div
-        className="min-h-screen flex items-center justify-center"
-        style={{ background: themeBg, color: "white" }}
-      >
-        <div className="text-center">
-          <div className="text-4xl mb-4 animate-pulse">⏳</div>
-          <p>Chargement de votre espace BAARO...</p>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div
@@ -169,75 +90,81 @@ function MainAppContent({ session }) {
         </div>
 
         <main className="md:col-span-3">
-          {activeTab === "feed" && (
-            <FeedTab
-              userId={userId}
-              onOpenProfile={(authorId) => setInspectingProfileId(authorId)}
-              onRewardPoints={handleRewardPoints}
-            />
-          )}
+          <ErrorBoundary>
+            {activeTab === "feed" && (
+              <FeedTab
+                userId={userId}
+                onOpenProfile={(authorId) => setInspectingProfileId(authorId)}
+                onRewardPoints={earnPoints}
+              />
+            )}
 
-          {activeTab === "friends" && <FriendsTab currentUserId={userId} />}
+            {activeTab === "friends" && <FriendsTab currentUserId={userId} />}
 
-          {activeTab === "videos" && (
-            <VideosTab userId={userId} onRewardPoints={handleRewardPoints} />
-          )}
+            {activeTab === "videos" && (
+              <VideosTab userId={userId} onRewardPoints={earnPoints} />
+            )}
 
-          {activeTab === "messages" && (
-            <MessagesTab userId={userId} onRewardPoints={handleRewardPoints} />
-          )}
+            {activeTab === "messages" && (
+              <MessagesTab userId={userId} onRewardPoints={earnPoints} />
+            )}
 
-          {activeTab === "wallet" && (
-            <WalletTab
-              userId={userId}
-              pointsBalance={pointsBalance}
-              baroBalance={baroBalance}
-              onRewardPoints={handleRewardPoints}
-              onNavigateToCrypto={() => setActiveTab("crypto")}
-            />
-          )}
+            {activeTab === "wallet" && (
+              <WalletTab
+                userId={userId}
+                pointsBalance={pointsBalance}
+                baroBalance={baroBalance}
+                onRewardPoints={earnPoints}
+                onNavigateToCrypto={() => setActiveTab("crypto")}
+              />
+            )}
 
-          {activeTab === "crypto" && (
-            <CryptoTab
-              userId={userId}
-              pointsBalance={pointsBalance}
-              baroBalance={baroBalance}
-              onRewardPoints={handleRewardPoints}
-              setPointsBalance={setPointsBalance}
-              setBaroBalance={setBaroBalance}
-            />
-          )}
+            {activeTab === "crypto" && (
+              <CryptoTab
+                userId={userId}
+                pointsBalance={pointsBalance}
+                baroBalance={baroBalance}
+                onRewardPoints={earnPoints}
+              />
+            )}
 
-          {activeTab === "debates" && (
-            <DebatesTab
-              currentUserId={userId}
-              onRewardPoints={handleRewardPoints}
-            />
-          )}
+            {activeTab === "debates" && (
+              <Suspense fallback={<TabFallback />}>
+                <DebatesTab
+                  currentUserId={userId}
+                  onRewardPoints={earnPoints}
+                />
+              </Suspense>
+            )}
 
-          {activeTab === "offline" && (
-            <OfflineTab onRewardPoints={handleRewardPoints} />
-          )}
+            {activeTab === "offline" && (
+              <Suspense fallback={<TabFallback />}>
+                <OfflineTab onRewardPoints={earnPoints} />
+              </Suspense>
+            )}
 
-          {activeTab === "assistant" && (
-            <AiAssistantTab
-              userId={userId}
-              userProfile={userProfile}
-              pointsBalance={pointsBalance}
-              baroBalance={baroBalance}
-              onRewardPoints={handleRewardPoints}
-            />
-          )}
+            {activeTab === "assistant" && (
+              <Suspense fallback={<TabFallback />}>
+                <AiAssistantTab
+                  userId={userId}
+                  userProfile={userProfile}
+                  pointsBalance={pointsBalance}
+                  baroBalance={baroBalance}
+                  onRewardPoints={earnPoints}
+                />
+              </Suspense>
+            )}
 
-          {activeTab === "settings" && (
-            <SettingsTab
-              userId={userId}
-              userProfile={userProfile}
-              setUserProfile={setUserProfile}
-              currentTheme={currentTheme}
-              onSelectTheme={setCurrentTheme}
-            />
-          )}
+            {activeTab === "settings" && (
+              <SettingsTab
+                userId={userId}
+                userProfile={userProfile}
+                setUserProfile={setUserProfile}
+                currentTheme={currentTheme}
+                onSelectTheme={setCurrentTheme}
+              />
+            )}
+          </ErrorBoundary>
         </main>
       </div>
 
@@ -267,45 +194,15 @@ function MainAppContent({ session }) {
 }
 
 export default function App() {
-  const [session, setSession] = useState(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      setLoading(false);
-    });
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-    });
-
-    return () => subscription.unsubscribe();
-  }, []);
+  const { session, loading } = useApp();
 
   if (loading) {
-    return (
-      <div
-        className="min-h-screen flex items-center justify-center"
-        style={{ background: "#0B1220", color: "white" }}
-      >
-        <div className="text-center">
-          <div className="text-4xl mb-4">⏳</div>
-          <p>Chargement de BAARO...</p>
-        </div>
-      </div>
-    );
+    return <LoadingScreen />;
   }
 
   if (!session) {
     return <AuthScreen />;
   }
 
-  return (
-    <ToastProvider>
-      <MainAppContent session={session} />
-    </ToastProvider>
-  );
+  return <MainAppContent />;
 }
