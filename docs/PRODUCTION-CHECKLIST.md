@@ -1,0 +1,22 @@
+# BAARO — Checklist de mise en production
+
+- [ ] `npm ci` fonctionne sans modification manuelle du lockfile.
+- [ ] `npm run build` réussit.
+- [ ] Toutes les migrations Supabase sont appliquées dans l’ordre.
+- [ ] Les policies RLS sont testées avec deux utilisateurs différents.
+- [ ] Les buckets privés refusent les accès croisés.
+- [ ] Les endpoints sensibles exigent un utilisateur authentifié.
+- [ ] Le rate limiting distribué est configuré.
+- [ ] Les logs ne contiennent ni token, ni clé API, ni contenu privé.
+- [ ] Les récompenses sont idempotentes.
+- [ ] Les opérations wallet sont transactionnelles.
+- [ ] Les retraits financiers réels ont été testés en environnement sandbox.
+- [ ] Les webhooks de paiement sont signés et idempotents.
+- [ ] Les uploads vidéo/story sont limités par taille et MIME.
+- [ ] Les médias privés utilisent des URLs signées.
+- [ ] Les notifications sont dédupliquées.
+- [ ] Les appels ont des tokens courts et des rooms expirables.
+- [ ] Le build Capacitor Android a été testé sur plusieurs versions Android.
+- [ ] Les fonctions hors-ligne non implémentées ne sont pas présentées comme actives.
+- [ ] Les Web Vitals et latences API sont mesurés.
+- [ ] Un rollback de migration est documenté.

@@ -1,0 +1,10 @@
+{
+  "version": "BAARO 2.0 v17",
+  "base": "v16",
+  "focus": [
+    "economy",
+    "payout foundation",
+    "idempotency",
+    "disabled-by-default withdrawals"
+  ]
+}

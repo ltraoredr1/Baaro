@@ -1,0 +1,9 @@
+{
+  "version": "BAARO 2.0 v18",
+  "base": "v17",
+  "focus": [
+    "E2E readiness",
+    "cross-module contracts",
+    "regression checks"
+  ]
+}

@@ -1,0 +1,45 @@
+{
+  "auth": {
+    "phone_label": "Numéro de téléphone",
+    "phone_placeholder": "Entre ton numéro",
+    "phone_invalid": "Numéro de téléphone invalide pour ce pays.",
+    "send_code": "Recevoir le code",
+    "sending": "Envoi...",
+    "otp_label": "Code reçu par SMS ({{phone}})",
+    "otp_invalid": "Code invalide.",
+    "verify": "Valider",
+    "verifying": "Vérification...",
+    "change_number": "Changer de numéro",
+    "resend": "Renvoyer le code",
+    "resend_cooldown": "Renvoyer ({{seconds}}s)",
+    "continue_with_google": "Continuer avec Google",
+    "continue_with_microsoft": "Continuer avec Microsoft",
+    "continue_with_phone": "Continuer avec un numéro de téléphone"
+  },
+  "shop": {
+    "register_title": "Inscrire ma boutique",
+    "name_placeholder": "Nom de la boutique / entreprise",
+    "category_placeholder": "Catégorie (ex: couture, électronique, restauration...)",
+    "city_placeholder": "Ville / quartier",
+    "description_placeholder": "Description de l'activité",
+    "required_fields": "Le nom et la ville sont requis.",
+    "price_normal": "Abonnement annuel : {{amount}} {{currency}} — {{premiumAmount}} {{currency}} avec BAARO Premium",
+    "price_premium": "Tarif Premium : {{amount}} {{currency}} au lieu de {{normalAmount}} {{currency}}",
+    "pay_and_activate": "Payer {{amount}} {{currency}} et activer ma boutique",
+    "preparing_payment": "Préparation du paiement...",
+    "secure_payment_note": "Paiement sécurisé. Ta boutique s'active automatiquement après confirmation."
+  },
+  "payment": {
+    "choose_method": "Choisis un moyen de paiement",
+    "mobile_money": "Mobile Money (Orange Money, Moov Money, Wave...)",
+    "card": "Carte bancaire",
+    "status_pending": "Paiement en attente",
+    "status_confirmed": "Paiement confirmé",
+    "status_failed": "Paiement échoué"
+  },
+  "common": {
+    "cancel": "Annuler",
+    "confirm": "Confirmer",
+    "loading": "Chargement..."
+  }
+}

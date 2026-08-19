@@ -1,0 +1,12 @@
+{
+  "version": "BAARO 2.0 v16",
+  "base": "BAARO 2.0 v15",
+  "changes": [
+    "Capacitor Android push foundation",
+    "Native capability helpers",
+    "Nearby consent-first connection flow",
+    "Nearby payload size limit",
+    "Android validation script",
+    "Android/Play Store documentation"
+  ]
+}

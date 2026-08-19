@@ -1,0 +1,21 @@
+// Palette de couleurs de BAARO : fond marine sombre, accents or et teal, texte ivoire.
+export const COLORS = {
+  bg: "#0B1220",
+  surface: "#111A2C",
+  surface2: "#1A2740",
+  surfaceHover: "#203152",
+  gold: "#D9AE52",
+  goldLight: "#F5C86B",
+  goldGlow: "rgba(217, 174, 82, 0.25)",
+  teal: "#2DBFA6",
+  tealLight: "#4EE1C8",
+  tealGlow: "rgba(45, 191, 166, 0.25)",
+  purple: "#8B5CF6",
+  rose: "#EC4899",
+  ivory: "#F4EFE3",
+  muted: "#8A93A6",
+  mutedLight: "#A0ABC0",
+  border: "rgba(255, 255, 255, 0.08)",
+  borderGold: "rgba(217, 174, 82, 0.3)",
+  borderTeal: "rgba(45, 191, 166, 0.3)",
+};

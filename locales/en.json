@@ -1,0 +1,45 @@
+{
+  "auth": {
+    "phone_label": "Phone number",
+    "phone_placeholder": "Enter your phone number",
+    "phone_invalid": "Invalid phone number for this country.",
+    "send_code": "Get code",
+    "sending": "Sending...",
+    "otp_label": "Code received by SMS ({{phone}})",
+    "otp_invalid": "Invalid code.",
+    "verify": "Verify",
+    "verifying": "Verifying...",
+    "change_number": "Change number",
+    "resend": "Resend code",
+    "resend_cooldown": "Resend ({{seconds}}s)",
+    "continue_with_google": "Continue with Google",
+    "continue_with_microsoft": "Continue with Microsoft",
+    "continue_with_phone": "Continue with a phone number"
+  },
+  "shop": {
+    "register_title": "Register my shop",
+    "name_placeholder": "Shop / business name",
+    "category_placeholder": "Category (e.g. tailoring, electronics, restaurant...)",
+    "city_placeholder": "City / neighborhood",
+    "description_placeholder": "Describe your business",
+    "required_fields": "Name and city are required.",
+    "price_normal": "Annual subscription: {{amount}} {{currency}} — {{premiumAmount}} {{currency}} with BAARO Premium",
+    "price_premium": "Premium rate: {{amount}} {{currency}} instead of {{normalAmount}} {{currency}}",
+    "pay_and_activate": "Pay {{amount}} {{currency}} and activate my shop",
+    "preparing_payment": "Preparing payment...",
+    "secure_payment_note": "Secure payment. Your shop activates automatically once confirmed."
+  },
+  "payment": {
+    "choose_method": "Choose a payment method",
+    "mobile_money": "Mobile Money (Orange Money, Moov Money, Wave...)",
+    "card": "Credit/debit card",
+    "status_pending": "Payment pending",
+    "status_confirmed": "Payment confirmed",
+    "status_failed": "Payment failed"
+  },
+  "common": {
+    "cancel": "Cancel",
+    "confirm": "Confirm",
+    "loading": "Loading..."
+  }
+}
