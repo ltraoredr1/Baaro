@@ -2,7 +2,7 @@ import { lazy } from "react";
 
 /**
  * Map tabId → composant lazy (code-splitting par feature).
- * Les features ré-exportent encore depuis components/ le temps de la migration physique.
+ * Destination : src/app/tabs.jsx
  */
 export const tabs = {
   feed: lazy(() =>
@@ -46,6 +46,9 @@ export const tabs = {
     import("../features/settings/index.js").then((m) => ({
       default: m.SettingsTab,
     }))
+  ),
+  shop: lazy(() =>
+    import("../features/shop/index.js").then((m) => ({ default: m.ShopTab }))
   ),
 };
 
