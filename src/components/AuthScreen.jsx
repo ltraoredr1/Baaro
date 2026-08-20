@@ -1,9 +1,15 @@
 import { useState, useEffect } from "react";
+import { Coins, Radio, Shield, Sparkles } from "lucide-react";
 import { supabase } from "../supabaseClient";
 import { TurnstileWidget } from "../Turnstile.jsx";
 import { COLORS } from "../theme.js";
 import { captureRefFromUrl, getPendingRef } from "../lib/referralApi.js";
 
+/**
+ * Écran d'entrée BAARO — promesse de valeur en < 8 secondes.
+ * Remplace : src/components/AuthScreen.jsx
+ * (réexporté par src/features/auth/index.js)
+ */
 export default function AuthScreen() {
   const [mode, setMode] = useState("anonymous"); // "anonymous" | "email"
   const [email, setEmail] = useState("");
@@ -33,7 +39,6 @@ export default function AuthScreen() {
 
       if (authError) throw authError;
       if (!data?.session) throw new Error("Session non créée");
-      // Le parrainage s'appliquera après sécurisation du compte (email/OAuth)
     } catch (err) {
       console.error(err);
       setError(
@@ -71,7 +76,6 @@ export default function AuthScreen() {
         });
         if (authError) throw authError;
       }
-      // useApplyPendingReferral dans l'app appliquera le code après session
     } catch (err) {
       setError(err.message || "Erreur d'authentification");
     } finally {
@@ -106,21 +110,68 @@ export default function AuthScreen() {
       <div
         className="w-full max-w-md rounded-3xl p-8 border shadow-2xl"
         style={{
-          background: "rgba(15, 23, 42, 0.9)",
+          background: "rgba(15, 23, 42, 0.95)",
           borderColor: COLORS.borderGold || "#D9AE52",
         }}
       >
-        <div className="text-center mb-8">
-          <div className="text-4xl mb-2">🌍</div>
+        {/* ——— Promesse de valeur (0–8 s) ——— */}
+        <div className="text-center mb-6">
+          <div
+            className="w-14 h-14 mx-auto mb-3 rounded-2xl flex items-center justify-center font-bold text-2xl shadow-lg"
+            style={{
+              background: "linear-gradient(135deg, #D9AE52 0%, #2DBFA6 100%)",
+              color: COLORS.bg,
+              fontFamily: "'Fraunces', serif",
+            }}
+          >
+            B
+          </div>
           <h1
-            className="text-2xl font-bold"
+            className="text-2xl font-bold tracking-wide"
             style={{ color: COLORS.gold || "#D9AE52" }}
           >
             BAARO
           </h1>
-          <p className="text-sm mt-1" style={{ color: COLORS.muted || "#94a3b8" }}>
-            Réseau social mondial
+          <p
+            className="text-base font-semibold mt-1.5"
+            style={{ color: COLORS.ivory || "#f1f5f9" }}
+          >
+            Gagne. Échange. Convertis.
           </p>
+          <p
+            className="text-sm mt-2 leading-relaxed px-1"
+            style={{ color: COLORS.muted || "#94a3b8" }}
+          >
+            Chaque action te rapporte des points convertibles en{" "}
+            <span style={{ color: COLORS.teal }}>BARO Coin</span> ou en
+            récompenses.
+          </p>
+        </div>
+
+        {/* 3 piliers micro */}
+        <div className="grid grid-cols-3 gap-2 mb-6">
+          {[
+            { icon: Coins, label: "Points → valeur", color: COLORS.gold },
+            { icon: Radio, label: "Lives + IA", color: COLORS.purple },
+            { icon: Shield, label: "Chat chiffré", color: COLORS.teal },
+          ].map(({ icon: Icon, label, color }) => (
+            <div
+              key={label}
+              className="flex flex-col items-center gap-1.5 p-2.5 rounded-xl border text-center"
+              style={{
+                background: "rgba(255,255,255,0.03)",
+                borderColor: "rgba(255,255,255,0.08)",
+              }}
+            >
+              <Icon size={18} style={{ color }} />
+              <span
+                className="text-[10px] font-medium leading-tight"
+                style={{ color: COLORS.muted }}
+              >
+                {label}
+              </span>
+            </div>
+          ))}
         </div>
 
         {pendingRef && (
@@ -132,19 +183,21 @@ export default function AuthScreen() {
               color: COLORS.teal,
             }}
           >
-            Code parrain détecté : <strong className="font-mono">{pendingRef}</strong>
+            Code parrain détecté :{" "}
+            <strong className="font-mono">{pendingRef}</strong>
             <br />
-            Il sera appliqué après création d&apos;un compte (email ou réseau social).
+            Il sera appliqué après création d&apos;un compte (email ou réseau
+            social).
           </div>
         )}
 
         {mode === "anonymous" && (
           <div className="flex flex-col gap-5">
             <p
-              className="text-sm text-center"
+              className="text-sm text-center font-medium"
               style={{ color: COLORS.ivory || "#f1f5f9" }}
             >
-              Entrez en un clic. Aucun compte requis.
+              Entre gratuitement — aucun compte requis.
             </p>
 
             <div className="flex justify-center">
@@ -158,9 +211,10 @@ export default function AuthScreen() {
 
             {loading && (
               <div
-                className="text-center text-sm"
+                className="text-center text-sm flex items-center justify-center gap-2"
                 style={{ color: COLORS.muted }}
               >
+                <Sparkles size={14} style={{ color: COLORS.gold }} />
                 Connexion en cours...
               </div>
             )}
@@ -176,7 +230,10 @@ export default function AuthScreen() {
                 className="flex-1 h-px"
                 style={{ background: COLORS.border || "#334155" }}
               />
-              <span className="text-xs" style={{ color: COLORS.muted || "#94a3b8" }}>
+              <span
+                className="text-xs"
+                style={{ color: COLORS.muted || "#94a3b8" }}
+              >
                 ou
               </span>
               <div
@@ -209,7 +266,9 @@ export default function AuthScreen() {
                   border: "1px solid #334155",
                 }}
               >
-                {oauthLoading === "twitter" ? "Connexion..." : "Continuer avec X"}
+                {oauthLoading === "twitter"
+                  ? "Connexion..."
+                  : "Continuer avec X"}
               </button>
             </div>
 
@@ -220,6 +279,14 @@ export default function AuthScreen() {
             >
               Ou se connecter avec un email
             </button>
+
+            <p
+              className="text-[10px] text-center leading-relaxed"
+              style={{ color: COLORS.muted }}
+            >
+              En invité tu explores librement. Crée un compte pour gagner des
+              points et les convertir.
+            </p>
           </div>
         )}
 
