@@ -18,7 +18,7 @@ export function ShopProductManager({ shopId, shopCurrency }) {
   async function loadProducts() {
     const { data } = await supabase
       .from('shop_products')
-      .selec'*'
+      .select('*')
       .eq('shop_id', shopId)
       .order('created_at', { ascending: false });
     setProducts(data ?? []);
@@ -126,7 +126,7 @@ export function LocalShopDirectory() {
   useEffect(() => {
     async function loadShops() {
       setLoading(true);
-      let query = supabase.from('shops').selec'*'.eq('is_active', true);
+      let query = supabase.from('shops').select('*').eq('is_active', true);
       if (countryFilter.trim()) query = query.eq('country', countryFilter.trim().toUpperCase());
       if (cityFilter.trim()) query = query.ilike('city', `%${cityFilter.trim()}%`);
       const { data } = await query.order('created_at', { ascending: false });
