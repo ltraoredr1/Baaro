@@ -1,0 +1,114 @@
+# Intégration dans FeedTab.jsx
+
+## 1. Imports (en haut du fichier)
+
+Remplacer / compléter :
+
+```jsx
+import { TranslateButton } from "./TranslateButton.jsx";
+// Si tu as aussi des vidéos dans le feed :
+import { VideoTranslateControls } from "./VideoTranslateControls.jsx";
+```
+
+Tu peux retirer l’import `Languages` de lucide-react s’il n’est plus utilisé ailleurs.
+
+## 2. State (déjà présent)
+
+```jsx
+const [translatedMap, setTranslatedMap] = useState({});
+// optionnel : mémoriser la langue
+const [translateLangMap, setTranslateLangMap] = useState({});
+```
+
+## 3. Remplacer handleTranslate
+
+**Supprimer** l’ancienne version factice :
+
+```jsx
+const handleTranslate = (postId, text) => {
+  if (translatedMap[postId]) {
+    setTranslatedMap((prev) => ({ ...prev, [postId]: null }));
+  } else {
+    setTranslatedMap((prev) => ({
+      ...prev,
+      [postId]: `[Traduit par BAARO IA] : ${text}`,
+    }));
+  }
+};
+```
+
+Elle n’est plus nécessaire : `TranslateButton` gère tout.
+
+## 4. Affichage du texte
+
+Garder :
+
+```jsx
+<p className="text-sm leading-relaxed whitespace-pre-wrap" style={{ color: COLORS.ivory }}>
+  {isTranslated ? translatedMap[post.id] : post.text}
+</p>
+{isTranslated && (
+  <p className="text-[10px]" style={{ color: COLORS.muted }}>
+    Traduit par BAARO
+  </p>
+)}
+```
+
+## 5. Bouton sous le post (remplacer le bouton Languages)
+
+```jsx
+<TranslateButton
+  text={post.text}
+  isTranslated={!!translatedMap[post.id]}
+  preferredLang={lang /* si tu as la langue UI du Header, sinon "en" */}
+  onTranslated={(translated, meta) => {
+    setTranslatedMap((prev) => ({ ...prev, [post.id]: translated }));
+    setTranslateLangMap?.((prev) => ({
+      ...prev,
+      [post.id]: meta.targetLang,
+    }));
+  }}
+  onClear={() =>
+    setTranslatedMap((prev) => ({ ...prev, [post.id]: null }))
+  }
+/>
+```
+
+## 6. Vidéos dans le feed
+
+Si le post a une vidéo, ajoute une ref et les contrôles :
+
+```jsx
+{post.media_url && post.media_type?.startsWith("video") && (
+  <div className="rounded-xl overflow-hidden relative">
+    <video
+      ref={(el) => {
+        // stocker dans une map de refs si plusieurs vidéos
+        if (!window.__baaroVideoRefs) window.__baaroVideoRefs = {};
+        window.__baaroVideoRefs[post.id] = el;
+      }}
+      src={post.media_url}
+      controls
+      className="w-full max-h-80 object-cover bg-black"
+    />
+    <div className="absolute bottom-3 right-3">
+      <VideoTranslateControls
+        mediaUrl={post.media_url}
+        videoId={post.id}
+        videoRef={{
+          get current() {
+            return window.__baaroVideoRefs?.[post.id] || null;
+          },
+        }}
+        preferredLang="en"
+      />
+    </div>
+  </div>
+)}
+```
+
+(Version plus propre : `useRef` map dans le parent — le snippet ci-dessus est le plus rapide à coller.)
+
+## 7. VideosTab.jsx
+
+Même `VideoTranslateControls` à placer près du player principal, avec `mediaUrl` + `videoId` de la vidéo courante.
