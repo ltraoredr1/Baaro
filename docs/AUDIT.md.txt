@@ -1,0 +1,96 @@
+# BAARO — Autorité du ledger (points / BARO)
+
+## Principe (non négociable)
+
+```
+Client  →  demande d'action (sans montant de crédit)
+Serveur →  authentifie + rate-limit
+Serveur →  vérifie l'événement métier en base
+SQL     →  lit le montant dans reward_catalog / redeem_catalog
+SQL     →  écrit 1 ligne dans transactions (append-only)
+SQL     →  met à jour wallets / crypto_holdings
+Client  →  affiche UNIQUEMENT le solde renvoyé par le serveur
+```
+
+**Interdit :**
+- `Client → “ajoute-moi 500 BARO” → serveur accepte`
+- Écriture directe `supabase.from('wallets').update({ balance })` depuis le navigateur
+- Passer `pts` / `balance` / `holdings` dans le body de `action: "earn"`
+
+---
+
+## Ce qui était déjà en place
+
+| Contrôle | Statut |
+|----------|--------|
+| RLS lecture seule sur wallets / transactions / crypto_holdings | ✅ migrations 001 |
+| RPC `security definer` + grant `service_role` only | ✅ 012 / 015 |
+| `reference_id` + preuve en base (post, like, etc.) | ✅ 015 |
+| Index unique anti double-claim | ✅ 015 |
+| Plafond quotidien + invités sans gains | ✅ api/wallet.js |
+| Gifts via `wallet_send_gift` (coût catalogue) | ✅ 015 + api/gifts.js |
+
+## Ce que la migration 022 ajoute
+
+1. **`reward_catalog` / `redeem_catalog`** — montants uniquement en base  
+2. **`wallet_earn_v2`** — **aucun paramètre `p_pts`** : le SQL lit le catalogue  
+3. **`wallet_redeem_v2` / `wallet_convert_v2`** — coûts / taux serveur  
+4. **Triggers** — `transactions` immuable (pas d’UPDATE/DELETE)  
+5. **API** — refuse les champs `pts`/`balance`/… sur `earn` et `redeem`
+
+---
+
+## Installation
+
+1. Supabase → SQL Editor → coller `022_ledger_server_authority.sql` → Run  
+2. Remplacer `api/wallet.js` par la version fournie  
+3. Déployer Vercel  
+
+Le client (`AppContext.earnPoints`) envoie déjà :
+
+```js
+{ action: "earn", actionKey, detail, referenceId }
+```
+
+**Ne jamais** y ajouter `pts`. Le solde UI ne doit être mis à jour qu’avec `result.balance` de la réponse.
+
+---
+
+## Tests manuels (2 comptes A/B)
+
+1. Depuis la console navigateur, tenter :
+   ```js
+   await supabase.from('wallets').update({ balance: 99999 }).eq('user_id', userId)
+   ```
+   → doit échouer (RLS).
+
+2. `POST /api/wallet` avec `{ action: "earn", actionKey: "like_post", pts: 500, referenceId: "..." }`  
+   → `400 Champ interdit pour earn: pts`
+
+3. `earn` avec `referenceId` d’un post d’un **autre** user  
+   → `REWARD_EVENT_NOT_FOUND`
+
+4. Double `earn` même `actionKey` + `referenceId`  
+   → `REWARD_ALREADY_CLAIMED` (409)
+
+5. `convert` avec `pts` > solde  
+   → `INSUFFICIENT_BALANCE`
+
+6. Vérifier qu’aucune ligne `transactions` ne peut être `UPDATE`/`DELETE` (trigger).
+
+---
+
+## Contrat client (rappel)
+
+```js
+// ✅ Correct
+const r = await earnPoints("like_post", "", postId);
+if (r.ok) setPointsBalance(r.balance); // solde serveur uniquement
+
+// ❌ Interdit
+await fetch("/api/wallet", {
+  body: JSON.stringify({ action: "earn", pts: 500 })
+});
+```
+
+Le navigateur **affiche** un solde ; il ne le **décide** jamais.
