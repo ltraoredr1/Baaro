@@ -256,13 +256,44 @@ export function VideosTab({ onRewardPoints, userId }) {
     }
   };
 
+
+  /** Lit la durée réelle du fichier vidéo (pas de plafond). */
+  const readVideoDurationLabel = (file) =>
+    new Promise((resolve) => {
+      try {
+        const url = URL.createObjectURL(file);
+        const el = document.createElement("video");
+        el.preload = "metadata";
+        el.onloadedmetadata = () => {
+          const sec = Math.max(0, Math.floor(el.duration || 0));
+          URL.revokeObjectURL(url);
+          const h = Math.floor(sec / 3600);
+          const m = Math.floor((sec % 3600) / 60);
+          const s = sec % 60;
+          const label =
+            h > 0
+              ? `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`
+              : `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+          resolve(label);
+        };
+        el.onerror = () => {
+          URL.revokeObjectURL(url);
+          resolve("00:00");
+        };
+        el.src = url;
+      } catch {
+        resolve("00:00");
+      }
+    });
+
   const handleUpload = async () => {
     if (!selectedFile) return showToast("Sélectionne une vidéo", "error");
     if (!selectedFile.type.startsWith("video/")) return showToast("Le fichier doit être une vidéo", "error");
 
     const { data: { user: currentUser } } = await supabase.auth.getUser();
     if (!currentUser) return showToast("Tu n'es pas connecté", "error");
-    if (selectedFile.size > 100 * 1024 * 1024) return showToast("Max 100 Mo", "error");
+    // Pas de limite de taille ni de durée côté client (partie Vidéos uniquement).
+    // La seule contrainte éventuelle vient de Supabase Storage (réglages projet).
 
     setUploading(true);
     setUploadProgress(20);
@@ -281,12 +312,14 @@ export function VideosTab({ onRewardPoints, userId }) {
 
       const { data: { publicUrl } } = supabase.storage.from("videos").getPublicUrl(path);
 
+      const durationLabel = await readVideoDurationLabel(selectedFile);
+
       const { data: createdVideo, error: dbErr } = await supabase.from("videos").insert({
         author_id: currentUser.id,
         video_url: publicUrl,
         title: uploadTitle.trim() || "Vidéo BAARO",
         description: uploadDescription.trim() || null,
-        duration: "00:00",
+        duration: durationLabel,
         views: 0,
         likes: 0,
         sound_id: selectedSound?.id || null,
@@ -576,12 +609,13 @@ export function VideosTab({ onRewardPoints, userId }) {
               {selectedFile ? (
                 <div>
                   <p className="text-white font-medium truncate">{selectedFile.name}</p>
-                  <p className="text-xs text-gray-400 mt-1">{(selectedFile.size / 1024 / 1024).toFixed(1)} Mo</p>
+                  <p className="text-xs text-gray-400 mt-1">{(selectedFile.size / 1024 / 1024).toFixed(1)} Mo · durée libre</p>
                 </div>
               ) : (
                 <div>
                   <div className="text-4xl mb-2">🎬</div>
                   <p className="text-gray-400 text-sm">Choisir une vidéo</p>
+                  <p className="text-[10px] text-gray-500 mt-2">Aucune limite de durée ni de taille côté app</p>
                 </div>
               )}
               <input id="videoInput" type="file" accept="video/*" className="hidden" onChange={(e) => setSelectedFile(e.target.files?.[0] || null)} />
