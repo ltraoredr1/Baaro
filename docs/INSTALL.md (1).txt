@@ -1,0 +1,26 @@
+# Installation — Ledger serveur-autoritaire
+
+## Fichiers
+
+| Fichier | Destination |
+|---------|-------------|
+| `022_ledger_server_authority.sql` | Exécuter dans **Supabase → SQL Editor** (après 001–021) |
+| `wallet.js` | `api/wallet.js` (remplacer entièrement) |
+| `AUDIT.md` | Documentation projet (optionnel) |
+
+## Ordre
+
+1. Backup / staging recommandé  
+2. Exécuter le SQL `022_...sql`  
+3. Commit + deploy de `api/wallet.js`  
+4. Parcourir `AUDIT.md` (tests A/B)
+
+## Compatibilité client
+
+`AppContext.earnPoints(actionKey, detail, referenceId)` reste compatible.
+
+Réponse `earn` enrichie :
+- `credited` : points réellement crédités (catalogue + plafond)
+- `balance` : solde serveur après écriture
+
+Aucun changement obligatoire dans les composants UI, tant qu’ils n’envoient pas de montants.
