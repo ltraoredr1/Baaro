@@ -10,6 +10,7 @@ import {
   Sparkles,
   Settings,
   Users,
+  Store,
   X,
 } from "lucide-react";
 import { COLORS } from "../theme.js";
@@ -24,6 +25,7 @@ const MAIN_ITEMS = [
 
 const MORE_ITEMS = [
   { id: "friends", label: "Communauté", icon: Users, badge: null },
+  { id: "shop", label: "Boutiques", icon: Store, badge: null },
   { id: "wallet", label: "Portefeuille", icon: Wallet, badge: null },
   { id: "offline", label: "Hors-ligne", icon: WifiOff, badge: "P2P" },
   { id: "assistant", label: "IA Assistant", icon: Sparkles, badge: null },
