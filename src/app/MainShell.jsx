@@ -120,6 +120,7 @@ export function MainShell() {
       onSelectTheme: setCurrentTheme,
       onReplayOnboarding: () => setForceOnboarding(true),
     },
+    shop: { userId },
   };
 
   return (
