@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Globe2,
   Coins,
@@ -36,6 +36,10 @@ const TICKER_EVENTS = [
   "🇯🇵 Osaka — +10 pts pour 7j d'activité",
 ];
 
+/**
+ * Header avec pulse du solde (prop pulsePoints).
+ * Remplace : src/components/Header.jsx
+ */
 export function Header({
   lang,
   setLang,
@@ -45,9 +49,18 @@ export function Header({
   onOpenProfile,
   onOpenNotifications,
   onOpenSearch,
+  pulsePoints = false,
 }) {
   const { isAnonymous } = useApp();
   const [langMenuOpen, setLangMenuOpen] = useState(false);
+  const [pulse, setPulse] = useState(false);
+
+  useEffect(() => {
+    if (!pulsePoints) return;
+    setPulse(true);
+    const t = setTimeout(() => setPulse(false), 2800);
+    return () => clearTimeout(t);
+  }, [pulsePoints]);
 
   return (
     <header className="sticky top-0 z-40 w-full glass-panel border-b border-[rgba(255,255,255,0.08)]">
@@ -77,7 +90,11 @@ export function Header({
             </span>
           ))}
         </div>
-        <style>{`@keyframes meridian-scroll { from { transform: translateX(0); } to { transform: translateX(-50%); } }`}</style>
+        <style>{`@keyframes meridian-scroll { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+@keyframes points-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(217, 174, 82, 0.5); transform: scale(1); }
+  50% { box-shadow: 0 0 0 8px rgba(217, 174, 82, 0); transform: scale(1.06); }
+}`}</style>
       </div>
 
       {/* Main Bar */}
@@ -104,14 +121,14 @@ export function Header({
                 className="text-[10px] px-1.5 py-0.5 rounded-full uppercase tracking-wider font-sans font-semibold"
                 style={{ background: COLORS.tealGlow, color: COLORS.teal }}
               >
-                v1.9
+                v2.0
               </span>
             </div>
             <div
               className="text-[10px] hidden sm:block tracking-widest uppercase"
               style={{ color: COLORS.muted }}
             >
-              Réseau Mondial & Crypto
+              Gagne · Échange · Convertis
             </div>
           </div>
         </div>
@@ -161,12 +178,13 @@ export function Header({
             </div>
           )}
 
-          {/* Points Pill */}
+          {/* Points Pill — pulse on welcome */}
           <div
-            className="flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-semibold shadow-inner"
+            className="flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-semibold shadow-inner transition"
             style={{
               background: COLORS.surface2,
-              borderColor: COLORS.borderGold,
+              borderColor: pulse ? COLORS.gold : COLORS.borderGold,
+              animation: pulse ? "points-pulse 0.9s ease-in-out 3" : "none",
             }}
           >
             <div
@@ -176,10 +194,16 @@ export function Header({
               <Coins size={12} />
             </div>
             <div className="flex flex-col">
-              <span className="text-[10px] leading-3" style={{ color: COLORS.muted }}>
+              <span
+                className="text-[10px] leading-3"
+                style={{ color: COLORS.muted }}
+              >
                 Solde
               </span>
-              <span style={{ color: COLORS.gold }} className="font-mono leading-3">
+              <span
+                style={{ color: COLORS.gold }}
+                className="font-mono leading-3"
+              >
                 {pointsBalance} pts
               </span>
             </div>
@@ -198,10 +222,16 @@ export function Header({
               style={{ background: COLORS.teal }}
             />
             <div className="flex flex-col">
-              <span className="text-[10px] leading-3" style={{ color: COLORS.muted }}>
+              <span
+                className="text-[10px] leading-3"
+                style={{ color: COLORS.muted }}
+              >
                 BARO Coin
               </span>
-              <span style={{ color: COLORS.teal }} className="font-mono leading-3">
+              <span
+                style={{ color: COLORS.teal }}
+                className="font-mono leading-3"
+              >
                 {Number(baroBalance).toFixed(2)} BARO
               </span>
             </div>
