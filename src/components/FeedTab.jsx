@@ -4,10 +4,10 @@ import {
   MessageCircle,
   Share2,
   Send,
-  Languages,
   Image as ImageIcon,
   BarChart2,
   X,
+  Loader2,
 } from "lucide-react";
 import { COLORS } from "../theme.js";
 import { randomId } from "../lib/id.js";
@@ -15,6 +15,8 @@ import { useToast } from "./ToastContext.jsx";
 import { supabase } from "../supabaseClient.js";
 import { handleDbError } from "../lib/dbErrors.js";
 import { checkRateLimit, rateLimitMessage } from "../lib/rateLimit.js";
+import { GuestBanner } from "./GuestBanner.jsx";
+import { TranslateButton } from "./TranslateButton.jsx";
 
 // Taille de page pour le fil. Pagination par CURSEUR (created_at + id),
 // pas par offset : reste rapide et correct même si de nouveaux posts
@@ -459,6 +461,53 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
     }
   };
 
+
+  const loadComments = async (postId) => {
+    if (!postId) return;
+    try {
+      const { data, error } = await supabase
+        .from("comments")
+        .select(`
+          id, text, created_at, author_id,
+          profiles:author_id (display_name, handle)
+        `)
+        .eq("post_id", postId)
+        .order("created_at", { ascending: true })
+        .limit(50);
+      if (error) throw error;
+      const rows = (data || []).map((c) => ({
+        id: c.id,
+        text: c.text,
+        author: c.profiles?.display_name || c.profiles?.handle || "Membre",
+        author_id: c.author_id,
+        created_at: c.created_at,
+      }));
+      setCommentsMap((prev) => ({ ...prev, [postId]: rows }));
+    } catch (e) {
+      // Fallback sans jointure profiles
+      try {
+        const { data } = await supabase
+          .from("comments")
+          .select("id, text, created_at, author_id")
+          .eq("post_id", postId)
+          .order("created_at", { ascending: true })
+          .limit(50);
+        setCommentsMap((prev) => ({
+          ...prev,
+          [postId]: (data || []).map((c) => ({
+            id: c.id,
+            text: c.text,
+            author: "Membre",
+            author_id: c.author_id,
+            created_at: c.created_at,
+          })),
+        }));
+      } catch (err) {
+        handleDbError(err, showToast, "Impossible de charger les commentaires");
+      }
+    }
+  };
+
   const handleAddComment = async (postId) => {
     const text = (newCommentText[postId] || "").trim();
     if (!text) return;
@@ -510,16 +559,6 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
     }
   };
 
-  const handleTranslate = (postId, text) => {
-    if (translatedMap[postId]) {
-      setTranslatedMap((prev) => ({ ...prev, [postId]: null }));
-    } else {
-      setTranslatedMap((prev) => ({
-        ...prev,
-        [postId]: `[Traduit par BAARO IA] : ${text}`,
-      }));
-    }
-  };
 
   if (loading) {
     return (
@@ -659,6 +698,12 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
         </div>
       </form>
 
+      <GuestBanner
+        onUpgrade={() =>
+          showToast("Crée un compte depuis Réglages pour gagner des points", "info")
+        }
+      />
+
       {posts.length === 0 ? (
         <div className="text-center py-8 text-gray-400">
           <p className="text-4xl mb-2">📭</p>
@@ -717,6 +762,11 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
                 <p className="text-sm leading-relaxed whitespace-pre-wrap" style={{ color: COLORS.ivory }}>
                   {isTranslated ? translatedMap[post.id] : post.text}
                 </p>
+                {isTranslated && (
+                  <p className="text-[10px]" style={{ color: COLORS.muted }}>
+                    Traduit par BAARO
+                  </p>
+                )}
 
                 {post.media_url && (
                   <div className="rounded-xl overflow-hidden">
@@ -739,9 +789,11 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
                   </button>
 
                   <button
-                    onClick={() =>
-                      setCommentOpen((prev) => ({ ...prev, [post.id]: !prev[post.id] }))
-                    }
+                    onClick={() => {
+                      const next = !commentOpen[post.id];
+                      setCommentOpen((prev) => ({ ...prev, [post.id]: next }));
+                      if (next) loadComments(post.id);
+                    }}
                     className="flex items-center gap-1.5 text-xs"
                     style={{ color: COLORS.muted }}
                   >
@@ -749,13 +801,17 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
                     {post.comments_count || comments.length}
                   </button>
 
-                  <button
-                    onClick={() => handleTranslate(post.id, post.text)}
-                    className="flex items-center gap-1.5 text-xs"
-                    style={{ color: COLORS.muted }}
-                  >
-                    <Languages size={16} />
-                  </button>
+                  <TranslateButton
+                    text={post.text}
+                    isTranslated={!!translatedMap[post.id]}
+                    preferredLang="fr"
+                    onTranslated={(translated) =>
+                      setTranslatedMap((prev) => ({ ...prev, [post.id]: translated }))
+                    }
+                    onClear={() =>
+                      setTranslatedMap((prev) => ({ ...prev, [post.id]: null }))
+                    }
+                  />
 
                   <button className="flex items-center gap-1.5 text-xs ml-auto" style={{ color: COLORS.muted }}>
                     <Share2 size={16} />
