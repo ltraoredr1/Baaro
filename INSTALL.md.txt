@@ -1,0 +1,40 @@
+# BAARO — Premier parcours < 30 secondes
+
+Fichiers prêts à coller dans ton dépôt.
+
+## Ordre d’installation (un par un)
+
+| # | Fichier local | Destination dans le repo |
+|---|---------------|--------------------------|
+| 1 | `AuthScreen.jsx` | `src/components/AuthScreen.jsx` |
+| 2 | `OnboardingModal.jsx` | `src/components/OnboardingModal.jsx` |
+| 3 | `GuestBanner.jsx` | `src/components/GuestBanner.jsx` |
+| 4 | `Header.jsx` | `src/components/Header.jsx` |
+| 5 | `MainShell.jsx` | `src/app/MainShell.jsx` |
+| 6 | `ToastContext.jsx` | `src/components/ToastContext.jsx` |
+
+Les exports existants (`src/features/auth/index.js`, `src/features/profile/index.js`) restent valides — pas besoin de les modifier.
+
+## Vérification rapide
+
+1. `npm run dev`
+2. Ouvre en navigation privée
+3. Tu dois voir :
+   - Auth : **Gagne. Échange. Convertis.** + 3 piliers
+   - Après entrée : **1 seul écran** d’onboarding
+   - Toast de bienvenue + solde qui pulse dans le header
+
+## Reset pour retester
+
+Dans la console du navigateur :
+
+```js
+localStorage.removeItem("baaro:onboarding_done");
+localStorage.removeItem("baaro:welcome_toast_shown");
+location.reload();
+```
+
+## Notes
+
+- Le bonus serveur de bienvenue (`WELCOME_BONUS = 50` dans `api/wallet.js`) ne s’applique qu’aux comptes **non anonymes**. Les invités voient un message d’encouragement à créer un compte.
+- `GuestBanner` est orienté gain ; branche `onUpgrade` vers ton flux de création de compte si tu l’utilises déjà dans le Feed.
