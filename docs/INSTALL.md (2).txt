@@ -1,0 +1,53 @@
+# BAARO — Traduction publications & vidéos
+
+## Fonctionnalités
+
+| Type | Comportement |
+|------|----------------|
+| **Texte (posts)** | Bouton Traduire → choix de langue → texte traduit via IA serveur |
+| **Vidéo — sous-titres** | Whisper (STT) → traduction → piste WebVTT synchronisée |
+| **Vidéo — voix** | Même pipeline + TTS (OpenAI ou ElevenLabs) → audio doublé synchronisé |
+
+Le navigateur **n’a jamais** les clés API.
+
+## Fichiers à installer
+
+| Fichier package | Destination |
+|-----------------|-------------|
+| `api/translate.js` | `api/translate.js` |
+| `api/translate-media.js` | `api/translate-media.js` |
+| `src/lib/translateApi.js` | `src/lib/translateApi.js` |
+| `src/components/TranslateButton.jsx` | `src/components/TranslateButton.jsx` |
+| `src/components/VideoTranslateControls.jsx` | `src/components/VideoTranslateControls.jsx` |
+| `supabase/023_translations.sql` | Exécuter dans Supabase SQL Editor |
+| `FEED_PATCH.md` | Guide d’intégration FeedTab / VideosTab |
+
+## Variables d’environnement (Vercel)
+
+Déjà utiles pour l’assistant IA — réutilisées :
+
+- `OPENAI_API_KEY` — **obligatoire** pour Whisper (transcription vidéo) + optionnel TTS
+- `ANTHROPIC_API_KEY` / autres providers du gateway — traduction texte
+- `ELEVENLABS_API_KEY` + `ELEVENLABS_VOICE_ID` — optionnel, doublage vocal plus naturel
+
+Sans `OPENAI_API_KEY`, la traduction **texte** fonctionne (via Claude/etc.), mais pas la **vidéo**.
+
+## Ordre
+
+1. Exécuter `023_translations.sql` dans Supabase  
+2. Copier les fichiers `api/` et `src/`  
+3. Suivre `FEED_PATCH.md` pour brancher l’UI  
+4. Deploy Vercel  
+
+## Coûts / limites
+
+- Rate limit : 30 traductions texte / min / IP ; 8 médias / min  
+- Cache en base (`content_translations`, `media_translations`) pour éviter de re-payer  
+- Invités : texte OK si auth anonyme autorisée ; **vidéo réservée aux comptes réels**
+
+## Test rapide
+
+1. Publier un post en français  
+2. Cliquer **Traduire → English** → le texte doit changer réellement  
+3. Sur une vidéo avec parole : **Traduire → Sous-titres → Español**  
+4. Mode **Voix** : attendre 20–60 s, la vidéo se mute et l’audio traduit démarre
