@@ -1,50 +1,22 @@
 import { useState, useEffect } from "react";
-import { X, Coins, MessageCircle, Radio, Shield, ChevronRight, ChevronLeft } from "lucide-react";
+import { X, Coins, Radio, Shield, ChevronRight } from "lucide-react";
 import { COLORS } from "../theme.js";
 import { useApp } from "../contexts/AppContext.jsx";
 
 const STORAGE_KEY = "baaro:onboarding_done";
 
-const STEPS = [
-  {
-    icon: Coins,
-    title: "Gagne des points",
-    body: "Publie, like, commente et participe aux débats pour accumuler des points. Convertis-les ensuite en BARO Coin.",
-    color: COLORS.gold,
-  },
-  {
-    icon: MessageCircle,
-    title: "Messagerie sécurisée",
-    body: "Échange en privé avec un chiffrement de bout en bout. Tes messages restent sur ton appareil.",
-    color: COLORS.teal,
-  },
-  {
-    icon: Radio,
-    title: "Lives & débats",
-    body: "Rejoins ou lance des lives, débat en temps réel, et invite l'assistant IA comme co-animateur.",
-    color: COLORS.purple,
-  },
-  {
-    icon: Shield,
-    title: "Compte invité vs réel",
-    body: "En invité tu explores librement. Crée un compte (email ou réseau social) pour gagner des points, convertir en BARO et accéder aux récompenses.",
-    color: COLORS.rose,
-  },
-];
-
 /**
- * Onboarding affiché une seule fois (localStorage).
- * Peut être forcé via prop forceOpen (ex. depuis Settings).
+ * Onboarding 1 écran — visible une seule fois (localStorage).
+ * Remplace : src/components/OnboardingModal.jsx
+ * Objectif : comprendre BAARO en < 15 secondes.
  */
 export function OnboardingModal({ forceOpen = false, onClose }) {
   const { isAnonymous } = useApp();
   const [open, setOpen] = useState(false);
-  const [step, setStep] = useState(0);
 
   useEffect(() => {
     if (forceOpen) {
       setOpen(true);
-      setStep(0);
       return;
     }
     try {
@@ -67,14 +39,34 @@ export function OnboardingModal({ forceOpen = false, onClose }) {
 
   if (!open) return null;
 
-  const current = STEPS[step];
-  const Icon = current.icon;
-  const isLast = step === STEPS.length - 1;
+  const pillars = [
+    {
+      icon: Coins,
+      title: "Gagne des points",
+      body: "Publie, like, commente, débat — chaque action rapporte des points convertibles en BARO.",
+      color: COLORS.gold,
+    },
+    {
+      icon: Radio,
+      title: "Lives & débats + IA",
+      body: "Lance ou rejoins un live. L’assistant IA peut co-animer avec toi.",
+      color: COLORS.purple,
+    },
+    {
+      icon: Shield,
+      title: "Messagerie chiffrée",
+      body: "Tes messages privés restent chiffrés de bout en bout. Le serveur ne les lit pas.",
+      color: COLORS.teal,
+    },
+  ];
 
   return (
     <div
       className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md"
       onClick={finish}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="onboarding-title"
     >
       <div
         onClick={(e) => e.stopPropagation()}
@@ -82,9 +74,9 @@ export function OnboardingModal({ forceOpen = false, onClose }) {
         style={{ borderColor: COLORS.borderGold, background: COLORS.surface }}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-5 pt-5 pb-2">
+        <div className="flex items-center justify-between px-5 pt-5 pb-1">
           <span className="text-xs font-mono" style={{ color: COLORS.muted }}>
-            {step + 1} / {STEPS.length}
+            Bienvenue
           </span>
           <button
             onClick={finish}
@@ -96,84 +88,94 @@ export function OnboardingModal({ forceOpen = false, onClose }) {
           </button>
         </div>
 
-        {/* Content */}
-        <div className="px-6 py-6 flex flex-col items-center text-center gap-4">
-          <div
-            className="w-16 h-16 rounded-2xl flex items-center justify-center"
-            style={{ background: `${current.color}22`, color: current.color }}
+        {/* Title */}
+        <div className="px-6 pt-2 pb-1 text-center">
+          <h2
+            id="onboarding-title"
+            className="text-xl font-bold"
+            style={{ color: COLORS.ivory }}
           >
-            <Icon size={32} />
-          </div>
-          <h2 className="text-xl font-bold" style={{ color: COLORS.ivory }}>
-            {current.title}
+            Pourquoi rester sur BAARO ?
           </h2>
-          <p className="text-sm leading-relaxed" style={{ color: COLORS.muted }}>
-            {current.body}
+          <p className="text-xs mt-1.5" style={{ color: COLORS.muted }}>
+            En 10 secondes, ce qui change tout.
           </p>
+        </div>
 
-          {isAnonymous && step === STEPS.length - 1 && (
+        {/* 3 piliers */}
+        <div className="px-5 py-4 flex flex-col gap-3">
+          {pillars.map(({ icon: Icon, title, body, color }) => (
+            <div
+              key={title}
+              className="flex items-start gap-3 p-3 rounded-2xl border"
+              style={{
+                background: `${color}10`,
+                borderColor: `${color}33`,
+              }}
+            >
+              <div
+                className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
+                style={{ background: `${color}22`, color }}
+              >
+                <Icon size={20} />
+              </div>
+              <div className="min-w-0">
+                <p
+                  className="text-sm font-bold"
+                  style={{ color: COLORS.ivory }}
+                >
+                  {title}
+                </p>
+                <p
+                  className="text-xs mt-0.5 leading-relaxed"
+                  style={{ color: COLORS.muted }}
+                >
+                  {body}
+                </p>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Mode invité */}
+        {isAnonymous && (
+          <div className="px-5 pb-2">
             <p
-              className="text-xs px-3 py-2 rounded-xl border w-full"
+              className="text-xs px-3 py-2.5 rounded-xl border text-center leading-relaxed"
               style={{
                 background: "rgba(236,72,153,0.08)",
                 borderColor: "rgba(236,72,153,0.3)",
                 color: COLORS.rose,
               }}
             >
-              Tu es actuellement en mode invité. Crée un compte pour débloquer les gains.
+              Tu es en mode invité : explore librement.
+              <br />
+              <span style={{ color: COLORS.ivory }}>
+                Crée un compte gratuit pour gagner et convertir tes points.
+              </span>
             </p>
-          )}
-        </div>
+          </div>
+        )}
 
-        {/* Dots */}
-        <div className="flex justify-center gap-1.5 pb-2">
-          {STEPS.map((_, i) => (
-            <div
-              key={i}
-              className="w-2 h-2 rounded-full transition-all"
-              style={{
-                background: i === step ? COLORS.gold : COLORS.border,
-                width: i === step ? 16 : 8,
-              }}
-            />
-          ))}
-        </div>
-
-        {/* Actions */}
-        <div className="flex gap-3 px-5 pb-6 pt-3">
-          {step > 0 ? (
-            <button
-              onClick={() => setStep((s) => s - 1)}
-              className="flex items-center justify-center gap-1 px-4 py-2.5 rounded-xl text-xs font-bold border transition"
-              style={{
-                background: COLORS.surface2,
-                borderColor: COLORS.border,
-                color: COLORS.ivory,
-              }}
-            >
-              <ChevronLeft size={16} />
-              Retour
-            </button>
-          ) : (
-            <button
-              onClick={finish}
-              className="px-4 py-2.5 rounded-xl text-xs font-medium transition"
-              style={{ color: COLORS.muted }}
-            >
-              Passer
-            </button>
-          )}
-
+        {/* CTA unique */}
+        <div className="px-5 pb-6 pt-3">
           <button
-            onClick={() => (isLast ? finish() : setStep((s) => s + 1))}
-            className="flex-1 flex items-center justify-center gap-1 py-2.5 rounded-xl text-xs font-bold transition"
+            onClick={finish}
+            className="w-full flex items-center justify-center gap-2 py-3 rounded-xl text-sm font-bold transition hover:opacity-95"
             style={{
               background: "linear-gradient(135deg, #D9AE52 0%, #2DBFA6 100%)",
               color: COLORS.bg,
             }}
           >
-            {isLast ? "C'est parti" : "Suivant"}
-            {!isLast && <ChevronRight size={16} />}
+            Commencer et gagner mes premiers points
+            <ChevronRight size={18} />
+          </button>
+          <button
+            onClick={finish}
+            className="w-full mt-2 py-2 text-xs transition"
+            style={{ color: COLORS.muted }}
+          >
+            Passer
           </button>
         </div>
       </div>
