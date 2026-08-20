@@ -1,4 +1,4 @@
-import { useState, Suspense } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { useApp } from "../contexts/AppContext.jsx";
 import { Header } from "../components/Header.jsx";
 import { Navigation } from "../components/Navigation.jsx";
@@ -19,6 +19,12 @@ const THEME_BG_MAP = {
   emerald: "#061A14",
 };
 
+const WELCOME_TOAST_KEY = "baaro:welcome_toast_shown";
+
+/**
+ * Shell principal + toast de bienvenue (première session).
+ * Remplace : src/app/MainShell.jsx
+ */
 export function MainShell() {
   const {
     userId,
@@ -27,8 +33,9 @@ export function MainShell() {
     baroBalance,
     earnPoints,
     setUserProfile,
+    isAnonymous,
   } = useApp();
-  const { showToast } = useToast();
+  const { showToast, showPointsReward } = useToast();
 
   useApplyPendingReferral({ showToast });
 
@@ -39,6 +46,48 @@ export function MainShell() {
   const [notifDrawerOpen, setNotifDrawerOpen] = useState(false);
   const [searchModalOpen, setSearchModalOpen] = useState(false);
   const [forceOnboarding, setForceOnboarding] = useState(false);
+  const [pulsePoints, setPulsePoints] = useState(false);
+
+  // Toast de bienvenue une seule fois par navigateur (après chargement wallet)
+  useEffect(() => {
+    if (!userId) return;
+    try {
+      if (localStorage.getItem(WELCOME_TOAST_KEY)) return;
+    } catch {
+      /* ignore */
+    }
+
+    const timer = setTimeout(() => {
+      try {
+        localStorage.setItem(WELCOME_TOAST_KEY, "1");
+      } catch {
+        /* ignore */
+      }
+
+      if (isAnonymous) {
+        showToast(
+          "Bienvenue ! Explore librement. Crée un compte pour gagner et convertir des points.",
+          "info",
+          5500
+        );
+      } else if (pointsBalance > 0) {
+        showPointsReward(
+          pointsBalance >= 50 ? 50 : pointsBalance,
+          "Bonus de bienvenue"
+        );
+        setPulsePoints(true);
+      } else {
+        showToast(
+          "Bienvenue sur BAARO — like, publie et débat pour gagner des points.",
+          "info",
+          4500
+        );
+      }
+      setPulsePoints(true);
+    }, 900);
+
+    return () => clearTimeout(timer);
+  }, [userId, isAnonymous, pointsBalance, showToast, showPointsReward]);
 
   const themeBg = THEME_BG_MAP[currentTheme] || THEME_BG_MAP.midnight;
   const Tab = tabs[activeTab] || null;
@@ -92,6 +141,7 @@ export function MainShell() {
         onOpenProfile={() => setInspectingProfileId(userId)}
         onOpenNotifications={() => setNotifDrawerOpen(true)}
         onOpenSearch={() => setSearchModalOpen(true)}
+        pulsePoints={pulsePoints}
       />
 
       <div className="max-w-7xl mx-auto w-full px-3 sm:px-6 pt-4 sm:pt-6 flex-1 grid grid-cols-1 md:grid-cols-4 gap-6">
