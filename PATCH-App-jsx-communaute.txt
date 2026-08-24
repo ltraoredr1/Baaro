@@ -1,0 +1,59 @@
+// PATCH pour src/App.jsx - Intégration Communauté V3 complète
+// Copie ces blocs dans ton App.jsx existant
+
+// 1. IMPORTS (en haut)
+import CommunityTab from './components/CommunityTab'
+import { useCommunityNotifications } from './hooks/useCommunityExtras'
+import { useCommunityExtras } from './hooks/useCommunityExtras'
+
+// 2. DANS LE COMPOSANT APP (après session)
+const { notifications, unreadCount, markAllRead } = useCommunityNotifications(session?.user?.id)
+const { createInviteLink, joinViaCode } = useCommunityExtras(session?.user?.id)
+
+// 3. DANS TA NAVIGATION / SIDEBAR (exemple)
+const navItems = [
+  { id: 'feed', label: 'Fil', icon: '🏠' },
+  { id: 'community', label: 'Communauté', icon: '👥', badge: unreadCount }, // <-- AJOUT
+  { id: 'messages', label: 'Messages', icon: '💬' },
+  { id: 'live', label: 'Live', icon: '🔴' },
+  { id: 'wallet', label: 'Portefeuille', icon: '💰' },
+]
+
+// 4. DANS LE RENDER PRINCIPAL
+{activeTab === 'community' && (
+  <CommunityTab userId={session?.user?.id} />
+)}
+
+// 5. PAGE INVITATION (optionnel, crée src/pages/InvitePage.jsx)
+import { useEffect } from 'react'
+import { useParams, useNavigate } from 'react-router-dom'
+
+export function InvitePage() {
+  const { code } = useParams()
+  const navigate = useNavigate()
+  const { joinViaCode } = useCommunityExtras(session?.user?.id)
+  
+  useEffect(() => {
+    if(!code) return
+    joinViaCode(code).then(groupId => {
+      navigate('/community?group=' + groupId)
+    }).catch(err => alert(err.message))
+  }, [code])
+  
+  return <div className="p-8 text-center">Rejoins le groupe... Code: {code}</div>
+}
+
+// 6. DANS /api/wallet.js - AJOUTE CE CASE (pour récompenses communauté sécurisées)
+if (type === 'community_reward') {
+  // Vérifie que reference_id n'a pas déjà été crédité (idempotence)
+  const { data: existing } = await supabaseAdmin.from('community_rewards_log').select('id').eq('user_id', user.id).eq('action', action).eq('reference_id', reference_id).single()
+  if(existing) return res.json({ already_rewarded: true })
+  
+  // Crédite
+  const { data: wallet } = await supabaseAdmin.from('wallets').select('points').eq('user_id', user.id).single()
+  await supabaseAdmin.from('wallets').update({ points: (wallet?.points||0) + points }).eq('user_id', user.id)
+  await supabaseAdmin.from('community_rewards_log').insert({ user_id: user.id, action, reference_id, points })
+  await supabaseAdmin.from('transactions').insert({ user_id: user.id, type: 'earn', amount: points, reason: action, reference_id })
+  
+  return res.json({ success: true, new_points: (wallet?.points||0) + points })
+}
