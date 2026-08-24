@@ -1,0 +1,82 @@
+/* === À FUSIONNER dans src/index.css (coller à la fin) === */
+
+/* Skip link accessibilité */
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 9999;
+  padding: 0.75rem 1.25rem;
+  background: #D9AE52;
+  color: #0B1220;
+  font-weight: 700;
+  border-radius: 0 0 0.75rem 0;
+}
+.skip-link:focus {
+  left: 0;
+}
+
+/* Cibles tactiles confortables (tous âges / doigts) */
+button,
+[role="button"],
+a {
+  touch-action: manipulation;
+}
+@media (pointer: coarse) {
+  button:not(.icon-sm),
+  [role="button"]:not(.icon-sm) {
+    min-height: 44px;
+  }
+}
+
+/* Réduire animations si demandé OS */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Perf : cartes hors viewport */
+.content-visibility-auto {
+  content-visibility: auto;
+  contain-intrinsic-size: 1px 280px;
+}
+
+/* Scrollbar mobile discret */
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Focus visible clavier uniquement */
+:focus:not(:focus-visible) {
+  outline: none;
+}
+:focus-visible {
+  outline: 2px solid #D9AE52;
+  outline-offset: 2px;
+}
+
+/* Safe area bas (iPhone / Android gestes) */
+.mobile-nav-spacer {
+  padding-bottom: calc(5.5rem + env(safe-area-inset-bottom, 0px));
+}
+@media (min-width: 768px) {
+  .mobile-nav-spacer {
+    padding-bottom: 1.5rem;
+  }
+}
+
+/* Texte lisible — contraste minimum */
+.baaro-readable {
+  line-height: 1.55;
+  letter-spacing: 0.01em;
+}

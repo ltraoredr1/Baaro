@@ -7,8 +7,12 @@ import {
   Image as ImageIcon,
   BarChart2,
   X,
-  Loader2,
+  Pencil,
+  Trash2,
+  MoreHorizontal,
+  Check,
 } from "lucide-react";
+import { FeedStories } from "./FeedStories.jsx";
 import { COLORS } from "../theme.js";
 import { randomId } from "../lib/id.js";
 import { useToast } from "./ToastContext.jsx";
@@ -50,6 +54,11 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
   const [translatedMap, setTranslatedMap] = useState({});
   const [user, setUser] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  const [menuOpenId, setMenuOpenId] = useState(null);
+  const [editingId, setEditingId] = useState(null);
+  const [editText, setEditText] = useState("");
+  const [savingEdit, setSavingEdit] = useState(false);
+
 
   // ===== Média (photo/vidéo) en cours de composition =====
   const [mediaFile, setMediaFile] = useState(null);
@@ -560,6 +569,99 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
   };
 
 
+
+  const meId = user?.id || userId;
+
+  const handleSharePost = async (post) => {
+    const url = `${window.location.origin}/?post=${post.id}`;
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: "BAARO", text: post.text?.slice(0, 120) || "Publication BAARO", url });
+      } else {
+        await navigator.clipboard.writeText(url);
+        showToast("Lien copié", "success");
+      }
+    } catch {
+      /* user cancel */
+    }
+  };
+
+  const handleDeletePost = async (postId) => {
+    if (!meId) return showToast("Connecte-toi", "error");
+    if (!window.confirm("Supprimer cette publication ?")) return;
+    setMenuOpenId(null);
+    try {
+      const { error } = await supabase.from("posts").delete().eq("id", postId).eq("author_id", meId);
+      if (error) throw error;
+      setPosts((prev) => prev.filter((p) => p.id !== postId));
+      showToast("Publication supprimée", "success");
+    } catch (e) {
+      handleDbError(e, showToast, "Impossible de supprimer");
+    }
+  };
+
+  const startEditPost = (post) => {
+    setMenuOpenId(null);
+    setEditingId(post.id);
+    setEditText(post.text || "");
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditText("");
+  };
+
+  const saveEditPost = async (postId) => {
+    if (!meId) return;
+    const text = editText.trim();
+    if (!text) return showToast("Texte vide", "error");
+    setSavingEdit(true);
+    try {
+      const { error } = await supabase
+        .from("posts")
+        .update({ text })
+        .eq("id", postId)
+        .eq("author_id", meId);
+      if (error) throw error;
+      setPosts((prev) => prev.map((p) => (p.id === postId ? { ...p, text } : p)));
+      setEditingId(null);
+      setEditText("");
+      showToast("Publication modifiée", "success");
+    } catch (e) {
+      handleDbError(e, showToast, "Impossible de modifier");
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
+  const handleDeleteComment = async (postId, commentId) => {
+    if (!meId) return;
+    if (!window.confirm("Supprimer ce commentaire ?")) return;
+    try {
+      const { error } = await supabase
+        .from("comments")
+        .delete()
+        .eq("id", commentId)
+        .eq("author_id", meId);
+      if (error) throw error;
+      setCommentsMap((prev) => ({
+        ...prev,
+        [postId]: (prev[postId] || []).filter((c) => c.id !== commentId),
+      }));
+      setPosts((prev) =>
+        prev.map((p) =>
+          p.id === postId
+            ? { ...p, comments_count: Math.max(0, (p.comments_count || 1) - 1) }
+            : p
+        )
+      );
+      showToast("Commentaire supprimé", "success");
+    } catch (e) {
+      handleDbError(e, showToast, "Impossible de supprimer le commentaire");
+    }
+  };
+
+
   if (loading) {
     return (
       <div className="text-center py-8 text-gray-400">
@@ -570,7 +672,9 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
   }
 
   return (
-    <div className="flex flex-col gap-6 max-w-2xl mx-auto w-full pb-20">
+    <div className="flex flex-col gap-4 max-w-2xl mx-auto w-full pb-20">
+      <FeedStories userId={userId} onRewardPoints={onRewardPoints} />
+
       <form
         onSubmit={handleCreatePost}
         className="glass-card rounded-2xl p-4 shadow-xl border"
@@ -757,11 +861,87 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
                       </p>
                     </div>
                   </div>
+
+                  {post.author_id === meId && (
+                    <div className="relative">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setMenuOpenId((id) => (id === post.id ? null : post.id))
+                        }
+                        className="p-2 rounded-lg hover:bg-white/5"
+                        style={{ color: COLORS.muted }}
+                        aria-label="Actions"
+                      >
+                        <MoreHorizontal size={18} />
+                      </button>
+                      {menuOpenId === post.id && (
+                        <div
+                          className="absolute right-0 top-9 z-20 min-w-[160px] rounded-xl border shadow-xl py-1"
+                          style={{
+                            background: COLORS.surface,
+                            borderColor: COLORS.borderGold,
+                          }}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => startEditPost(post)}
+                            className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-white/5"
+                            style={{ color: COLORS.ivory }}
+                          >
+                            <Pencil size={14} /> Modifier
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeletePost(post.id)}
+                            className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-white/5 text-red-400"
+                          >
+                            <Trash2 size={14} /> Supprimer
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
 
+                {editingId === post.id ? (
+                  <div className="flex flex-col gap-2">
+                    <textarea
+                      value={editText}
+                      onChange={(e) => setEditText(e.target.value)}
+                      rows={3}
+                      className="w-full rounded-xl px-3 py-2 text-sm outline-none border resize-none"
+                      style={{
+                        background: COLORS.surface2,
+                        borderColor: COLORS.borderGold,
+                        color: COLORS.ivory,
+                      }}
+                    />
+                    <div className="flex gap-2 justify-end">
+                      <button
+                        type="button"
+                        onClick={cancelEdit}
+                        className="px-3 py-1.5 rounded-lg text-xs"
+                        style={{ color: COLORS.muted }}
+                      >
+                        Annuler
+                      </button>
+                      <button
+                        type="button"
+                        disabled={savingEdit}
+                        onClick={() => saveEditPost(post.id)}
+                        className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-bold disabled:opacity-40"
+                        style={{ background: COLORS.gold, color: "#000" }}
+                      >
+                        <Check size={14} /> {savingEdit ? "…" : "Enregistrer"}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
                 <p className="text-sm leading-relaxed whitespace-pre-wrap" style={{ color: COLORS.ivory }}>
                   {isTranslated ? translatedMap[post.id] : post.text}
                 </p>
+                )}
                 {isTranslated && (
                   <p className="text-[10px]" style={{ color: COLORS.muted }}>
                     Traduit par BAARO
@@ -813,7 +993,12 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
                     }
                   />
 
-                  <button className="flex items-center gap-1.5 text-xs ml-auto" style={{ color: COLORS.muted }}>
+                  <button
+                    type="button"
+                    onClick={() => handleSharePost(post)}
+                    className="flex items-center gap-1.5 text-xs ml-auto"
+                    style={{ color: COLORS.muted }}
+                  >
                     <Share2 size={16} />
                   </button>
                 </div>
@@ -821,8 +1006,20 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
                 {commentOpen[post.id] && (
                   <div className="pt-3 border-t space-y-2" style={{ borderColor: COLORS.border }}>
                     {comments.map((c) => (
-                      <div key={c.id} className="text-xs" style={{ color: COLORS.muted }}>
-                        <span className="font-bold" style={{ color: COLORS.ivory }}>{c.author}</span> : {c.text}
+                      <div key={c.id} className="text-xs flex items-start justify-between gap-2" style={{ color: COLORS.muted }}>
+                        <div>
+                          <span className="font-bold" style={{ color: COLORS.ivory }}>{c.author}</span> : {c.text}
+                        </div>
+                        {c.author_id === meId && (
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteComment(post.id, c.id)}
+                            className="shrink-0 p-1 text-red-400/80 hover:text-red-400"
+                            aria-label="Supprimer commentaire"
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        )}
                       </div>
                     ))}
                     <div className="flex gap-2">

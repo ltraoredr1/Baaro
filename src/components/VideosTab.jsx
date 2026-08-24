@@ -1,12 +1,22 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { supabase } from "../supabaseClient";
+import { supabase } from "../supabaseClient.js";
 import {
-  Play, Heart, MessageCircle, Share2, Coins, Volume2, VolumeX,
-  Music, X, Plus, Repeat2, Check, Send
+  Play,
+  Heart,
+  MessageCircle,
+  Share2,
+  Volume2,
+  VolumeX,
+  Music,
+  X,
+  Plus,
+  Repeat2,
+  Check,
+  Send,
+  Trash2,
 } from "lucide-react";
 import { COLORS } from "../theme.js";
 import { useToast } from "./ToastContext.jsx";
-import { StoriesBar } from "./StoriesBar.jsx";
 import { StoryViewer } from "./StoryViewer.jsx";
 
 export function VideosTab({ onRewardPoints, userId }) {
@@ -390,6 +400,24 @@ export function VideosTab({ onRewardPoints, userId }) {
     }
   };
 
+
+  const handleDeleteVideo = async (videoId) => {
+    if (!user) return showToast("Connecte-toi", "error");
+    if (!window.confirm("Supprimer cette vidéo ?")) return;
+    try {
+      const { error } = await supabase
+        .from("videos")
+        .delete()
+        .eq("id", videoId)
+        .eq("author_id", user.id);
+      if (error) throw error;
+      setVideos((prev) => prev.filter((v) => v.id !== videoId));
+      showToast("Vidéo supprimée", "success");
+    } catch {
+      showToast("Impossible de supprimer", "error");
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-[80vh] bg-black text-gray-400">
@@ -403,15 +431,11 @@ export function VideosTab({ onRewardPoints, userId }) {
 
   return (
     <>
-      <div className="bg-black">
-        <StoriesBar
-          refreshKey={storyRefreshKey}
-          onOpenStory={setStoryGroup}
-          onCreateStory={() => setShowCreateStory(true)}
-        />
-      </div>
-
-      <div className="h-[calc(100dvh-160px)] w-full overflow-y-scroll snap-y snap-mandatory bg-black no-scrollbar relative">
+      {/* Stories déplacées vers le Fil (FeedStories). Vidéos = plein écran. */}
+      <div
+        className="fixed inset-0 z-40 w-full h-[100dvh] overflow-y-scroll snap-y snap-mandatory bg-black no-scrollbar"
+        style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
+      >
         <div className="absolute top-0 left-0 right-0 z-30 flex justify-between items-center px-4 py-3 bg-gradient-to-b from-black/80 to-transparent pointer-events-none">
           <h2 className="text-lg font-bold text-white pointer-events-auto">BAARO Videos</h2>
           <div className="flex gap-2 pointer-events-auto">
@@ -449,7 +473,7 @@ export function VideosTab({ onRewardPoints, userId }) {
             const hasError = !!videoErrors[v.id];
 
             return (
-              <div key={v.id} className="h-full w-full snap-start relative flex items-center justify-center bg-black">
+              <div key={v.id} className="h-[100dvh] w-full snap-start relative flex items-center justify-center bg-black">
                 <video
                   ref={(el) => { if (el) videoRefs.current[v.id] = el; }}
                   data-id={v.id}
@@ -555,6 +579,14 @@ export function VideosTab({ onRewardPoints, userId }) {
                     </div>
                     <span className="text-xs font-bold text-white">{shareFeedbackId === v.id ? "Copié" : "Partager"}</span>
                   </button>
+                  {(v.author_id === user?.id) && (
+                    <button onClick={() => handleDeleteVideo(v.id)} className="flex flex-col items-center gap-1">
+                      <div className="p-3 rounded-full bg-red-500/25 backdrop-blur-md">
+                        <Trash2 size={26} className="text-red-400" />
+                      </div>
+                      <span className="text-xs font-bold text-red-300">Suppr.</span>
+                    </button>
+                  )}
                 </div>
               </div>
             );

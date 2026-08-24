@@ -2,20 +2,42 @@
 <html lang="fr">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <title>BAARO</title>
-    <meta name="description" content="Réseau social mondial avec points, crypto et assistant IA intégré." />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=5"
+    />
+    <title>BAARO — Réseau social, points & IA</title>
+    <meta
+      name="description"
+      content="BAARO : publie, débat, gagne des points, vidéos, wallet et assistant IA. Simple et accessible partout."
+    />
+    <meta name="theme-color" content="#0B1220" />
+    <meta name="color-scheme" content="dark" />
+
+    <!-- Perf : préconnexion API -->
+    <link rel="dns-prefetch" href="https://fonts.googleapis.com" />
+    <link rel="dns-prefetch" href="https://fonts.gstatic.com" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 
     <link rel="manifest" href="/manifest.json" />
-    <meta name="theme-color" content="#0B1526" />
-
     <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="BAARO" />
+    <meta name="mobile-web-app-capable" content="yes" />
+
+    <!-- Open Graph simple -->
+    <meta property="og:title" content="BAARO" />
+    <meta
+      property="og:description"
+      content="Réseau social mondial avec points, crypto et assistant IA."
+    />
+    <meta property="og:type" content="website" />
   </head>
   <body>
+    <a class="skip-link" href="#main-content">Aller au contenu</a>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>

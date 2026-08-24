@@ -12,6 +12,8 @@ import { useToast } from "../components/ToastContext.jsx";
 import { COLORS } from "../theme.js";
 import { tabs } from "./tabs.jsx";
 import { TabFallback } from "./TabFallback.jsx";
+import { OfflineBanner } from "../components/OfflineBanner.jsx";
+import { saveLastTab, loadLastTab } from "../lib/perf.js";
 
 const THEME_BG_MAP = {
   midnight: "#0B1220",
@@ -39,7 +41,7 @@ export function MainShell() {
 
   useApplyPendingReferral({ showToast });
 
-  const [activeTab, setActiveTab] = useState("feed");
+  const [activeTab, setActiveTab] = useState(() => loadLastTab("feed"));
   const [lang, setLang] = useState("fr");
   const [currentTheme, setCurrentTheme] = useState("midnight");
   const [inspectingProfileId, setInspectingProfileId] = useState(null);
@@ -90,6 +92,11 @@ export function MainShell() {
   }, [userId, isAnonymous, pointsBalance, showToast, showPointsReward]);
 
   const themeBg = THEME_BG_MAP[currentTheme] || THEME_BG_MAP.midnight;
+
+  useEffect(() => {
+    saveLastTab(activeTab);
+  }, [activeTab]);
+
   const Tab = tabs[activeTab] || null;
 
   const tabProps = {
@@ -128,6 +135,7 @@ export function MainShell() {
       className="min-h-screen flex flex-col transition-colors duration-500"
       style={{ background: themeBg, color: COLORS.ivory }}
     >
+      <OfflineBanner />
       <OnboardingModal
         forceOpen={forceOnboarding}
         onClose={() => setForceOnboarding(false)}
@@ -150,7 +158,7 @@ export function MainShell() {
           <Navigation activeTab={activeTab} setActiveTab={setActiveTab} />
         </div>
 
-        <main className="md:col-span-3 mobile-nav-spacer">
+        <main id="main-content" className="md:col-span-3 mobile-nav-spacer" tabIndex={-1}>
           <ErrorBoundary>
             <Suspense fallback={<TabFallback />}>
               {Tab ? <Tab {...(tabProps[activeTab] || {})} /> : null}

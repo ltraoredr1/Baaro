@@ -1,37 +1,45 @@
 /**
- * paymentProvider.js — point d'entrée UNIQUE pour les paiements boutique BAARO.
- * Destination : src/lib/paymentProvider.js
+ * Point d'entrée UNIQUE paiements boutique — /api/create-payment (Vercel).
  */
 import { supabase } from "../supabaseClient.js";
 
-/**
- * @param {Object} params
- * @param {'cinetpay'|'stripe'|'paypal'} params.provider
- * @param {string} params.shopId
- * @param {string} params.paymentRef
- * @param {number} params.amount
- * @param {string} params.currency
- * @param {string} [params.channel]
- */
+function apiBase() {
+  const base = import.meta.env.VITE_API_BASE_URL || "";
+  return base.replace(/\/$/, "");
+}
+
 export async function createPayment({
   provider,
   shopId,
   paymentRef,
-  amount,
-  currency,
   channel,
 }) {
-  const { data, error } = await supabase.functions.invoke("create-payment", {
-    body: {
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  if (!session?.access_token) {
+    throw new Error("Session requise pour le paiement");
+  }
+
+  const url = `${apiBase()}/api/create-payment`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${session.access_token}`,
+    },
+    body: JSON.stringify({
       provider,
       shop_id: shopId,
       payment_ref: paymentRef,
-      amount,
-      currency,
       channel,
-    },
+    }),
   });
-  if (error) throw error;
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error || `Erreur paiement (${res.status})`);
+  }
   return data;
 }
 
@@ -45,7 +53,7 @@ export async function getPaymentStatus(paymentRef) {
   return data;
 }
 
-/** Fournisseurs affichés selon le pays (indicatif UI). */
+/** Fournisseurs UI selon pays. */
 export function getAvailableProviders(countryCode) {
   const cc = String(countryCode || "").toUpperCase();
   const westAfrica = ["ML", "CI", "SN", "BF", "BJ", "TG", "GN", "CM", "NE"];
@@ -57,6 +65,6 @@ export function getAvailableProviders(countryCode) {
   }
   return [
     { id: "stripe", label: "Carte bancaire (Stripe)" },
-    { id: "paypal", label: "PayPal" },
+    { id: "cinetpay", label: "Mobile Money (CinetPay)" },
   ];
 }
