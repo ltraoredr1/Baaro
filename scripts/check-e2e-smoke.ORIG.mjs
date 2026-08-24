@@ -2,10 +2,6 @@
  * Smoke checks BAARO — pas un vrai E2E browser, mais garde-fous CI.
  * Usage: node scripts/check-e2e-smoke.mjs
  * Optionnel: BAARO_BASE_URL=https://... node scripts/check-e2e-smoke.mjs
- *
- * FIX 2026-08-24: le test "locale.spli" etait un faux positif
- * (matche aussi le correct "locale.split"). On detecte desormais
- * uniquement les vrais typos .spli( / .selec'
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -42,7 +38,7 @@ for (const f of requiredFiles) {
   else fail(`missing ${f}`);
 }
 
-// Navigation doit referencer shop
+// Navigation doit référencer shop
 const nav = fs.readFileSync(path.join(root, "src/components/Navigation.jsx"), "utf8");
 if (nav.includes('id: "shop"') || nav.includes("id: 'shop'")) ok("Navigation contains shop tab");
 else fail("Navigation missing shop tab id");
@@ -55,18 +51,15 @@ const mainShell = fs.readFileSync(path.join(root, "src/app/MainShell.jsx"), "utf
 if (mainShell.includes("shop:")) ok("MainShell tabProps.shop");
 else fail("MainShell missing shop props");
 
-// ShopRegistrationForm — typos reels uniquement (pas "locale.split")
+// ShopRegistrationForm ne doit plus avoir les bugs de syntaxe
 const reg = fs.readFileSync(
   path.join(root, "src/features/shop/ShopRegistrationForm.jsx"),
   "utf8"
 );
-// Ancien bug: locale.spli(  — le correct est locale.split(
-if (/\.spli\s*\(/.test(reg)) fail("ShopRegistrationForm still has split typo (.spli()");
+if (reg.includes("locale.spli")) fail("ShopRegistrationForm still has split typo");
 else ok("ShopRegistrationForm split syntax");
 if (reg.includes(".selec'")) fail("ShopRegistrationForm still has select typo");
 else ok("ShopRegistrationForm select syntax");
-if (reg.includes(".split(")) ok("ShopRegistrationForm uses .split()");
-else ok("ShopRegistrationForm: no .split() (ok if country default changed)");
 
 // create-payment doit auth
 const pay = fs.readFileSync(path.join(root, "api/create-payment.js"), "utf8");
