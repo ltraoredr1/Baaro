@@ -1,13 +1,22 @@
-// BAARO AI Gateway v1 — patch: profiles.user_id (pas profiles.id)
+/**
+ * BAARO AI Gateway v2
+ * - Circuit breaker + fallback multi-providers
+ * - Rate-limit async (Upstash)
+ * - Logging structuré
+ * - Headers latence / provider
+ */
 import { getAdminClient, requireUser } from "./_supabaseAdmin.js";
-import { rateLimit } from "./_rateLimit.js";
+import { rateLimitAsync } from "./_rateLimit.js";
 import { applyCors } from "./_cors.js";
 import { chooseProvider, normalizeCountry, providerConfig } from "./ai/router.js";
 import { callOpenAICompatible } from "./ai/openai-compatible.js";
+import { isOpen, recordFailure, recordSuccess } from "./ai/circuit.js";
+import { logError, logWarn } from "./_logger.js";
 
 function safeMaxTokens(value) {
   return Math.min(Math.max(Number(value) || 1200, 1), 2000);
 }
+
 function safeCountry(req, context) {
   return (
     normalizeCountry(context?.country) ||
@@ -15,6 +24,7 @@ function safeCountry(req, context) {
     null
   );
 }
+
 function buildSystem(customSystem, mode, context) {
   let system =
     customSystem ||
@@ -100,12 +110,75 @@ async function callN8n({ url, secret, sessionId, payload }) {
   };
 }
 
+async function invokeProvider(provider, ctx) {
+  const {
+    normalizedMessages,
+    system,
+    maxTokens,
+    sessionId,
+    country,
+    profile,
+    mode,
+    publicModel,
+  } = ctx;
+
+  if (provider === "n8n") {
+    return callN8n({
+      url: process.env.N8N_BAARO_WEBHOOK_URL,
+      secret: process.env.N8N_WEBHOOK_SECRET,
+      sessionId,
+      payload: {
+        messages: normalizedMessages,
+        context: {
+          country,
+          user_id: ctx.userId,
+          language: profile.language || null,
+        },
+        max_tokens: maxTokens,
+        mode: mode || "default",
+        system,
+        model: publicModel || process.env.BAARO_AI_MODEL || null,
+        provider,
+        sessionId,
+      },
+    });
+  }
+
+  if (provider === "anthropic") {
+    return callAnthropic({
+      apiKey: process.env.ANTHROPIC_API_KEY,
+      messages: normalizedMessages,
+      system,
+      maxTokens,
+    });
+  }
+
+  const cfg = providerConfig(provider);
+  if (!cfg?.key || !cfg?.base) {
+    throw Object.assign(new Error(`Provider ${provider} mal configuré`), {
+      status: 503,
+    });
+  }
+  return callOpenAICompatible({
+    base: cfg.base,
+    key: cfg.key,
+    model: publicModel || cfg.model,
+    messages: normalizedMessages,
+    system,
+    maxTokens,
+  });
+}
+
 export default async function handler(req, res) {
   if (applyCors(req, res)) return;
   if (req.method !== "POST")
     return res.status(405).json({ error: "Méthode non autorisée" });
 
-  const limit = rateLimit(req, { key: "chat", max: 20, windowMs: 60_000 });
+  const limit = await rateLimitAsync(req, {
+    key: "chat",
+    max: 20,
+    windowMs: 60_000,
+  });
   if (!limit.ok) {
     Object.entries(limit.headers || {}).forEach(([k, v]) =>
       res.setHeader(k, v)
@@ -155,15 +228,6 @@ export default async function handler(req, res) {
     ...(context || {}),
     country: context?.country || profile.country,
   });
-  const provider = chooseProvider({
-    country,
-    requested: requestedProvider || requestedModel,
-  });
-  if (!provider) {
-    return res
-      .status(503)
-      .json({ error: "Aucun fournisseur IA n'est configuré" });
-  }
 
   const maxTokens = safeMaxTokens(max_tokens);
   const system = buildSystem(customSystem, mode, {
@@ -178,61 +242,80 @@ export default async function handler(req, res) {
       ? String(requestedModel).slice(0, 120)
       : undefined;
 
-  try {
-    let result;
-    if (provider === "n8n") {
-      result = await callN8n({
-        url: process.env.N8N_BAARO_WEBHOOK_URL,
-        secret: process.env.N8N_WEBHOOK_SECRET,
-        sessionId,
-        payload: {
-          messages: normalizedMessages,
-          context: {
-            country,
-            user_id: user.id,
-            language: profile.language || null,
-          },
-          max_tokens: maxTokens,
-          mode: mode || "default",
-          system,
-          model: publicModel || process.env.BAARO_AI_MODEL || null,
-          provider,
-          sessionId,
-        },
-      });
-    } else if (provider === "anthropic") {
-      result = await callAnthropic({
-        apiKey: process.env.ANTHROPIC_API_KEY,
-        messages: normalizedMessages,
-        system,
-        maxTokens,
-      });
-    } else {
-      const cfg = providerConfig(provider);
-      result = await callOpenAICompatible({
-        base: cfg.base,
-        key: cfg.key,
-        model: publicModel || cfg.model,
-        messages: normalizedMessages,
-        system,
-        maxTokens,
+  const ctx = {
+    normalizedMessages,
+    system,
+    maxTokens,
+    sessionId,
+    country,
+    profile,
+    mode,
+    publicModel,
+    userId: user.id,
+  };
+
+  const start = Date.now();
+  const tried = [];
+  let lastError = null;
+  let result = null;
+  let usedProvider = null;
+
+  // Tentatives avec fallback (max 4 providers)
+  for (let i = 0; i < 4; i++) {
+    const provider = chooseProvider({
+      country,
+      requested: i === 0 ? requestedProvider || requestedModel : undefined,
+      exclude: tried,
+    });
+    if (!provider) break;
+    if (isOpen(provider)) {
+      tried.push(provider);
+      logWarn("chat", `Circuit open for ${provider}`, { userId: user.id });
+      continue;
+    }
+
+    tried.push(provider);
+    try {
+      result = await invokeProvider(provider, ctx);
+      recordSuccess(provider);
+      usedProvider = result.provider || provider;
+      break;
+    } catch (err) {
+      lastError = err;
+      recordFailure(provider);
+      logWarn("chat", `Provider ${provider} failed`, {
+        userId: user.id,
+        status: err?.status,
+        message: err?.message,
       });
     }
-    res.setHeader("X-BAARO-AI-Provider", result.provider || provider);
-    res.setHeader("X-BAARO-AI-Country", country || "unknown");
-    return res.status(200).json({
-      reply: result.reply,
-      sessionId: result.sessionId || sessionId,
-      provider: result.provider || provider,
-      model: publicModel || provider,
-      country: country || null,
-    });
-  } catch (err) {
-    return res
-      .status(err.status && err.status < 500 ? err.status : 502)
-      .json({
-        error: "Fournisseur IA temporairement indisponible",
-        provider,
-      });
   }
+
+  const latency = Date.now() - start;
+
+  if (!result) {
+    logError("chat", lastError || new Error("No provider available"), {
+      userId: user.id,
+      country,
+      tried,
+    });
+    return res.status(502).json({
+      error: "Fournisseur IA temporairement indisponible",
+      tried,
+    });
+  }
+
+  res.setHeader("X-BAARO-AI-Provider", usedProvider);
+  res.setHeader("X-BAARO-AI-Country", country || "unknown");
+  res.setHeader("X-BAARO-AI-Latency-Ms", String(latency));
+  res.setHeader("X-BAARO-AI-Tried", tried.join(","));
+
+  return res.status(200).json({
+    reply: result.reply,
+    sessionId: result.sessionId || sessionId,
+    provider: usedProvider,
+    model: publicModel || usedProvider,
+    country: country || null,
+    latencyMs: latency,
+  });
 }

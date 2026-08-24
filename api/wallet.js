@@ -1,23 +1,20 @@
-import { getAdminClient, requireUser } from "./_supabaseAdmin.js";
-import { rateLimit } from "./_rateLimit.js";
-import { applyCors } from "./_cors.js";
-
 /**
- * BAARO /api/wallet — autorité serveur exclusive
+ * BAARO /api/wallet — autorité serveur exclusive (v2 patch)
  *
- * Flux unique :
- *   Client → action (sans montant) → serveur vérifie → RPC ledger → solde
- *
- * Le client NE PEUT PAS envoyer pts / balance / holdings à créditer.
- * Les montants viennent de reward_catalog / redeem_catalog (Postgres).
- *
- * Remplace : api/wallet.js
+ * Changements :
+ * - rateLimitAsync (Upstash)
+ * - logging structuré
+ * - headers rate-limit
+ * - refus montants client inchangé
  */
+import { getAdminClient, requireUser } from "./_supabaseAdmin.js";
+import { rateLimitAsync } from "./_rateLimit.js";
+import { applyCors } from "./_cors.js";
+import { logError } from "./_logger.js";
 
-const DAILY_EARN_CAP = 100;
+const DAILY_EARN_CAP = Number(process.env.BAARO_DAILY_EARN_CAP) || 100;
 const MIN_ACCOUNT_AGE_MS_FOR_CASHOUT = 3 * 24 * 60 * 60 * 1000;
 
-/** Actions autorisées côté API (le montant reste en base). */
 const ALLOWED_EARN_ACTIONS = new Set([
   "like_post",
   "publish_post",
@@ -31,7 +28,6 @@ const ALLOWED_EARN_ACTIONS = new Set([
   "comment_video",
   "publish_story",
   "daily_bonus",
-  // tip_video volontairement exclu tant que non vérifiable en base
 ]);
 
 function jsonError(res, status, message) {
@@ -42,7 +38,6 @@ function isAnonymous(user) {
   return user?.is_anonymous === true;
 }
 
-/** Refuse tout champ qui ressemble à un montant décidé par le client. */
 function rejectClientAmounts(body) {
   const forbidden = [
     "pts",
@@ -60,7 +55,6 @@ function rejectClientAmounts(body) {
       return `Champ interdit pour earn: ${key}`;
     }
   }
-  // redeem / convert : seuls optionId ou pts (quantité à convertir, pas un crédit) sont OK
   if (body.action === "redeem") {
     for (const key of ["pts", "cost", "balance", "amount"]) {
       if (Object.prototype.hasOwnProperty.call(body, key)) {
@@ -115,8 +109,6 @@ async function rpcWallet(admin, fn, args) {
 }
 
 async function ensureWallet(admin, user) {
-  // Welcome bonus uniquement pour comptes non anonymes.
-  // Le montant réel est lu dans reward_catalog par wallet_ensure (SQL).
   const welcomeFlag = isAnonymous(user) ? 0 : 1;
   return rpcWallet(admin, "wallet_ensure", {
     p_user_id: user.id,
@@ -160,7 +152,6 @@ async function handleStatus(admin, user, res) {
     .maybeSingle();
   if (crypto) holdings = Number(crypto.holdings) || 0;
 
-  // Catalogue public (lecture seule) pour l'UI — montants serveur
   const { data: catalog } = await admin
     .from("reward_catalog")
     .select("action_key, pts, label")
@@ -212,13 +203,11 @@ async function handleEarn(admin, user, body, res) {
     return jsonError(res, 400, "Référence d'événement requise");
   }
 
-  // UUID basique
   if (referenceId && !/^[0-9a-f-]{36}$/i.test(referenceId)) {
     return jsonError(res, 400, "referenceId invalide");
   }
 
   try {
-    // AUCUN montant passé : wallet_earn_v2 lit reward_catalog
     const result = await rpcWallet(admin, "wallet_earn_v2", {
       p_user_id: user.id,
       p_action_key: actionKey,
@@ -249,7 +238,10 @@ async function handleEarn(admin, user, body, res) {
       return jsonError(res, 400, "Événement de récompense introuvable");
     if (msg.includes("REWARD_ALREADY_CLAIMED"))
       return jsonError(res, 409, "Récompense déjà attribuée");
-    if (msg.includes("UNVERIFIABLE_REWARD_ACTION") || msg.includes("UNKNOWN_REWARD_ACTION"))
+    if (
+      msg.includes("UNVERIFIABLE_REWARD_ACTION") ||
+      msg.includes("UNKNOWN_REWARD_ACTION")
+    )
       return jsonError(res, 400, "Action de récompense non vérifiable");
     throw e;
   }
@@ -264,7 +256,6 @@ async function handleRedeem(admin, user, body, res) {
     typeof body.optionId === "string" ? body.optionId.trim() : "";
   if (!optionId) return jsonError(res, 400, "optionId requis");
 
-  // Coût lu en base via wallet_redeem_v2 — pas de cost client
   const { data: opt } = await admin
     .from("redeem_catalog")
     .select("option_id, is_cash, active")
@@ -304,13 +295,10 @@ async function handleConvert(admin, user, body, res) {
     return jsonError(res, 403, "Créez un compte pour convertir en BARO");
   }
 
-  // pts = quantité que l'utilisateur CHOISIT de convertir (débit),
-  // pas un crédit arbitraire. Le taux BARO est figé en SQL.
   const pts = Number(body.pts);
   if (!Number.isFinite(pts) || pts <= 0 || pts % 1 !== 0) {
     return jsonError(res, 400, "Montant invalide");
   }
-  // Plafond anti-abus d'une seule requête
   if (pts > 1_000_000) {
     return jsonError(res, 400, "Montant trop élevé");
   }
@@ -344,7 +332,11 @@ export default async function handler(req, res) {
     return jsonError(res, 405, "Méthode non autorisée");
   }
 
-  const limit = rateLimit(req, { key: "wallet", max: 40, windowMs: 60_000 });
+  const limit = await rateLimitAsync(req, {
+    key: "wallet",
+    max: 40,
+    windowMs: 60_000,
+  });
   if (!limit.ok) {
     Object.entries(limit.headers || {}).forEach(([k, v]) =>
       res.setHeader(k, v)
@@ -382,7 +374,7 @@ export default async function handler(req, res) {
       return await handleConvert(admin, user, body, res);
     return jsonError(res, 400, "Action inconnue");
   } catch (e) {
-    console.error("Erreur /api/wallet :", e);
+    logError("wallet", e, { userId: user?.id, action: body?.action });
     return jsonError(res, 500, "Erreur serveur");
   }
 }
