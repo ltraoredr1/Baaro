@@ -12,20 +12,26 @@ import {
   Users,
   Store,
   X,
+  MoreHorizontal,
 } from "lucide-react";
 import { COLORS } from "../theme.js";
 
+/**
+ * Navigation BAARO
+ * - Shop dans la barre principale (mobile + desktop)
+ * - Rappel Statuts / Stories → onglet Fil
+ */
 const MAIN_ITEMS = [
   { id: "feed", label: "Fil", icon: Rss, badge: null },
   { id: "videos", label: "Vidéos", icon: Play, badge: "HOT" },
-  { id: "messages", label: "Chat", icon: MessageSquare, badge: "3" },
+  { id: "messages", label: "Chat", icon: MessageSquare, badge: null },
   { id: "debates", label: "Débats", icon: Swords, badge: null },
-  { id: "crypto", label: "BARO", icon: Coins, badge: "PRO" },
+  { id: "shop", label: "Shop", icon: Store, badge: null },
 ];
 
 const MORE_ITEMS = [
   { id: "friends", label: "Communauté", icon: Users, badge: null },
-  { id: "shop", label: "Boutiques", icon: Store, badge: null },
+  { id: "crypto", label: "BARO", icon: Coins, badge: "PRO" },
   { id: "wallet", label: "Portefeuille", icon: Wallet, badge: null },
   { id: "offline", label: "Hors-ligne", icon: WifiOff, badge: "P2P" },
   { id: "assistant", label: "IA Assistant", icon: Sparkles, badge: null },
@@ -55,14 +61,30 @@ export function Navigation({ activeTab, setActiveTab }) {
           className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest"
           style={{ color: COLORS.muted }}
         >
-          Navigation Principale
+          Navigation
         </div>
+
+        <button
+          type="button"
+          onClick={() => goTo("feed")}
+          className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-[11px] font-medium mb-1"
+          style={{
+            color: COLORS.muted,
+            background: "rgba(217,174,82,0.06)",
+            border: `1px dashed ${COLORS.borderGold || "rgba(217,174,82,0.35)"}`,
+          }}
+        >
+          <span style={{ color: COLORS.gold }}>●</span>
+          Statuts / Stories → Fil
+        </button>
+
         {ALL_ITEMS.map((item) => {
           const Icon = item.icon;
           const isActive = activeTab === item.id;
           return (
             <button
               key={item.id}
+              type="button"
               onClick={() => goTo(item.id)}
               className={`flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all group ${
                 isActive ? "shadow-md gold-glow" : "hover:bg-[rgba(255,255,255,0.05)]"
@@ -127,13 +149,11 @@ export function Navigation({ activeTab, setActiveTab }) {
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between mb-4">
-              <h3
-                className="font-bold text-sm"
-                style={{ color: COLORS.ivory }}
-              >
+              <h3 className="font-bold text-sm" style={{ color: COLORS.ivory }}>
                 Plus
               </h3>
               <button
+                type="button"
                 onClick={() => setMoreOpen(false)}
                 className="p-2 rounded-full"
                 style={{ color: COLORS.muted }}
@@ -148,6 +168,7 @@ export function Navigation({ activeTab, setActiveTab }) {
                 return (
                   <button
                     key={item.id}
+                    type="button"
                     onClick={() => goTo(item.id)}
                     className="flex flex-col items-center gap-2 p-3 rounded-2xl border transition"
                     style={{
@@ -172,7 +193,7 @@ export function Navigation({ activeTab, setActiveTab }) {
         </div>
       )}
 
-      {/* Mobile bottom bar */}
+      {/* Mobile bottom bar — Shop visible */}
       <nav
         className="md:hidden fixed bottom-3 left-3 right-3 z-50 glass-panel rounded-2xl border p-1.5 shadow-2xl flex items-center justify-around"
         style={{
@@ -186,6 +207,7 @@ export function Navigation({ activeTab, setActiveTab }) {
           return (
             <button
               key={item.id}
+              type="button"
               onClick={() => goTo(item.id)}
               className="flex flex-col items-center gap-0.5 p-2 rounded-xl transition relative"
               style={{ color: isActive ? COLORS.gold : COLORS.muted }}
@@ -207,11 +229,14 @@ export function Navigation({ activeTab, setActiveTab }) {
           );
         })}
         <button
+          type="button"
           onClick={() => setMoreOpen(true)}
           className="flex flex-col items-center gap-0.5 p-2 rounded-xl transition relative"
-          style={{ color: isMoreActive || moreOpen ? COLORS.teal : COLORS.muted }}
+          style={{
+            color: isMoreActive || moreOpen ? COLORS.teal : COLORS.muted,
+          }}
         >
-          <Settings size={20} />
+          <MoreHorizontal size={20} />
           <span className="text-[10px] font-medium leading-none">Plus</span>
           {(isMoreActive || moreOpen) && (
             <span

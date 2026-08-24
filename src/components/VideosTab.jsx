@@ -19,7 +19,7 @@ import { COLORS } from "../theme.js";
 import { useToast } from "./ToastContext.jsx";
 import { StoryViewer } from "./StoryViewer.jsx";
 
-export function VideosTab({ onRewardPoints, userId }) {
+export function VideosTab({ onRewardPoints, userId, onExit }) {
   const { showToast, showPointsReward } = useToast();
   const [videos, setVideos] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -436,14 +436,21 @@ export function VideosTab({ onRewardPoints, userId }) {
         className="fixed inset-0 z-40 w-full h-[100dvh] overflow-y-scroll snap-y snap-mandatory bg-black no-scrollbar"
         style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
       >
-        <div className="absolute top-0 left-0 right-0 z-30 flex justify-between items-center px-4 py-3 bg-gradient-to-b from-black/80 to-transparent pointer-events-none">
-          <h2 className="text-lg font-bold text-white pointer-events-auto">BAARO Videos</h2>
-          <div className="flex gap-2 pointer-events-auto">
-            <button onClick={() => setMuted(!muted)} className="p-2.5 rounded-full bg-white/15 backdrop-blur-md text-white">
-              {muted ? <VolumeX size={20} /> : <Volume2 size={20} />}
+        <div className="absolute top-0 left-0 right-0 z-30 flex justify-between items-center px-3 pt-[max(0.75rem,env(safe-area-inset-top))] pb-3 bg-gradient-to-b from-black/70 to-transparent pointer-events-none">
+          <div className="flex items-center gap-2 pointer-events-auto">
+            {onExit && (
+              <button type="button" onClick={onExit} className="p-2 rounded-full bg-white/15 backdrop-blur-md text-white" aria-label="Retour">
+                <X size={18} />
+              </button>
+            )}
+            <h2 className="text-sm font-bold text-white tracking-wide">Vidéos</h2>
+          </div>
+          <div className="flex gap-1.5 pointer-events-auto">
+            <button type="button" onClick={() => setMuted(!muted)} className="p-2 rounded-full bg-white/15 backdrop-blur-md text-white">
+              {muted ? <VolumeX size={18} /> : <Volume2 size={18} />}
             </button>
-            <button onClick={() => setShowUpload(true)} className="p-2.5 rounded-full bg-white/15 backdrop-blur-md text-white">
-              <Plus size={20} />
+            <button type="button" onClick={() => setShowUpload(true)} className="p-2 rounded-full bg-white/15 backdrop-blur-md text-white">
+              <Plus size={18} />
             </button>
           </div>
         </div>
@@ -530,61 +537,51 @@ export function VideosTab({ onRewardPoints, userId }) {
                   </div>
                 )}
 
-                <div className="absolute bottom-24 left-4 right-20 z-20 flex flex-col gap-2.5">
-                  <div className="flex items-center gap-3">
-                    <div className="w-11 h-11 rounded-full border-2 border-white overflow-hidden bg-gray-800">
+                <div className="absolute bottom-20 left-3 right-16 z-20 flex flex-col gap-1.5 pointer-events-none">
+                  <div className="flex items-center gap-2">
+                    <div className="w-9 h-9 rounded-full border-2 border-white overflow-hidden bg-gray-800 shrink-0">
                       {profile.avatar_url ? (
                         <img src={profile.avatar_url} className="w-full h-full object-cover" alt="" />
                       ) : (
-                        <div className="w-full h-full flex items-center justify-center text-lg">{profile.flag || "🌍"}</div>
+                        <div className="w-full h-full flex items-center justify-center text-sm">{profile.flag || "🌍"}</div>
                       )}
                     </div>
-                    <div>
-                      <div className="text-sm font-bold text-white">@{profile.handle || "membre"} {profile.flag}</div>
-                      <div className="text-xs text-gray-300">{profile.display_name || "Membre BAARO"}</div>
-                    </div>
+                    <div className="text-xs font-bold text-white truncate">@{profile.handle || "membre"} {profile.flag}</div>
                   </div>
-                  <p className="text-sm text-white leading-snug line-clamp-3">
+                  <p className="text-xs text-white/90 leading-snug line-clamp-2">
                     {v.title}
-                    {v.description && <span className="text-gray-300"> • {v.description}</span>}
+                    {v.description && <span className="text-gray-400"> · {v.description}</span>}
                   </p>
-                  <div className="flex items-center gap-2 text-xs text-gray-400">
-                    <Music size={12} />
-                    <span>Son original</span>
-                  </div>
                 </div>
 
-                <div className="absolute right-3 bottom-28 flex flex-col gap-5 items-center z-20">
-                  <button onClick={() => handleLike(v.id)} className="flex flex-col items-center gap-1">
-                    <div className={"p-3 rounded-full backdrop-blur-md " + (isLiked ? "bg-pink-500/30" : "bg-white/15")}>
-                      <Heart size={26} className={isLiked ? "text-pink-500" : "text-white"} fill={isLiked ? "currentColor" : "none"} />
+                <div className="absolute right-2 bottom-24 flex flex-col gap-3.5 items-center z-20">
+                  <button type="button" onClick={() => handleLike(v.id)} className="flex flex-col items-center gap-0.5">
+                    <div className={"p-2 rounded-full backdrop-blur-md " + (isLiked ? "bg-pink-500/30" : "bg-white/12")}>
+                      <Heart size={20} className={isLiked ? "text-pink-500" : "text-white"} fill={isLiked ? "currentColor" : "none"} />
                     </div>
-                    <span className="text-xs font-bold text-white">{v.likes || 0}</span>
+                    <span className="text-[10px] font-bold text-white">{v.likes || 0}</span>
                   </button>
-                  <button onClick={() => openComments(v.id)} className="flex flex-col items-center gap-1">
-                    <div className="p-3 rounded-full bg-white/15 backdrop-blur-md">
-                      <MessageCircle size={26} className="text-white" />
+                  <button type="button" onClick={() => openComments(v.id)} className="flex flex-col items-center gap-0.5">
+                    <div className="p-2 rounded-full bg-white/12 backdrop-blur-md">
+                      <MessageCircle size={20} className="text-white" />
                     </div>
-                    <span className="text-xs font-bold text-white">{v.comments_count || 0}</span>
+                    <span className="text-[10px] font-bold text-white">{v.comments_count || 0}</span>
                   </button>
-                  <button onClick={() => handleRepost(v)} className="flex flex-col items-center gap-1">
-                    <div className="p-3 rounded-full bg-white/15 backdrop-blur-md">
-                      <Repeat2 size={26} className="text-white" />
+                  <button type="button" onClick={() => handleRepost(v)} className="flex flex-col items-center gap-0.5">
+                    <div className="p-2 rounded-full bg-white/12 backdrop-blur-md">
+                      <Repeat2 size={20} className="text-white" />
                     </div>
-                    <span className="text-xs font-bold text-white">Repost</span>
                   </button>
-                  <button onClick={() => handleShare(v)} className="flex flex-col items-center gap-1">
-                    <div className="p-3 rounded-full bg-white/15 backdrop-blur-md">
-                      {shareFeedbackId === v.id ? <Check size={26} className="text-green-400" /> : <Share2 size={26} className="text-white" />}
+                  <button type="button" onClick={() => handleShare(v)} className="flex flex-col items-center gap-0.5">
+                    <div className="p-2 rounded-full bg-white/12 backdrop-blur-md">
+                      {shareFeedbackId === v.id ? <Check size={20} className="text-green-400" /> : <Share2 size={20} className="text-white" />}
                     </div>
-                    <span className="text-xs font-bold text-white">{shareFeedbackId === v.id ? "Copié" : "Partager"}</span>
                   </button>
                   {(v.author_id === user?.id) && (
-                    <button onClick={() => handleDeleteVideo(v.id)} className="flex flex-col items-center gap-1">
-                      <div className="p-3 rounded-full bg-red-500/25 backdrop-blur-md">
-                        <Trash2 size={26} className="text-red-400" />
+                    <button type="button" onClick={() => handleDeleteVideo(v.id)} className="flex flex-col items-center gap-0.5">
+                      <div className="p-2 rounded-full bg-red-500/25 backdrop-blur-md">
+                        <Trash2 size={18} className="text-red-400" />
                       </div>
-                      <span className="text-xs font-bold text-red-300">Suppr.</span>
                     </button>
                   )}
                 </div>

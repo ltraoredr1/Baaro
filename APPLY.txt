@@ -1,0 +1,18 @@
+BAARO UI — Shop visible + Statuts rappel + Videos plein ecran
+
+Installation (depuis C:\BAARO) :
+
+  copy /Y baaro-ui\src\app\MainShell.jsx src\app\MainShell.jsx
+  copy /Y baaro-ui\src\components\Navigation.jsx src\components\Navigation.jsx
+  copy /Y baaro-ui\src\components\VideosTab.jsx src\components\VideosTab.jsx
+
+Puis :
+
+  git add src/app/MainShell.jsx src/components/Navigation.jsx src/components/VideosTab.jsx
+  git commit -m "ui: shop visible, statuts rappel, videos plein ecran immersif"
+  git push
+
+Changements :
+- Shop dans la barre du bas (mobile) et sidebar
+- Rappel "Statuts / Stories -> Fil" dans la sidebar
+- Videos : Header+Nav masques, barre du haut seule, boutons lateraux reduits, bouton retour

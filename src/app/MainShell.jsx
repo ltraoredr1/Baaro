@@ -24,8 +24,8 @@ const THEME_BG_MAP = {
 const WELCOME_TOAST_KEY = "baaro:welcome_toast_shown";
 
 /**
- * Shell principal + toast de bienvenue (première session).
- * Remplace : src/app/MainShell.jsx
+ * Shell principal.
+ * Mode immersif vidéos : Header + Navigation masqués, contenu plein écran.
  */
 export function MainShell() {
   const {
@@ -50,7 +50,6 @@ export function MainShell() {
   const [forceOnboarding, setForceOnboarding] = useState(false);
   const [pulsePoints, setPulsePoints] = useState(false);
 
-  // Toast de bienvenue une seule fois par navigateur (après chargement wallet)
   useEffect(() => {
     if (!userId) return;
     try {
@@ -97,6 +96,7 @@ export function MainShell() {
     saveLastTab(activeTab);
   }, [activeTab]);
 
+  const isImmersive = activeTab === "videos";
   const Tab = tabs[activeTab] || null;
 
   const tabProps = {
@@ -106,7 +106,11 @@ export function MainShell() {
       onRewardPoints: earnPoints,
     },
     friends: { currentUserId: userId },
-    videos: { userId, onRewardPoints: earnPoints },
+    videos: {
+      userId,
+      onRewardPoints: earnPoints,
+      onExit: () => setActiveTab("feed"),
+    },
     messages: { userId, onRewardPoints: earnPoints },
     wallet: { onNavigateToCrypto: () => setActiveTab("crypto") },
     crypto: {},
@@ -133,7 +137,10 @@ export function MainShell() {
   return (
     <div
       className="min-h-screen flex flex-col transition-colors duration-500"
-      style={{ background: themeBg, color: COLORS.ivory }}
+      style={{
+        background: isImmersive ? "#000" : themeBg,
+        color: COLORS.ivory,
+      }}
     >
       <OfflineBanner />
       <OnboardingModal
@@ -141,31 +148,46 @@ export function MainShell() {
         onClose={() => setForceOnboarding(false)}
       />
 
-      <Header
-        lang={lang}
-        setLang={setLang}
-        pointsBalance={pointsBalance}
-        baroBalance={baroBalance}
-        userProfile={userProfile}
-        onOpenProfile={() => setInspectingProfileId(userId)}
-        onOpenNotifications={() => setNotifDrawerOpen(true)}
-        onOpenSearch={() => setSearchModalOpen(true)}
-        pulsePoints={pulsePoints}
-      />
+      {!isImmersive && (
+        <Header
+          lang={lang}
+          setLang={setLang}
+          pointsBalance={pointsBalance}
+          baroBalance={baroBalance}
+          userProfile={userProfile}
+          onOpenProfile={() => setInspectingProfileId(userId)}
+          onOpenNotifications={() => setNotifDrawerOpen(true)}
+          onOpenSearch={() => setSearchModalOpen(true)}
+          pulsePoints={pulsePoints}
+        />
+      )}
 
-      <div className="max-w-7xl mx-auto w-full px-3 sm:px-6 pt-4 sm:pt-6 flex-1 grid grid-cols-1 md:grid-cols-4 gap-6">
-        <div className="md:col-span-1">
-          <Navigation activeTab={activeTab} setActiveTab={setActiveTab} />
-        </div>
-
-        <main id="main-content" className="md:col-span-3 mobile-nav-spacer" tabIndex={-1}>
+      {isImmersive ? (
+        <main id="main-content" className="flex-1 relative" tabIndex={-1}>
           <ErrorBoundary>
             <Suspense fallback={<TabFallback />}>
               {Tab ? <Tab {...(tabProps[activeTab] || {})} /> : null}
             </Suspense>
           </ErrorBoundary>
         </main>
-      </div>
+      ) : (
+        <div className="max-w-7xl mx-auto w-full px-3 sm:px-6 pt-4 sm:pt-6 flex-1 grid grid-cols-1 md:grid-cols-4 gap-6">
+          <div className="md:col-span-1">
+            <Navigation activeTab={activeTab} setActiveTab={setActiveTab} />
+          </div>
+          <main
+            id="main-content"
+            className="md:col-span-3 mobile-nav-spacer"
+            tabIndex={-1}
+          >
+            <ErrorBoundary>
+              <Suspense fallback={<TabFallback />}>
+                {Tab ? <Tab {...(tabProps[activeTab] || {})} /> : null}
+              </Suspense>
+            </ErrorBoundary>
+          </main>
+        </div>
+      )}
 
       {inspectingProfileId && (
         <ProfileModal
