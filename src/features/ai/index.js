@@ -1,1 +1,1 @@
-export { default as AiAssistantTab } from "../../components/AiAssistantTab.jsx";
+export { AiAssistantTab } from "../../components/AiAssistantTab.jsx";
