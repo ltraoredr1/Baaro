@@ -1,1 +1,1 @@
-export { OfflineTab } from "../../components/OfflineTab.jsx";
+export { OfflineTab } from "./OfflineTab.jsx";

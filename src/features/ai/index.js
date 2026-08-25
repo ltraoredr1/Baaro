@@ -1,1 +1,1 @@
-export { AiAssistantTab } from "../../components/AiAssistantTab.jsx";
+export { AiAssistantTab } from "./AiAssistantTab.jsx";
