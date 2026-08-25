@@ -18,10 +18,10 @@ import {
   YAxis,
   Tooltip,
 } from "recharts";
-import { COLORS } from "../theme.js";
-import { useToast } from "./ToastContext.jsx";
-import { useWallet } from "../hooks/useWallet.js";
-import { GuestBanner } from "./GuestBanner.jsx";
+import { COLORS } from "../../theme.js";
+import { useToast } from "../../components/ToastContext.jsx";
+import { useWallet } from "../../hooks/useWallet.js";
+import { GuestBanner } from "../../components/GuestBanner.jsx";
 
 const PRICE_HISTORY = [
   { t: "J-6", price: 0.82 },

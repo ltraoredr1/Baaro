@@ -1,10 +1,10 @@
 import { useState } from "react";
 import { Gift, BadgeCheck, Rocket, CreditCard, Landmark } from "lucide-react";
-import { COLORS } from "../theme.js";
-import { useToast } from "./ToastContext.jsx";
-import { useWallet } from "../hooks/useWallet.js";
-import { supabase } from "../supabaseClient";
-import { API_BASE } from "../config.js";
+import { COLORS } from "../../theme.js";
+import { useToast } from "../../components/ToastContext.jsx";
+import { useWallet } from "../../hooks/useWallet.js";
+import { supabase } from "../../supabaseClient.js";
+import { API_BASE } from "../../config.js";
 
 const REWARDS = [
   {

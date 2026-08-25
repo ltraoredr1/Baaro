@@ -8,8 +8,8 @@ import {
   unfollowUser,
   acceptFriendRequest,
   rejectFriendRequest
-} from '../supabaseClient';
-import { getUserById } from '../usersData';
+} from '../../supabaseClient.js';
+import { getUserById } from '../../usersData.js';
 
 export function FriendsTab() {
   const [activeTab, setActiveTab] = useState('friends');

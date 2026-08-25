@@ -12,15 +12,15 @@ import {
   MoreHorizontal,
   Check,
 } from "lucide-react";
-import { FeedStories } from "./FeedStories.jsx";
-import { COLORS } from "../theme.js";
-import { randomId } from "../lib/id.js";
-import { useToast } from "./ToastContext.jsx";
-import { supabase } from "../supabaseClient.js";
-import { handleDbError } from "../lib/dbErrors.js";
-import { checkRateLimit, rateLimitMessage } from "../lib/rateLimit.js";
-import { GuestBanner } from "./GuestBanner.jsx";
-import { TranslateButton } from "./TranslateButton.jsx";
+import { FeedStories } from "../../components/FeedStories.jsx";
+import { COLORS } from "../../theme.js";
+import { randomId } from "../../lib/id.js";
+import { useToast } from "../../components/ToastContext.jsx";
+import { supabase } from "../../supabaseClient.js";
+import { handleDbError } from "../../lib/dbErrors.js";
+import { checkRateLimit, rateLimitMessage } from "../../lib/rateLimit.js";
+import { GuestBanner } from "../../components/GuestBanner.jsx";
+import { TranslateButton } from "../../components/TranslateButton.jsx";
 
 // Taille de page pour le fil. Pagination par CURSEUR (created_at + id),
 // pas par offset : reste rapide et correct même si de nouveaux posts

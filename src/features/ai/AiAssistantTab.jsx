@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef } from "react";
 import { Sparkles, Send, Bot, User, Zap, MessageSquare, Coins, Swords } from "lucide-react";
-import { COLORS } from "../theme.js";
-import { useToast } from "./ToastContext.jsx";
-import { API_BASE } from "../config.js";
-import { supabase } from "../supabaseClient.js";
+import { COLORS } from "../../theme.js";
+import { useToast } from "../../components/ToastContext.jsx";
+import { API_BASE } from "../../config.js";
+import { supabase } from "../../supabaseClient.js";
 
 const PRESETS = [
   { icon: Coins, text: "Comment maximiser mes points aujourd'hui ?" },

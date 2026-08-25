@@ -1,14 +1,14 @@
 import { useState, useEffect } from "react";
 import { Share2, Copy, Users, Gift } from "lucide-react";
-import { COLORS } from "../theme.js";
-import { useToast } from "./ToastContext.jsx";
-import { useApp } from "../contexts/AppContext.jsx";
+import { COLORS } from "../../theme.js";
+import { useToast } from "../../components/ToastContext.jsx";
+import { useApp } from "../../contexts/AppContext.jsx";
 import {
   getMyReferralCode,
   applyReferralCode,
   getPendingRef,
   clearPendingRef,
-} from "../lib/referralApi.js";
+} from "../../lib/referralApi.js";
 
 /**
  * Section parrainage pour WalletTab (ou Settings).

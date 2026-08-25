@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { User, Lock, Mail, Flag, Sparkles, X, LogIn, UserPlus, CheckCircle2, AlertCircle } from "lucide-react";
-import { COLORS } from "../theme.js";
-import { useToast } from "./ToastContext.jsx";
-import { supabase } from "../supabaseClient.js";
+import { COLORS } from "../../theme.js";
+import { useToast } from "../../components/ToastContext.jsx";
+import { supabase } from "../../supabaseClient.js";
 
 export function AuthModal({ isOpen, onClose, onAuthSuccess }) {
   const { showToast } = useToast();

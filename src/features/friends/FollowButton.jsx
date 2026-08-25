@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { supabase } from '../supabaseClient';
-import { useToast } from './ToastContext'; // Assurez-vous que ce chemin est correct
+import { supabase } from '../../supabaseClient.js';
+import { useToast } from '../../components/ToastContext.jsx'; // Assurez-vous que ce chemin est correct
 
 export default function FollowButton({ targetUserId, currentUserId }) {
   const [isFollowing, setIsFollowing] = useState(false);

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { WifiOff, Radio, Smartphone, Send, ShieldCheck, Zap, RefreshCw } from "lucide-react";
-import { COLORS } from "../theme.js";
-import { useToast } from "./ToastContext.jsx";
+import { COLORS } from "../../theme.js";
+import { useToast } from "../../components/ToastContext.jsx";
 
 const DEMO_NEARBY_DEVICES = [
   { id: "dev1", name: "Samsung Galaxy A53 (Amina)", distance: "~ 3m", signal: "Fort" },

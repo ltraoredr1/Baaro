@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { supabase } from "../supabaseClient.js";
+import { supabase } from "../../supabaseClient.js";
 import {
   Play,
   Heart,
@@ -15,9 +15,9 @@ import {
   Send,
   Trash2,
 } from "lucide-react";
-import { COLORS } from "../theme.js";
-import { useToast } from "./ToastContext.jsx";
-import { StoryViewer } from "./StoryViewer.jsx";
+import { COLORS } from "../../theme.js";
+import { useToast } from "../../components/ToastContext.jsx";
+import { StoryViewer } from "../../components/StoryViewer.jsx";
 
 export function VideosTab({ onRewardPoints, userId, onExit }) {
   const { showToast, showPointsReward } = useToast();

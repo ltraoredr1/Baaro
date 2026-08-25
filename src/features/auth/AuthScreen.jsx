@@ -1,9 +1,9 @@
 import { useState, useEffect } from "react";
 import { Coins, Radio, Shield, Sparkles } from "lucide-react";
-import { supabase } from "../supabaseClient";
-import { TurnstileWidget } from "../Turnstile.jsx";
-import { COLORS } from "../theme.js";
-import { captureRefFromUrl, getPendingRef } from "../lib/referralApi.js";
+import { supabase } from "../../supabaseClient.js";
+import { TurnstileWidget } from "../../Turnstile.jsx";
+import { COLORS } from "../../theme.js";
+import { captureRefFromUrl, getPendingRef } from "../../lib/referralApi.js";
 
 /**
  * Écran d'entrée BAARO — promesse de valeur en < 8 secondes.
