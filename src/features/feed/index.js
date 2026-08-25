@@ -1,1 +1,1 @@
-export { FeedTab } from "../../components/FeedTab.jsx";
+export { FeedTab } from "./FeedTab.jsx";
