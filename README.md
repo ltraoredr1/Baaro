@@ -1,104 +1,94 @@
-# BAARO - Module Communauté V3 (Tout-en-un)
+# BAARO 2.0 — Super-app communautaire
 
-Ce module ajoute à Baaro : liste d'amis, découverte d'utilisateurs, groupes avec plusieurs canaux (texte + vocal), rôles, invitations par lien, notifications temps réel, et récompenses BARO.
+Réseau social + wallet + live + IA régionale, conçu pour l’Afrique et les marchés émergents.
 
-## 📁 Fichiers à ajouter
+**Version** : 2.0.0-v20+ (package de correctifs inclus)
 
-```
-supabase/
-  - supabase-add-community.sql        (V1: groupes, membres, canaux, messages)
-  - supabase-add-community-v2.sql     (V2: rôles custom, voice_participants)
-  - supabase-add-community-v3.sql     (V3: invites, notifs, rewards_log)
+## Fonctionnalités principales
 
-src/hooks/
-  - useCommunity.js                   (logique principale + voice)
-  - useCommunityExtras.js             (invites, notifs, rewards)
+- Feed social, Stories, Vidéos
+- Messagerie + appels (Daily.co)
+- Debates / salles de discussion
+- Communauté type Discord (groupes, canaux, vocal, rôles)
+- Wallet BARO (gains, redeem, convert, payout)
+- Paiements Stripe + CinetPay
+- Assistant IA multi-providers avec routing par pays
+- Traduction texte / média
+- Notifications push + mode offline
+- Application mobile (Capacitor Android / iOS)
 
-src/components/
-  - CommunityTab.jsx                  (UI complète 3 colonnes type Discord)
+## Stack
 
-api/
-  - invite/[code].js                  (rejoindre via baaro.app/invite/XXXXXX)
-```
+| Couche        | Technologie                          |
+|---------------|--------------------------------------|
+| Frontend      | React 18, Vite, Tailwind, Capacitor  |
+| API           | Vercel Serverless                    |
+| Base de données | Supabase (Auth, Postgres, Realtime, Storage, RLS) |
+| Live / Appels | Daily.co                             |
+| Paiements     | Stripe, CinetPay                     |
+| IA            | OpenAI, Anthropic, Gemini, Moonshot, xAI, n8n |
+| Rate-limit    | Upstash Redis (optionnel)            |
 
-## 🛠️ Installation (ordre important)
+## Démarrage rapide
 
-1. **SQL dans Supabase** (SQL Editor) :
-```sql
--- exécute dans l'ordre :
--- supabase-add-community.sql
--- supabase-add-community-v2.sql
--- supabase-add-community-v3.sql
-```
+```bash
+cp .env.example .env.local
+# Renseigner VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY, etc.
 
-2. **Active Realtime** : Database > Replication > ajoute :
-   - channel_messages
-   - group_members
-   - voice_participants
-   - community_notifications
-   - group_invites
-
-3. **Copie les fichiers JS** dans src/hooks et src/components
-
-4. **Dans src/App.jsx** :
-
-```jsx
-import CommunityTab from './components/CommunityTab'
-import { useCommunityNotifications } from './hooks/useCommunityExtras'
-
-// dans ton composant App :
-const { unreadCount } = useCommunityNotifications(session?.user?.id)
-
-// dans ton menu :
-{ activeTab === 'community' && <CommunityTab userId={session?.user?.id} /> }
-
-// badge notif sur icône communauté :
-<span className="relative">
-  👥 Communauté
-  {unreadCount > 0 && <span className="absolute -top-1 -right-1 bg-red-500 text-[10px] px-1 rounded-full">{unreadCount}</span>}
-</span>
+# Migrations Supabase (ordre dans supabase/README.md)
+# Puis :
+npm ci
+npm run dev
 ```
 
-5. **Route d'invitation** : si tu utilises React Router, ajoute :
-```jsx
-<Route path="/invite/:code" element={<InvitePage />} />
-// InvitePage appelle joinViaCode(code) puis redirige vers /community
+## Scripts utiles
+
+```bash
+npm run build
+npm run check:lock
+npm run check:production
+npm run audit:security
+npm run check:e2e
+npm run cap:sync
+npm run cap:android
 ```
 
-## 🎮 Utilisation
+## Architecture
 
-- Créer groupe : bouton + dans sidebar gauche → nom, description, privé/public
-- Par défaut 4 canaux créés : #général, #annonces, 🔊Vocal Général, #Trading BARO
-- Créer canal : champ en bas de liste canaux (admin seulement)
-- Inviter : bouton 🔗 Inviter → génère baaro.app/invite/XXXXXX (choisis max uses, expiration)
-- Rôles : hover sur membre → 👑 promouvoir admin / 🚫 bannir (owner/admin seulement)
-- Vocal : Rejoindre / Quitter → branché sur src/lib/webrtc.js existant
-- Rewards : chaque action crédite via /api/wallet (sécurisé serveur, anti-double)
+```
+src/
+├── app/           # Shell (App, MainShell, tabs lazy)
+├── features/      # Une feature = un dossier + index
+├── components/    # UI partagée
+├── services/      # supabase, walletApi
+├── hooks/, lib/, contexts/
+api/               # Endpoints serverless (wallet, chat, payout…)
+supabase/          # Schéma + migrations
+```
 
-## 🔒 Sécurité (comme ton système portefeuille)
+## Sécurité
 
-- Toutes écritures via RLS + service_role key côté serveur
-- Idempotence via community_rewards_log (user_id, action, reference_id) unique
-- Pas de confiance au montant envoyé par client
+- Service-role Supabase **uniquement** côté serveur
+- Wallet : montants jamais décidés par le client
+- Idempotence des récompenses (reference_id)
+- CORS strict en production
+- Rate-limiting (mémoire + Upstash)
+- Headers de sécurité (CSP, HSTS, etc.) dans `vercel.json`
 
-## 💰 Barème points BARO Communauté
+## Documentation versionnée
 
-| Action | Points |
-|---|---|
-| Créer groupe | +10 |
-| Créer canal | +2 |
-| Créer lien invitation | +5 |
-| Rejoindre via lien | +3 |
-| Premier message jour / groupe | +1 |
-| Daily streak (7j consécutifs) | +15 |
+Voir les fichiers `docs-BAARO-vXX-*.md` :
+- v11 Messaging / Calls
+- v12 Live
+- v13 AI régional
+- v14 Notifications
+- v15 Performance
+- v16 Android
+- v17 Payout
+- v18 E2E
+- v19 Security
+- v20 Production
 
-À ajuster dans useCommunityExtras.js -> logReward()
+## Licence
 
-## 🚀 Prochaines étapes suggérées
-
-- Mentions @username dans channel_messages (parse texte)
-- Threads / réponses à un message
-- Upload fichier dans canaux (réutilise ton bucket media)
-- Modération IA (filtre toxicité avant envoi)
-
-Bon build !
+Projet privé — tous droits réservés.
