@@ -1,43 +1,36 @@
-import { supabase } from "../supabaseClient";
-import { API_BASE } from "../config.js"; // vérifie que ce fichier existe et exporte API_BASE
+import { supabase } from "../supabaseClient.js";
+import { API_BASE } from "../config.js";
+
+async function authHeaders() {
+  const { data } = await supabase.auth.getSession();
+  const token = data?.session?.access_token;
+  return {
+    "Content-Type": "application/json",
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+}
+
+async function walletRequest(body) {
+  const res = await fetch(`${API_BASE}/api/wallet`, {
+    method: "POST",
+    headers: await authHeaders(),
+    body: JSON.stringify(body),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    return { ok: false, error: json.error || res.statusText, status: res.status };
+  }
+  return { ok: true, ...json };
+}
+
+export const walletStatus = () => walletRequest({ action: "status" });
+export const walletEarn = (actionKey, detail = "", referenceId = null) =>
+  walletRequest({ action: "earn", actionKey, detail, referenceId });
+export const walletRedeem = (optionId) =>
+  walletRequest({ action: "redeem", optionId });
+export const walletConvert = (pts) =>
+  walletRequest({ action: "convert", pts });
 
 export async function earnPoints(actionKey, detail = "", referenceId = null) {
-  try {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-
-    if (!session?.access_token) {
-      return { ok: false, error: "Non authentifié" };
-    }
-
-    const res = await fetch(`${API_BASE}/api/wallet`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${session.access_token}`,
-      },
-      body: JSON.stringify({
-        action: "earn",
-        actionKey,
-        detail,
-        referenceId,
-      }),
-    });
-
-    const data = await res.json().catch(() => ({}));
-
-    if (!res.ok) {
-      return { ok: false, error: data.error || "Erreur serveur" };
-    }
-
-    return {
-      ok: true,
-      balance: data.balance,
-      transaction: data.transaction,
-    };
-  } catch (err) {
-    console.error("earnPoints error:", err);
-    return { ok: false, error: "Impossible de joindre le serveur" };
-  }
+  return walletEarn(actionKey, detail, referenceId);
 }
