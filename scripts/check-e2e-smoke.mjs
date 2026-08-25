@@ -3,9 +3,7 @@
  * Usage: node scripts/check-e2e-smoke.mjs
  * Optionnel: BAARO_BASE_URL=https://... node scripts/check-e2e-smoke.mjs
  *
- * FIX 2026-08-24: le test "locale.spli" etait un faux positif
- * (matche aussi le correct "locale.split"). On detecte desormais
- * uniquement les vrais typos .spli( / .selec'
+ * FIX: "locale.spli" etait un faux positif (matche aussi locale.split).
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -42,7 +40,6 @@ for (const f of requiredFiles) {
   else fail(`missing ${f}`);
 }
 
-// Navigation doit referencer shop
 const nav = fs.readFileSync(path.join(root, "src/components/Navigation.jsx"), "utf8");
 if (nav.includes('id: "shop"') || nav.includes("id: 'shop'")) ok("Navigation contains shop tab");
 else fail("Navigation missing shop tab id");
@@ -55,25 +52,19 @@ const mainShell = fs.readFileSync(path.join(root, "src/app/MainShell.jsx"), "utf
 if (mainShell.includes("shop:")) ok("MainShell tabProps.shop");
 else fail("MainShell missing shop props");
 
-// ShopRegistrationForm — typos reels uniquement (pas "locale.split")
 const reg = fs.readFileSync(
   path.join(root, "src/features/shop/ShopRegistrationForm.jsx"),
   "utf8"
 );
-// Ancien bug: locale.spli(  — le correct est locale.split(
 if (/\.spli\s*\(/.test(reg)) fail("ShopRegistrationForm still has split typo (.spli()");
 else ok("ShopRegistrationForm split syntax");
 if (reg.includes(".selec'")) fail("ShopRegistrationForm still has select typo");
 else ok("ShopRegistrationForm select syntax");
-if (reg.includes(".split(")) ok("ShopRegistrationForm uses .split()");
-else ok("ShopRegistrationForm: no .split() (ok if country default changed)");
 
-// create-payment doit auth
 const pay = fs.readFileSync(path.join(root, "api/create-payment.js"), "utf8");
 if (pay.includes("requireUser")) ok("create-payment uses requireUser");
 else fail("create-payment missing requireUser");
 
-// vercel CSP
 const vercel = fs.readFileSync(path.join(root, "vercel.json"), "utf8");
 if (vercel.includes("Content-Security-Policy")) ok("CSP header in vercel.json");
 else fail("CSP missing in vercel.json");
@@ -81,7 +72,7 @@ else fail("CSP missing in vercel.json");
 const base = process.env.BAARO_BASE_URL;
 if (base) {
   try {
-    const res = await fetch(base.replace(/\/$/, "/") );
+    const res = await fetch(base.replace(/\/$/, "/"));
     if (res.ok) ok(`HTTP ${res.status} ${base}`);
     else fail(`HTTP ${res.status} ${base}`);
   } catch (e) {
