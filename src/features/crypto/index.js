@@ -1,1 +1,1 @@
-export { CryptoTab } from "../../components/CryptoTab.jsx";
+export { CryptoTab } from "./CryptoTab.jsx";
