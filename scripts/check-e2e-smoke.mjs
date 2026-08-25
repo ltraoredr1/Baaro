@@ -1,9 +1,6 @@
 /**
- * Smoke checks BAARO — pas un vrai E2E browser, mais garde-fous CI.
- * Usage: node scripts/check-e2e-smoke.mjs
- * Optionnel: BAARO_BASE_URL=https://... node scripts/check-e2e-smoke.mjs
- *
- * FIX: "locale.spli" etait un faux positif (matche aussi locale.split).
+ * Smoke checks BAARO — garde-fous CI.
+ * FIX: ne plus matcher "locale.split" via "locale.spli"
  */
 import fs from "node:fs";
 import path from "node:path";
