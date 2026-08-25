@@ -1,1 +1,1 @@
-export { default as OfflineTab } from "../../components/OfflineTab.jsx";
+export { OfflineTab } from "../../components/OfflineTab.jsx";
