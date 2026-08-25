@@ -1,1 +1,1 @@
-export { VideosTab } from "../../components/VideosTab.jsx";
+export { VideosTab } from "./VideosTab.jsx";
