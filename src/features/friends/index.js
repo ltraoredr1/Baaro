@@ -1,2 +1,2 @@
 export { FriendsTab } from "../../components/FriendsTab.jsx";
-export { FollowButton } from "../../components/FollowButton.jsx";
+export { default as FollowButton } from "../../components/FollowButton.jsx";
