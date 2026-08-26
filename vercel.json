@@ -21,5 +21,20 @@
         }
       ]
     }
+  ],
+  "rewrites": [
+    { "source": "/api/gifts", "destination": "/api/wallet?route=gifts" },
+    { "source": "/api/payout", "destination": "/api/wallet?route=payout" },
+    { "source": "/api/create-payment", "destination": "/api/payments?route=create" },
+    { "source": "/api/stripe-redeem", "destination": "/api/payments?route=stripe-redeem" },
+    { "source": "/api/payment-webhook", "destination": "/api/webhooks?route=payment" },
+    { "source": "/api/stripe-webhook", "destination": "/api/webhooks?route=stripe" },
+    { "source": "/api/chat-call", "destination": "/api/chat?route=call" },
+    { "source": "/api/create-room", "destination": "/api/live?route=room" },
+    { "source": "/api/live-roles", "destination": "/api/live?route=roles" },
+    { "source": "/api/ai-routing", "destination": "/api/ai?route=routing" },
+    { "source": "/api/debate-ai", "destination": "/api/ai?route=debate" },
+    { "source": "/api/translate-media", "destination": "/api/translate?route=media" },
+    { "source": "/api/invite/:code", "destination": "/api/referral?route=invite&code=:code" }
   ]
 }
