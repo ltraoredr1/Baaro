@@ -25,7 +25,7 @@ const WELCOME_TOAST_KEY = "baaro:welcome_toast_shown";
 
 /**
  * Shell principal.
- * Mode immersif vidéos : Header + Navigation masqués, contenu plein écran.
+ * Mode immersif vidéos : Header masqué, barre de navigation mobile toujours visible.
  */
 export function MainShell() {
   const {
@@ -186,6 +186,13 @@ export function MainShell() {
               </Suspense>
             </ErrorBoundary>
           </main>
+        </div>
+      )}
+
+      {/* Nav mobile toujours visible, y compris en mode Vidéos */}
+      {isImmersive && (
+        <div className="md:hidden">
+          <Navigation activeTab={activeTab} setActiveTab={setActiveTab} />
         </div>
       )}
 
