@@ -147,6 +147,7 @@ export function VideosTab({ onRewardPoints, userId, onExit }) {
             });
           } else {
             videoEl.pause();
+            setPlayingId((id) => (id === videoId ? null : id));
           }
         });
       },
@@ -434,7 +435,7 @@ export function VideosTab({ onRewardPoints, userId, onExit }) {
       {/* Stories déplacées vers le Fil (FeedStories). Vidéos = plein écran. */}
       <div
         className="fixed inset-0 z-40 w-full h-[100dvh] overflow-y-scroll snap-y snap-mandatory bg-black no-scrollbar"
-        style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
+        style={{ paddingBottom: "calc(4.5rem + env(safe-area-inset-bottom, 0px))" }}
       >
         <div className="absolute top-0 left-0 right-0 z-30 flex justify-between items-center px-3 pt-[max(0.75rem,env(safe-area-inset-top))] pb-3 bg-gradient-to-b from-black/70 to-transparent pointer-events-none">
           <div className="flex items-center gap-2 pointer-events-auto">
@@ -474,7 +475,7 @@ export function VideosTab({ onRewardPoints, userId, onExit }) {
           </div>
         ) : (
           videos.map((v) => {
-            const isPlaying = playingId === v.id;
+            const isPlaying = String(playingId) === String(v.id);
             const isLiked = !!likedMap[v.id];
             const profile = v.profiles || {};
             const hasError = !!videoErrors[v.id];
@@ -483,13 +484,17 @@ export function VideosTab({ onRewardPoints, userId, onExit }) {
               <div key={v.id} className="h-[100dvh] w-full snap-start relative flex items-center justify-center bg-black">
                 <video
                   ref={(el) => { if (el) videoRefs.current[v.id] = el; }}
-                  data-id={v.id}
+                  data-id={String(v.id)}
                   src={v.video_url}
                   className="h-full w-full object-cover"
                   loop
                   playsInline
                   preload="metadata"
                   muted={muted}
+                  onPlay={() => setPlayingId(String(v.id))}
+                  onPause={() =>
+                    setPlayingId((id) => (id === String(v.id) ? null : id))
+                  }
                   onClick={() => {
                     const el = videoRefs.current[v.id];
                     if (!el || hasError) return;
@@ -530,14 +535,20 @@ export function VideosTab({ onRewardPoints, userId, onExit }) {
                 )}
 
                 {!isPlaying && !hasError && (
-                  <div className="absolute inset-0 flex items-center justify-center z-10 pointer-events-none">
-                    <div className="w-16 h-16 rounded-full bg-black/50 backdrop-blur-md flex items-center justify-center">
+                  <div
+                    className="absolute inset-0 flex items-center justify-center z-10"
+                    onClick={() => {
+                      const el = videoRefs.current[v.id];
+                      if (el) el.play().catch(() => {});
+                    }}
+                  >
+                    <div className="w-16 h-16 rounded-full bg-black/50 backdrop-blur-md flex items-center justify-center pointer-events-none">
                       <Play size={32} className="text-white ml-1" fill="white" />
                     </div>
                   </div>
                 )}
 
-                <div className="absolute bottom-20 left-3 right-16 z-20 flex flex-col gap-1.5 pointer-events-none">
+                <div className="absolute bottom-28 left-3 right-16 z-20 flex flex-col gap-1.5 pointer-events-none">
                   <div className="flex items-center gap-2">
                     <div className="w-9 h-9 rounded-full border-2 border-white overflow-hidden bg-gray-800 shrink-0">
                       {profile.avatar_url ? (
@@ -554,7 +565,7 @@ export function VideosTab({ onRewardPoints, userId, onExit }) {
                   </p>
                 </div>
 
-                <div className="absolute right-2 bottom-24 flex flex-col gap-3.5 items-center z-20">
+                <div className="absolute right-2 bottom-32 flex flex-col gap-3.5 items-center z-20">
                   <button type="button" onClick={() => handleLike(v.id)} className="flex flex-col items-center gap-0.5">
                     <div className={"p-2 rounded-full backdrop-blur-md " + (isLiked ? "bg-pink-500/30" : "bg-white/12")}>
                       <Heart size={20} className={isLiked ? "text-pink-500" : "text-white"} fill={isLiked ? "currentColor" : "none"} />
