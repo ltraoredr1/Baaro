@@ -20,19 +20,23 @@ const COUNTRY_CURRENCY = {
   CA: "USD",
 };
 
+const TRIAL_DAYS = 30;
+
 function guessDefaultCountry() {
   try {
     const locale = navigator.language || navigator.languages?.[0] || "";
     const region = locale.split("-")[1];
     if (region && region.length === 2) return region.toUpperCase();
   } catch {
-    // ignore
+    /* ignore */
   }
   return "ML";
 }
 
 /**
- * Inscription boutique — tarif selon pays, paiement via /api/create-payment.
+ * Inscription boutique
+ * - Nouveaux users : 30 jours gratuits (trial)
+ * - Après / renouvellement : paiement annuel
  */
 export default function ShopRegistrationForm({ onRegistered }) {
   const [country, setCountry] = useState(guessDefaultCountry);
@@ -47,21 +51,38 @@ export default function ShopRegistrationForm({ onRegistered }) {
   const [description, setDescription] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [eligibleForTrial, setEligibleForTrial] = useState(false);
+  const [checkingTrial, setCheckingTrial] = useState(true);
 
   useEffect(() => {
-    async function loadPremiumStatus() {
+    async function loadUserAndTrial() {
+      setCheckingTrial(true);
       const {
         data: { user },
       } = await supabase.auth.getUser();
-      if (!user) return;
-      const { data } = await supabase
+      if (!user) {
+        setEligibleForTrial(false);
+        setCheckingTrial(false);
+        return;
+      }
+
+      const { data: profile } = await supabase
         .from("profiles")
         .select("is_premium")
         .eq("user_id", user.id)
         .maybeSingle();
-      setIsPremium(!!data?.is_premium);
+      setIsPremium(!!profile?.is_premium);
+
+      // Essai = jamais eu de boutique (première création)
+      const { count } = await supabase
+        .from("shops")
+        .select("id", { count: "exact", head: true })
+        .eq("owner_id", user.id);
+
+      setEligibleForTrial((count || 0) === 0);
+      setCheckingTrial(false);
     }
-    loadPremiumStatus();
+    loadUserAndTrial();
   }, []);
 
   useEffect(() => {
@@ -107,10 +128,6 @@ export default function ShopRegistrationForm({ onRegistered }) {
       setError("Nom et ville sont obligatoires.");
       return;
     }
-    if (!pricing || !selectedProvider) {
-      setError("Choisissez un moyen de paiement.");
-      return;
-    }
 
     setLoading(true);
     try {
@@ -118,6 +135,58 @@ export default function ShopRegistrationForm({ onRegistered }) {
         data: { user },
       } = await supabase.auth.getUser();
       if (!user) throw new Error("Non connecté");
+
+      // Re-vérifier l'éligibilité côté client (la vérité reste en base)
+      const { count } = await supabase
+        .from("shops")
+        .select("id", { count: "exact", head: true })
+        .eq("owner_id", user.id);
+      const canTrial = (count || 0) === 0;
+
+      if (canTrial) {
+        const trialEnds = new Date();
+        trialEnds.setDate(trialEnds.getDate() + TRIAL_DAYS);
+
+        const { data: shop, error: shopError } = await supabase
+          .from("shops")
+          .insert({
+            owner_id: user.id,
+            name: name.trim(),
+            description: description.trim() || null,
+            category: category.trim() || null,
+            country,
+            city: city.trim(),
+            currency: COUNTRY_CURRENCY[country] || "XOF",
+            is_active: true,
+            subscription_status: "trial",
+            trial_ends_at: trialEnds.toISOString(),
+          })
+          .select()
+          .single();
+
+        if (shopError) throw shopError;
+
+        // Trace abonnement gratuit
+        await supabase.from("shop_subscriptions").insert({
+          shop_id: shop.id,
+          amount: 0,
+          currency: COUNTRY_CURRENCY[country] || "XOF",
+          was_premium_rate: false,
+          provider: "trial",
+          payment_ref: `trial_\( {shop.id}_ \){Date.now()}`,
+          status: "trial",
+        });
+
+        onRegistered?.(shop);
+        return;
+      }
+
+      // --- Parcours payant (pas d'essai / renouvellement) ---
+      if (!pricing || !selectedProvider) {
+        setError("Choisissez un moyen de paiement.");
+        setLoading(false);
+        return;
+      }
 
       const { data: shop, error: shopError } = await supabase
         .from("shops")
@@ -128,14 +197,16 @@ export default function ShopRegistrationForm({ onRegistered }) {
           category: category.trim() || null,
           country,
           city: city.trim(),
+          currency: currency || "XOF",
           is_active: false,
+          subscription_status: "none",
         })
         .select()
         .single();
 
       if (shopError) throw shopError;
 
-      const paymentRef = `shop_${shop.id}_${Date.now()}`;
+      const paymentRef = `shop_\( {shop.id}_ \){Date.now()}`;
       const { error: subError } = await supabase.from("shop_subscriptions").insert({
         shop_id: shop.id,
         amount: price,
@@ -169,11 +240,26 @@ export default function ShopRegistrationForm({ onRegistered }) {
     }
   }
 
+  if (checkingTrial) {
+    return (
+      <p className="text-sm text-center p-4 text-gray-400">
+        Vérification de l&apos;offre d&apos;essai…
+      </p>
+    );
+  }
+
   return (
     <form onSubmit={handleSubmit} className="max-w-md mx-auto space-y-4 p-4">
       <h2 className="text-lg font-semibold">Créer ma boutique</h2>
 
-      {pricing && (
+      {eligibleForTrial ? (
+        <div className="rounded-lg p-3 text-sm bg-emerald-50 text-emerald-800 border border-emerald-200">
+          <strong>Offre de bienvenue</strong>
+          <br />
+          Création <strong>gratuite pendant {TRIAL_DAYS} jours</strong> pour les
+          nouveaux utilisateurs. Ensuite, abonnement annuel selon ton pays.
+        </div>
+      ) : pricing ? (
         <div
           className={`rounded-lg p-3 text-sm ${
             isPremium ? "bg-yellow-50 text-yellow-800" : "bg-gray-50 text-gray-600"
@@ -183,7 +269,7 @@ export default function ShopRegistrationForm({ onRegistered }) {
             ? `Tarif premium : ${pricing.amount_premium} ${currency} / an (au lieu de ${pricing.amount_normal} ${currency})`
             : `Tarif : ${pricing.amount_normal} ${currency} / an (premium : ${pricing.amount_premium} ${currency})`}
         </div>
-      )}
+      ) : null}
 
       <select
         value={country}
@@ -228,7 +314,7 @@ export default function ShopRegistrationForm({ onRegistered }) {
         rows={3}
       />
 
-      {providers.length > 0 && (
+      {!eligibleForTrial && providers.length > 0 && (
         <div className="space-y-1">
           <label className="text-sm font-medium">Moyen de paiement</label>
           {providers.map((p) => (
@@ -250,18 +336,24 @@ export default function ShopRegistrationForm({ onRegistered }) {
 
       <button
         type="submit"
-        disabled={loading || !pricing}
+        disabled={loading || (!eligibleForTrial && !pricing)}
         className="w-full bg-blue-600 text-white rounded-lg py-2 disabled:opacity-50"
       >
         {loading
-          ? "Préparation du paiement…"
-          : price
-            ? `Payer ${price} ${currency} et activer`
-            : "Chargement…"}
+          ? eligibleForTrial
+            ? "Activation de l'essai…"
+            : "Préparation du paiement…"
+          : eligibleForTrial
+            ? `Activer gratuitement (${TRIAL_DAYS} jours)`
+            : price
+              ? `Payer ${price} ${currency} et activer`
+              : "Chargement…"}
       </button>
 
       <p className="text-xs text-gray-400 text-center">
-        Paiement sécurisé — le montant est revalidé côté serveur.
+        {eligibleForTrial
+          ? `Après ${TRIAL_DAYS} jours, un abonnement annuel sera requis pour rester visible.`
+          : "Paiement sécurisé — le montant est revalidé côté serveur."}
       </p>
     </form>
   );
