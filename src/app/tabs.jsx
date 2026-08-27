@@ -1,9 +1,5 @@
 import { lazy } from "react";
 
-/**
- * Map tabId → composant lazy (code-splitting par feature).
- * Destination : src/app/tabs.jsx
- */
 export const tabs = {
   feed: lazy(() =>
     import("../features/feed/index.js").then((m) => ({ default: m.FeedTab }))
@@ -42,13 +38,18 @@ export const tabs = {
       default: m.AiAssistantTab,
     }))
   ),
-  settings: lazy(() =>
-    import("../features/settings").then((m) => ({
-      default: m.SettingsTab,
-    }))
-  ),
   shop: lazy(() =>
     import("../features/shop/index.js").then((m) => ({ default: m.ShopTab }))
+  ),
+
+  // FIX: settings est en default export
+  settings: lazy(() =>
+    import("../features/settings/index.tsx").then((m) => ({ default: m.default }))
+  ),
+
+  // PLUS = onglet qui contient settings (comme tu veux)
+  plus: lazy(() =>
+    import("../features/settings/index.tsx").then((m) => ({ default: m.default }))
   ),
 };
 
