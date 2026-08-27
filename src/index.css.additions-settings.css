@@ -1,0 +1,19 @@
+/* À coller dans src/index.css — accessibilité & data-saver (réglages BAARO) */
+
+html.baaro-large-text {
+  font-size: 112.5%;
+}
+
+html.baaro-reduce-motion *,
+html.baaro-reduce-motion *::before,
+html.baaro-reduce-motion *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
+}
+
+/* Les lecteurs de média peuvent tester data-baaro-data-saver="1" sur <html> */
+html[data-baaro-data-saver="1"] video:not([data-force-hq]) {
+  /* hint CSS uniquement — la logique de préchargement reste côté JS */
+}
