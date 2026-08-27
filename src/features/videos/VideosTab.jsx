@@ -84,22 +84,23 @@ export function VideosTab({ onRewardPoints, onExit }) {
   const [showSoundPicker, setShowSoundPicker] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
-  const [showCamera, setShowCamera] = useState(false);
+
+  // Créateur caméra : aucun plafond de durée imposé par BAARO.
+  const [cameraOpen, setCameraOpen] = useState(false);
   const [cameraFacing, setCameraFacing] = useState("user");
-  const [recording, setRecording] = useState(false);
-  const [recordSeconds, setRecordSeconds] = useState(0);
+  const [cameraRecording, setCameraRecording] = useState(false);
+  const [cameraSeconds, setCameraSeconds] = useState(0);
+  const [cameraError, setCameraError] = useState("");
+  const cameraVideoRef = useRef(null);
+  const cameraStreamRef = useRef(null);
+  const mediaRecorderRef = useRef(null);
+  const cameraChunksRef = useRef([]);
+  const cameraTimerRef = useRef(null);
 
   const videoRefs = useRef({});
   const observerRef = useRef(null);
   const viewedRef = useRef(new Set());
   const fileInputRef = useRef(null);
-  const cameraVideoRef = useRef(null);
-  const cameraStreamRef = useRef(null);
-  const mediaRecorderRef = useRef(null);
-  const cameraChunksRef = useRef([]);
-  const recordTimerRef = useRef(null);
-
-  useEffect(() => () => stopCamera(), [stopCamera]);
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => setUser(data?.user || null));
@@ -496,12 +497,12 @@ export function VideosTab({ onRewardPoints, onExit }) {
   };
 
 
-  const stopCamera = useCallback(() => {
-    if (recordTimerRef.current) {
-      clearInterval(recordTimerRef.current);
-      recordTimerRef.current = null;
+  const stopCameraStream = useCallback(() => {
+    if (cameraTimerRef.current) {
+      clearInterval(cameraTimerRef.current);
+      cameraTimerRef.current = null;
     }
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+    if (mediaRecorderRef.current?.state === "recording") {
       try { mediaRecorderRef.current.stop(); } catch {}
     }
     mediaRecorderRef.current = null;
@@ -509,19 +510,25 @@ export function VideosTab({ onRewardPoints, onExit }) {
       cameraStreamRef.current.getTracks().forEach((track) => track.stop());
       cameraStreamRef.current = null;
     }
-    setRecording(false);
-    setRecordSeconds(0);
+    if (cameraVideoRef.current) cameraVideoRef.current.srcObject = null;
+    setCameraRecording(false);
   }, []);
 
   const startCamera = useCallback(async () => {
+    setCameraError("");
     if (!navigator.mediaDevices?.getUserMedia) {
-      showToast("La caméra n'est pas disponible dans ce navigateur.", "error");
+      setCameraError("La caméra n'est pas disponible dans ce navigateur. Vérifie HTTPS et les permissions.");
       return;
     }
+
+    stopCameraStream();
     try {
-      stopCamera();
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: cameraFacing }, width: { ideal: 1080 }, height: { ideal: 1920 } },
+        video: {
+          facingMode: cameraFacing,
+          width: { ideal: 1080 },
+          height: { ideal: 1920 },
+        },
         audio: true,
       });
       cameraStreamRef.current = stream;
@@ -529,85 +536,117 @@ export function VideosTab({ onRewardPoints, onExit }) {
         cameraVideoRef.current.srcObject = stream;
         await cameraVideoRef.current.play().catch(() => {});
       }
+      setCameraSeconds(0);
     } catch (error) {
-      console.error("camera:", error);
-      showToast("Autorise la caméra et le micro pour filmer sur BAARO.", "error");
+      console.error("BAARO camera:", error);
+      setCameraError(
+        error?.name === "NotAllowedError"
+          ? "Autorise la caméra et le micro dans le navigateur puis réessaie."
+          : "Impossible d'ouvrir la caméra. Vérifie les permissions de l'appareil."
+      );
     }
-  }, [cameraFacing, showToast, stopCamera]);
+  }, [cameraFacing, stopCameraStream]);
 
-  useEffect(() => {
-    if (!showCamera) {
-      stopCamera();
-      return;
-    }
-    startCamera();
-    return () => stopCamera();
-  }, [showCamera, cameraFacing, startCamera, stopCamera]);
+  const openCamera = async () => {
+    setShowUpload(true);
+    setCameraOpen(true);
+    await startCamera();
+  };
 
-  const switchCamera = () => {
+  const closeCamera = () => {
+    stopCameraStream();
+    setCameraOpen(false);
+    setCameraError("");
+    setCameraSeconds(0);
+  };
+
+  const toggleCameraFacing = async () => {
+    if (cameraRecording) return;
     setCameraFacing((value) => (value === "user" ? "environment" : "user"));
   };
 
-  const startRecording = () => {
+  useEffect(() => {
+    if (!cameraOpen || cameraRecording) return;
+    startCamera();
+    return () => stopCameraStream();
+  }, [cameraOpen, cameraFacing]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    return () => stopCameraStream();
+  }, [stopCameraStream]);
+
+  const startCameraRecording = () => {
     const stream = cameraStreamRef.current;
     if (!stream) {
-      showToast("Caméra non prête.", "error");
+      setCameraError("La caméra n'est pas ouverte.");
       return;
     }
-    const mimeTypes = [
+    const candidates = [
       "video/webm;codecs=vp9,opus",
       "video/webm;codecs=vp8,opus",
       "video/webm",
       "video/mp4",
     ];
-    const mimeType = mimeTypes.find((type) => MediaRecorder.isTypeSupported?.(type)) || "";
+    const mimeType = candidates.find((type) => window.MediaRecorder?.isTypeSupported?.(type)) || "";
+    if (!window.MediaRecorder) {
+      setCameraError("L'enregistrement vidéo n'est pas supporté par ce navigateur.");
+      return;
+    }
+
+    cameraChunksRef.current = [];
+    let recorder;
     try {
-      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
-      cameraChunksRef.current = [];
-      recorder.ondataavailable = (event) => {
-        if (event.data?.size) cameraChunksRef.current.push(event.data);
-      };
-      recorder.onerror = (event) => {
-        console.error("MediaRecorder:", event);
-        showToast("Impossible d'enregistrer la vidéo.", "error");
-        setRecording(false);
-      };
-      recorder.onstop = () => {
-        const type = recorder.mimeType || mimeType || "video/webm";
-        const blob = new Blob(cameraChunksRef.current, { type });
-        if (!blob.size) {
-          showToast("Enregistrement vide.", "error");
-          return;
-        }
-        const ext = type.includes("mp4") ? "mp4" : "webm";
-        const file = new File([blob], `baaro-camera-${Date.now()}.${ext}`, { type });
-        handleFileSelected(file);
-        setShowCamera(false);
-        showToast("Vidéo enregistrée. Tu peux maintenant la publier.", "success");
-      };
-      mediaRecorderRef.current = recorder;
-      recorder.start(1000);
-      setRecording(true);
-      setRecordSeconds(0);
-      recordTimerRef.current = setInterval(() => {
-        setRecordSeconds((value) => value + 1);
-      }, 1000);
+      recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
     } catch (error) {
       console.error(error);
-      showToast("Enregistrement caméra non supporté sur cet appareil.", "error");
+      setCameraError("Impossible de démarrer l'enregistrement.");
+      return;
     }
+
+    mediaRecorderRef.current = recorder;
+    recorder.ondataavailable = (event) => {
+      if (event.data?.size) cameraChunksRef.current.push(event.data);
+    };
+    recorder.onerror = (event) => {
+      console.error("BAARO recorder:", event.error);
+      setCameraError("Une erreur est survenue pendant l'enregistrement.");
+      setCameraRecording(false);
+    };
+    recorder.onstop = () => {
+      const type = recorder.mimeType || mimeType || "video/webm";
+      const blob = new Blob(cameraChunksRef.current, { type });
+      if (!blob.size) {
+        setCameraError("Aucune vidéo n'a été enregistrée.");
+        return;
+      }
+      const ext = type.includes("mp4") ? "mp4" : "webm";
+      const file = new File([blob], `baaro-camera-${Date.now()}.${ext}`, {
+        type,
+        lastModified: Date.now(),
+      });
+      handleFileSelected(file);
+      setCameraOpen(false);
+      setCameraSeconds(0);
+      stopCameraStream();
+    };
+
+    recorder.start(1000);
+    setCameraRecording(true);
+    setCameraSeconds(0);
+    cameraTimerRef.current = setInterval(() => {
+      setCameraSeconds((value) => value + 1);
+    }, 1000);
   };
 
-  const stopRecording = () => {
-    if (recordTimerRef.current) {
-      clearInterval(recordTimerRef.current);
-      recordTimerRef.current = null;
+  const stopCameraRecording = () => {
+    if (mediaRecorderRef.current?.state === "recording") {
+      mediaRecorderRef.current.stop();
     }
-    const recorder = mediaRecorderRef.current;
-    if (recorder && recorder.state !== "inactive") {
-      recorder.stop();
+    if (cameraTimerRef.current) {
+      clearInterval(cameraTimerRef.current);
+      cameraTimerRef.current = null;
     }
-    setRecording(false);
+    setCameraRecording(false);
   };
 
   const resetUpload = () => {
@@ -1127,52 +1166,82 @@ export function VideosTab({ onRewardPoints, onExit }) {
         </div>
       )}
 
-
-      {showCamera && (
-        <div className="fixed inset-0 z-[100] bg-black flex flex-col">
-          <div className="relative flex-1 min-h-0 bg-black">
-            <video
-              ref={cameraVideoRef}
-              autoPlay
-              muted
-              playsInline
-              className="h-full w-full object-cover"
-            />
-            <div className="absolute top-0 left-0 right-0 p-4 flex items-center justify-between">
-              <button
-                onClick={() => setShowCamera(false)}
-                className="h-10 w-10 rounded-full bg-black/50 backdrop-blur flex items-center justify-center"
-                aria-label="Fermer caméra"
-              >
-                <X size={20} />
-              </button>
-              <div className="px-3 py-2 rounded-full bg-black/50 text-xs font-bold">
-                {recording ? `● ${formatTime(recordSeconds)}` : "Caméra BAARO"}
-              </div>
-              <button
-                onClick={switchCamera}
-                disabled={recording}
-                className="h-10 w-10 rounded-full bg-black/50 backdrop-blur flex items-center justify-center disabled:opacity-40"
-                aria-label="Changer de caméra"
-              >
-                <Repeat2 size={20} />
-              </button>
-            </div>
-          </div>
-          <div className="shrink-0 p-6 pb-8 bg-black flex justify-center">
-            <button
-              onClick={recording ? stopRecording : startRecording}
-              className="h-20 w-20 rounded-full border-4 border-white flex items-center justify-center"
-              aria-label={recording ? "Arrêter l'enregistrement" : "Commencer l'enregistrement"}
-            >
-              <span className={recording ? "h-9 w-9 rounded-lg bg-red-500" : "h-14 w-14 rounded-full bg-red-500"} />
-            </button>
-          </div>
-        </div>
-      )}
-
       {showUpload && (
         <div className="fixed inset-0 z-[80] bg-black/80 backdrop-blur-md flex items-end sm:items-center justify-center p-0 sm:p-4">
+          {cameraOpen && (
+            <div className="fixed inset-0 z-[120] bg-black flex flex-col">
+              <div className="flex items-center justify-between p-4 pt-[max(1rem,env(safe-area-inset-top))]">
+                <button
+                  onClick={closeCamera}
+                  className="h-10 w-10 rounded-full bg-white/10 flex items-center justify-center"
+                  aria-label="Fermer la caméra"
+                >
+                  <X size={20} />
+                </button>
+                <div className="text-center">
+                  <div className="font-black">Caméra BAARO</div>
+                  <div className="text-xs text-white/50">
+                    {formatTime(cameraSeconds)}
+                  </div>
+                </div>
+                <button
+                  onClick={toggleCameraFacing}
+                  disabled={cameraRecording}
+                  className="h-10 w-10 rounded-full bg-white/10 flex items-center justify-center disabled:opacity-40"
+                  aria-label="Changer de caméra"
+                >
+                  🔄
+                </button>
+              </div>
+
+              <div className="flex-1 min-h-0 flex items-center justify-center px-3">
+                <div className="relative w-full max-w-md h-full max-h-[78dvh] rounded-3xl overflow-hidden bg-zinc-950">
+                  <video
+                    ref={cameraVideoRef}
+                    autoPlay
+                    muted
+                    playsInline
+                    className="h-full w-full object-cover"
+                    style={{ transform: cameraFacing === "user" ? "scaleX(-1)" : "none" }}
+                  />
+                  {cameraError && (
+                    <div className="absolute inset-x-4 bottom-4 rounded-2xl bg-black/75 border border-red-400/30 p-4 text-sm text-center">
+                      {cameraError}
+                    </div>
+                  )}
+                  {cameraRecording && (
+                    <div className="absolute top-4 left-4 flex items-center gap-2 rounded-full bg-black/60 px-3 py-2 text-xs font-bold">
+                      <span className="h-2.5 w-2.5 rounded-full bg-red-500 animate-pulse" />
+                      REC · {formatTime(cameraSeconds)}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="p-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] flex flex-col items-center gap-3">
+                {!cameraError && (
+                  <button
+                    onClick={cameraRecording ? stopCameraRecording : startCameraRecording}
+                    className="h-20 w-20 rounded-full border-4 border-white flex items-center justify-center active:scale-95"
+                    aria-label={cameraRecording ? "Arrêter l'enregistrement" : "Démarrer l'enregistrement"}
+                  >
+                    <span
+                      className={cameraRecording ? "h-8 w-8 rounded-lg bg-red-500" : "h-16 w-16 rounded-full bg-red-500"}
+                    />
+                  </button>
+                )}
+                {cameraError && (
+                  <button
+                    onClick={startCamera}
+                    className="rounded-2xl px-5 py-3 font-black"
+                    style={{ background: COLORS.gold, color: "#000" }}
+                  >
+                    Réessayer la caméra
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
           <div className="w-full max-w-xl max-h-[92dvh] overflow-y-auto bg-zinc-950 rounded-t-3xl sm:rounded-3xl border border-white/10">
             <div className="sticky top-0 z-10 flex items-center justify-between p-4 bg-zinc-950/95 backdrop-blur border-b border-white/10">
               <div>
@@ -1182,6 +1251,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
               <button
                 onClick={() => {
                   if (!uploading) {
+                    closeCamera();
                     setShowUpload(false);
                     resetUpload();
                   }
@@ -1196,8 +1266,9 @@ export function VideosTab({ onRewardPoints, onExit }) {
               {!selectedFile ? (
                 <div className="space-y-3">
                   <button
-                    onClick={() => setShowCamera(true)}
-                    className="w-full aspect-[9/14] max-h-[52dvh] rounded-3xl bg-white/[0.04] border border-white/10 flex flex-col items-center justify-center"
+                    onClick={openCamera}
+                    className="w-full aspect-[9/14] max-h-[52dvh] rounded-3xl border border-white/10 bg-white/[0.04] flex flex-col items-center justify-center active:scale-[0.99]"
+                    style={{ boxShadow: `inset 0 0 0 1px ${COLORS.gold}33` }}
                   >
                     <div
                       className="h-20 w-20 rounded-full flex items-center justify-center mb-4"
@@ -1206,15 +1277,16 @@ export function VideosTab({ onRewardPoints, onExit }) {
                       <span className="text-3xl">📹</span>
                     </div>
                     <p className="font-black text-lg">Filmer avec la caméra</p>
-                    <p className="text-xs text-white/40 mt-1">Caméra + micro, sans limite de durée imposée par BAARO</p>
+                    <p className="text-xs text-white/40 mt-1 px-6 text-center">
+                      Caméra + micro · aucune limite de durée imposée par BAARO
+                    </p>
                   </button>
-
                   <button
                     onClick={() => fileInputRef.current?.click()}
-                    className="w-full rounded-2xl border border-dashed border-white/20 bg-white/[0.03] px-4 py-4 flex items-center justify-center gap-2"
+                    className="w-full rounded-2xl border border-white/10 bg-white/[0.05] px-4 py-3 flex items-center justify-center gap-2 text-sm font-bold"
                   >
-                    <Plus size={20} />
-                    <span className="font-bold">Choisir une vidéo dans la galerie</span>
+                    <Plus size={18} />
+                    Choisir une vidéo dans la galerie
                   </button>
                 </div>
               ) : (
