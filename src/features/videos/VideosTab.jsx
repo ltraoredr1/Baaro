@@ -3,10 +3,12 @@ import {
   Check,
   ChevronDown,
   Clock3,
+  Copy,
   Expand,
   Heart,
   MessageCircle,
   Music2,
+  Pause,
   Play,
   Plus,
   Repeat2,
@@ -82,28 +84,6 @@ export function VideosTab({ onRewardPoints, onExit }) {
   const [showSoundPicker, setShowSoundPicker] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
-  const [creatorMode, setCreatorMode] = useState(null); // camera | gallery
-  const [cameraStream, setCameraStream] = useState(null);
-  const [cameraFacing, setCameraFacing] = useState("user");
-  const [cameraRecording, setCameraRecording] = useState(false);
-  const [cameraPreviewUrl, setCameraPreviewUrl] = useState("");
-  const [localAudioFile, setLocalAudioFile] = useState(null);
-  const [localAudioUrl, setLocalAudioUrl] = useState("");
-  const [sourceVideoId, setSourceVideoId] = useState(null);
-  const [sourceSound, setSourceSound] = useState(null);
-  const cameraVideoRef = useRef(null);
-  const cameraRecorderRef = useRef(null);
-  const cameraChunksRef = useRef([]);
-  const localAudioInputRef = useRef(null);
-  const [trimStart, setTrimStart] = useState(0);
-  const [trimEnd, setTrimEnd] = useState(null);
-  const [videoVolume, setVideoVolume] = useState(1);
-  const [audioVolume, setAudioVolume] = useState(1);
-  const [audioOffset, setAudioOffset] = useState(0);
-  const [editorDuration, setEditorDuration] = useState(0);
-  const [isRenderingPreview, setIsRenderingPreview] = useState(false);
-  const editorVideoRef = useRef(null);
-  const editorAudioRef = useRef(null);
 
   const videoRefs = useRef({});
   const observerRef = useRef(null);
@@ -128,7 +108,6 @@ export function VideosTab({ onRewardPoints, onExit }) {
           video_url,
           thumbnail_url,
           duration,
-          duration_seconds,
           views,
           likes,
           comments_count,
@@ -136,10 +115,6 @@ export function VideosTab({ onRewardPoints, onExit }) {
           created_at,
           author_id,
           sound_id,
-          original_sound_id,
-          repost_of_id,
-          watch_seconds,
-          tips_total,
           profiles:author_id (
             display_name,
             handle,
@@ -465,16 +440,12 @@ export function VideosTab({ onRewardPoints, onExit }) {
           video_url: video.video_url,
           title: `🔁 ${video.title || "Vidéo BAARO"}`,
           description: `Repost de @${video.profiles?.handle || "membre"}`,
-          duration: video.duration || null,
-          duration_seconds: Number(video.duration_seconds || 0) || null,
+          duration: video.duration || "00:00",
           views: 0,
           likes: 0,
-          comments_count: 0,
           is_repost: true,
-          repost_of_id: video.repost_of_id || video.id,
-          original_author_id: video.original_author_id || video.author_id,
+          original_author_id: video.author_id,
           sound_id: video.sound_id || null,
-          original_sound_id: video.original_sound_id || video.sound_id || null,
         })
         .select("id")
         .single();
@@ -513,299 +484,6 @@ export function VideosTab({ onRewardPoints, onExit }) {
     }
   };
 
-  const stopCamera = useCallback(() => {
-    if (cameraRecorderRef.current?.state === "recording") {
-      cameraRecorderRef.current.stop();
-    }
-    cameraRecorderRef.current = null;
-    if (cameraStream) {
-      cameraStream.getTracks().forEach((track) => track.stop());
-    }
-    setCameraStream(null);
-    setCameraRecording(false);
-  }, [cameraStream]);
-
-  const openCameraCreator = async (sound = null, sourceId = null) => {
-    if (!navigator.mediaDevices?.getUserMedia) {
-      showToast("La caméra n'est pas disponible dans ce navigateur/appareil.", "error");
-      return;
-    }
-
-    try {
-      stopCamera();
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: cameraFacing },
-        audio: true,
-      });
-      setCameraStream(stream);
-      setSourceSound(sound);
-      setSourceVideoId(sourceId);
-      setCreatorMode("camera");
-      requestAnimationFrame(() => {
-        if (cameraVideoRef.current) {
-          cameraVideoRef.current.srcObject = stream;
-          cameraVideoRef.current.play().catch(() => {});
-        }
-      });
-    } catch (error) {
-      console.error(error);
-      showToast("Autorise l'accès à la caméra et au micro pour filmer.", "error");
-    }
-  };
-
-  const flipCamera = async () => {
-    if (!cameraStream) return;
-    const next = cameraFacing === "user" ? "environment" : "user";
-    setCameraFacing(next);
-
-    try {
-      cameraStream.getTracks().forEach((track) => track.stop());
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: next },
-        audio: true,
-      });
-      setCameraStream(stream);
-      if (cameraVideoRef.current) {
-        cameraVideoRef.current.srcObject = stream;
-        cameraVideoRef.current.play().catch(() => {});
-      }
-    } catch (error) {
-      console.error(error);
-      showToast("Impossible de changer de caméra.", "error");
-    }
-  };
-
-  const startCameraRecording = () => {
-    if (!cameraStream) return;
-
-    const preferred =
-      MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus")
-        ? "video/webm;codecs=vp9,opus"
-        : MediaRecorder.isTypeSupported("video/webm")
-          ? "video/webm"
-          : "";
-
-    const recorder = new MediaRecorder(
-      cameraStream,
-      preferred ? { mimeType: preferred } : undefined
-    );
-
-    cameraChunksRef.current = [];
-    recorder.ondataavailable = (event) => {
-      if (event.data.size) cameraChunksRef.current.push(event.data);
-    };
-
-    recorder.onstop = () => {
-      const blob = new Blob(cameraChunksRef.current, {
-        type: recorder.mimeType || "video/webm",
-      });
-      const file = new File(
-        [blob],
-        `baaro-camera-${Date.now()}.webm`,
-        { type: blob.type }
-      );
-
-      if (cameraPreviewUrl) URL.revokeObjectURL(cameraPreviewUrl);
-      const url = URL.createObjectURL(file);
-      setSelectedFile(file);
-      setPreviewUrl(url);
-      setCameraPreviewUrl(url);
-      setCameraRecording(false);
-      stopCamera();
-      setCreatorMode(null);
-    };
-
-    cameraRecorderRef.current = recorder;
-    recorder.start();
-    setCameraRecording(true);
-  };
-
-  const stopCameraRecording = () => {
-    if (cameraRecorderRef.current?.state === "recording") {
-      cameraRecorderRef.current.stop();
-    }
-  };
-
-  const handleLocalAudio = (file) => {
-    if (!file) return;
-    if (!file.type.startsWith("audio/")) {
-      showToast("Sélectionne un fichier audio.", "error");
-      return;
-    }
-
-    if (localAudioUrl) URL.revokeObjectURL(localAudioUrl);
-    setLocalAudioFile(file);
-    setLocalAudioUrl(URL.createObjectURL(file));
-  };
-
-  const useVideoSound = (video) => {
-    const sound = sounds.find((item) => item.id === video.sound_id) || {
-      id: video.sound_id || video.original_sound_id,
-      title: "Son de cette vidéo",
-      artist: video.profiles?.handle ? `@${video.profiles.handle}` : "BAARO",
-    };
-
-    setSelectedSound(sound);
-    setSourceSound(sound);
-    setSourceVideoId(video.id);
-    setShowUpload(true);
-    showToast("Son sélectionné. Crée ta vidéo avec ce son.", "success");
-  };
-
-
-  const syncEditorMedia = () => {
-    const video = editorVideoRef.current;
-    const audio = editorAudioRef.current;
-    if (!video) return;
-
-    video.volume = videoVolume;
-    if (audio) {
-      audio.volume = audioVolume;
-      audio.currentTime = Math.max(0, Number(audioOffset) || 0);
-    }
-  };
-
-  const seekEditor = (value) => {
-    const video = editorVideoRef.current;
-    if (!video) return;
-    video.currentTime = Number(value) || 0;
-    if (editorAudioRef.current) {
-      editorAudioRef.current.currentTime =
-        Math.max(0, (Number(value) || 0) - (Number(audioOffset) || 0));
-    }
-  };
-
-  const handleEditorMetadata = () => {
-    const duration = editorVideoRef.current?.duration || 0;
-    setEditorDuration(duration);
-    setTrimEnd((current) => current == null ? duration : Math.min(current, duration));
-  };
-
-  const exportEditedVideo = async () => {
-    const video = editorVideoRef.current;
-    if (!video || !selectedFile) return;
-
-    // Browser-native export path. For long videos, this uses MediaRecorder
-    // and does not impose a BAARO duration limit. Availability depends on
-    // the browser codec support.
-    if (!video.captureStream || typeof MediaRecorder === "undefined") {
-      showToast("L'export direct n'est pas pris en charge par ce navigateur. La vidéo originale reste disponible.", "error");
-      return;
-    }
-
-    const end = trimEnd == null ? editorDuration : Math.min(trimEnd, editorDuration);
-    const start = Math.max(0, Number(trimStart) || 0);
-    if (end > 0 && end <= start) {
-      showToast("La fin doit être après le début.", "error");
-      return;
-    }
-
-    setIsRenderingPreview(true);
-
-    try {
-      const canvas = document.createElement("canvas");
-      canvas.width = video.videoWidth || 720;
-      canvas.height = video.videoHeight || 1280;
-
-      const ctx = canvas.getContext("2d", { alpha: false });
-      const videoStream = canvas.captureStream(30);
-
-      // Capture the selected video's audio when supported.
-      let audioContext = null;
-      let destination = null;
-      const tracks = [...videoStream.getVideoTracks()];
-
-      if (window.AudioContext || window.webkitAudioContext) {
-        const AudioCtx = window.AudioContext || window.webkitAudioContext;
-        audioContext = new AudioCtx();
-        destination = audioContext.createMediaStreamDestination();
-
-        const videoAudio = audioContext.createMediaElementSource(video);
-        const videoGain = audioContext.createGain();
-        videoGain.gain.value = Number(videoVolume);
-        videoAudio.connect(videoGain).connect(destination);
-
-        if (editorAudioRef.current) {
-          const localAudio = audioContext.createMediaElementSource(editorAudioRef.current);
-          const localGain = audioContext.createGain();
-          localGain.gain.value = Number(audioVolume);
-          localAudio.connect(localGain).connect(destination);
-        }
-
-        tracks.push(...destination.stream.getAudioTracks());
-      }
-
-      const outputStream = new MediaStream(tracks);
-      const mime =
-        MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus")
-          ? "video/webm;codecs=vp9,opus"
-          : MediaRecorder.isTypeSupported("video/webm")
-            ? "video/webm"
-            : "";
-
-      if (!mime) {
-        throw new Error("MediaRecorder video codec unavailable");
-      }
-
-      const recorder = new MediaRecorder(outputStream, { mimeType: mime });
-      const chunks = [];
-      recorder.ondataavailable = (event) => {
-        if (event.data.size) chunks.push(event.data);
-      };
-
-      const done = new Promise((resolve, reject) => {
-        recorder.onerror = () => reject(recorder.error || new Error("Export failed"));
-        recorder.onstop = resolve;
-      });
-
-      video.currentTime = start;
-      await video.play();
-      if (editorAudioRef.current) {
-        editorAudioRef.current.currentTime = Math.max(0, start - Number(audioOffset || 0));
-        editorAudioRef.current.play().catch(() => {});
-      }
-
-      recorder.start(1000);
-
-      const draw = () => {
-        if (video.paused || video.ended) return;
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        const current = video.currentTime;
-        if (end > 0 && current >= end) {
-          video.pause();
-          if (editorAudioRef.current) editorAudioRef.current.pause();
-          recorder.stop();
-          return;
-        }
-        requestAnimationFrame(draw);
-      };
-      draw();
-
-      await done;
-
-      const blob = new Blob(chunks, { type: mime });
-      const file = new File(
-        [blob],
-        `baaro-edit-${Date.now()}.webm`,
-        { type: mime }
-      );
-
-      if (previewUrl) URL.revokeObjectURL(previewUrl);
-      const url = URL.createObjectURL(file);
-      setSelectedFile(file);
-      setPreviewUrl(url);
-      setCameraPreviewUrl(url);
-
-      showToast("Montage exporté. Tu peux maintenant publier.", "success");
-      if (audioContext) await audioContext.close();
-    } catch (error) {
-      console.error(error);
-      showToast("Le montage n'a pas pu être exporté sur cet appareil.", "error");
-    } finally {
-      setIsRenderingPreview(false);
-    }
-  };
-
   const resetUpload = () => {
     if (previewUrl) URL.revokeObjectURL(previewUrl);
     setSelectedFile(null);
@@ -813,11 +491,6 @@ export function VideosTab({ onRewardPoints, onExit }) {
     setUploadTitle("");
     setUploadDescription("");
     setSelectedSound(null);
-    setSourceSound(null);
-    setSourceVideoId(null);
-    setLocalAudioFile(null);
-    if (localAudioUrl) URL.revokeObjectURL(localAudioUrl);
-    setLocalAudioUrl("");
     setShowSoundPicker(false);
     setUploadProgress(0);
   };
@@ -867,21 +540,6 @@ export function VideosTab({ onRewardPoints, onExit }) {
         .getPublicUrl(path);
 
       const duration = await readDuration(selectedFile);
-      const durationSeconds = await new Promise((resolve) => {
-        const objectUrl = URL.createObjectURL(selectedFile);
-        const probe = document.createElement("video");
-        probe.preload = "metadata";
-        probe.onloadedmetadata = () => {
-          const value = Number.isFinite(probe.duration) ? Math.round(probe.duration) : 0;
-          URL.revokeObjectURL(objectUrl);
-          resolve(value);
-        };
-        probe.onerror = () => {
-          URL.revokeObjectURL(objectUrl);
-          resolve(0);
-        };
-        probe.src = objectUrl;
-      });
       setUploadProgress(80);
 
       const { data: created, error: dbError } = await supabase
@@ -892,14 +550,9 @@ export function VideosTab({ onRewardPoints, onExit }) {
           title: uploadTitle.trim() || "Vidéo BAARO",
           description: uploadDescription.trim() || null,
           duration,
-          duration_seconds: durationSeconds || null,
           views: 0,
           likes: 0,
-          comments_count: 0,
-          watch_seconds: 0,
-          tips_total: 0,
           sound_id: selectedSound?.id || null,
-          original_sound_id: selectedSound?.id || null,
         })
         .select("id")
         .single();
@@ -1206,14 +859,6 @@ export function VideosTab({ onRewardPoints, onExit }) {
                   </button>
 
                   <button
-                    onClick={() => useVideoSound(video)}
-                    className="h-11 w-11 rounded-full bg-white/10 backdrop-blur-md flex items-center justify-center"
-                    aria-label="Utiliser ce son"
-                  >
-                    <Music2 size={20} />
-                  </button>
-
-                  <button
                     onClick={() => handleRepost(video)}
                     className="h-11 w-11 rounded-full bg-white/10 backdrop-blur-md flex items-center justify-center"
                     aria-label="Reposter"
@@ -1283,73 +928,6 @@ export function VideosTab({ onRewardPoints, onExit }) {
           })
         )}
       </div>
-
-      {creatorMode === "camera" && (
-        <div className="fixed inset-0 z-[95] bg-black flex flex-col">
-          <div className="absolute top-0 left-0 right-0 z-10 p-4 pt-[max(1rem,env(safe-area-inset-top))] flex items-center justify-between">
-            <button
-              onClick={() => { stopCamera(); setCreatorMode(null); }}
-              className="h-10 w-10 rounded-full bg-black/50 backdrop-blur flex items-center justify-center"
-            >
-              <X size={20} />
-            </button>
-            <div className="px-3 py-1.5 rounded-full bg-black/50 backdrop-blur text-xs font-black">
-              {cameraRecording ? "● ENREGISTREMENT" : "CAMÉRA BAARO"}
-            </div>
-            <button
-              onClick={flipCamera}
-              className="h-10 w-10 rounded-full bg-black/50 backdrop-blur flex items-center justify-center"
-            >
-              🔄
-            </button>
-          </div>
-
-          <video
-            ref={cameraVideoRef}
-            muted
-            playsInline
-            autoPlay
-            className="flex-1 w-full h-full object-cover"
-          />
-
-          <div className="absolute bottom-0 left-0 right-0 z-10 p-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] bg-gradient-to-t from-black/90 to-transparent">
-            <div className="flex items-center justify-center gap-8">
-              <button
-                onClick={() => { stopCamera(); setCreatorMode(null); }}
-                className="h-12 w-12 rounded-full bg-white/10 backdrop-blur flex items-center justify-center"
-              >
-                <X size={20} />
-              </button>
-
-              <button
-                onClick={cameraRecording ? stopCameraRecording : startCameraRecording}
-                className={`h-20 w-20 rounded-full border-4 border-white flex items-center justify-center ${cameraRecording ? "bg-red-500" : "bg-white"}`}
-                aria-label={cameraRecording ? "Arrêter" : "Enregistrer"}
-              >
-                {cameraRecording ? (
-                  <span className="h-7 w-7 rounded-md bg-white" />
-                ) : (
-                  <span className="h-14 w-14 rounded-full bg-red-500" />
-                )}
-              </button>
-
-              <button
-                onClick={() => {
-                  stopCamera();
-                  setCreatorMode(null);
-                  setShowUpload(true);
-                }}
-                className="h-12 w-12 rounded-full bg-white/10 backdrop-blur flex items-center justify-center text-xs font-black"
-              >
-                OK
-              </button>
-            </div>
-            <p className="text-center text-[10px] text-white/45 mt-4">
-              Aucun plafond de durée imposé par BAARO
-            </p>
-          </div>
-        </div>
-      )}
 
       {showComments && (
         <div className="fixed inset-0 z-[70] bg-black/70 backdrop-blur-sm flex items-end justify-center">
@@ -1434,8 +1012,6 @@ export function VideosTab({ onRewardPoints, onExit }) {
               <button
                 onClick={() => {
                   if (!uploading) {
-                    stopCamera();
-                    setCreatorMode(null);
                     setShowUpload(false);
                     resetUpload();
                   }
@@ -1448,172 +1024,22 @@ export function VideosTab({ onRewardPoints, onExit }) {
 
             <div className="p-4 space-y-4">
               {!selectedFile ? (
-  
-              <div className="space-y-3">
-                  <button
-                    onClick={() => openCameraCreator(sourceSound, null)}
-                    className="w-full rounded-3xl bg-white/10 border border-white/10 px-5 py-5 text-left flex items-center gap-4"
-                  >
-                    <span className="h-12 w-12 rounded-2xl flex items-center justify-center" style={{ background: COLORS.gold, color: "#000" }}>
-                      <Plus size={24} />
-                    </span>
-                    <span>
-                      <span className="block font-black">📹 Filmer avec la caméra</span>
-                      <span className="block text-xs text-white/40 mt-1">Caméra + micro, sans limite de durée imposée par BAARO</span>
-                    </span>
-                  </button>
-
-                  <button
-                    onClick={() => fileInputRef.current?.click()}
-                    className="w-full rounded-3xl bg-white/10 border border-white/10 px-5 py-5 text-left flex items-center gap-4"
-                  >
-                    <span className="h-12 w-12 rounded-2xl bg-white/10 flex items-center justify-center">🎬</span>
-                    <span>
-                      <span className="block font-black">📱 Choisir une vidéo</span>
-                      <span className="block text-xs text-white/40 mt-1">Galerie ou fichier vidéo local</span>
-                    </span>
-                  </button>
-
-                  <button
-                    onClick={() => localAudioInputRef.current?.click()}
-                    className="w-full rounded-3xl bg-white/10 border border-white/10 px-5 py-5 text-left flex items-center gap-4"
-                  >
-                    <span className="h-12 w-12 rounded-2xl bg-white/10 flex items-center justify-center"><Music2 size={22} /></span>
-                    <span>
-                      <span className="block font-black">🎵 Ajouter un son local</span>
-                      <span className="block text-xs text-white/40 mt-1">Utilise un fichier audio du téléphone</span>
-                    </span>
-                  </button>
-                </div>
-              ) : (
-
-              {selectedFile && (
-                <div className="rounded-3xl bg-white/[0.04] border border-white/10 p-4 space-y-4">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <div className="text-[10px] font-black uppercase text-white/40">Montage vidéo</div>
-                      <div className="font-black mt-1">Vidéo + audio + découpage</div>
-                    </div>
-                    {isRenderingPreview && (
-                      <div className="text-xs text-yellow-300 font-bold">Export…</div>
-                    )}
-                  </div>
-
-                  <video
-                    ref={editorVideoRef}
-                    src={previewUrl || URL.createObjectURL(selectedFile)}
-                    playsInline
-                    controls
-                    onLoadedMetadata={handleEditorMetadata}
-                    onVolumeChange={syncEditorMedia}
-                    className="w-full rounded-2xl bg-black aspect-video object-contain"
-                  />
-
-                  {localAudioUrl && (
-                    <audio
-                      ref={editorAudioRef}
-                      src={localAudioUrl}
-                      preload="metadata"
-                      className="hidden"
-                    />
-                  )}
-
-                  {sourceSound && !localAudioUrl && (
-                    <div className="rounded-2xl bg-yellow-400/10 border border-yellow-400/20 px-3 py-2 text-xs">
-                      🎵 <b>{sourceSound.title || "Son BAARO"}</b>
-                      <span className="text-white/40"> · son sélectionné</span>
-                    </div>
-                  )}
-
-                  <div>
-                    <div className="flex justify-between text-[10px] text-white/40 mb-2">
-                      <span>Début {Number(trimStart).toFixed(1)}s</span>
-                      <span>Fin {Number(trimEnd ?? editorDuration).toFixed(1)}s</span>
-                    </div>
-                    <input
-                      type="range"
-                      min="0"
-                      max={Math.max(editorDuration, 0.1)}
-                      step="0.1"
-                      value={Math.min(trimStart, Math.max(editorDuration - 0.1, 0))}
-                      onChange={(e) => {
-                        const value = Number(e.target.value);
-                        setTrimStart(value);
-                        seekEditor(value);
-                      }}
-                      className="w-full"
-                    />
-                    <input
-                      type="range"
-                      min="0"
-                      max={Math.max(editorDuration, 0.1)}
-                      step="0.1"
-                      value={Math.min(trimEnd ?? editorDuration, editorDuration)}
-                      onChange={(e) => setTrimEnd(Number(e.target.value))}
-                      className="w-full mt-2"
-                    />
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <label className="text-xs">
-                      <span className="text-white/40">Volume vidéo</span>
-                      <input
-                        type="range"
-                        min="0"
-                        max="1"
-                        step="0.05"
-                        value={videoVolume}
-                        onChange={(e) => {
-                          setVideoVolume(Number(e.target.value));
-                          if (editorVideoRef.current) editorVideoRef.current.volume = Number(e.target.value);
-                        }}
-                        className="w-full"
-                      />
-                    </label>
-
-                    <label className="text-xs">
-                      <span className="text-white/40">Volume audio</span>
-                      <input
-                        type="range"
-                        min="0"
-                        max="1"
-                        step="0.05"
-                        value={audioVolume}
-                        onChange={(e) => {
-                          setAudioVolume(Number(e.target.value));
-                          if (editorAudioRef.current) editorAudioRef.current.volume = Number(e.target.value);
-                        }}
-                        className="w-full"
-                      />
-                    </label>
-                  </div>
-
-                  <label className="block text-xs">
-                    <span className="text-white/40">Décalage du son (secondes)</span>
-                    <input
-                      type="number"
-                      step="0.1"
-                      value={audioOffset}
-                      onChange={(e) => setAudioOffset(Number(e.target.value) || 0)}
-                      className="mt-1 w-full rounded-xl bg-white/10 border border-white/10 px-3 py-2 outline-none"
-                    />
-                  </label>
-
-                  <button
-                    onClick={exportEditedVideo}
-                    disabled={isRenderingPreview}
-                    className="w-full rounded-2xl py-3 font-black disabled:opacity-50"
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="w-full aspect-[9/14] max-h-[52dvh] rounded-3xl border border-dashed border-white/20 bg-white/[0.03] flex flex-col items-center justify-center"
+                >
+                  <div
+                    className="h-16 w-16 rounded-full flex items-center justify-center mb-4"
                     style={{ background: COLORS.gold, color: "#000" }}
                   >
-                    {isRenderingPreview ? "Export du montage…" : "🎬 Appliquer le montage"}
-                  </button>
-
-                  <p className="text-[10px] text-white/35">
-                    BAARO n'impose aucune durée maximale. L'appareil et le navigateur peuvent toutefois avoir leurs propres limites techniques d'export.
+                    <Plus size={28} />
+                  </div>
+                  <p className="font-black">Choisir une vidéo</p>
+                  <p className="text-xs text-white/40 mt-1">
+                    MP4, MOV ou autre format vidéo compatible
                   </p>
-                </div>
-              )}
-
+                </button>
+              ) : (
                 <div className="relative rounded-3xl overflow-hidden bg-black aspect-[9/14] max-h-[52dvh]">
                   <video
                     src={previewUrl}
@@ -1641,13 +1067,6 @@ export function VideosTab({ onRewardPoints, onExit }) {
                 className="hidden"
                 onChange={(event) => handleFileSelected(event.target.files?.[0])}
               />
-              <input
-                ref={localAudioInputRef}
-                type="file"
-                accept="audio/*"
-                className="hidden"
-                onChange={(event) => handleLocalAudio(event.target.files?.[0])}
-              />
 
               <input
                 value={uploadTitle}
@@ -1665,27 +1084,6 @@ export function VideosTab({ onRewardPoints, onExit }) {
                 maxLength={500}
                 className="w-full rounded-2xl bg-white/10 px-4 py-3 outline-none text-sm resize-none"
               />
-
-              {sourceSound && (
-                <div className="rounded-2xl bg-yellow-400/10 border border-yellow-400/20 px-4 py-3">
-                  <div className="text-[10px] text-yellow-300 font-black uppercase">Son de la vidéo</div>
-                  <div className="font-bold text-sm mt-1">{sourceSound.title || "Son BAARO"}</div>
-                  <div className="text-[10px] text-white/40">{sourceSound.artist || "Audio BAARO"}</div>
-                </div>
-              )}
-
-              {localAudioFile && (
-                <div className="rounded-2xl bg-white/5 border border-white/10 px-4 py-3">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <div className="text-[10px] text-white/40 font-black uppercase">Son local</div>
-                      <div className="font-bold text-sm mt-1 truncate max-w-[250px]">{localAudioFile.name}</div>
-                    </div>
-                    <button onClick={() => { setLocalAudioFile(null); if (localAudioUrl) URL.revokeObjectURL(localAudioUrl); setLocalAudioUrl(""); }} className="text-xs text-red-300">Retirer</button>
-                  </div>
-                  {localAudioUrl && <audio className="w-full mt-3" controls src={localAudioUrl} />}
-                </div>
-              )}
 
               <button
                 onClick={() => setShowSoundPicker((value) => !value)}
