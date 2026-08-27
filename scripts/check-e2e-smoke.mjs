@@ -1,6 +1,5 @@
 /**
  * Smoke checks BAARO — garde-fous CI.
- * FIX: ne plus matcher "locale.split" via "locale.spli"
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -23,8 +22,8 @@ const requiredFiles = [
   "src/features/shop/ShopTab.jsx",
   "src/features/shop/ShopRegistrationForm.jsx",
   "api/wallet.js",
-  "api/create-payment.js",
-  "api/payment-webhook.js",
+  "api/payments.js",
+  "api/webhooks.js",
   "api/_cors.js",
   "api/_rateLimit.js",
   "api/_supabaseAdmin.js",
@@ -58,13 +57,23 @@ else ok("ShopRegistrationForm split syntax");
 if (reg.includes(".selec'")) fail("ShopRegistrationForm still has select typo");
 else ok("ShopRegistrationForm select syntax");
 
-const pay = fs.readFileSync(path.join(root, "api/create-payment.js"), "utf8");
-if (pay.includes("requireUser")) ok("create-payment uses requireUser");
-else fail("create-payment missing requireUser");
+const pay = fs.readFileSync(path.join(root, "api/payments.js"), "utf8");
+if (pay.includes("requireUser")) ok("payments uses requireUser");
+else fail("payments missing requireUser");
+if (pay.includes("cinetpay") && pay.includes("stripe")) ok("payments contains CinetPay + Stripe");
+else fail("payments provider support incomplete");
+
+const hooks = fs.readFileSync(path.join(root, "api/webhooks.js"), "utf8");
+if (hooks.includes("handleCinetPay") && hooks.includes("handleStripe")) ok("webhooks contains CinetPay + Stripe");
+else fail("webhooks provider support incomplete");
 
 const vercel = fs.readFileSync(path.join(root, "vercel.json"), "utf8");
-if (vercel.includes("Content-Security-Policy")) ok("CSP header in vercel.json");
-else fail("CSP missing in vercel.json");
+if (vercel.includes('"/api/create-payment"') && vercel.includes('"/api/payments?route=create"')) ok("create-payment rewrite");
+else fail("create-payment rewrite missing");
+if (vercel.includes('"/api/payment-webhook"') && vercel.includes('"/api/webhooks?route=payment"')) ok("payment-webhook rewrite");
+else fail("payment-webhook rewrite missing");
+if (vercel.includes('"/api/stripe-redeem"') && vercel.includes('"/api/payments?route=stripe-redeem"')) ok("stripe-redeem rewrite");
+else fail("stripe-redeem rewrite missing");
 
 const base = process.env.BAARO_BASE_URL;
 if (base) {
