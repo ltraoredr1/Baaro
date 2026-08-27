@@ -1370,24 +1370,6 @@ export function VideosTab({ onRewardPoints, onExit }) {
             </div>
 
             <div className="flex-1 overflow-y-auto p-4 space-y-4">
-
-        {/* Créateur vidéo BAARO — accès direct */}
-        <div className="sticky top-0 z-30 px-3 pt-3 pb-2 bg-black/80 backdrop-blur-xl">
-          <button
-            type="button"
-            onClick={() => {
-              setShowUpload(true);
-              if (typeof openCameraCreator === "function") {
-                // La caméra reste accessible immédiatement depuis le panneau.
-              }
-            }}
-            className="w-full rounded-2xl px-4 py-3 flex items-center justify-center gap-3 font-black shadow-lg"
-            style={{ background: COLORS.gold, color: "#000" }}
-          >
-            <span className="text-xl">📹</span>
-            <span>Créer une vidéo</span>
-          </button>
-        </div>
               {(comments[showComments] || []).length === 0 ? (
                 <div className="py-12 text-center text-white/40 text-sm">
                   Aucun commentaire. Sois le premier !
@@ -1465,26 +1447,46 @@ export function VideosTab({ onRewardPoints, onExit }) {
             </div>
 
             <div className="p-4 space-y-4">
-
+              {!selectedFile ? (
+  
+              <div className="space-y-3">
                   <button
-                    type="button"
-                    onClick={() => openCameraCreator(sourceSound, sourceVideoId)}
-                    className="w-full rounded-3xl border border-yellow-300/30 bg-yellow-400/10 px-5 py-5 text-left flex items-center gap-4 active:scale-[0.99]"
+                    onClick={() => openCameraCreator(sourceSound, null)}
+                    className="w-full rounded-3xl bg-white/10 border border-white/10 px-5 py-5 text-left flex items-center gap-4"
                   >
-                    <span className="h-14 w-14 rounded-2xl flex items-center justify-center text-2xl"
-                      style={{ background: COLORS.gold, color: "#000" }}>
-                      📹
+                    <span className="h-12 w-12 rounded-2xl flex items-center justify-center" style={{ background: COLORS.gold, color: "#000" }}>
+                      <Plus size={24} />
                     </span>
                     <span>
-                      <span className="block font-black text-base">Caméra</span>
-                      <span className="block text-xs text-white/50 mt-1">
-                        Filmer maintenant avec caméra + micro
-                      </span>
+                      <span className="block font-black">📹 Filmer avec la caméra</span>
+                      <span className="block text-xs text-white/40 mt-1">Caméra + micro, sans limite de durée imposée par BAARO</span>
                     </span>
                   </button>
 
-              {!selectedFile ? (
-  
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    className="w-full rounded-3xl bg-white/10 border border-white/10 px-5 py-5 text-left flex items-center gap-4"
+                  >
+                    <span className="h-12 w-12 rounded-2xl bg-white/10 flex items-center justify-center">🎬</span>
+                    <span>
+                      <span className="block font-black">📱 Choisir une vidéo</span>
+                      <span className="block text-xs text-white/40 mt-1">Galerie ou fichier vidéo local</span>
+                    </span>
+                  </button>
+
+                  <button
+                    onClick={() => localAudioInputRef.current?.click()}
+                    className="w-full rounded-3xl bg-white/10 border border-white/10 px-5 py-5 text-left flex items-center gap-4"
+                  >
+                    <span className="h-12 w-12 rounded-2xl bg-white/10 flex items-center justify-center"><Music2 size={22} /></span>
+                    <span>
+                      <span className="block font-black">🎵 Ajouter un son local</span>
+                      <span className="block text-xs text-white/40 mt-1">Utilise un fichier audio du téléphone</span>
+                    </span>
+                  </button>
+                </div>
+              ) : (
+
               {selectedFile && (
                 <div className="rounded-3xl bg-white/[0.04] border border-white/10 p-4 space-y-4">
                   <div className="flex items-center justify-between">
@@ -1612,43 +1614,6 @@ export function VideosTab({ onRewardPoints, onExit }) {
                 </div>
               )}
 
-              <div className="space-y-3">
-                  <button
-                    onClick={() => openCameraCreator(sourceSound, sourceVideoId)}
-                    className="w-full rounded-3xl bg-white/10 border border-white/10 px-5 py-5 text-left flex items-center gap-4"
-                  >
-                    <span className="h-12 w-12 rounded-2xl flex items-center justify-center" style={{ background: COLORS.gold, color: "#000" }}>
-                      <Plus size={24} />
-                    </span>
-                    <span>
-                      <span className="block font-black">📹 Filmer avec la caméra</span>
-                      <span className="block text-xs text-white/40 mt-1">Caméra + micro, sans limite de durée imposée par BAARO</span>
-                    </span>
-                  </button>
-
-                  <button
-                    onClick={() => fileInputRef.current?.click()}
-                    className="w-full rounded-3xl bg-white/10 border border-white/10 px-5 py-5 text-left flex items-center gap-4"
-                  >
-                    <span className="h-12 w-12 rounded-2xl bg-white/10 flex items-center justify-center">🎬</span>
-                    <span>
-                      <span className="block font-black">📱 Choisir une vidéo</span>
-                      <span className="block text-xs text-white/40 mt-1">Galerie ou fichier vidéo local</span>
-                    </span>
-                  </button>
-
-                  <button
-                    onClick={() => localAudioInputRef.current?.click()}
-                    className="w-full rounded-3xl bg-white/10 border border-white/10 px-5 py-5 text-left flex items-center gap-4"
-                  >
-                    <span className="h-12 w-12 rounded-2xl bg-white/10 flex items-center justify-center"><Music2 size={22} /></span>
-                    <span>
-                      <span className="block font-black">🎵 Ajouter un son local</span>
-                      <span className="block text-xs text-white/40 mt-1">Utilise un fichier audio du téléphone</span>
-                    </span>
-                  </button>
-                </div>
-              ) : (
                 <div className="relative rounded-3xl overflow-hidden bg-black aspect-[9/14] max-h-[52dvh]">
                   <video
                     src={previewUrl}
