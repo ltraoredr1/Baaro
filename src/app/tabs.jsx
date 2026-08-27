@@ -43,7 +43,7 @@ export const tabs = {
     }))
   ),
   settings: lazy(() =>
-    import("../features/settings/index.tsx").then((m) => ({
+    import("../features/settings").then((m) => ({
       default: m.SettingsTab,
     }))
   ),
