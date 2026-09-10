@@ -1,5 +1,14 @@
 import { useState } from "react";
-import { X, Hash, Mic, Video, MessageSquare, Sparkles, Zap } from "lucide-react";
+import {
+  X,
+  Mic,
+  Video,
+  MessageSquare,
+  Sparkles,
+  Zap,
+  Paperclip,
+  Layers,
+} from "lucide-react";
 import { COLORS } from "../theme.js";
 import { randomCode } from "../lib/id.js";
 import { supabase } from "../supabaseClient.js";
@@ -14,37 +23,59 @@ const TOPIC_SUGGESTIONS = [
   "Société",
 ];
 
+/**
+ * Modes :
+ * - text  : chat texte + fichiers
+ * - audio : vocal Daily + chat + fichiers
+ * - video : vidéo Daily + chat + fichiers
+ * - hybrid: tout (texte + vocal + vidéo + fichiers) — recommandé
+ */
 const MODES = [
   {
-    id: "text",
-    icon: MessageSquare,
-    label: "Texte",
-    hint: "Chat en direct",
-  },
-  {
-    id: "audio",
-    icon: Mic,
-    label: "Audio",
-    hint: "Voix · Daily",
+    id: "hybrid",
+    icon: Layers,
+    label: "Tout",
+    hint: "Texte · Voix · Vidéo · Fichiers",
   },
   {
     id: "video",
     icon: Video,
     label: "Vidéo",
-    hint: "Caméra · Daily",
+    hint: "Caméra + chat",
+  },
+  {
+    id: "audio",
+    icon: Mic,
+    label: "Audio",
+    hint: "Voix + chat",
+  },
+  {
+    id: "text",
+    icon: MessageSquare,
+    label: "Texte",
+    hint: "Chat + fichiers",
   },
 ];
 
 export function CreateDebateModal({ isOpen, onClose, currentUserId, onSuccess }) {
   const [title, setTitle] = useState("");
   const [topic, setTopic] = useState("");
-  const [mode, setMode] = useState("text");
+  const [mode, setMode] = useState("hybrid");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
   if (!isOpen) return null;
 
   const generateInviteCode = () => randomCode(6);
+
+  /** Mode qui nécessite Daily.co */
+  const needsDaily = (m) => m === "audio" || m === "video" || m === "hybrid";
+
+  /** Mode stocké en base (hybrid → video côté Daily, flag hybrid en topic/meta) */
+  const dbMode = (m) => {
+    if (m === "hybrid") return "video"; // Daily full features
+    return m;
+  };
 
   const handleCreate = async () => {
     if (!title.trim() || !topic.trim() || !currentUserId) return;
@@ -61,8 +92,11 @@ export function CreateDebateModal({ isOpen, onClose, currentUserId, onSuccess })
       }
 
       let room = null;
+      const finalMode = dbMode(mode);
+      const topicWithHybrid =
+        mode === "hybrid" ? `${topic.trim()} · ⚡ Tout-en-un` : topic.trim();
 
-      if (mode === "audio" || mode === "video") {
+      if (needsDaily(mode)) {
         const res = await fetch(`${API_BASE}/api/create-room`, {
           method: "POST",
           headers: {
@@ -74,8 +108,8 @@ export function CreateDebateModal({ isOpen, onClose, currentUserId, onSuccess })
             userName: "Hôte",
             enableHLS: false,
             title: title.trim(),
-            topic: topic.trim(),
-            mode,
+            topic: topicWithHybrid,
+            mode: finalMode,
           }),
         });
 
@@ -100,9 +134,10 @@ export function CreateDebateModal({ isOpen, onClose, currentUserId, onSuccess })
           .from("debate_rooms")
           .update({
             title: title.trim(),
-            topic: topic.trim(),
-            mode,
-            max_participants: 10,
+            topic: topicWithHybrid,
+            mode: finalMode,
+            max_participants: 12,
+            status: "active",
           })
           .eq("invite_code", inviteCode)
           .select()
@@ -126,14 +161,15 @@ export function CreateDebateModal({ isOpen, onClose, currentUserId, onSuccess })
             invite_code: inviteCode,
             daily_room_name: dailyRoomName,
             title: title.trim(),
-            topic: topic.trim(),
-            mode,
+            topic: topicWithHybrid,
+            mode: finalMode,
             status: "active",
             host_id: currentUserId,
           };
         }
         room = updatedRoom;
       } else {
+        // Mode texte pur
         const inviteCode = generateInviteCode();
         const { data: newRoom, error: roomError } = await supabase
           .from("debate_rooms")
@@ -144,7 +180,7 @@ export function CreateDebateModal({ isOpen, onClose, currentUserId, onSuccess })
             invite_code: inviteCode,
             host_id: currentUserId,
             status: "active",
-            max_participants: 10,
+            max_participants: 12,
           })
           .select()
           .single();
@@ -155,6 +191,7 @@ export function CreateDebateModal({ isOpen, onClose, currentUserId, onSuccess })
         await supabase.from("debate_participants").upsert({
           room_id: room.id,
           user_id: currentUserId,
+          role: "host",
         });
       }
 
@@ -162,7 +199,7 @@ export function CreateDebateModal({ isOpen, onClose, currentUserId, onSuccess })
       onClose?.();
       setTitle("");
       setTopic("");
-      setMode("text");
+      setMode("hybrid");
     } catch (err) {
       console.error("Création débat:", err);
       setError(err.message || "Impossible de créer le débat");
@@ -171,7 +208,8 @@ export function CreateDebateModal({ isOpen, onClose, currentUserId, onSuccess })
     }
   };
 
-  const canSubmit = title.trim().length > 0 && topic.trim().length > 0 && !loading;
+  const canSubmit =
+    title.trim().length > 0 && topic.trim().length > 0 && !loading;
 
   return (
     <div
@@ -234,7 +272,7 @@ export function CreateDebateModal({ isOpen, onClose, currentUserId, onSuccess })
           />
         </div>
 
-        {/* Thème + suggestions */}
+        {/* Thème */}
         <div>
           <label
             className="text-[11px] font-bold uppercase tracking-wider mb-1.5 block"
@@ -282,7 +320,7 @@ export function CreateDebateModal({ isOpen, onClose, currentUserId, onSuccess })
           >
             Format
           </label>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-2 gap-2">
             {MODES.map((m) => {
               const Icon = m.icon;
               const active = mode === m.id;
@@ -291,7 +329,7 @@ export function CreateDebateModal({ isOpen, onClose, currentUserId, onSuccess })
                   key={m.id}
                   type="button"
                   onClick={() => setMode(m.id)}
-                  className="flex flex-col items-center gap-1 py-3 px-1 rounded-xl border transition"
+                  className="flex flex-col items-center gap-1 py-3 px-2 rounded-xl border transition"
                   style={{
                     background: active ? `${COLORS.gold}18` : COLORS.surface2,
                     borderColor: active ? COLORS.gold : COLORS.border,
@@ -300,11 +338,20 @@ export function CreateDebateModal({ isOpen, onClose, currentUserId, onSuccess })
                 >
                   <Icon size={20} />
                   <span className="text-xs font-bold">{m.label}</span>
-                  <span className="text-[9px] opacity-70">{m.hint}</span>
+                  <span className="text-[9px] opacity-70 text-center leading-tight">
+                    {m.hint}
+                  </span>
                 </button>
               );
             })}
           </div>
+          <p
+            className="text-[10px] mt-2 flex items-center gap-1"
+            style={{ color: COLORS.muted }}
+          >
+            <Paperclip size={12} />
+            Fichiers (image, PDF, audio) disponibles dans tous les formats
+          </p>
         </div>
 
         <button
@@ -324,7 +371,9 @@ export function CreateDebateModal({ isOpen, onClose, currentUserId, onSuccess })
         </button>
 
         <p className="text-[10px] text-center" style={{ color: COLORS.muted }}>
-          Un code d&apos;invitation sera généré pour partager la salle
+          Un code d&apos;invitation sera généré pour partager la salle.
+          <br />
+          L&apos;hôte peut mettre en pause, reprendre ou terminer le débat.
         </p>
       </div>
     </div>
