@@ -19,10 +19,15 @@ import {
   Copy,
   Check,
   Hand,
+  Trash2,
+  StopCircle,
+  Paperclip,
+  FileText,
 } from "lucide-react";
 import { COLORS } from "../theme.js";
 import { supabase } from "../supabaseClient.js";
 import { API_BASE } from "../config.js";
+import { randomId } from "../lib/id.js";
 import {
   joinLiveByCode,
   leaveLive,
@@ -186,6 +191,10 @@ export function DebateRoom({
   const [aiLoading, setAiLoading] = useState(false);
   const [roomStatus, setRoomStatus] = useState("active");
   const [pauseLoading, setPauseLoading] = useState(false);
+  const [endLoading, setEndLoading] = useState(false);
+  const [deleteLoading, setDeleteLoading] = useState(false);
+  const [uploadingFile, setUploadingFile] = useState(false);
+  const fileInputRef = useRef(null);
   const [activeSpeakerId, setActiveSpeakerId] = useState(null);
   const [speakRequestSent, setSpeakRequestSent] = useState(false);
   const [speakRequestLoading, setSpeakRequestLoading] = useState(false);
@@ -275,7 +284,7 @@ export function DebateRoom({
 
         const { data: msgsData } = await supabase
           .from("debate_messages")
-          .select("id, text, created_at, sender_id, sender_type")
+          .select("id, text, created_at, sender_id, sender_type, media_url, media_type, media_name")
           .eq("room_id", roomData.id)
           .order("created_at", { ascending: true })
           .limit(200);
@@ -792,6 +801,7 @@ export function DebateRoom({
   const handleSendMessage = async (e) => {
     e.preventDefault();
     if (!newMessage.trim() || !room || !currentUserId) return;
+    if (roomStatus === "paused" || roomStatus === "ended") return;
 
     const text = newMessage.trim();
     setNewMessage("");
@@ -831,16 +841,31 @@ export function DebateRoom({
   };
 
   const handlePauseToggle = async () => {
-    if (!room || !isRoomOwner || pauseLoading) return;
+    if (!room || !isRoomOwner || pauseLoading || roomStatus === "ended") return;
     setPauseLoading(true);
     setRoleActionError(null);
     try {
       if (roomStatus === "paused") {
-        const data = await resumeRoom(room.id);
-        setRoomStatus(data.status || "active");
+        // RPC SQL prioritaire
+        const { data, error } = await supabase.rpc("resume_debate_room", {
+          p_room_id: room.id,
+        });
+        if (error) {
+          const apiData = await resumeRoom(room.id);
+          setRoomStatus(apiData.status || "active");
+        } else {
+          setRoomStatus(data?.status || "active");
+        }
       } else {
-        const data = await pauseRoom(room.id);
-        setRoomStatus(data.status || "paused");
+        const { data, error } = await supabase.rpc("pause_debate_room", {
+          p_room_id: room.id,
+        });
+        if (error) {
+          const apiData = await pauseRoom(room.id);
+          setRoomStatus(apiData.status || "paused");
+        } else {
+          setRoomStatus(data?.status || "paused");
+        }
         enableMic(false);
         setMicOn(false);
         if (room.mode === "video") {
@@ -852,6 +877,136 @@ export function DebateRoom({
       setRoleActionError(err.message || "Erreur pause/reprise");
     } finally {
       setPauseLoading(false);
+    }
+  };
+
+  const handleEndDebate = async () => {
+    if (!room || !isRoomOwner || endLoading || roomStatus === "ended") return;
+    if (!window.confirm("Terminer ce débat pour tout le monde ?")) return;
+    setEndLoading(true);
+    setRoleActionError(null);
+    try {
+      const { error } = await supabase.rpc("end_debate_room", {
+        p_room_id: room.id,
+      });
+      if (error) throw error;
+      setRoomStatus("ended");
+      try {
+        await leaveLive({
+          roomName: room.daily_room_name || dailyRoomName,
+          isHost: true,
+        });
+      } catch (_) {}
+      setTimeout(() => onBack?.(), 1200);
+    } catch (err) {
+      setRoleActionError(err.message || "Impossible de terminer le débat");
+    } finally {
+      setEndLoading(false);
+    }
+  };
+
+  const handleDeleteDebate = async () => {
+    if (!room || !isRoomOwner || deleteLoading) return;
+    if (
+      !window.confirm(
+        "Supprimer définitivement ce débat (messages inclus) ? Action irréversible."
+      )
+    ) {
+      return;
+    }
+    setDeleteLoading(true);
+    setRoleActionError(null);
+    try {
+      const { error } = await supabase.rpc("delete_debate_room", {
+        p_room_id: room.id,
+      });
+      if (error) throw error;
+      onBack?.();
+    } catch (err) {
+      setRoleActionError(err.message || "Impossible de supprimer le débat");
+    } finally {
+      setDeleteLoading(false);
+    }
+  };
+
+  const detectMediaType = (file) => {
+    if (file.type.startsWith("image/")) return "image";
+    if (file.type.startsWith("video/")) return "video";
+    if (file.type.startsWith("audio/")) return "audio";
+    if (file.type === "application/pdf") return "pdf";
+    return "file";
+  };
+
+  const handleSendFile = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file || !room || !currentUserId) return;
+    if (roomStatus === "paused" || roomStatus === "ended") {
+      setRoleActionError("Salle en pause ou terminée");
+      return;
+    }
+    if (file.size > 20 * 1024 * 1024) {
+      setRoleActionError("Fichier trop lourd (max 20 Mo)");
+      return;
+    }
+    setUploadingFile(true);
+    setRoleActionError(null);
+    try {
+      const mediaType = detectMediaType(file);
+      const ext = (file.name.split(".").pop() || "bin")
+        .toLowerCase()
+        .replace(/[^a-z0-9]/g, "");
+      const path = `${currentUserId}/${room.id}/${randomId("file")}.${ext}`;
+      const { error: upErr } = await supabase.storage
+        .from("debate-media")
+        .upload(path, file, {
+          cacheControl: "3600",
+          upsert: false,
+          contentType: file.type,
+        });
+      if (upErr) throw upErr;
+      const { data: urlData } = supabase.storage
+        .from("debate-media")
+        .getPublicUrl(path);
+      const mediaUrl = urlData.publicUrl;
+      const caption =
+        mediaType === "image"
+          ? "📷 Image"
+          : mediaType === "video"
+            ? "🎬 Vidéo"
+            : mediaType === "audio"
+              ? "🎵 Audio"
+              : mediaType === "pdf"
+                ? "📄 PDF"
+                : `📎 ${file.name}`;
+      const { data: msg, error: msgErr } = await supabase
+        .from("debate_messages")
+        .insert({
+          room_id: room.id,
+          sender_id: currentUserId,
+          sender_type: "user",
+          text: caption,
+          media_url: mediaUrl,
+          media_type: mediaType,
+          media_name: file.name,
+          media_size: file.size,
+        })
+        .select(
+          "id, text, created_at, sender_id, sender_type, media_url, media_type, media_name"
+        )
+        .single();
+      if (msgErr) throw msgErr;
+      setMessages((prev) => [
+        ...prev,
+        {
+          ...msg,
+          profile: { display_name: "Vous", flag: "🌍" },
+        },
+      ]);
+    } catch (err) {
+      setRoleActionError(err.message || "Envoi fichier impossible");
+    } finally {
+      setUploadingFile(false);
     }
   };
 
@@ -975,10 +1130,16 @@ export function DebateRoom({
               className={`text-[10px] px-2 py-0.5 rounded-full font-normal shrink-0 ${
                 roomStatus === "paused"
                   ? "bg-amber-500/20 text-amber-400"
-                  : "bg-green-500/20 text-green-400"
+                  : roomStatus === "ended"
+                    ? "bg-slate-500/20 text-slate-300"
+                    : "bg-green-500/20 text-green-400"
               }`}
             >
-              {roomStatus === "paused" ? "PAUSE" : "LIVE"}
+              {roomStatus === "paused"
+                ? "PAUSE"
+                : roomStatus === "ended"
+                  ? "TERMINÉ"
+                  : "LIVE"}
             </span>
             {isVoiceMode && (
               <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-400 font-normal flex items-center gap-1 shrink-0">
@@ -1283,31 +1444,65 @@ export function DebateRoom({
                 )}
 
                 {isRoomOwner && (
-                  <button
-                    type="button"
-                    onClick={handlePauseToggle}
-                    disabled={pauseLoading}
-                    className="p-3 rounded-full disabled:opacity-50"
-                    style={{
-                      background:
-                        roomStatus === "paused"
-                          ? "rgba(34,197,94,0.25)"
-                          : "rgba(245,158,11,0.25)",
-                      color:
-                        roomStatus === "paused" ? "#22c55e" : COLORS.gold,
-                    }}
-                    title={
-                      roomStatus === "paused"
-                        ? "Reprendre le débat"
-                        : "Mettre en pause"
-                    }
-                  >
-                    {roomStatus === "paused" ? (
-                      <Play size={18} />
-                    ) : (
-                      <Pause size={18} />
+                  <>
+                    {roomStatus !== "ended" && (
+                      <button
+                        type="button"
+                        onClick={handlePauseToggle}
+                        disabled={pauseLoading}
+                        className="p-3 rounded-full disabled:opacity-50"
+                        style={{
+                          background:
+                            roomStatus === "paused"
+                              ? "rgba(34,197,94,0.25)"
+                              : "rgba(245,158,11,0.25)",
+                          color:
+                            roomStatus === "paused" ? "#22c55e" : COLORS.gold,
+                        }}
+                        title={
+                          roomStatus === "paused"
+                            ? "Reprendre le débat"
+                            : "Mettre en pause"
+                        }
+                      >
+                        {roomStatus === "paused" ? (
+                          <Play size={18} />
+                        ) : (
+                          <Pause size={18} />
+                        )}
+                      </button>
                     )}
-                  </button>
+                    {roomStatus !== "ended" && (
+                      <button
+                        type="button"
+                        onClick={handleEndDebate}
+                        disabled={endLoading}
+                        className="p-3 rounded-full disabled:opacity-50"
+                        style={{
+                          background: "rgba(239,68,68,0.2)",
+                          color: "#f87171",
+                        }}
+                        title="Terminer le débat"
+                      >
+                        <StopCircle size={18} />
+                      </button>
+                    )}
+                    {roomStatus === "ended" && (
+                      <button
+                        type="button"
+                        onClick={handleDeleteDebate}
+                        disabled={deleteLoading}
+                        className="p-3 rounded-full disabled:opacity-50"
+                        style={{
+                          background: "rgba(239,68,68,0.35)",
+                          color: "#ef4444",
+                        }}
+                        title="Supprimer définitivement"
+                      >
+                        <Trash2 size={18} />
+                      </button>
+                    )}
+                  </>
                 )}
 
                 <button
@@ -1474,6 +1669,38 @@ export function DebateRoom({
                     </p>
                   )}
                   <p>{msg.text}</p>
+                  {msg.media_url && msg.media_type === "image" && (
+                    <a href={msg.media_url} target="_blank" rel="noreferrer">
+                      <img
+                        src={msg.media_url}
+                        alt={msg.media_name || "image"}
+                        className="mt-2 max-h-48 rounded-lg object-cover"
+                      />
+                    </a>
+                  )}
+                  {msg.media_url && msg.media_type === "video" && (
+                    <video
+                      src={msg.media_url}
+                      controls
+                      className="mt-2 max-h-48 w-full rounded-lg"
+                    />
+                  )}
+                  {msg.media_url && msg.media_type === "audio" && (
+                    <audio src={msg.media_url} controls className="mt-2 w-full" />
+                  )}
+                  {msg.media_url &&
+                    (msg.media_type === "pdf" || msg.media_type === "file") && (
+                      <a
+                        href={msg.media_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="mt-2 inline-flex items-center gap-1.5 text-xs underline"
+                        style={{ color: isMe ? "#000" : COLORS.gold }}
+                      >
+                        <FileText size={14} />
+                        {msg.media_name || "Fichier"}
+                      </a>
+                    )}
                   <p
                     className={`text-[10px] mt-1.5 ${
                       isMe ? "text-black/60" : "text-gray-400"
@@ -1494,15 +1721,51 @@ export function DebateRoom({
 
       <form
         onSubmit={handleSendMessage}
-        className="p-4 border-t flex gap-2"
+        className="p-4 border-t flex gap-2 items-center"
         style={{ borderColor: COLORS.border }}
       >
+        <input
+          ref={fileInputRef}
+          type="file"
+          className="hidden"
+          accept="image/*,video/*,audio/*,.pdf,.txt,application/pdf"
+          onChange={handleSendFile}
+        />
+        <button
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={
+            uploadingFile ||
+            roomStatus === "paused" ||
+            roomStatus === "ended"
+          }
+          title="Joindre un fichier"
+          className="p-3 rounded-xl disabled:opacity-50 shrink-0"
+          style={{
+            background: COLORS.surface2,
+            color: COLORS.muted,
+            border: `1px solid ${COLORS.border}`,
+          }}
+        >
+          {uploadingFile ? (
+            <Loader2 size={18} className="animate-spin" />
+          ) : (
+            <Paperclip size={18} />
+          )}
+        </button>
         <input
           type="text"
           value={newMessage}
           onChange={(e) => setNewMessage(e.target.value)}
-          placeholder="Message ou question pour l'IA…"
-          className="flex-1 px-4 py-3 rounded-xl border text-sm outline-none"
+          placeholder={
+            roomStatus === "paused"
+              ? "Salle en pause…"
+              : roomStatus === "ended"
+                ? "Débat terminé"
+                : "Message ou question pour l'IA…"
+          }
+          disabled={roomStatus === "paused" || roomStatus === "ended"}
+          className="flex-1 px-4 py-3 rounded-xl border text-sm outline-none disabled:opacity-50"
           style={{
             background: COLORS.surface2,
             borderColor: COLORS.border,
@@ -1512,9 +1775,14 @@ export function DebateRoom({
         <button
           type="button"
           onClick={handleAskAI}
-          disabled={!newMessage.trim() || aiLoading}
+          disabled={
+            !newMessage.trim() ||
+            aiLoading ||
+            roomStatus === "paused" ||
+            roomStatus === "ended"
+          }
           title="Demander à l'IA"
-          className="p-3 rounded-xl disabled:opacity-50"
+          className="p-3 rounded-xl disabled:opacity-50 shrink-0"
           style={{
             background: "rgba(167,139,250,0.25)",
             color: "#a78bfa",
@@ -1524,8 +1792,12 @@ export function DebateRoom({
         </button>
         <button
           type="submit"
-          disabled={!newMessage.trim()}
-          className="p-3 rounded-xl disabled:opacity-50"
+          disabled={
+            !newMessage.trim() ||
+            roomStatus === "paused" ||
+            roomStatus === "ended"
+          }
+          className="p-3 rounded-xl disabled:opacity-50 shrink-0"
           style={{ background: COLORS.gold, color: "#000" }}
         >
           <Send size={18} />
