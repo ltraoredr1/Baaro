@@ -1,50 +1,38 @@
 import { createClient } from '@supabase/supabase-js';
-import { corsHeaders, handleCors } from './_cors.js';
-import { rateLimit, checkRateLimit } from './_rateLimit.js';
-import { supabaseAdmin } from './_supabaseAdmin.js';
 
-// Initialisation Supabase
-const supabaseUrl = Deno.env.get('SUPABASE_URL');
-const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-export default async function handler(req) {
+export default async function handler(req, res) {
   // Gestion CORS
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
   if (req.method === 'OPTIONS') {
-    return handleCors(req, new Response(null, { headers: corsHeaders }));
+    return res.status(200).end();
   }
 
   try {
-    // Vérification rate limiting
-    const clientIP = req.headers.get('x-forwarded-for') || 'unknown';
-    await checkRateLimit(clientIP, 'wallet');
-
     // Authentification
-    const authHeader = req.headers.get('Authorization');
+    const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return new Response(
-        JSON.stringify({ error: 'Token manquant' }),
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      return res.status(401).json({ error: 'Token manquant' });
     }
 
     const token = authHeader.split(' ')[1];
+    const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
     const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(token);
     
     if (authError || !user) {
-      return new Response(
-        JSON.stringify({ error: 'Non autorisé' }),
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      return res.status(401).json({ error: 'Non autorisé' });
     }
 
     const supabase = createClient(supabaseUrl, supabaseServiceKey, {
       global: { headers: { Authorization: `Bearer ${token}` } }
     });
 
-    const url = new URL(req.url);
-    const action = url.searchParams.get('action');
-
-    // GET - Récupérer le solde du wallet
+    // GET - Récupérer le solde
     if (req.method === 'GET') {
       const { data: wallet, error } = await supabase
         .from('wallets')
@@ -52,61 +40,25 @@ export default async function handler(req) {
         .eq('user_id', user.id)
         .single();
 
-      if (error && error.code !== 'PGRST116') {
-        throw error;
-      }
+      if (error && error.code !== 'PGRST116') throw error;
 
-      return new Response(
-        JSON.stringify({
-          success: true,
-          wallet: wallet || {
-            user_id: user.id,
-            diamonds_balance: 0,
-            pepites_balance: 0,
-            total_deposited: 0,
-            total_withdrawn: 0
-          }
-        }),
-        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      return res.status(200).json({
+        success: true,
+        wallet: wallet || {
+          user_id: user.id,
+          diamonds_balance: 0,
+          pepites_balance: 0
+        }
+      });
     }
 
-    // POST - Actions sur le wallet
+    // POST - Actions (send_gift, withdraw)
     if (req.method === 'POST') {
-      const body = await req.json();
-      const { action, amount, payment_method, account_details, receiver_id, gift_id, pk_battle_id } = body;
+      const { action, amount, payment_method, account_details, receiver_id, gift_id, pk_battle_id } = req.body;
 
-      // Action: Demander un retrait
-      if (action === 'withdraw') {
-        if (!amount || !payment_method || !account_details) {
-          return new Response(
-            JSON.stringify({ error: 'Paramètres manquants' }),
-            { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-          );
-        }
-
-        const { data, error } = await supabase.rpc('request_withdrawal', {
-          p_user_id: user.id,
-          p_amount_pepites: amount,
-          p_payment_method: payment_method,
-          p_account_details: account_details
-        });
-
-        if (error) throw error;
-
-        return new Response(
-          JSON.stringify(data),
-          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
-      }
-
-      // Action: Envoyer un cadeau
       if (action === 'send_gift') {
         if (!receiver_id || !gift_id) {
-          return new Response(
-            JSON.stringify({ error: 'Paramètres manquants' }),
-            { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-          );
+          return res.status(400).json({ error: 'Paramètres manquants' });
         }
 
         const { data, error } = await supabase.rpc('process_gift_transaction', {
@@ -116,39 +68,33 @@ export default async function handler(req) {
           p_pk_battle_id: pk_battle_id || null
         });
 
-        if (error) {
-          return new Response(
-            JSON.stringify({ error: error.message }),
-            { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-          );
-        }
-
-        return new Response(
-          JSON.stringify(data),
-          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+        if (error) return res.status(400).json({ error: error.message });
+        return res.status(200).json(data);
       }
 
-      return new Response(
-        JSON.stringify({ error: 'Action non valide' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      if (action === 'withdraw') {
+        if (!amount || !payment_method || !account_details) {
+          return res.status(400).json({ error: 'Paramètres manquants' });
+        }
+
+        const { data, error } = await supabase.rpc('request_withdrawal', {
+          p_user_id: user.id,
+          p_amount_pepites: amount,
+          p_payment_method: payment_method,
+          p_account_details: account_details
+        });
+
+        if (error) return res.status(400).json({ error: error.message });
+        return res.status(200).json(data);
+      }
+
+      return res.status(400).json({ error: 'Action non valide' });
     }
 
-    // Méthode non autorisée
-    return new Response(
-      JSON.stringify({ error: 'Méthode non autorisée' }),
-      { status: 405, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    return res.status(405).json({ error: 'Méthode non autorisée' });
 
   } catch (error) {
     console.error('Wallet API Error:', error);
-    return new Response(
-      JSON.stringify({ error: error.message || 'Erreur serveur' }),
-      { 
-        status: error.message?.includes('insuffisant') ? 400 : 500,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      }
-    );
+    return res.status(500).json({ error: error.message || 'Erreur serveur' });
   }
 }
