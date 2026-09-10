@@ -1,161 +1,115 @@
-import { getAdminClient } from "./_supabaseAdmin.js";
-import crypto from "node:crypto";
+import { createClient } from '@supabase/supabase-js';
+import { corsHeaders } from './_cors.js';
+import { supabaseAdmin } from './_supabaseAdmin.js';
 
-function timingSafeEqual(a, b) {
-  const ba = Buffer.from(a);
-  const bb = Buffer.from(b);
-  if (ba.length !== bb.length) return false;
-  return crypto.timingSafeEqual(ba, bb);
-}
+const supabaseUrl = Deno.env.get('SUPABASE_URL');
+const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+const CINETPAY_API_KEY = Deno.env.get('CINETPAY_API_KEY');
+const CINETPAY_SITE_ID = Deno.env.get('CINETPAY_SITE_ID');
 
-function verifyStripeSignature(payload, header, secret) {
-  if (!header || !secret) return false;
-  const parts = Object.fromEntries(
-    header.split(",").map((p) => {
-      const [k, v] = p.split("=");
-      return [k.trim(), v];
-    })
-  );
-  const t = parts.t;
-  const v1 = parts.v1;
-  if (!t || !v1) return false;
-  const signed = `\( {t}. \){payload}`;
-  const expected = crypto
-    .createHmac("sha256", secret)
-    .update(signed, "utf8")
-    .digest("hex");
-  return timingSafeEqual(expected, v1);
-}
-
-async function handleCinetPay(req, res) {
-  const payment_ref =
-    req.body?.cpm_trans_id || req.body?.payment_ref || req.body?.transaction_id;
-  if (!payment_ref) return res.status(400).json({ error: "payment_ref manquant" });
-
-  let admin;
+export default async function handler(req) {
   try {
-    admin = getAdminClient();
-  } catch (e) {
-    return res.status(500).json({ error: "config" });
-  }
+    // CinetPay envoie en POST
+    if (req.method !== 'POST') {
+      return new Response(
+        JSON.stringify({ error: 'Méthode non autorisée' }),
+        { status: 405, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
 
-  if (!process.env.CINETPAY_API_KEY || !process.env.CINETPAY_SITE_ID) {
-    return res.status(500).json({ error: "CinetPay non configuré" });
-  }
+    const body = await req.json();
+    console.log('Webhook CinetPay reçu:', body);
 
-  const statusRes = await fetch(
-    "https://api-checkout.cinetpay.com/v2/payment/check",
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
+    const { cpm_trans_id, cpm_status, cpm_custom } = body;
+
+    // Vérifier que le paiement est accepté
+    if (cpm_status !== 'ACCEPTED') {
+      console.log('Paiement non accepté:', cpm_status);
+      return new Response(
+        JSON.stringify({ code: '00', message: 'Webhook reçu' }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // Vérification auprès de l'API CinetPay (anti-fraude)
+    const verifyResponse = await fetch('https://api-check.cinetpay.com/v2/', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
       body: JSON.stringify({
-        apikey: process.env.CINETPAY_API_KEY,
-        site_id: process.env.CINETPAY_SITE_ID,
-        transaction_id: payment_ref,
-      }),
-    }
-  );
-  const statusData = await statusRes.json().catch(() => ({}));
-
-  if (statusData.data?.status !== "ACCEPTED") {
-    await admin
-      .from("shop_subscriptions")
-      .update({ status: "failed" })
-      .eq("payment_ref", payment_ref)
-      .eq("status", "pending");
-    return res.status(200).json({ ok: true });
-  }
-
-  const { data: sub } = await admin
-    .from("shop_subscriptions")
-    .select("shop_id, amount, currency, was_premium_rate, status")
-    .eq("payment_ref", payment_ref)
-    .maybeSingle();
-
-  if (sub && sub.status === "pending") {
-    await admin.rpc("activate_shop_subscription", {
-      p_shop_id: sub.shop_id,
-      p_payment_ref: payment_ref,
-      p_amount: sub.amount,
-      p_currency: sub.currency,
-      p_provider: "cinetpay",
-      p_was_premium: sub.was_premium_rate,
+        apikey: CINETPAY_API_KEY,
+        site_id: CINETPAY_SITE_ID,
+        transaction_id: cpm_trans_id
+      })
     });
-  }
-  return res.status(200).json({ ok: true });
-}
 
-async function handleStripe(req, res) {
-  const secret = process.env.STRIPE_WEBHOOK_SECRET;
-  const sig = req.headers["stripe-signature"];
-  const raw =
-    typeof req.body === "string" ? req.body : JSON.stringify(req.body || {});
+    const verifyData = await verifyResponse.json();
+    console.log('Vérification CinetPay:', verifyData);
 
-  if (secret && sig) {
-    if (!verifyStripeSignature(raw, sig, secret)) {
-      return res.status(400).json({ error: "Signature Stripe invalide" });
+    if (verifyData.code !== '00' || verifyData.data?.status !== 'ACCEPTED') {
+      console.error('Vérification échouée:', verifyData);
+      return new Response(
+        JSON.stringify({ code: '01', message: 'Vérification échouée' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
     }
-  } else if (
-    process.env.VITE_APP_ENV === "production" ||
-    process.env.NODE_ENV === "production"
-  ) {
-    return res.status(500).json({ error: "STRIPE_WEBHOOK_SECRET requis en production" });
-  }
 
-  let event;
-  try {
-    event =
-      typeof req.body === "object" && req.body?.type
-        ? req.body
-        : JSON.parse(raw);
-  } catch {
-    return res.status(400).json({ error: "JSON invalide" });
-  }
+    // Récupérer les infos de la transaction vérifiée
+    const userId = verifyData.data.cpm_custom;
+    const amountPaid = parseFloat(verifyData.data.cpm_amount);
+    
+    // Calculer les diamants (ex: 100 FCFA = 10 diamants)
+    const diamondsToAdd = Math.floor(amountPaid / 10);
 
-  if (event.type !== "checkout.session.completed") {
-    return res.status(200).json({ ok: true, ignored: event.type });
-  }
+    const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-  const session = event.data?.object || {};
-  const payment_ref =
-    session.client_reference_id || session.metadata?.payment_ref;
-  if (!payment_ref) return res.status(200).json({ ok: true, note: "pas de payment_ref" });
-  if (session.payment_status && session.payment_status !== "paid") {
-    return res.status(200).json({ ok: true, note: "non payé" });
-  }
-
-  let admin;
-  try {
-    admin = getAdminClient();
-  } catch (e) {
-    return res.status(500).json({ error: "config" });
-  }
-
-  const { data: sub } = await admin
-    .from("shop_subscriptions")
-    .select("shop_id, amount, currency, was_premium_rate, status")
-    .eq("payment_ref", payment_ref)
-    .maybeSingle();
-
-  if (sub && sub.status === "pending") {
-    await admin.rpc("activate_shop_subscription", {
-      p_shop_id: sub.shop_id,
-      p_payment_ref: payment_ref,
-      p_amount: sub.amount,
-      p_currency: sub.currency,
-      p_provider: "stripe",
-      p_was_premium: sub.was_premium_rate,
+    // Créditer l'utilisateur via la fonction RPC
+    const { data, error } = await supabase.rpc('add_diamonds_to_wallet', {
+      p_user_id: userId,
+      p_amount: diamondsToAdd,
+      p_transaction_id: cpm_trans_id
     });
-  }
-  return res.status(200).json({ ok: true });
-}
 
-export default async function handler(req, res) {
-  if (req.method !== "POST") return res.status(405).end();
-  const path = (req.url || "").split("?")[0];
-  const hasStripeSig = !!req.headers["stripe-signature"];
-  if (hasStripeSig || path.includes("stripe")) {
-    return handleStripe(req, res);
-  }
-  return handleCinetPay(req, res);
+    if (error) {
+      console.error('Erreur lors du crédit:', error);
+      throw error;
+    }
+
+    // Mettre à jour la transaction pending
+    await supabase
+      .from('transactions')
+      .update({ 
+        status: 'completed',
+        diamonds_spent: diamondsToAdd
+      })
+      .eq('metadata->>cinetpay_transaction_id', cpm_trans_id);
+
+    console.log(`✅ Utilisateur ${userId} crédité de ${diamondsToAdd} diamants`);
+
+    // Ici, vous pouvez ajouter:
+    // - Envoi de notification push
+    // - Webhook vers n8n pour automation
+    // - Email de confirmation
+
+    return new Response(
+      JSON.stringify({ 
+        code: '00', 
+        message: 'Webhook traité avec succès',
+        data: {
+          user_id: userId,
+          diamonds_added: diamondsToAdd
         }
+      }),
+      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
+
+  } catch (error) {
+    console.error('Erreur Webhook:', error);
+    return new Response(
+      JSON.stringify({ code: '01', message: 'Erreur serveur', error: error.message }),
+      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
+  }
+}
