@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { COLORS } from "../../../theme.js";
+import { COLORS } from "../theme.js";
 import { fetchActiveShops } from "../services/shopApi.js";
 import ShopCard from "./ShopCard.jsx";
 

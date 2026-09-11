@@ -1,4 +1,4 @@
-import { COLORS } from "../../../theme.js";
+import { COLORS } from "../theme.js";
 import { MapPin, Store } from "lucide-react";
 
 export default function ShopCard({ shop, onClick }) {

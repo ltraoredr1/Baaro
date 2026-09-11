@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { COLORS } from "../../../theme.js";
+import { COLORS } from "../theme.js";
 import { fetchSellerOrders, updateOrderStatus } from "../services/shopApi.js";
-import { useToast } from "../../../components/ToastContext.jsx";
+import { useToast } from "./ToastContext.jsx";
 
 const STATUS_LABEL = {
   pending: "En attente",

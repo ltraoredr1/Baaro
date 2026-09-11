@@ -1,10 +1,10 @@
 import { useState, useEffect } from "react";
 import { ArrowLeft } from "lucide-react";
-import { COLORS } from "../../../theme.js";
+import { COLORS } from "../theme.js";
 import { createOrder } from "../services/shopApi.js";
-import { createPayment, getAvailableProviders } from "../../../lib/paymentProvider.js";
-import { useToast } from "../../../components/ToastContext.jsx";
-import { supabase } from "../../../supabaseClient.js";
+import { createPayment, getAvailableProviders } from "../lib/paymentProvider.js";
+import { useToast } from "./ToastContext.jsx";
+import { supabase } from "../supabaseClient.js";
 
 /**
  * Checkout commande :

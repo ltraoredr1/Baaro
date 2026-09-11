@@ -1,8 +1,8 @@
 import { useState } from "react";
-import { COLORS } from "../../../theme.js";
-import { supabase } from "../../../supabaseClient.js";
+import { COLORS } from "../theme.js";
+import { supabase } from "../supabaseClient.js";
 import ImageUpload from "./ImageUpload.jsx";
-import { useToast } from "../../../components/ToastContext.jsx";
+import { useToast } from "./ToastContext.jsx";
 
 /**
  * Formulaire ajout / édition produit avec image.

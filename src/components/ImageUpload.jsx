@@ -1,8 +1,8 @@
 import { useRef, useState } from "react";
 import { Camera, X, Loader2 } from "lucide-react";
-import { COLORS } from "../../../theme.js";
+import { COLORS } from "../theme.js";
 import { uploadShopMedia } from "../services/mediaUpload.js";
-import { useToast } from "../../../components/ToastContext.jsx";
+import { useToast } from "./ToastContext.jsx";
 
 /**
  * Sélecteur + preview + upload image.

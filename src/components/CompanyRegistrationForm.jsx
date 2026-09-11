@@ -1,8 +1,8 @@
 import { useState, useEffect } from "react";
-import { supabase } from "../../../supabaseClient.js";
-import { COLORS } from "../../../theme.js";
+import { supabase } from "../supabaseClient.js";
+import { COLORS } from "../theme.js";
 import { COMPANY_TYPES, createCompany } from "../services/companyApi.js";
-import { createPayment, getAvailableProviders } from "../../../lib/paymentProvider.js";
+import { createPayment, getAvailableProviders } from "../lib/paymentProvider.js";
 
 const COUNTRY_CURRENCY = {
   ML: "XOF",

@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { Building2, PlusCircle, Store, Package } from "lucide-react";
-import { COLORS } from "../../../theme.js";
+import { COLORS } from "../theme.js";
 import { fetchActiveCompanies, fetchMyCompany, COMPANY_TYPES } from "../services/companyApi.js";
 import CompanyCard from "./CompanyCard.jsx";
 import CompanyDetail from "./CompanyDetail.jsx";

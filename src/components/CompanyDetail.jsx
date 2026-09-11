@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { ArrowLeft, Phone, Globe, Mail } from "lucide-react";
-import { COLORS } from "../../../theme.js";
+import { COLORS } from "../theme.js";
 import {
   fetchCompanyById,
   fetchCompanyPrograms,

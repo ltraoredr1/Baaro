@@ -1,5 +1,5 @@
 import { Plus } from "lucide-react";
-import { COLORS } from "../../../theme.js";
+import { COLORS } from "../theme.js";
 
 export default function ProductCard({ product, onAdd }) {
   return (

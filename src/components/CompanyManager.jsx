@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { COLORS } from "../../../theme.js";
+import { COLORS } from "../theme.js";
 import {
   fetchCompanyPrograms,
   fetchCompanyTariffs,
@@ -13,7 +13,7 @@ import {
   PROGRAM_TYPES,
   DAYS_LABELS,
 } from "../services/companyApi.js";
-import { useToast } from "../../../components/ToastContext.jsx";
+import { useToast } from "./ToastContext.jsx";
 
 /**
  * Gestion des programmes, tarifs et infos pour le propriétaire d'une entreprise.

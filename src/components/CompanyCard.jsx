@@ -1,4 +1,4 @@
-import { COLORS } from "../../../theme.js";
+import { COLORS } from "../theme.js";
 import { MapPin } from "lucide-react";
 import { COMPANY_TYPES } from "../services/companyApi.js";
 

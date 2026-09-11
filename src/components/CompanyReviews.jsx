@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { Star } from "lucide-react";
-import { COLORS } from "../../../theme.js";
-import { supabase } from "../../../supabaseClient.js";
-import { useToast } from "../../../components/ToastContext.jsx";
+import { COLORS } from "../theme.js";
+import { supabase } from "../supabaseClient.js";
+import { useToast } from "./ToastContext.jsx";
 
 /**
  * Avis sur une entreprise (transport, radio, TV, etc.)

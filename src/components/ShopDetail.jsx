@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { ArrowLeft, ShoppingBag } from "lucide-react";
-import { COLORS } from "../../../theme.js";
+import { COLORS } from "../theme.js";
 import { fetchShopById, fetchShopProducts } from "../services/shopApi.js";
 import ProductCard from "./ProductCard.jsx";
 import OrderCheckout from "./OrderCheckout.jsx";

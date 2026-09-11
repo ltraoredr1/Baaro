@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { COLORS } from "../../../theme.js";
+import { COLORS } from "../theme.js";
 import { fetchBuyerOrders } from "../services/shopApi.js";
 
 const STATUS_LABEL = {
