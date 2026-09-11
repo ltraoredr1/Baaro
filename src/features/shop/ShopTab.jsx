@@ -1,20 +1,21 @@
-import { useState } from "react";
-import { Store, PlusCircle } from "lucide-react";
+import { useState, useEffect } from "react";
+import { Store, PlusCircle, Package, ClipboardList } from "lucide-react";
 import { COLORS } from "../../theme.js";
+import { supabase } from "../../supabaseClient.js";
 import { LocalShopDirectory, ShopProductManager } from "./ShopFeature.jsx";
 import ShopRegistrationForm from "./ShopRegistrationForm.jsx";
-import { supabase } from "../../supabaseClient.js";
-import { useEffect } from "react";
+import ShopDetail from "./components/ShopDetail.jsx";
+import OrdersBuyer from "./components/OrdersBuyer.jsx";
+import OrdersSeller from "./components/OrdersSeller.jsx";
 
 /**
- * Onglet Boutiques BAARO
- * - Annuaire local
- * - Inscription boutique
- * - Gestion produits si le user a déjà une boutique
+ * Onglet Boutiques BAARO — version complète
+ * Modes : directory | detail | register | manage | orders-buyer | orders-seller
  */
 export default function ShopTab({ userId }) {
-  const [mode, setMode] = useState("directory"); // directory | register | manage
+  const [mode, setMode] = useState("directory");
   const [myShop, setMyShop] = useState(null);
+  const [selectedShopId, setSelectedShopId] = useState(null);
 
   useEffect(() => {
     if (!userId) return;
@@ -30,52 +31,108 @@ export default function ShopTab({ userId }) {
     })();
   }, [userId, mode]);
 
+  const btn = (active, activeColor = "gold") => ({
+    background: active
+      ? activeColor === "teal"
+        ? COLORS.tealGlow || COLORS.goldGlow
+        : COLORS.goldGlow
+      : COLORS.surface2,
+    borderColor: active
+      ? activeColor === "teal"
+        ? COLORS.borderTeal || COLORS.borderGold
+        : COLORS.borderGold
+      : COLORS.border,
+    color: active
+      ? activeColor === "teal"
+        ? COLORS.teal || COLORS.gold
+        : COLORS.gold
+      : COLORS.ivory,
+  });
+
   return (
     <div className="flex flex-col gap-4">
+      {/* Nav */}
       <div className="flex flex-wrap gap-2">
         <button
           type="button"
-          onClick={() => setMode("directory")}
-          className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold border"
-          style={{
-            background: mode === "directory" ? COLORS.goldGlow : COLORS.surface2,
-            borderColor: mode === "directory" ? COLORS.borderGold : COLORS.border,
-            color: mode === "directory" ? COLORS.gold : COLORS.ivory,
+          onClick={() => {
+            setMode("directory");
+            setSelectedShopId(null);
           }}
+          className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold border"
+          style={btn(mode === "directory" || mode === "detail")}
         >
           <Store size={14} />
           Annuaire
         </button>
+
         <button
           type="button"
           onClick={() => setMode("register")}
           className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold border"
-          style={{
-            background: mode === "register" ? COLORS.goldGlow : COLORS.surface2,
-            borderColor: mode === "register" ? COLORS.borderGold : COLORS.border,
-            color: mode === "register" ? COLORS.gold : COLORS.ivory,
-          }}
+          style={btn(mode === "register")}
         >
           <PlusCircle size={14} />
           Créer ma boutique
         </button>
+
         {myShop && (
           <button
             type="button"
             onClick={() => setMode("manage")}
             className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold border"
-            style={{
-              background: mode === "manage" ? COLORS.tealGlow : COLORS.surface2,
-              borderColor: mode === "manage" ? COLORS.borderTeal : COLORS.border,
-              color: mode === "manage" ? COLORS.teal : COLORS.ivory,
-            }}
+            style={btn(mode === "manage", "teal")}
           >
+            <Package size={14} />
             Mes produits
+          </button>
+        )}
+
+        {myShop && (
+          <button
+            type="button"
+            onClick={() => setMode("orders-seller")}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold border"
+            style={btn(mode === "orders-seller", "teal")}
+          >
+            <ClipboardList size={14} />
+            Commandes reçues
+          </button>
+        )}
+
+        {userId && (
+          <button
+            type="button"
+            onClick={() => setMode("orders-buyer")}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold border"
+            style={btn(mode === "orders-buyer")}
+          >
+            Mes commandes
           </button>
         )}
       </div>
 
-      {mode === "directory" && <LocalShopDirectory />}
+      {/* Contenu */}
+      {mode === "directory" && !selectedShopId && (
+        <LocalShopDirectory
+          onSelectShop={(s) => {
+            setSelectedShopId(s.id);
+            setMode("detail");
+          }}
+        />
+      )}
+
+      {mode === "detail" && selectedShopId && (
+        <ShopDetail
+          shopId={selectedShopId}
+          userId={userId}
+          onBack={() => {
+            setSelectedShopId(null);
+            setMode("directory");
+          }}
+        />
+      )}
+
       {mode === "register" && (
         <ShopRegistrationForm
           onRegistered={() => {
@@ -83,6 +140,7 @@ export default function ShopTab({ userId }) {
           }}
         />
       )}
+
       {mode === "manage" && myShop && (
         <ShopProductManager shopId={myShop.id} shopCurrency={myShop.currency} />
       )}
@@ -90,6 +148,14 @@ export default function ShopTab({ userId }) {
         <p className="text-sm" style={{ color: COLORS.muted }}>
           Aucune boutique trouvée. Crée-en une d&apos;abord.
         </p>
+      )}
+
+      {mode === "orders-seller" && myShop && (
+        <OrdersSeller shopId={myShop.id} />
+      )}
+
+      {mode === "orders-buyer" && userId && (
+        <OrdersBuyer userId={userId} />
       )}
     </div>
   );
