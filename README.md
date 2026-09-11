@@ -1,94 +1,162 @@
-# BAARO 2.0 — Super-app communautaire
+# BAARO Marketplace + Entreprises & Services
 
-Réseau social + wallet + live + IA régionale, conçu pour l’Afrique et les marchés émergents.
+Pack complet pour étendre BAARO avec :
 
-**Version** : 2.0.0-v20+ (package de correctifs inclus)
+1. **Marketplace boutiques** (commandes, panier, pickup/livraison)
+2. **Entreprises & Services** (transport, radio, TV, télécoms, banques, etc.)
+   - Auto-inscription
+   - Programmes / grilles / horaires / itinéraires
+   - Tarifs
+   - Informations complémentaires
 
-## Fonctionnalités principales
+---
 
-- Feed social, Stories, Vidéos
-- Messagerie + appels (Daily.co)
-- Debates / salles de discussion
-- Communauté type Discord (groupes, canaux, vocal, rôles)
-- Wallet BARO (gains, redeem, convert, payout)
-- Paiements Stripe + CinetPay
-- Assistant IA multi-providers avec routing par pays
-- Traduction texte / média
-- Notifications push + mode offline
-- Application mobile (Capacitor Android / iOS)
+## Structure des fichiers
 
-## Stack
+```
+baaro-marketplace/
+├── migrations/
+│   ├── 023_marketplace_orders.sql      # Commandes + avis boutiques
+│   └── 024_companies_and_services.sql  # Entreprises, programmes, tarifs
+├── services/
+│   ├── shopApi.js                      # API boutiques + commandes
+│   └── companyApi.js                   # API entreprises
+├── components/
+│   ├── ShopCard.jsx
+│   ├── ProductCard.jsx
+│   ├── ShopDetail.jsx
+│   ├── OrderCheckout.jsx
+│   ├── OrdersBuyer.jsx
+│   ├── CompanyCard.jsx
+│   ├── CompanyDetail.jsx
+│   ├── CompanyRegistrationForm.jsx
+│   ├── CompanyManager.jsx
+│   └── CompaniesTab.jsx                # Onglet principal entreprises
+└── README.md
+```
 
-| Couche        | Technologie                          |
-|---------------|--------------------------------------|
-| Frontend      | React 18, Vite, Tailwind, Capacitor  |
-| API           | Vercel Serverless                    |
-| Base de données | Supabase (Auth, Postgres, Realtime, Storage, RLS) |
-| Live / Appels | Daily.co                             |
-| Paiements     | Stripe, CinetPay                     |
-| IA            | OpenAI, Anthropic, Gemini, Moonshot, xAI, n8n |
-| Rate-limit    | Upstash Redis (optionnel)            |
+---
 
-## Démarrage rapide
+## Installation
+
+### 1. Migrations Supabase
+
+Dans l’ordre :
 
 ```bash
-cp .env.example .env.local
-# Renseigner VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY, etc.
-
-# Migrations Supabase (ordre dans supabase/README.md)
-# Puis :
-npm ci
-npm run dev
+# Dans le SQL Editor Supabase (ou via CLI)
+# 1. 023_marketplace_orders.sql
+# 2. 024_companies_and_services.sql
 ```
 
-## Scripts utiles
-
-```bash
-npm run build
-npm run check:lock
-npm run check:production
-npm run audit:security
-npm run check:e2e
-npm run cap:sync
-npm run cap:android
-```
-
-## Architecture
+### 2. Copier les fichiers dans ton projet
 
 ```
-src/
-├── app/           # Shell (App, MainShell, tabs lazy)
-├── features/      # Une feature = un dossier + index
-├── components/    # UI partagée
-├── services/      # supabase, walletApi
-├── hooks/, lib/, contexts/
-api/               # Endpoints serverless (wallet, chat, payout…)
-supabase/          # Schéma + migrations
+src/features/shop/
+├── services/
+│   ├── shopApi.js
+│   └── companyApi.js
+├── components/
+│   ├── ShopCard.jsx
+│   ├── ProductCard.jsx
+│   ├── ShopDetail.jsx
+│   ├── OrderCheckout.jsx
+│   ├── OrdersBuyer.jsx
+│   ├── CompanyCard.jsx
+│   ├── CompanyDetail.jsx
+│   ├── CompanyRegistrationForm.jsx
+│   ├── CompanyManager.jsx
+│   └── CompaniesTab.jsx
 ```
 
-## Sécurité
+Ajuste les imports relatifs si besoin (`../../../theme.js`, `../../../supabaseClient.js`, etc.).
 
-- Service-role Supabase **uniquement** côté serveur
-- Wallet : montants jamais décidés par le client
-- Idempotence des récompenses (reference_id)
-- CORS strict en production
-- Rate-limiting (mémoire + Upstash)
-- Headers de sécurité (CSP, HSTS, etc.) dans `vercel.json`
+### 3. Brancher l’onglet
 
-## Documentation versionnée
+Dans ton shell / navigation, ajoute un onglet :
 
-Voir les fichiers `docs-BAARO-vXX-*.md` :
-- v11 Messaging / Calls
-- v12 Live
-- v13 AI régional
-- v14 Notifications
-- v15 Performance
-- v16 Android
-- v17 Payout
-- v18 E2E
-- v19 Security
-- v20 Production
+```jsx
+import CompaniesTab from "./features/shop/components/CompaniesTab.jsx";
 
-## Licence
+// ...
+{activeTab === "companies" && <CompaniesTab userId={user?.id} />}
+```
 
-Projet privé — tous droits réservés.
+Tu peux aussi fusionner boutiques + entreprises dans un seul onglet « Marketplace ».
+
+---
+
+## Types d’entreprises supportés
+
+| Type         | Exemples                          |
+|--------------|-----------------------------------|
+| `transport`  | Bus, taxi, train, compagnie aérienne |
+| `radio`      | Stations FM, webradio             |
+| `tv`         | Chaînes TV, plateformes           |
+| `telecom`    | Opérateurs mobile, ISP            |
+| `energy`     | Électricité, solaire              |
+| `bank`       | Banques, microfinance             |
+| `insurance`  | Assurances                        |
+| `education`  | Écoles, centres de formation      |
+| `health`     | Cliniques, pharmacies             |
+| `hospitality`| Hôtels, restaurants               |
+| `shop`       | Commerces (alternative à shops)   |
+| `other`      | Autre                             |
+
+---
+
+## Fonctionnalités
+
+### Boutiques (existant enrichi)
+- Annuaire + fiche + produits
+- Panier + commande (pickup / livraison)
+- Code de retrait
+- Mes commandes (acheteur)
+
+### Entreprises
+- **Auto-inscription** (30 jours gratuits puis abonnement annuel)
+- **Programmes** : horaires, grilles radio/TV, itinéraires transport, émissions
+- **Tarifs** : grilles tarifaires (ticket, abonnement, spot pub…)
+- **Infos** : conditions, couverture, FAQ, etc.
+- Fiche publique avec onglets Programmes / Tarifs / Infos
+- Gestion complète côté propriétaire
+
+---
+
+## Prochaines étapes possibles
+
+1. Upload logo / cover (Supabase Storage)
+2. Paiement réel des commandes boutique (CinetPay / Stripe)
+3. `OrdersSeller.jsx` (vendeur change le statut)
+4. Avis / notes sur entreprises
+5. Géolocalisation « près de moi »
+6. Notifications (nouvelle commande, fin d’essai…)
+
+---
+
+## Notes
+
+- Les chemins d’import (`theme.js`, `supabaseClient.js`, `ToastContext`, `paymentProvider.js`) correspondent à la structure BAARO actuelle.
+- `CompanyRegistrationForm` réutilise `shop_pricing` et `createPayment` pour rester cohérent avec le système de paiement existant.
+- Pour le paiement entreprise, tu pourras adapter l’endpoint `/api/payments` pour accepter aussi `company_id` si besoin.
+
+---
+
+## Patch API (payments + webhooks)
+
+Fichiers prêts à remplacer dans ton repo :
+
+```
+api/payments.js   ← remplace le fichier existant
+api/webhooks.js   ← remplace le fichier existant
+```
+
+Ils gèrent maintenant :
+1. Topup diamants (comportement d'origine)
+2. Abonnement boutique (`shop_*`)
+3. Abonnement entreprise (`company_*`)
+4. Paiement commande marketplace (`order_*`)
+
+**Aucun nouvel endpoint** — toujours 9 / 12 max.
+
+Après copie : redéployer Vercel + appliquer migration `026`.
