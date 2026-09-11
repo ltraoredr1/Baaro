@@ -173,7 +173,7 @@ export default function ShopRegistrationForm({ onRegistered }) {
           currency: COUNTRY_CURRENCY[country] || "XOF",
           was_premium_rate: false,
           provider: "trial",
-          payment_ref: `trial_\( {shop.id}_ \){Date.now()}`,
+          payment_ref: `trial_${shop.id}_${Date.now()}`,
           status: "trial",
         });
 
@@ -206,7 +206,7 @@ export default function ShopRegistrationForm({ onRegistered }) {
 
       if (shopError) throw shopError;
 
-      const paymentRef = `shop_\( {shop.id}_ \){Date.now()}`;
+      const paymentRef = `shop_${shop.id}_${Date.now()}`;
       const { error: subError } = await supabase.from("shop_subscriptions").insert({
         shop_id: shop.id,
         amount: price,
