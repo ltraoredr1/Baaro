@@ -1,38 +1,49 @@
 // src/lib/paymentProvider.js
 import { supabase } from "../supabaseClient.js";
-import { requireUser } from "./requireUser.js"; // ← CORRECTION: import ajouté
 
-/**
- * Récupère l'URL de base de l'API
- */
 function apiBase() {
   const base = import.meta.env.VITE_API_BASE_URL || "";
   return base.replace(/\/$/, "");
 }
 
-/**
- * Crée un paiement (pour boutique ou recharge wallet)
- * Point d'entrée unique pour CinetPay et Stripe
- */
+async function getAuthenticatedSession() {
+  const { data, error } = await supabase.auth.getSession();
+
+  if (error) {
+    console.error("Authentication error:", error);
+    throw new Error("Impossible de récupérer la session.");
+  }
+
+  const session = data?.session;
+
+  if (!session?.access_token) {
+    throw new Error("Session requise pour le paiement. Veuillez vous reconnecter.");
+  }
+
+  return session;
+}
+
 export async function createPayment({
   provider,
   shopId,
   paymentRef,
   channel,
-  amount,      // ← CORRECTION: paramètre ajouté
-  currency,    // ← CORRECTION: paramètre ajouté
-  userId,      // ← CORRECTION: paramètre ajouté (pour les recharges wallet)
+  amount,
+  currency,
+  userId,
+  companyId,
+  orderId,
+  paymentType,
 }) {
-  // CORRECTION: utilisation de requireUser pour satisfaire le linter
-  const { user, session, error: authError } = await requireUser();
-  
-  if (authError || !session?.access_token) {
-    console.error("Authentication error:", authError);
-    throw new Error("Session requise pour le paiement. Veuillez vous reconnecter.");
+  const session = await getAuthenticatedSession();
+  const authenticatedUserId = session.user?.id;
+
+  if (!authenticatedUserId && !userId) {
+    throw new Error("Utilisateur authentifié introuvable.");
   }
 
   const url = `${apiBase()}/api/payments`;
-  
+
   const requestBody = {
     provider,
     shop_id: shopId,
@@ -40,8 +51,21 @@ export async function createPayment({
     channel,
     amount,
     currency,
-    user_id: userId || user.id,
+    user_id: userId || authenticatedUserId,
+    company_id: companyId,
+    order_id: orderId,
+    payment_type: paymentType,
   };
+
+  Object.keys(requestBody).forEach((key) => {
+    if (
+      requestBody[key] === undefined ||
+      requestBody[key] === null ||
+      requestBody[key] === ""
+    ) {
+      delete requestBody[key];
+    }
+  });
 
   try {
     const res = await fetch(url, {
@@ -54,12 +78,12 @@ export async function createPayment({
     });
 
     const data = await res.json().catch(() => ({}));
-    
+
     if (!res.ok) {
       console.error("Payment API error:", data);
-      throw new Error(data.error || `Erreur paiement (${res.status})`);
+      throw new Error(data?.error || `Erreur paiement (${res.status})`);
     }
-    
+
     return data;
   } catch (error) {
     console.error("Create payment error:", error);
@@ -67,147 +91,147 @@ export async function createPayment({
   }
 }
 
-/**
- * Récupère le statut d'un paiement
- */
 export async function getPaymentStatus(paymentRef) {
-  try {
-    const { data, error } = await supabase
-      .from("shop_subscriptions")
-      .select("status, provider, currency, amount, period_end")
-      .eq("payment_ref", paymentRef)
-      .single();
-      
-    if (error) {
-      console.error("Error fetching payment status:", error);
-      throw error;
-    }
-    
-    return data;
-  } catch (error) {
-    console.error("Get payment status error:", error);
+  if (!paymentRef) {
+    throw new Error("Référence de paiement requise.");
+  }
+
+  const { data, error } = await supabase
+    .from("shop_subscriptions")
+    .select("status, provider, currency, amount, period_end")
+    .eq("payment_ref", paymentRef)
+    .maybeSingle();
+
+  if (error) {
+    console.error("Error fetching payment status:", error);
     throw error;
   }
+
+  return data;
 }
 
-/**
- * Fournisseurs de paiement disponibles selon le pays
- * CORRECTION: ajout des channels et du flag enabled pour "provider support incomplete"
- */
 export function getAvailableProviders(countryCode) {
   const cc = String(countryCode || "").toUpperCase();
   const westAfrica = ["ML", "CI", "SN", "BF", "BJ", "TG", "GN", "CM", "NE"];
-  
+
   if (westAfrica.includes(cc)) {
     return [
-      { 
-        id: "cinetpay", 
+      {
+        id: "cinetpay",
         label: "Mobile Money / Carte (CinetPay)",
         description: "Orange Money, MTN, Wave, Moov, Carte bancaire",
         channels: ["orange_money", "mtn", "moov", "wave", "card"],
         enabled: true,
-        icon: "📱"
+        icon: "📱",
       },
-      { 
-        id: "stripe", 
+      {
+        id: "stripe",
         label: "Carte bancaire internationale (Stripe)",
         description: "Visa, Mastercard, American Express",
         channels: ["card"],
         enabled: true,
-        icon: "💳"
+        icon: "💳",
       },
     ];
   }
-  
-  // Pour les autres pays (Europe, Amérique, etc.)
+
   return [
-    { 
-      id: "stripe", 
+    {
+      id: "stripe",
       label: "Carte bancaire (Stripe)",
       description: "Visa, Mastercard",
       channels: ["card"],
       enabled: true,
-      icon: "💳"
+      icon: "💳",
     },
-    { 
-      id: "cinetpay", 
+    {
+      id: "cinetpay",
       label: "Mobile Money (CinetPay)",
       description: "Paiement mobile africain",
       channels: ["orange_money", "mtn", "wave"],
       enabled: true,
-      icon: "📱"
+      icon: "📱",
     },
   ];
 }
 
-/**
- * Valide qu'un provider est supporté dans un pays donné
- */
 export function validateProvider(providerId, countryCode) {
-  const providers = getAvailableProviders(countryCode);
-  const provider = providers.find(p => p.id === providerId);
-  
+  const provider = getAvailableProviders(countryCode).find(
+    (item) => item.id === providerId
+  );
+
   if (!provider) {
     throw new Error(`Le moyen de paiement "${providerId}" n'existe pas.`);
   }
-  
+
   if (!provider.enabled) {
-    throw new Error(`Le moyen de paiement "${providerId}" n'est pas disponible actuellement.`);
+    throw new Error(
+      `Le moyen de paiement "${providerId}" n'est pas disponible actuellement.`
+    );
   }
-  
+
   return true;
 }
 
-/**
- * Récupère les canaux disponibles pour un provider donné
- */
 export function getProviderChannels(providerId, countryCode) {
-  const providers = getAvailableProviders(countryCode);
-  const provider = providers.find(p => p.id === providerId);
-  
-  if (!provider) {
-    return [];
-  }
-  
-  return provider.channels || [];
+  const provider = getAvailableProviders(countryCode).find(
+    (item) => item.id === providerId
+  );
+
+  return provider?.channels || [];
 }
 
-/**
- * Formatte le montant selon la devise
- */
 export function formatAmount(amount, currency) {
+  const numericAmount = Number(amount);
+
+  if (!Number.isFinite(numericAmount)) {
+    return `0 ${currency || ""}`.trim();
+  }
+
   const currencies = {
     XOF: { symbol: "FCFA", decimals: 0 },
     EUR: { symbol: "€", decimals: 2 },
     USD: { symbol: "$", decimals: 2 },
   };
-  
-  const config = currencies[currency] || { symbol: currency, decimals: 2 };
-  return `${amount.toLocaleString('fr-FR')} ${config.symbol}`;
+
+  const config = currencies[currency] || {
+    symbol: currency || "",
+    decimals: 2,
+  };
+
+  return `${numericAmount.toLocaleString("fr-FR", {
+    minimumFractionDigits: config.decimals,
+    maximumFractionDigits: config.decimals,
+  })} ${config.symbol}`.trim();
 }
 
-/**
- * Calcule les frais de transaction selon le provider
- */
 export function calculateFees(amount, provider, currency = "XOF") {
+  const numericAmount = Number(amount);
+
+  if (!Number.isFinite(numericAmount) || numericAmount < 0) {
+    return { percentage: 0, fixed: 0, total: 0, net: 0 };
+  }
+
   const feeRates = {
-    cinetpay: 0.035, // 3.5% pour CinetPay
-    stripe: 0.029,   // 2.9% pour Stripe
+    cinetpay: 0.035,
+    stripe: 0.029,
   };
-  
+
   const fixedFees = {
     XOF: { cinetpay: 0, stripe: 0 },
     EUR: { cinetpay: 0.25, stripe: 0.25 },
-    USD: { cinetpay: 0.30, stripe: 0.30 },
+    USD: { cinetpay: 0.3, stripe: 0.3 },
   };
-  
-  const rate = feeRates[provider] || 0.035;
-  const fixed = fixedFees[currency]?.[provider] || 0;
-  
+
+  const rate = feeRates[provider] ?? 0.035;
+  const fixed = fixedFees[currency]?.[provider] ?? 0;
+  const percentage = rate * numericAmount;
+  const total = percentage + fixed;
+
   return {
-    percentage: rate * amount,
+    percentage,
     fixed,
-    total: (rate * amount) + fixed,
-    net: amount - ((rate * amount) + fixed),
+    total,
+    net: Math.max(0, numericAmount - total),
   };
-  }
+}
