@@ -1,9 +1,16 @@
 /**
- * Image / vidéo optimisées : lazy, decode async, placeholder, erreur soft.
+ * Image / vidéo optimisées + miniatures Supabase.
+ * Place : src/components/LazyMedia.jsx
+ * (remplace l'ancien fichier du même nom)
  */
 import { useState } from "react";
 import { COLORS } from "../theme.js";
+import { feedImageUrl, avatarUrl, fullImageUrl } from "../lib/mediaUrl.js";
 
+/**
+ * @param {object} props
+ * @param {'feed'|'avatar'|'full'|'raw'} [props.variant]
+ */
 export function LazyImage({
   src,
   alt = "",
@@ -11,11 +18,20 @@ export function LazyImage({
   style,
   aspectRatio,
   onClick,
+  variant = "feed",
+  width,
 }) {
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
 
-  if (!src || failed) {
+  let resolved = src;
+  if (src && variant !== "raw") {
+    if (variant === "avatar") resolved = avatarUrl(src, width || 96);
+    else if (variant === "full") resolved = fullImageUrl(src);
+    else resolved = feedImageUrl(src);
+  }
+
+  if (!resolved || failed) {
     return (
       <div
         className={`flex items-center justify-center bg-black/40 text-xs ${className}`}
@@ -47,7 +63,7 @@ export function LazyImage({
         />
       )}
       <img
-        src={src}
+        src={resolved}
         alt={alt}
         loading="lazy"
         decoding="async"
@@ -70,6 +86,7 @@ export function LazyVideo({
   ...rest
 }) {
   const [failed, setFailed] = useState(false);
+
   if (!src || failed) {
     return (
       <div
@@ -80,6 +97,7 @@ export function LazyVideo({
       </div>
     );
   }
+
   return (
     <video
       src={src}
