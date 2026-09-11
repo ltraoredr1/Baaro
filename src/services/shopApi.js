@@ -1,4 +1,4 @@
-import { supabase } from "../../../supabaseClient.js";
+import { supabase } from "../supabaseClient.js";
 
 export async function fetchActiveShops({ query = "", country, city, category, limit = 40 } = {}) {
   let q = supabase
