@@ -23,17 +23,19 @@ body,
   text-rendering: optimizeLegibility;
 }
 
-/* Skip link accessibilité */
+/* ============================================================
+   Skip link accessibilité
+   ============================================================ */
 .skip-link {
   position: absolute;
   left: -9999px;
   top: 0;
   z-index: 9999;
-  padding: 0.75rem 1rem;
+  padding: 0.75rem 1.25rem;
   background: #d9ae52;
   color: #0b1220;
   font-weight: 700;
-  border-radius: 0 0 0.5rem 0;
+  border-radius: 0 0 0.75rem 0;
 }
 .skip-link:focus {
   left: 0;
@@ -55,6 +57,14 @@ body,
 }
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(217, 174, 82, 0.5);
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
 }
 
 /* ============================================================
@@ -152,16 +162,14 @@ body,
    Mobile / safe-area / navigation
    ============================================================ */
 .mobile-nav-spacer {
-  padding-bottom: calc(4.5rem + env(safe-area-inset-bottom, 0px));
+  padding-bottom: calc(5.5rem + env(safe-area-inset-bottom, 0px));
 }
-
-@supports (padding: max(0px)) {
+@media (min-width: 768px) {
   .mobile-nav-spacer {
-    padding-bottom: max(4.5rem, calc(4.5rem + env(safe-area-inset-bottom)));
+    padding-bottom: 1.5rem;
   }
 }
 
-/* Zone safe iOS (notch / home indicator) */
 .safe-bottom {
   padding-bottom: env(safe-area-inset-bottom, 0px);
 }
@@ -169,7 +177,20 @@ body,
   padding-top: env(safe-area-inset-top, 0px);
 }
 
-/* Cibles tactiles minimales (44×44) */
+/* Cibles tactiles */
+button,
+[role='button'],
+a {
+  touch-action: manipulation;
+}
+
+@media (pointer: coarse) {
+  button:not(.icon-sm),
+  [role='button']:not(.icon-sm) {
+    min-height: 44px;
+  }
+}
+
 .nav-tab-btn,
 button.touch-target {
   min-height: 44px;
@@ -179,9 +200,10 @@ button.touch-target {
 /* ============================================================
    Performance — content-visibility
    ============================================================ */
-.feed-card {
+.feed-card,
+.content-visibility-auto {
   content-visibility: auto;
-  contain-intrinsic-size: 80px 260px;
+  contain-intrinsic-size: 80px 280px;
 }
 
 .virtual-list-item {
@@ -189,7 +211,6 @@ button.touch-target {
   contain-intrinsic-size: 60px 120px;
 }
 
-/* Conteneurs médias : éviter reflow */
 .lazy-media-box {
   contain: layout paint;
 }
@@ -197,18 +218,46 @@ button.touch-target {
 /* ============================================================
    Accessibilité / focus
    ============================================================ */
+:focus:not(:focus-visible) {
+  outline: none;
+}
 :focus-visible {
-  outline: 2px solid rgba(217, 174, 82, 0.85);
+  outline: 2px solid #d9ae52;
   outline-offset: 2px;
 }
 
-button:focus:not(:focus-visible),
-a:focus:not(:focus-visible) {
-  outline: none;
+.baaro-readable {
+  line-height: 1.55;
+  letter-spacing: 0.01em;
 }
 
 /* ============================================================
-   Reduced motion
+   PARAMÈTRES BAARO (réglages utilisateur)
+   Classes posées sur <html> depuis Settings
+   ============================================================ */
+
+/* Texte agrandi */
+html.baaro-large-text {
+  font-size: 112.5%;
+}
+
+/* Réduction mouvement (toggle réglages, en plus de prefers-reduced-motion) */
+html.baaro-reduce-motion *,
+html.baaro-reduce-motion *::before,
+html.baaro-reduce-motion *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
+}
+
+/* Économie de données — hint CSS (logique JS côté média) */
+html[data-baaro-data-saver='1'] video:not([data-force-hq]) {
+  /* préchargement contrôlé côté JS */
+}
+
+/* ============================================================
+   Reduced motion (préférence système OS)
    ============================================================ */
 @media (prefers-reduced-motion: reduce) {
   *,
@@ -243,7 +292,6 @@ a:focus:not(:focus-visible) {
   overflow: hidden;
 }
 
-/* Sélection texte thème BAARO */
 ::selection {
   background: rgba(217, 174, 82, 0.35);
   color: #f4efe3;
