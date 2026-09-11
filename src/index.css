@@ -4,17 +4,44 @@
 @tailwind components;
 @tailwind utilities;
 
-html, body, #root {
+/* ============================================================
+   Base
+   ============================================================ */
+html,
+body,
+#root {
   height: 100%;
   margin: 0;
   padding: 0;
-  background-color: #0B1220;
-  color: #F4EFE3;
-  font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background-color: #0b1220;
+  color: #f4efe3;
+  font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    Roboto, sans-serif;
   overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
-/* Custom Scrollbar */
+/* Skip link accessibilité */
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 9999;
+  padding: 0.75rem 1rem;
+  background: #d9ae52;
+  color: #0b1220;
+  font-weight: 700;
+  border-radius: 0 0 0.5rem 0;
+}
+.skip-link:focus {
+  left: 0;
+}
+
+/* ============================================================
+   Scrollbar
+   ============================================================ */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -30,7 +57,9 @@ html, body, #root {
   background: rgba(217, 174, 82, 0.5);
 }
 
-/* Custom Glassmorphism Classes */
+/* ============================================================
+   Glassmorphism
+   ============================================================ */
 .glass-panel {
   background: rgba(17, 26, 44, 0.75);
   backdrop-filter: blur(16px);
@@ -39,7 +68,11 @@ html, body, #root {
 }
 
 .glass-card {
-  background: linear-gradient(135deg, rgba(26, 39, 64, 0.6) 0%, rgba(17, 26, 44, 0.8) 100%);
+  background: linear-gradient(
+    135deg,
+    rgba(26, 39, 64, 0.6) 0%,
+    rgba(17, 26, 44, 0.8) 100%
+  );
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -59,20 +92,32 @@ html, body, #root {
 }
 
 .text-gradient-gold {
-  background: linear-gradient(135deg, #F5C86B 0%, #D9AE52 50%, #B88B2A 100%);
+  background: linear-gradient(135deg, #f5c86b 0%, #d9ae52 50%, #b88b2a 100%);
   -webkit-background-clip: text;
+  background-clip: text;
   -webkit-text-fill-color: transparent;
 }
 
 .text-gradient-teal {
-  background: linear-gradient(135deg, #4EE1C8 0%, #2DBFA6 100%);
+  background: linear-gradient(135deg, #4ee1c8 0%, #2dbfa6 100%);
   -webkit-background-clip: text;
+  background-clip: text;
   -webkit-text-fill-color: transparent;
 }
 
+/* ============================================================
+   Animations
+   ============================================================ */
 @keyframes pulse-slow {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.85; transform: scale(1.02); }
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.85;
+    transform: scale(1.02);
+  }
 }
 
 .animate-pulse-slow {
@@ -80,18 +125,126 @@ html, body, #root {
 }
 
 @keyframes float {
-  0%, 100% { transform: translateY(0px); }
-  50% { transform: translateY(-4px); }
+  0%,
+  100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
 }
 
 .animate-float {
   animation: float 3s ease-in-out infinite;
 }
 
-/* Anti-capture web : flou quand l'onglet n'est plus au premier plan */
+/* ============================================================
+   Privacy (anti-capture / blur onglet inactif)
+   ============================================================ */
 .privacy-blur {
   filter: blur(14px) brightness(0.7);
   transition: filter 0.12s ease;
   pointer-events: none;
   user-select: none;
+}
+
+/* ============================================================
+   Mobile / safe-area / navigation
+   ============================================================ */
+.mobile-nav-spacer {
+  padding-bottom: calc(4.5rem + env(safe-area-inset-bottom, 0px));
+}
+
+@supports (padding: max(0px)) {
+  .mobile-nav-spacer {
+    padding-bottom: max(4.5rem, calc(4.5rem + env(safe-area-inset-bottom)));
+  }
+}
+
+/* Zone safe iOS (notch / home indicator) */
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+.safe-top {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+/* Cibles tactiles minimales (44×44) */
+.nav-tab-btn,
+button.touch-target {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+/* ============================================================
+   Performance — content-visibility
+   ============================================================ */
+.feed-card {
+  content-visibility: auto;
+  contain-intrinsic-size: 80px 260px;
+}
+
+.virtual-list-item {
+  content-visibility: auto;
+  contain-intrinsic-size: 60px 120px;
+}
+
+/* Conteneurs médias : éviter reflow */
+.lazy-media-box {
+  contain: layout paint;
+}
+
+/* ============================================================
+   Accessibilité / focus
+   ============================================================ */
+:focus-visible {
+  outline: 2px solid rgba(217, 174, 82, 0.85);
+  outline-offset: 2px;
+}
+
+button:focus:not(:focus-visible),
+a:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* ============================================================
+   Reduced motion
+   ============================================================ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .animate-pulse-slow,
+  .animate-float {
+    animation: none !important;
+  }
+}
+
+/* ============================================================
+   Utilitaires texte
+   ============================================================ */
+.line-clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.line-clamp-3 {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Sélection texte thème BAARO */
+::selection {
+  background: rgba(217, 174, 82, 0.35);
+  color: #f4efe3;
 }
