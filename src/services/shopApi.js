@@ -54,45 +54,27 @@ export async function createOrder({
   notes = "",
   dropoffAddress = null,
 }) {
-  const total = items.reduce((sum, i) => sum + i.unitPrice * i.quantity, 0);
-  const currency = items[0]?.currency || "XOF";
-  const pickupCode =
-    method === "pickup"
-      ? Math.random().toString(36).substring(2, 8).toUpperCase()
-      : null;
+  if (!shopId || !buyerId || !Array.isArray(items) || items.length === 0) {
+    throw new Error("Commande invalide.");
+  }
 
-  const { data: order, error } = await supabase
-    .from("orders")
-    .insert({
-      shop_id: shopId,
-      buyer_id: buyerId,
-      status: "pending",
-      payment_status: "unpaid",
-      method,
-      total_amount: total,
-      currency,
-      pickup_code: pickupCode,
-      notes: notes || null,
-      dropoff_address: dropoffAddress,
-    })
-    .select()
-    .single();
-
-  if (error) throw error;
-
-  const orderItems = items.map((i) => ({
-    order_id: order.id,
-    product_id: i.productId,
-    name: i.name,
-    unit_price: i.unitPrice,
-    quantity: i.quantity,
-    currency: i.currency,
+  // Le serveur recalcule les prix depuis shop_products.
+  // Les prix/noms envoyés par le client ne sont jamais utilisés pour facturer.
+  const payload = items.map((i) => ({
+    productId: i.productId,
+    quantity: Math.max(1, Math.min(100, Number(i.quantity) || 1)),
   }));
 
-  const { error: itemsError } = await supabase.from("order_items").insert(orderItems);
-  if (itemsError) throw itemsError;
+  const { data, error } = await supabase.rpc("create_order_secure", {
+    p_shop_id: shopId,
+    p_method: method,
+    p_notes: notes || null,
+    p_dropoff_address: dropoffAddress || null,
+    p_items: payload,
+  });
 
-  return order;
+  if (error) throw error;
+  return data;
 }
 
 export async function updateOrderStatus(orderId, status) {
