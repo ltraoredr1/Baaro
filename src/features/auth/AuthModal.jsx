@@ -44,8 +44,16 @@ export function AuthModal({ isOpen, onClose, onAuthSuccess }) {
         });
 
         if (error) {
-          // If Supabase is placeholder or fails, simulate successful account creation in local state
-          console.warn("Supabase Auth notice:", error.message);
+          throw error;
+        }
+
+        // Avec la confirmation e-mail activée, Supabase peut créer le compte
+        // sans ouvrir immédiatement une session. On affiche alors le message
+        // sans basculer artificiellement l'utilisateur vers l'application.
+        if (!data?.session) {
+          setErrorMessage("Compte créé. Vérifiez votre e-mail pour confirmer votre adresse.");
+          setLoading(false);
+          return;
         }
 
         const newUserProfile = {
@@ -71,6 +79,8 @@ export function AuthModal({ isOpen, onClose, onAuthSuccess }) {
           email: email.trim(),
           password: password
         });
+        if (error) throw error;
+        if (!data?.session) throw new Error("Session non créée.");
 
         const loggedInProfile = {
           display_name: email.split("@")[0],

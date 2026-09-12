@@ -205,7 +205,7 @@ export default function AuthScreen() {
         {mode === "anonymous" && (
           <div className="flex flex-col gap-4">
             <div className="flex justify-center">
-              <TurnstileWidget onVerify={(token) => { setCaptchaToken(token); if (token) handleAnonymous(token); }} />
+              <TurnstileWidget onVerify={(token) => { setCaptchaToken(token); }} />
             </div>
 
             <div className="flex items-center gap-3">
@@ -214,8 +214,8 @@ export default function AuthScreen() {
               <div className="flex-1 h-px" style={{ background: COLORS.border || "#334155" }} />
             </div>
 
-            <button type="button" onClick={() => { setMode("email"); resetMessages(); }} className="w-full py-3 rounded-xl font-semibold text-sm border flex items-center justify-center gap-2" style={inputStyle}>
-              <Mail size={17} /> E-mail et mot de passe
+            <button type="button" onClick={() => { setMode("email"); setIsLogin(false); resetMessages(); }} className="w-full py-3 rounded-xl font-semibold text-sm border flex items-center justify-center gap-2" style={inputStyle}>
+              <Mail size={17} /> S'inscrire avec e-mail
             </button>
             <button type="button" onClick={() => { setMode("phone"); setPhoneStep("request"); resetMessages(); }} className="w-full py-3 rounded-xl font-semibold text-sm border flex items-center justify-center gap-2" style={inputStyle}>
               <Phone size={17} /> Numéro de téléphone (SMS)
@@ -234,8 +234,17 @@ export default function AuthScreen() {
             </div>
 
             {oauthLoading && <div className="text-center text-xs" style={{ color: COLORS.muted }}>Redirection vers {oauthLoading}...</div>}
+            <button
+              type="button"
+              onClick={() => { setCaptchaToken(null); handleAnonymous(null); }}
+              disabled={loading}
+              className="w-full py-3 rounded-xl font-semibold text-sm border transition disabled:opacity-50"
+              style={{ borderColor: COLORS.border, color: COLORS.muted }}
+            >
+              Continuer en invité
+            </button>
             <p className="text-[10px] text-center leading-relaxed" style={{ color: COLORS.muted }}>
-              Les réseaux sociaux créent automatiquement ton compte BAARO lors de la première connexion.
+              Aucun compte n'est créé automatiquement. Choisis une méthode d'inscription ou continue volontairement en invité.
             </p>
           </div>
         )}
