@@ -48,6 +48,30 @@ export default function CompaniesTab({ userId }) {
 
   return (
     <div className="flex flex-col gap-4">
+      <div
+        className="rounded-2xl border p-4"
+        style={{ background: COLORS.surface2, borderColor: COLORS.border }}
+      >
+        <div className="flex items-start gap-3">
+          <div
+            className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0"
+            style={{ background: COLORS.goldGlow, color: COLORS.gold }}
+          >
+            <Building2 size={22} />
+          </div>
+          <div>
+            <h2 className="text-base font-bold" style={{ color: COLORS.ivory }}>
+              Entreprises & Services
+            </h2>
+            <p className="text-xs mt-1" style={{ color: COLORS.muted }}>
+              Créez une entreprise indépendante d'une boutique : transport, voyage,
+              radio, TV, télécoms, énergie, banque, assurance, éducation, santé,
+              hôtellerie et autres services.
+            </p>
+          </div>
+        </div>
+      </div>
+
       {/* Navigation modes */}
       <div className="flex flex-wrap gap-2">
         <button
@@ -77,7 +101,7 @@ export default function CompaniesTab({ userId }) {
           }}
         >
           <PlusCircle size={14} />
-          Inscrire mon entreprise
+          Créer une entreprise
         </button>
         {myCompany && (
           <button

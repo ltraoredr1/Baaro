@@ -11,6 +11,7 @@ import {
   Settings,
   Users,
   Store,
+  Building2,
   X,
   MoreHorizontal,
 } from "lucide-react";
@@ -18,7 +19,7 @@ import { COLORS } from "../theme.js";
 
 /**
  * Navigation BAARO
- * - Shop dans la barre principale (mobile + desktop)
+ * - Shop dans la barre principale (mobile + desktop)\n * - Entreprises & Services dans Plus sur mobile et dans la navigation desktop
  * - Rappel Statuts / Stories → onglet Fil
  */
 const MAIN_ITEMS = [
@@ -30,6 +31,7 @@ const MAIN_ITEMS = [
 ];
 
 const MORE_ITEMS = [
+  { id: "companies", label: "Entreprises", icon: Building2, badge: null },
   { id: "friends", label: "Communauté", icon: Users, badge: null },
   { id: "crypto", label: "BARO", icon: Coins, badge: "PRO" },
   { id: "wallet", label: "Portefeuille", icon: Wallet, badge: null },
