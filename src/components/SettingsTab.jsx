@@ -13,6 +13,7 @@ import {
 import { COLORS } from "../theme.js";
 import { PrivacyPage } from "./PrivacyPage.jsx";
 import { PushSettings } from "./PushSettings.jsx";
+import ProfileContactsLinks from "./ProfileContactsLinks.jsx";
 
 const SUBSCRIPTION_TIERS = [
   {
@@ -69,6 +70,7 @@ export function SettingsTab({
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
   const [showPrivacy, setShowPrivacy] = useState(false);
+  const [accountUserId, setAccountUserId] = useState(null);
 
   const [isAnonymousUser, setIsAnonymousUser] = useState(false);
   const [secureEmail, setSecureEmail] = useState("");
@@ -81,6 +83,7 @@ export function SettingsTab({
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => {
       setIsAnonymousUser(data?.user?.is_anonymous === true);
+      setAccountUserId(data?.user?.id || null);
     });
   }, []);
 
@@ -498,6 +501,25 @@ export function SettingsTab({
           </form>
         )}
       </div>
+
+      {/* Coordonnées, liens et réseaux sociaux */}
+      {accountUserId && !isAnonymousUser && (
+        <div
+          className="rounded-2xl p-5 border flex flex-col gap-4"
+          style={{ background: COLORS.surface, borderColor: COLORS.borderTeal }}
+        >
+          <div>
+            <h3 className="text-base font-bold flex items-center gap-2" style={{ color: COLORS.teal }}>
+              <ShieldCheck size={18} />
+              Coordonnées et réseaux
+            </h3>
+            <p className="text-xs mt-1" style={{ color: COLORS.muted }}>
+              Ajoute jusqu'à 3 numéros, 3 e-mails, ton site Web et tes réseaux sociaux.
+            </p>
+          </div>
+          <ProfileContactsLinks userId={accountUserId} />
+        </div>
+      )}
 
       {/* Thèmes */}
       <div
