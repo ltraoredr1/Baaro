@@ -24,28 +24,35 @@ export function AppProvider({ children }) {
   const [remainingToday, setRemainingToday] = useState(100);
   const [dailyCap, setDailyCap] = useState(100);
 
-  // Auth listener
+  // Auth listener — la session Supabase est persistante et le profil est
+  // rechargé à chaque reconnexion/changement de compte.
   useEffect(() => {
+    let active = true;
+
+    const applySession = (nextSession) => {
+      if (!active) return;
+      setSession(nextSession);
+      setUserId(nextSession?.user?.id || null);
+      setIsAnonymous(nextSession?.user?.is_anonymous === true);
+    };
+
     supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      if (session?.user) {
-        setUserId(session.user.id);
-        setIsAnonymous(session.user.is_anonymous === true);
-      }
-      setLoading(false);
+      applySession(session);
+      if (active) setLoading(false);
     });
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-      setUserId(session?.user?.id || null);
-      setIsAnonymous(session?.user?.is_anonymous === true);
+    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      applySession(nextSession);
+      if (active) setLoading(false);
     });
 
-    return () => subscription.unsubscribe();
+    return () => {
+      active = false;
+      subscription.unsubscribe();
+    };
   }, []);
-
   // Appel générique à /api/wallet
   const callWallet = useCallback(async (action, payload = {}) => {
     const {
@@ -83,7 +90,7 @@ export function AppProvider({ children }) {
         // Profil
         let { data: profile } = await supabase
           .from("profiles")
-          .select("display_name, handle, flag, bio")
+          .select("user_id, display_name, handle, flag, bio, avatar_url, country, is_verified, created_at")
           .eq("user_id", userId)
           .maybeSingle();
 
@@ -92,10 +99,10 @@ export function AppProvider({ children }) {
             .from("profiles")
             .upsert({
               user_id: userId,
-              display_name: "Membre BAARO",
-              handle: `@user_${userId.slice(0, 8)}`,
-              flag: "🌍",
-              bio: "",
+              display_name: session?.user?.user_metadata?.display_name || "Membre BAARO",
+              handle: session?.user?.user_metadata?.handle || `@user_${userId.slice(0, 8)}`,
+              flag: session?.user?.user_metadata?.flag || "🌍",
+              bio: session?.user?.user_metadata?.bio || "",
             })
             .select()
             .single();
@@ -108,6 +115,9 @@ export function AppProvider({ children }) {
             handle: profile.handle || "@membre",
             flag: profile.flag || "🌍",
             bio: profile.bio || "",
+            avatar_url: profile.avatar_url || null,
+            country: profile.country || null,
+            is_verified: profile.is_verified === true,
           });
         }
 
@@ -197,12 +207,18 @@ export function AppProvider({ children }) {
   const updateProfile = useCallback(
     async (updates) => {
       if (!userId) return { ok: false, error: "Non authentifié" };
-      const { error } = await supabase
+      const payload = {
+        ...updates,
+        user_id: userId,
+        updated_at: new Date().toISOString(),
+      };
+      const { data, error } = await supabase
         .from("profiles")
-        .update(updates)
-        .eq("user_id", userId);
+        .upsert(payload, { onConflict: "user_id" })
+        .select("user_id, display_name, handle, flag, bio, avatar_url, country, is_verified, created_at, updated_at")
+        .single();
       if (error) return { ok: false, error };
-      setUserProfile((prev) => ({ ...prev, ...updates }));
+      setUserProfile((prev) => ({ ...prev, ...data }));
       return { ok: true };
     },
     [userId]
