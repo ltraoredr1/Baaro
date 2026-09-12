@@ -41,6 +41,9 @@ export const tabs = {
   shop: lazy(() =>
     import("../features/shop/index.js").then((m) => ({ default: m.ShopTab }))
   ),
+  companies: lazy(() =>
+    import("../components/CompaniesTab.jsx").then((m) => ({ default: m.default }))
+  ),
 
   // FIX: settings est en default export
   settings: lazy(() =>
