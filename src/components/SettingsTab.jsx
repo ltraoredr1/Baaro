@@ -57,11 +57,13 @@ export function SettingsTab({
   const [displayName, setDisplayName] = useState(
     userProfile?.display_name || "Membre BAARO"
   );
+  const [handle, setHandle] = useState(userProfile?.handle || "@membre");
   const [bio, setBio] = useState(userProfile?.bio || "");
   const [flag, setFlag] = useState(userProfile?.flag || "🌍");
   const [activeTier, setActiveTier] = useState("free");
   const [isEditing, setIsEditing] = useState(false);
   const [editDisplayName, setEditDisplayName] = useState(displayName);
+  const [editHandle, setEditHandle] = useState(handle);
   const [editBio, setEditBio] = useState(bio);
   const [editFlag, setEditFlag] = useState(flag);
   const [loading, setLoading] = useState(false);
@@ -190,26 +192,31 @@ export function SettingsTab({
       } = await supabase.auth.getUser();
       if (!user) throw new Error("Non connecté");
 
+      const normalizedHandle = (editHandle || "@membre").trim().replace(/^@?/, "@").replace(/[^@a-zA-Z0-9_.-]/g, "_").slice(0, 31);
       const { error } = await supabase
         .from("profiles")
-        .update({
-          display_name: editDisplayName,
-          flag: editFlag,
-          bio: editBio,
-        })
-        .eq("user_id", user.id);
+        .upsert({
+          user_id: user.id,
+          display_name: editDisplayName.trim().slice(0, 60) || "Membre BAARO",
+          handle: normalizedHandle,
+          flag: editFlag || "🌍",
+          bio: editBio.trim().slice(0, 500),
+          updated_at: new Date().toISOString(),
+        }, { onConflict: "user_id" });
 
       if (error) throw error;
 
       const updated = {
         ...userProfile,
-        display_name: editDisplayName,
-        flag: editFlag,
-        bio: editBio,
+        display_name: editDisplayName.trim(),
+        handle: normalizedHandle,
+        flag: editFlag || "🌍",
+        bio: editBio.trim(),
       };
       setUserProfile?.(updated);
-      setDisplayName(editDisplayName);
-      setBio(editBio);
+      setDisplayName(editDisplayName.trim());
+      setHandle(normalizedHandle);
+      setBio(editBio.trim());
       setFlag(editFlag);
       setIsEditing(false);
       setMessage("✅ Profil mis à jour");
@@ -422,6 +429,18 @@ export function SettingsTab({
           </div>
         ) : (
           <form onSubmit={handleSaveProfile} className="space-y-3">
+            <div>
+              <label className="text-xs font-semibold block mb-1" style={{ color: COLORS.muted }}>Nom d'utilisateur</label>
+              <input
+                name="edit-handle"
+                value={editHandle}
+                onChange={(e) => setEditHandle(e.target.value)}
+                maxLength={31}
+                placeholder="@mon_nom"
+                className="w-full bg-transparent border rounded-xl p-2.5 text-xs outline-none"
+                style={{ borderColor: COLORS.border, color: COLORS.ivory }}
+              />
+            </div>
             <input
               type="text"
               value={editDisplayName}
