@@ -14,6 +14,7 @@ import { COLORS } from "../theme.js";
 import { PrivacyPage } from "./PrivacyPage.jsx";
 import { PushSettings } from "./PushSettings.jsx";
 import ProfileContactsLinks from "./ProfileContactsLinks.jsx";
+import ProfilePhotosEditor from "./ProfilePhotosEditor.jsx";
 import {
   normalizeHandle,
   displayHandle,
@@ -489,6 +490,19 @@ export function SettingsTab({
           <User size={18} />
           Profil
         </h3>
+
+        {accountUserId && (
+          <ProfilePhotosEditor
+            userId={accountUserId}
+            profile={userProfile}
+            onUpdated={(patch) => {
+              setUserProfile?.((prev) =>
+                prev ? { ...prev, ...patch } : { ...patch }
+              );
+            }}
+          />
+        )}
+
         {!isEditing ? (
           <div className="space-y-3">
             <div className="flex items-center gap-3">
