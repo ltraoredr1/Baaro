@@ -90,7 +90,7 @@ export function AppProvider({ children }) {
         // Profil
         let { data: profile } = await supabase
           .from("profiles")
-          .select("user_id, display_name, handle, flag, bio, avatar_url, country, is_verified, created_at")
+          .select("user_id, display_name, handle, flag, bio, avatar_url, cover_url, country, is_verified, created_at")
           .eq("user_id", userId)
           .maybeSingle();
 
@@ -100,9 +100,11 @@ export function AppProvider({ children }) {
             .upsert({
               user_id: userId,
               display_name: session?.user?.user_metadata?.display_name || "Membre BAARO",
-              handle: session?.user?.user_metadata?.handle || `@user_${userId.slice(0, 8)}`,
+              // Plus de @user_UUID — handle libre, à choisir dans Réglages
+              handle: session?.user?.user_metadata?.handle || null,
               flag: session?.user?.user_metadata?.flag || "🌍",
               bio: session?.user?.user_metadata?.bio || "",
+              avatar_url: session?.user?.user_metadata?.avatar_url || null,
             })
             .select()
             .single();
@@ -112,10 +114,11 @@ export function AppProvider({ children }) {
         if (profile) {
           setUserProfile({
             display_name: profile.display_name || "Membre BAARO",
-            handle: profile.handle || "@membre",
+            handle: profile.handle || null,
             flag: profile.flag || "🌍",
             bio: profile.bio || "",
             avatar_url: profile.avatar_url || null,
+            cover_url: profile.cover_url || null,
             country: profile.country || null,
             is_verified: profile.is_verified === true,
           });
