@@ -169,6 +169,15 @@ const STRINGS: Record<string, Record<string, string>> = {
     save_profile: "Enregistrer",
     cancel: "Annuler",
     display_name: "Nom affiché",
+    first_name: "Prénom",
+    last_name: "Nom de famille",
+    birth_date: "Date de naissance",
+    location: "Localisation",
+    account_email: "E-mail du compte",
+    registered_country: "Pays d'inscription",
+    current_country: "Pays actuel",
+    country_change_wait: "Le changement de pays sera disponible après 4 mois.",
+    country_change_ready: "Vous pouvez changer votre pays actuel.",
     flag_emoji: "Drapeau (emoji)",
     bio: "Bio",
     profile_saved: "✅ Profil mis à jour",
@@ -836,6 +845,14 @@ type Props = {
     cover_url?: string;
     flag?: string;
     bio?: string;
+    first_name?: string;
+    last_name?: string;
+    birth_date?: string | null;
+    location?: string;
+    country?: string | null;
+    registered_country?: string | null;
+    country_changed_at?: string | null;
+    country_change_available_at?: string | null;
   } | null;
   setUserProfile?: (p: unknown) => void;
   currentTheme?: string;
@@ -864,6 +881,11 @@ export default function SettingsTab({
   // Profile edit
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState("");
+  const [editFirstName, setEditFirstName] = useState("");
+  const [editLastName, setEditLastName] = useState("");
+  const [editBirthDate, setEditBirthDate] = useState("");
+  const [editLocation, setEditLocation] = useState("");
+  const [editCountry, setEditCountry] = useState("");
   const [editHandle, setEditHandle] = useState("");
   const [editFlag, setEditFlag] = useState("");
   const [editBio, setEditBio] = useState("");
@@ -944,6 +966,26 @@ export default function SettingsTab({
           email: data.user.email ?? undefined,
           is_anonymous: data.user.is_anonymous === true,
         });
+
+        // Profil public/identité : l'e-mail du compte reste celui de Supabase Auth
+        // et n'est jamais copié dans la table publique profiles.
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("user_id, display_name, handle, flag, bio, avatar_url, cover_url, country, registered_country, country_changed_at, country_change_available_at, first_name, last_name, birth_date, location, is_verified, created_at")
+          .eq("user_id", data.user.id)
+          .maybeSingle();
+        if (!cancelled && profile) {
+          setUserProfile?.({ ...(userProfile || {}), ...profile });
+          setEditName(profile.display_name || "");
+          setEditFirstName(profile.first_name || "");
+          setEditLastName(profile.last_name || "");
+          setEditBirthDate(profile.birth_date || "");
+          setEditLocation(profile.location || "");
+          setEditCountry(profile.country || profile.registered_country || "");
+          setEditFlag(profile.flag || "🌍");
+          setEditBio(profile.bio || "");
+        }
+
         const res = await supabase
           .from("user_settings")
           .select("*")
@@ -1048,13 +1090,33 @@ export default function SettingsTab({
         }
       }
 
+      const originalCountry = userProfile?.country || userProfile?.registered_country || "";
+      const countryChanged = editCountry !== originalCountry;
+      const countryChangeAt = userProfile?.country_change_available_at
+        ? new Date(userProfile.country_change_available_at).getTime()
+        : 0;
+      if (countryChanged && countryChangeAt && countryChangeAt > Date.now()) {
+        setMessage(`❌ ${t("country_change_wait")} ${new Date(countryChangeAt).toLocaleDateString()}`);
+        setProfileLoading(false);
+        return;
+      }
+
+      const selectedProfileCountry = COUNTRIES.find((c) => c.code === editCountry);
+      const derivedFlag = selectedProfileCountry?.flag || "🌍";
+      setEditFlag(derivedFlag);
+
       const { error } = await supabase
         .from("profiles")
         .update({
           display_name: name,
+          first_name: editFirstName.trim(),
+          last_name: editLastName.trim(),
+          birth_date: editBirthDate || null,
+          location: editLocation.trim(),
+          country: editCountry || null,
           handle: finalHandle,
-          flag: editFlag.trim() || "🌍",
-          bio: editBio,
+          flag: derivedFlag,
+          bio: editBio.trim(),
           updated_at: new Date().toISOString(),
         })
         .eq("user_id", user.id);
@@ -1071,9 +1133,14 @@ export default function SettingsTab({
             .from("profiles")
             .update({
               display_name: name,
+              first_name: editFirstName.trim(),
+              last_name: editLastName.trim(),
+              birth_date: editBirthDate || null,
+              location: editLocation.trim(),
+              country: editCountry || null,
               handle: resolved.handle,
-              flag: editFlag.trim() || "🌍",
-              bio: editBio,
+              flag: derivedFlag,
+              bio: editBio.trim(),
               updated_at: new Date().toISOString(),
             })
             .eq("user_id", user.id);
@@ -1088,9 +1155,14 @@ export default function SettingsTab({
       const updated = {
         ...userProfile,
         display_name: name,
+        first_name: editFirstName.trim(),
+        last_name: editLastName.trim(),
+        birth_date: editBirthDate || null,
+        location: editLocation.trim(),
+        country: editCountry || null,
+        flag: derivedFlag,
         handle: finalHandle,
-        flag: editFlag.trim() || "🌍",
-        bio: editBio,
+        bio: editBio.trim(),
       };
       setUserProfile?.(updated);
       setEditHandle(finalHandle);
@@ -1567,6 +1639,11 @@ export default function SettingsTab({
               type="button"
               onClick={() => {
                 setEditName(userProfile?.display_name || displayName);
+                setEditFirstName(userProfile?.first_name || "");
+                setEditLastName(userProfile?.last_name || "");
+                setEditBirthDate(userProfile?.birth_date || "");
+                setEditLocation(userProfile?.location || "");
+                setEditCountry(userProfile?.country || userProfile?.registered_country || "");
                 setEditHandle(
                   displayHandle(
                     userProfile?.handle,
@@ -1585,6 +1662,24 @@ export default function SettingsTab({
             </button>
           ) : (
             <form onSubmit={handleSaveProfile} className="flex flex-col gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <input
+                  value={editFirstName}
+                  onChange={(e) => setEditFirstName(e.target.value)}
+                  placeholder={t("first_name")}
+                  maxLength={60}
+                  className="w-full rounded-xl p-3 text-sm outline-none border"
+                  style={inputStyle}
+                />
+                <input
+                  value={editLastName}
+                  onChange={(e) => setEditLastName(e.target.value)}
+                  placeholder={t("last_name")}
+                  maxLength={60}
+                  className="w-full rounded-xl p-3 text-sm outline-none border"
+                  style={inputStyle}
+                />
+              </div>
               <input
                 value={editName}
                 onChange={(e) => {
@@ -1636,19 +1731,73 @@ export default function SettingsTab({
                   />
                 </div>
               </div>
-              <input
-                value={editFlag}
-                onChange={(e) => setEditFlag(e.target.value)}
-                placeholder={t("flag_emoji")}
-                maxLength={4}
-                className="w-full rounded-xl p-3 text-sm outline-none border"
-                style={inputStyle}
-              />
+              <div className="rounded-xl border px-3 py-2.5 text-sm" style={{ ...inputStyle, opacity: 0.9 }}>
+                {t("flag_emoji")}: {editFlag || "🌍"} — automatiquement lié au pays actuel
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div>
+                  <label className="text-xs font-semibold block mb-1" style={{ color: COLORS.muted }}>{t("birth_date")}</label>
+                  <input
+                    type="date"
+                    value={editBirthDate}
+                    max={new Date(new Date().setFullYear(new Date().getFullYear() - 13)).toISOString().slice(0, 10)}
+                    min="1900-01-01"
+                    onChange={(e) => setEditBirthDate(e.target.value)}
+                    className="w-full rounded-xl p-3 text-sm outline-none border"
+                    style={inputStyle}
+                  />
+                </div>
+                <input
+                  value={editLocation}
+                  onChange={(e) => setEditLocation(e.target.value)}
+                  placeholder={t("location")}
+                  maxLength={120}
+                  className="w-full rounded-xl p-3 text-sm outline-none border self-end"
+                  style={inputStyle}
+                />
+              </div>
+
+              <div className="rounded-xl border p-3" style={{ borderColor: COLORS.border }}>
+                <label className="text-xs font-semibold block mb-1" style={{ color: COLORS.muted }}>{t("account_email")}</label>
+                <input
+                  value={user?.email || ""}
+                  readOnly
+                  disabled
+                  className="w-full rounded-xl p-3 text-sm border opacity-80"
+                  style={inputStyle}
+                />
+                <p className="text-[11px] mt-1" style={{ color: COLORS.muted }}>E-mail d'authentification du compte, géré par Supabase Auth.</p>
+              </div>
+
+              <div className="rounded-xl border p-3" style={{ borderColor: COLORS.border }}>
+                <label className="text-xs font-semibold block mb-1" style={{ color: COLORS.muted }}>{t("current_country")}</label>
+                <select
+                  value={editCountry}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setEditCountry(value);
+                    setEditFlag(COUNTRIES.find((c) => c.code === value)?.flag || "🌍");
+                  }}
+                  className="w-full rounded-xl p-3 text-sm outline-none border"
+                  style={inputStyle}
+                >
+                  <option value="">Choisir un pays</option>
+                  {COUNTRIES.map((c) => <option key={c.code} value={c.code}>{c.flag} {c.label}</option>)}
+                </select>
+                <p className="text-[11px] mt-1" style={{ color: COLORS.muted }}>
+                  {userProfile?.registered_country ? `${t("registered_country")} : ${userProfile.registered_country}. ` : ""}
+                  {userProfile?.country_change_available_at && new Date(userProfile.country_change_available_at).getTime() > Date.now()
+                    ? `${t("country_change_wait")} ${new Date(userProfile.country_change_available_at).toLocaleDateString()}`
+                    : t("country_change_ready")}
+                </p>
+              </div>
+
               <textarea
                 value={editBio}
                 onChange={(e) => setEditBio(e.target.value)}
                 placeholder={t("bio")}
                 rows={2}
+                maxLength={500}
                 className="w-full rounded-xl p-3 text-sm outline-none border resize-none"
                 style={inputStyle}
               />
