@@ -34,6 +34,16 @@ import {
 import { COLORS } from "../../theme.js";
 import { supabase } from "../../supabaseClient.js";
 import { PushSettings } from "../../components/PushSettings.jsx";
+import ProfilePhotosEditor from "../../components/ProfilePhotosEditor.jsx";
+import ProfileContactsLinks from "../../components/ProfileContactsLinks.jsx";
+import {
+  displayHandle,
+  normalizeHandle,
+  suggestHandle,
+  checkHandleAvailable,
+  resolveUniqueHandle,
+  isHandleUniqueViolation,
+} from "../../lib/username.js";
 
 const STORAGE_KEY = "baaro_settings_v23";
 const APP_VERSION = "2.0.0-v23";
@@ -823,6 +833,7 @@ type Props = {
     display_name?: string;
     handle?: string;
     avatar_url?: string;
+    cover_url?: string;
     flag?: string;
     bio?: string;
   } | null;
@@ -853,6 +864,7 @@ export default function SettingsTab({
   // Profile edit
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState("");
+  const [editHandle, setEditHandle] = useState("");
   const [editFlag, setEditFlag] = useState("");
   const [editBio, setEditBio] = useState("");
   const [profileLoading, setProfileLoading] = useState(false);
@@ -1008,27 +1020,93 @@ export default function SettingsTab({
     setProfileLoading(true);
     setMessage("");
     try {
+      const name = editName.trim() || displayName;
+      const desired = normalizeHandle(editHandle, name);
+
+      const availability = await checkHandleAvailable(supabase, desired, user.id);
+      let finalHandle = desired;
+      let conflictNote = "";
+
+      if (!availability.ok) {
+        const resolved = await resolveUniqueHandle(
+          supabase,
+          desired,
+          name,
+          user.id
+        );
+        finalHandle = resolved.handle;
+        if (resolved.conflict) {
+          conflictNote =
+            resolved.message ||
+            (availability.suggestion
+              ? `${desired} est pris. Identifiant utilisé : ${finalHandle}`
+              : availability.reason || "");
+        } else if (availability.reason && !availability.suggestion) {
+          setMessage("❌ " + availability.reason);
+          setProfileLoading(false);
+          return;
+        }
+      }
+
       const { error } = await supabase
         .from("profiles")
         .update({
-          display_name: editName.trim() || displayName,
+          display_name: name,
+          handle: finalHandle,
           flag: editFlag.trim() || "🌍",
           bio: editBio,
+          updated_at: new Date().toISOString(),
         })
         .eq("user_id", user.id);
-      if (error) throw error;
+
+      if (error) {
+        if (isHandleUniqueViolation(error)) {
+          const resolved = await resolveUniqueHandle(
+            supabase,
+            desired,
+            name,
+            user.id
+          );
+          const { error: err2 } = await supabase
+            .from("profiles")
+            .update({
+              display_name: name,
+              handle: resolved.handle,
+              flag: editFlag.trim() || "🌍",
+              bio: editBio,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("user_id", user.id);
+          if (err2) throw err2;
+          finalHandle = resolved.handle;
+          conflictNote = `Identifiant déjà pris — attribué : ${finalHandle}`;
+        } else {
+          throw error;
+        }
+      }
+
       const updated = {
         ...userProfile,
-        display_name: editName.trim() || displayName,
+        display_name: name,
+        handle: finalHandle,
         flag: editFlag.trim() || "🌍",
         bio: editBio,
       };
       setUserProfile?.(updated);
+      setEditHandle(finalHandle);
       setIsEditing(false);
-      setMessage(t("profile_saved"));
+      setMessage(
+        conflictNote
+          ? `✅ Profil mis à jour. ${conflictNote}`
+          : t("profile_saved")
+      );
     } catch (err) {
       console.error(err);
-      setMessage(t("profile_error"));
+      setMessage(
+        isHandleUniqueViolation(err)
+          ? "❌ Cet identifiant vient d'être pris. Choisis-en un autre."
+          : t("profile_error")
+      );
     } finally {
       setProfileLoading(false);
     }
@@ -1278,9 +1356,10 @@ export default function SettingsTab({
     userProfile?.display_name ||
     user?.email?.split("@")[0] ||
     t("guest");
-  const handle =
-    userProfile?.handle ||
-    (user?.email ? `@${user.email.split("@")[0]}` : "@invite");
+  const handle = displayHandle(
+    userProfile?.handle,
+    userProfile?.display_name || user?.email?.split("@")[0] || "baaro"
+  );
   const avatarUrl =
     userProfile?.avatar_url ||
     `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(displayName)}&backgroundColor=1A2740`;
@@ -1451,9 +1530,24 @@ export default function SettingsTab({
           open={openSections.profile}
           onToggle={() => toggleSection("profile")}
         >
+          {user?.id && (
+            <ProfilePhotosEditor
+              userId={user.id}
+              profile={userProfile}
+              onUpdated={(patch: Record<string, unknown>) => {
+                setUserProfile?.({
+                  ...(userProfile || {}),
+                  ...patch,
+                });
+              }}
+            />
+          )}
           <div className="flex items-center gap-3">
             <img
-              src={avatarUrl}
+              src={
+                userProfile?.avatar_url ||
+                avatarUrl
+              }
               alt=""
               className="h-14 w-14 rounded-2xl object-cover"
               style={{ border: `1px solid ${COLORS.border}` }}
@@ -1473,6 +1567,12 @@ export default function SettingsTab({
               type="button"
               onClick={() => {
                 setEditName(userProfile?.display_name || displayName);
+                setEditHandle(
+                  displayHandle(
+                    userProfile?.handle,
+                    userProfile?.display_name || displayName
+                  )
+                );
                 setEditFlag(userProfile?.flag || "🌍");
                 setEditBio(userProfile?.bio || "");
                 setIsEditing(true);
@@ -1487,11 +1587,55 @@ export default function SettingsTab({
             <form onSubmit={handleSaveProfile} className="flex flex-col gap-2">
               <input
                 value={editName}
-                onChange={(e) => setEditName(e.target.value)}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setEditName(v);
+                  const h = (editHandle || "").replace(/^@/, "");
+                  if (!h || h === "membre" || h === "member" || h.startsWith("user_")) {
+                    setEditHandle(suggestHandle(v));
+                  }
+                }}
                 placeholder={t("display_name")}
                 className="w-full rounded-xl p-3 text-sm outline-none border"
                 style={inputStyle}
               />
+              <div>
+                <label className="text-xs font-semibold block mb-1" style={{ color: COLORS.muted }}>
+                  Identifiant
+                </label>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-bold" style={{ color: COLORS.gold }}>@</span>
+                  <input
+                    value={(editHandle || "").replace(/^@/, "")}
+                    onChange={(e) => setEditHandle(e.target.value)}
+                    onBlur={async () => {
+                      if (!user?.id || !editHandle?.trim()) return;
+                      try {
+                        const result = await checkHandleAvailable(
+                          supabase,
+                          editHandle,
+                          user.id
+                        );
+                        if (!result.ok) {
+                          setMessage(
+                            "⚠️ " +
+                              result.reason +
+                              (result.suggestion
+                                ? ` Suggestion : ${result.suggestion}`
+                                : "")
+                          );
+                        }
+                      } catch {
+                        /* ignore */
+                      }
+                    }}
+                    placeholder="amadou_traore"
+                    maxLength={30}
+                    className="w-full rounded-xl p-3 text-sm outline-none border"
+                    style={inputStyle}
+                  />
+                </div>
+              </div>
               <input
                 value={editFlag}
                 onChange={(e) => setEditFlag(e.target.value)}
@@ -1527,6 +1671,14 @@ export default function SettingsTab({
                 </button>
               </div>
             </form>
+          )}
+          {user?.id && !isAnonymous && (
+            <div className="mt-3 pt-3 border-t" style={{ borderColor: COLORS.border }}>
+              <p className="text-xs font-semibold mb-2" style={{ color: COLORS.muted }}>
+                Coordonnées et réseaux
+              </p>
+              <ProfileContactsLinks userId={user.id} />
+            </div>
           )}
         </CollapsibleSection>
       )}
