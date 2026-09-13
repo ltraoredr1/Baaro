@@ -4,7 +4,14 @@ import { COLORS } from "../theme.js";
 import { useToast } from "./ToastContext.jsx";
 import { supabase } from "../supabaseClient.js";
 import { handleDbError } from "../lib/dbErrors.js";
+import { LazyImage } from "./LazyMedia.jsx";
+import ProfileContactLinksView from "./ProfileContactLinksView.jsx";
+import { displayHandle } from "../lib/username.js";
 
+/**
+ * Modal profil public / soi-même.
+ * Affiche : avatar, bio, stats, follow/message, contacts + liens + réseaux.
+ */
 export function ProfileModal({
   authorId,
   currentUserId,
@@ -17,10 +24,13 @@ export function ProfileModal({
   const [stats, setStats] = useState({ posts: 0, followers: 0, following: 0 });
   const [isFollowing, setIsFollowing] = useState(false);
   const [followLoading, setFollowLoading] = useState(false);
+  const [contacts, setContacts] = useState({ phones: [], emails: [] });
+  const [links, setLinks] = useState([]);
+  const [socials, setSocials] = useState([]);
 
   const isMe = currentUserId && authorId && currentUserId === authorId;
 
-  // Charge le profil
+  // Profil de base
   useEffect(() => {
     if (!authorId) return;
 
@@ -29,7 +39,7 @@ export function ProfileModal({
       try {
         const { data, error } = await supabase
           .from("profiles")
-          .select("user_id, display_name, handle, flag, bio")
+          .select("user_id, display_name, handle, flag, bio, avatar_url")
           .eq("user_id", authorId)
           .maybeSingle();
 
@@ -38,9 +48,10 @@ export function ProfileModal({
         setProfile(
           data || {
             display_name: "Membre BAARO",
-            handle: "@membre",
+            handle: null,
             flag: "🌍",
             bio: "",
+            avatar_url: null,
           }
         );
       } catch (err) {
@@ -52,34 +63,64 @@ export function ProfileModal({
     })();
   }, [authorId, showToast]);
 
-  // Charge les stats + statut d'abonnement
+  // Stats + follow + contacts / liens / socials
   useEffect(() => {
     if (!authorId) return;
 
     (async () => {
       try {
-        const { count: postsCount } = await supabase
-          .from("posts")
-          .select("*", { count: "exact", head: true })
-          .eq("author_id", authorId);
-
-        const { count: followersCount } = await supabase
-          .from("follows")
-          .select("*", { count: "exact", head: true })
-          .eq("followed_id", authorId)
-          .eq("status", "accepted");
-
-        const { count: followingCount } = await supabase
-          .from("follows")
-          .select("*", { count: "exact", head: true })
-          .eq("follower_id", authorId)
-          .eq("status", "accepted");
+        const [
+          postsRes,
+          followersRes,
+          followingRes,
+          contactsRes,
+          linksRes,
+          socialsRes,
+        ] = await Promise.all([
+          supabase
+            .from("posts")
+            .select("*", { count: "exact", head: true })
+            .eq("author_id", authorId),
+          supabase
+            .from("follows")
+            .select("*", { count: "exact", head: true })
+            .eq("followed_id", authorId)
+            .eq("status", "accepted"),
+          supabase
+            .from("follows")
+            .select("*", { count: "exact", head: true })
+            .eq("follower_id", authorId)
+            .eq("status", "accepted"),
+          supabase
+            .from("profile_contacts")
+            .select("id, contact_type, value, label, position, is_primary")
+            .eq("user_id", authorId)
+            .order("position"),
+          supabase
+            .from("profile_links")
+            .select("id, link_type, label, url, position")
+            .eq("user_id", authorId)
+            .order("position"),
+          supabase
+            .from("profile_social_links")
+            .select("id, platform, username, url, position")
+            .eq("user_id", authorId)
+            .order("platform"),
+        ]);
 
         setStats({
-          posts: postsCount || 0,
-          followers: followersCount || 0,
-          following: followingCount || 0,
+          posts: postsRes.count || 0,
+          followers: followersRes.count || 0,
+          following: followingRes.count || 0,
         });
+
+        const allContacts = contactsRes.data || [];
+        setContacts({
+          phones: allContacts.filter((x) => x.contact_type === "phone"),
+          emails: allContacts.filter((x) => x.contact_type === "email"),
+        });
+        setLinks(linksRes.data || []);
+        setSocials(socialsRes.data || []);
 
         if (currentUserId && !isMe) {
           const { data } = await supabase
@@ -89,11 +130,10 @@ export function ProfileModal({
             .eq("followed_id", authorId)
             .eq("status", "accepted")
             .maybeSingle();
-
           setIsFollowing(!!data);
         }
       } catch (err) {
-        console.error("Erreur stats profil:", err);
+        console.error("Erreur stats/contacts profil:", err);
       }
     })();
   }, [authorId, currentUserId, isMe]);
@@ -109,9 +149,7 @@ export function ProfileModal({
           .delete()
           .eq("follower_id", currentUserId)
           .eq("followed_id", authorId);
-
         if (error) throw error;
-
         setIsFollowing(false);
         setStats((s) => ({ ...s, followers: Math.max(0, s.followers - 1) }));
         showToast("Abonnement retiré", "success");
@@ -122,9 +160,7 @@ export function ProfileModal({
           status: "accepted",
           is_friend: false,
         });
-
         if (error) throw error;
-
         setIsFollowing(true);
         setStats((s) => ({ ...s, followers: s.followers + 1 }));
         showToast("Abonné(e) !", "success");
@@ -144,52 +180,74 @@ export function ProfileModal({
     );
   }
 
+  const initial = (profile.display_name || "?").charAt(0).toUpperCase();
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/70 backdrop-blur-sm"
       onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="profile-modal-title"
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-lg glass-card rounded-t-3xl sm:rounded-3xl p-6 border shadow-2xl flex flex-col gap-4"
+        className="w-full max-w-lg glass-card rounded-t-3xl sm:rounded-3xl p-6 border shadow-2xl flex flex-col gap-4 max-h-[90vh] overflow-y-auto baaro-safe-bottom"
         style={{ borderColor: COLORS.borderGold }}
       >
         {/* En-tête */}
-        <div className="flex justify-between items-start">
-          <div className="flex items-center gap-3">
+        <div className="flex justify-between items-start gap-3">
+          <div className="flex items-center gap-3 min-w-0">
             <div
-              className="w-14 h-14 rounded-full flex items-center justify-center font-bold text-xl border"
+              className="w-14 h-14 rounded-full overflow-hidden flex items-center justify-center font-bold text-xl border shrink-0"
               style={{
                 borderColor: COLORS.borderGold,
                 background: COLORS.surface,
               }}
             >
-              <span style={{ color: COLORS.gold }}>
-                {profile.display_name?.charAt(0) || "?"}
-              </span>
+              {profile.avatar_url ? (
+                <LazyImage
+                  src={profile.avatar_url}
+                  alt=""
+                  variant="avatar"
+                  className="w-14 h-14 rounded-full"
+                />
+              ) : (
+                <span style={{ color: COLORS.gold }}>{initial}</span>
+              )}
             </div>
-            <div>
-              <div className="text-base font-bold" style={{ color: COLORS.ivory }}>
+            <div className="min-w-0">
+              <h2
+                id="profile-modal-title"
+                className="text-base font-bold truncate"
+                style={{ color: COLORS.ivory }}
+              >
                 {profile.display_name} {profile.flag}
-              </div>
-              <div className="text-xs" style={{ color: COLORS.muted }}>
-                {profile.handle || "@membre"}
+              </h2>
+              <div className="text-xs truncate" style={{ color: COLORS.muted }}>
+                {displayHandle(profile.handle, profile.display_name)}
               </div>
             </div>
           </div>
 
           <button
+            type="button"
             onClick={onClose}
-            className="p-2 rounded-xl border hover:bg-white/5"
+            className="p-2 rounded-xl border hover:bg-white/5 baaro-tap shrink-0"
             style={{ borderColor: COLORS.border, color: COLORS.ivory }}
+            aria-label="Fermer"
           >
             <X size={15} />
           </button>
         </div>
 
         {/* Bio */}
-        <p className="text-xs leading-relaxed" style={{ color: COLORS.ivory }}>
-          {profile.bio || "Pas encore de bio."}
+        <p className="text-sm leading-relaxed baaro-readable" style={{ color: COLORS.ivory }}>
+          {profile.bio?.trim()
+            ? profile.bio
+            : isMe
+              ? "Ajoute une bio dans tes réglages pour te présenter."
+              : "Pas encore de bio."}
         </p>
 
         {/* Stats */}
@@ -217,17 +275,26 @@ export function ProfileModal({
           </div>
         </div>
 
-        {/* Actions (seulement si ce n'est pas mon profil) */}
+        {/* Contacts / liens / réseaux */}
+        <ProfileContactLinksView
+          contacts={contacts}
+          links={links}
+          socials={socials}
+        />
+
+        {/* Actions */}
         {!isMe && (
-          <div className="flex gap-3 pt-2">
+          <div className="flex gap-3 pt-1">
             <button
+              type="button"
               onClick={toggleFollow}
               disabled={followLoading}
-              className="flex-1 py-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5"
+              className="flex-1 py-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 baaro-tap"
               style={{
                 background: isFollowing ? COLORS.surface : COLORS.gold,
                 color: isFollowing ? COLORS.gold : COLORS.bg,
                 border: isFollowing ? `1px solid ${COLORS.borderGold}` : "none",
+                opacity: followLoading ? 0.7 : 1,
               }}
             >
               {isFollowing ? <Check size={16} /> : <UserPlus size={16} />}
@@ -235,11 +302,12 @@ export function ProfileModal({
             </button>
 
             <button
+              type="button"
               onClick={() => {
                 onClose();
                 onNavigateToMessages?.();
               }}
-              className="flex-1 py-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 border"
+              className="flex-1 py-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 border baaro-tap"
               style={{
                 background: COLORS.surface,
                 borderColor: COLORS.borderTeal,

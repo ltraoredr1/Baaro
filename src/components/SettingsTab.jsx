@@ -14,6 +14,14 @@ import { COLORS } from "../theme.js";
 import { PrivacyPage } from "./PrivacyPage.jsx";
 import { PushSettings } from "./PushSettings.jsx";
 import ProfileContactsLinks from "./ProfileContactsLinks.jsx";
+import {
+  normalizeHandle,
+  displayHandle,
+  suggestHandle,
+  checkHandleAvailable,
+  resolveUniqueHandle,
+  isHandleUniqueViolation,
+} from "../lib/username.js";
 
 const SUBSCRIPTION_TIERS = [
   {
@@ -58,7 +66,9 @@ export function SettingsTab({
   const [displayName, setDisplayName] = useState(
     userProfile?.display_name || "Membre BAARO"
   );
-  const [handle, setHandle] = useState(userProfile?.handle || "@membre");
+  const [handle, setHandle] = useState(
+    displayHandle(userProfile?.handle, userProfile?.display_name)
+  );
   const [bio, setBio] = useState(userProfile?.bio || "");
   const [flag, setFlag] = useState(userProfile?.flag || "🌍");
   const [activeTier, setActiveTier] = useState("free");
@@ -195,37 +205,109 @@ export function SettingsTab({
       } = await supabase.auth.getUser();
       if (!user) throw new Error("Non connecté");
 
-      const normalizedHandle = (editHandle || "@membre").trim().replace(/^@?/, "@").replace(/[^@a-zA-Z0-9_.-]/g, "_").slice(0, 31);
-      const { error } = await supabase
-        .from("profiles")
-        .upsert({
+      const name = editDisplayName.trim().slice(0, 60) || "Membre BAARO";
+      const desired = normalizeHandle(editHandle, name);
+
+      // Vérif préalable (message clair si pris)
+      const availability = await checkHandleAvailable(
+        supabase,
+        desired,
+        user.id
+      );
+
+      let finalHandle = desired;
+      let conflictNote = "";
+
+      if (!availability.ok) {
+        // Auto-résolution avec suffixe + message
+        const resolved = await resolveUniqueHandle(
+          supabase,
+          desired,
+          name,
+          user.id
+        );
+        finalHandle = resolved.handle;
+        if (resolved.conflict) {
+          conflictNote =
+            resolved.message ||
+            (availability.suggestion
+              ? `${desired} est pris. Identifiant utilisé : ${finalHandle}`
+              : availability.reason);
+        } else if (availability.reason && !availability.suggestion) {
+          setMessage("❌ " + availability.reason);
+          setLoading(false);
+          return;
+        }
+      }
+
+      const { error } = await supabase.from("profiles").upsert(
+        {
           user_id: user.id,
-          display_name: editDisplayName.trim().slice(0, 60) || "Membre BAARO",
-          handle: normalizedHandle,
+          display_name: name,
+          handle: finalHandle,
           flag: editFlag || "🌍",
           bio: editBio.trim().slice(0, 500),
           updated_at: new Date().toISOString(),
-        }, { onConflict: "user_id" });
+        },
+        { onConflict: "user_id" }
+      );
 
-      if (error) throw error;
+      if (error) {
+        if (isHandleUniqueViolation(error)) {
+          // Course critique : quelqu'un a pris le handle entre-temps
+          const resolved = await resolveUniqueHandle(
+            supabase,
+            desired,
+            name,
+            user.id
+          );
+          const { error: err2 } = await supabase.from("profiles").upsert(
+            {
+              user_id: user.id,
+              display_name: name,
+              handle: resolved.handle,
+              flag: editFlag || "🌍",
+              bio: editBio.trim().slice(0, 500),
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: "user_id" }
+          );
+          if (err2) throw err2;
+          finalHandle = resolved.handle;
+          conflictNote = `Identifiant déjà pris — attribué : ${finalHandle}`;
+        } else {
+          throw error;
+        }
+      }
 
       const updated = {
         ...userProfile,
-        display_name: editDisplayName.trim(),
-        handle: normalizedHandle,
+        display_name: name,
+        handle: finalHandle,
         flag: editFlag || "🌍",
         bio: editBio.trim(),
       };
       setUserProfile?.(updated);
-      setDisplayName(editDisplayName.trim());
-      setHandle(normalizedHandle);
+      setDisplayName(name);
+      setHandle(finalHandle);
+      setEditHandle(finalHandle);
       setBio(editBio.trim());
       setFlag(editFlag);
       setIsEditing(false);
-      setMessage("✅ Profil mis à jour");
+      setMessage(
+        conflictNote
+          ? `✅ Profil mis à jour. ${conflictNote}`
+          : "✅ Profil mis à jour"
+      );
     } catch (err) {
       console.error(err);
-      setMessage("❌ " + (err.message || "Erreur"));
+      if (isHandleUniqueViolation(err)) {
+        setMessage(
+          "❌ Cet identifiant vient d'être pris. Choisis-en un autre."
+        );
+      } else {
+        setMessage("❌ " + (err.message || "Erreur"));
+      }
     } finally {
       setLoading(false);
     }
@@ -253,8 +335,14 @@ export function SettingsTab({
           style={{
             background: message.startsWith("✅")
               ? "rgba(45,191,166,0.15)"
-              : "rgba(239,68,68,0.15)",
-            color: message.startsWith("✅") ? COLORS.teal : "#F87171",
+              : message.startsWith("⚠️")
+                ? "rgba(217,174,82,0.15)"
+                : "rgba(239,68,68,0.15)",
+            color: message.startsWith("✅")
+              ? COLORS.teal
+              : message.startsWith("⚠️")
+                ? COLORS.gold
+                : "#F87171",
           }}
         >
           {message}
@@ -408,7 +496,7 @@ export function SettingsTab({
               <div>
                 <p className="text-lg font-bold">{displayName}</p>
                 <p className="text-sm" style={{ color: COLORS.muted }}>
-                  {userProfile?.handle || "@membre"}
+                  {displayHandle(userProfile?.handle, displayName)}
                 </p>
               </div>
             </div>
@@ -420,6 +508,7 @@ export function SettingsTab({
             <button
               onClick={() => {
                 setEditDisplayName(displayName);
+                setEditHandle(displayHandle(handle, displayName));
                 setEditBio(bio);
                 setEditFlag(flag);
                 setIsEditing(true);
@@ -433,29 +522,88 @@ export function SettingsTab({
         ) : (
           <form onSubmit={handleSaveProfile} className="space-y-3">
             <div>
-              <label className="text-xs font-semibold block mb-1" style={{ color: COLORS.muted }}>Nom d'utilisateur</label>
+              <label className="text-xs font-semibold block mb-1" style={{ color: COLORS.muted }}>
+                Nom affiché
+              </label>
               <input
-                name="edit-handle"
-                value={editHandle}
-                onChange={(e) => setEditHandle(e.target.value)}
-                maxLength={31}
-                placeholder="@mon_nom"
-                className="w-full bg-transparent border rounded-xl p-2.5 text-xs outline-none"
-                style={{ borderColor: COLORS.border, color: COLORS.ivory }}
+                type="text"
+                value={editDisplayName}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setEditDisplayName(v);
+                  const h = (editHandle || "").replace(/^@/, "");
+                  if (
+                    !h ||
+                    h === "membre" ||
+                    h === "member" ||
+                    h === "user"
+                  ) {
+                    setEditHandle(suggestHandle(v));
+                  }
+                }}
+                placeholder="Ex: Amadou Traoré"
+                maxLength={60}
+                className="w-full rounded-xl p-3 text-sm outline-none border"
+                style={{
+                  background: COLORS.surface2,
+                  borderColor: COLORS.border,
+                  color: COLORS.ivory,
+                }}
               />
             </div>
-            <input
-              type="text"
-              value={editDisplayName}
-              onChange={(e) => setEditDisplayName(e.target.value)}
-              placeholder="Nom"
-              className="w-full rounded-xl p-3 text-sm outline-none border"
-              style={{
-                background: COLORS.surface2,
-                borderColor: COLORS.border,
-                color: COLORS.ivory,
-              }}
-            />
+            <div>
+              <label className="text-xs font-semibold block mb-1" style={{ color: COLORS.muted }}>
+                Identifiant (unique)
+              </label>
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-bold" style={{ color: COLORS.gold }}>
+                  @
+                </span>
+                <input
+                  name="edit-handle"
+                  value={(editHandle || "").replace(/^@/, "")}
+                  onChange={(e) => {
+                    setEditHandle(e.target.value);
+                    setMessage("");
+                  }}
+                  onBlur={async () => {
+                    try {
+                      const {
+                        data: { user },
+                      } = await supabase.auth.getUser();
+                      if (!user || !editHandle?.trim()) return;
+                      const result = await checkHandleAvailable(
+                        supabase,
+                        editHandle,
+                        user.id
+                      );
+                      if (!result.ok) {
+                        setMessage(
+                          "⚠️ " +
+                            result.reason +
+                            (result.suggestion
+                              ? ` Suggestion : ${result.suggestion}`
+                              : "")
+                        );
+                      }
+                    } catch {
+                      /* ignore */
+                    }
+                  }}
+                  maxLength={30}
+                  placeholder="amadou_traore"
+                  className="w-full rounded-xl p-2.5 text-sm outline-none border"
+                  style={{
+                    background: COLORS.surface2,
+                    borderColor: COLORS.border,
+                    color: COLORS.ivory,
+                  }}
+                />
+              </div>
+              <p className="text-[11px] mt-1" style={{ color: COLORS.muted }}>
+                Lettres, chiffres, _ et . — visible sur ton profil public
+              </p>
+            </div>
             <input
               type="text"
               value={editFlag}
