@@ -1,16 +1,34 @@
 import { createClient } from '@supabase/supabase-js';
+import { rateLimitAsync } from './_rateLimit.js';
+import { applyCors } from './_cors.js';
 
 const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 export default async function handler(req, res) {
-  // Gestion CORS
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  // CORS strict (via helper si disponible)
+  if (applyCors(req, res)) return;
+
+  // Fallback CORS basique si applyCors n'a pas répondu
+  if (!res.getHeader('Access-Control-Allow-Origin')) {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  }
 
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
+  }
+
+  // Rate-limit distribué (Upstash si configuré, sinon mémoire)
+  const limit = await rateLimitAsync(req, {
+    key: 'wallet',
+    max: 30,
+    windowMs: 60_000,
+  });
+  if (!limit.ok) {
+    Object.entries(limit.headers || {}).forEach(([k, v]) => res.setHeader(k, v));
+    return res.status(limit.status).json(limit.body);
   }
 
   try {
@@ -23,7 +41,7 @@ export default async function handler(req, res) {
     const token = authHeader.split(' ')[1];
     const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
     const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(token);
-    
+
     if (authError || !user) {
       return res.status(401).json({ error: 'Non autorisé' });
     }

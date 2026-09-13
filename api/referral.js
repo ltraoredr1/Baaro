@@ -1,6 +1,6 @@
 import { randomInt } from "node:crypto";
 import { getAdminClient, requireUser } from "./_supabaseAdmin.js";
-import { rateLimit } from "./_rateLimit.js";
+import { rateLimitAsync } from "./_rateLimit.js";
 import { applyCors } from "./_cors.js";
 
 const REFERRER_REWARD = 25; // pts pour le parrain
@@ -169,7 +169,7 @@ export default async function handler(req, res) {
     return jsonError(res, 405, "Méthode non autorisée");
   }
 
-  const limit = rateLimit(req, { key: "referral", max: 20, windowMs: 60_000 });
+  const limit = await rateLimitAsync(req, { key: "referral", max: 20, windowMs: 60_000 });
   if (!limit.ok) {
     Object.entries(limit.headers || {}).forEach(([k, v]) => res.setHeader(k, v));
     return res.status(limit.status).json(limit.body);

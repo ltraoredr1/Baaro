@@ -1,5 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { createCheckoutSession, mapStripeError } from './_stripe.js';
+import { rateLimitAsync } from './_rateLimit.js';
+import { applyCors } from './_cors.js';
 
 const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -19,6 +21,17 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
   if (req.method === 'OPTIONS') return res.status(200).end();
+
+  // Rate-limit distribué
+  const limit = await rateLimitAsync(req, {
+    key: 'payments',
+    max: 15,
+    windowMs: 60_000,
+  });
+  if (!limit.ok) {
+    Object.entries(limit.headers || {}).forEach(([k, v]) => res.setHeader(k, v));
+    return res.status(limit.status).json(limit.body);
+  }
 
   try {
     const authHeader = req.headers.authorization;
