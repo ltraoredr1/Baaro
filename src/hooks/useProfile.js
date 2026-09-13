@@ -40,7 +40,7 @@ export function useProfile(userId, showToast) {
         profileRes.data || {
           user_id: userId,
           display_name: "Nouveau membre",
-          handle: "@membre",
+          handle: null,  // sera normalisé à l’affichage / à la sauvegarde
           flag: "🌍",
           bio: "",
           avatar_url: null,
@@ -72,7 +72,9 @@ export function useProfile(userId, showToast) {
         const payload = {
           user_id: userId,
           display_name: updates.display_name?.trim() || "Nouveau membre",
-          handle: updates.handle?.trim() || "@membre",
+          handle: (updates.handle?.trim() && updates.handle.trim() !== "@membre")
+            ? updates.handle.trim()
+            : null,
           flag: updates.flag || "🌍",
           bio: updates.bio?.trim() || "",
           avatar_url: updates.avatar_url ?? null,
