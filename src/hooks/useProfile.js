@@ -3,7 +3,7 @@ import { supabase } from "../supabaseClient.js";
 import { handleDbError } from "../lib/dbErrors.js";
 
 const PROFILE_SELECT =
-  "user_id, display_name, handle, flag, bio, avatar_url, created_at";
+  "user_id, display_name, handle, flag, bio, avatar_url, cover_url, created_at";
 
 export function useProfile(userId, showToast) {
   const [profile, setProfile] = useState(null);
@@ -44,6 +44,7 @@ export function useProfile(userId, showToast) {
           flag: "🌍",
           bio: "",
           avatar_url: null,
+          cover_url: null,
         }
       );
 
@@ -78,6 +79,7 @@ export function useProfile(userId, showToast) {
           flag: updates.flag || "🌍",
           bio: updates.bio?.trim() || "",
           avatar_url: updates.avatar_url ?? null,
+          cover_url: updates.cover_url ?? null,
           updated_at: new Date().toISOString(),
         };
 
