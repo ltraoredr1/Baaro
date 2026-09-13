@@ -296,3 +296,68 @@ html[data-baaro-data-saver='1'] video:not([data-force-hq]) {
   background: rgba(217, 174, 82, 0.35);
   color: #f4efe3;
 }
+/* ============================================================
+   UX-PERF — utilitaires complémentaires BAARO
+   Coller à la fin de src/index.css
+   ============================================================ */
+
+/* Skip-link (déjà référencé dans index.html) */
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 9999;
+  padding: 0.75rem 1.25rem;
+  background: #d9ae52;
+  color: #0b1220;
+  font-weight: 700;
+  border-radius: 0 0 0.5rem 0;
+}
+.skip-link:focus {
+  left: 0;
+}
+
+/* content-visibility pour longs feeds */
+.baaro-feed-item {
+  content-visibility: auto;
+  contain-intrinsic-size: 1px 320px;
+}
+
+/* Cibles tactiles confortables (≥ 44×44) */
+.baaro-tap {
+  min-height: 44px;
+  min-width: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Safe area (notch / home indicator) */
+.baaro-safe-bottom {
+  padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+}
+.baaro-safe-top {
+  padding-top: max(0.5rem, env(safe-area-inset-top));
+}
+
+/* Skeleton léger */
+.baaro-skeleton {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.04) 25%,
+    rgba(255, 255, 255, 0.08) 50%,
+    rgba(255, 255, 255, 0.04) 75%
+  );
+  background-size: 200% 100%;
+  animation: baaro-shimmer 1.2s ease-in-out infinite;
+}
+@keyframes baaro-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .baaro-skeleton {
+    animation: none;
+  }
+}
+```
