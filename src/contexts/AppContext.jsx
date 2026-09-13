@@ -13,6 +13,14 @@ export function AppProvider({ children }) {
     handle: "@membre",
     flag: "🌍",
     bio: "",
+    first_name: "",
+    last_name: "",
+    birth_date: null,
+    location: "",
+    country: null,
+    registered_country: null,
+    country_changed_at: null,
+    country_change_available_at: null,
   });
   const [pointsBalance, setPointsBalance] = useState(0);
   const [baroBalance, setBaroBalance] = useState(0);
@@ -90,7 +98,7 @@ export function AppProvider({ children }) {
         // Profil
         let { data: profile } = await supabase
           .from("profiles")
-          .select("user_id, display_name, handle, flag, bio, avatar_url, cover_url, country, is_verified, created_at")
+          .select("user_id, display_name, handle, flag, bio, avatar_url, cover_url, country, registered_country, country_changed_at, country_change_available_at, first_name, last_name, birth_date, location, is_verified, created_at")
           .eq("user_id", userId)
           .maybeSingle();
 
@@ -105,6 +113,7 @@ export function AppProvider({ children }) {
               flag: session?.user?.user_metadata?.flag || "🌍",
               bio: session?.user?.user_metadata?.bio || "",
               avatar_url: session?.user?.user_metadata?.avatar_url || null,
+              country: session?.user?.user_metadata?.country || null,
             })
             .select()
             .single();
@@ -120,6 +129,13 @@ export function AppProvider({ children }) {
             avatar_url: profile.avatar_url || null,
             cover_url: profile.cover_url || null,
             country: profile.country || null,
+            registered_country: profile.registered_country || null,
+            country_changed_at: profile.country_changed_at || null,
+            country_change_available_at: profile.country_change_available_at || null,
+            first_name: profile.first_name || "",
+            last_name: profile.last_name || "",
+            birth_date: profile.birth_date || null,
+            location: profile.location || "",
             is_verified: profile.is_verified === true,
           });
         }
@@ -218,7 +234,7 @@ export function AppProvider({ children }) {
       const { data, error } = await supabase
         .from("profiles")
         .upsert(payload, { onConflict: "user_id" })
-        .select("user_id, display_name, handle, flag, bio, avatar_url, country, is_verified, created_at, updated_at")
+        .select("user_id, display_name, handle, flag, bio, avatar_url, cover_url, country, registered_country, country_changed_at, country_change_available_at, first_name, last_name, birth_date, location, is_verified, created_at, updated_at")
         .single();
       if (error) return { ok: false, error };
       setUserProfile((prev) => ({ ...prev, ...data }));
