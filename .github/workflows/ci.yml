@@ -11,20 +11,45 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
           cache: npm
+
       - name: Install
         run: npm ci
+
       - name: Lock check
-        run: npm run check:lock || true
+        run: npm run check:lock
+        # STRICT — plus de || true
+
       - name: Security audit scan
-        run: npm run audit:security || true
+        run: npm run audit:security
+        # STRICT — plus de || true
+
+      - name: API file count (≤ 12)
+        run: |
+          count=$(find api -maxdepth 1 -type f -name '*.js' | wc -l)
+          echo "api/*.js files: $count"
+          if [ "$count" -gt 12 ]; then
+            echo "FAIL: api/ has $count JS files (max 12)"
+            find api -maxdepth 1 -type f -name '*.js' | sort
+            exit 1
+          fi
+
       - name: Smoke
         run: node scripts/check-e2e-smoke.mjs
+
+      - name: E2E readiness
+        run: npm run check:e2e
+
+      - name: Production checklist script
+        run: npm run check:production
+
       - name: Build
         run: npm run build
         env:
           VITE_SUPABASE_URL: https://example.supabase.co
           VITE_SUPABASE_ANON_KEY: public-anon-placeholder
+          VITE_APP_ENV: ci
