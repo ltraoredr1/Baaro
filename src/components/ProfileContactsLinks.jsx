@@ -1,17 +1,14 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Globe,
   Plus,
   Trash2,
-  Phone,
-  Mail,
   Facebook,
   Youtube,
   Instagram,
   Linkedin,
   MessageCircle,
   Save,
-  ExternalLink,
 } from "lucide-react";
 import { supabase } from "../supabaseClient.js";
 import { COLORS } from "../theme.js";
@@ -101,9 +98,13 @@ export default function ProfileContactsLinks({ userId }) {
     if (!userId || saving) return;
     setSaving(true);
     try {
+      if (phones.length > 3 || emails.length > 3) {
+        throw new Error("Maximum de 3 numéros et 3 e-mails.");
+      }
+
       const contactRows = [
-        ...phones.map((x, i) => ({ ...x, contact_type: "phone", position: i + 1 })),
-        ...emails.map((x, i) => ({ ...x, contact_type: "email", position: i + 1 })),
+        ...phones.map((x, i) => ({ ...x, contact_type: "phone", position: i + 1, is_primary: i === 0 })),
+        ...emails.map((x, i) => ({ ...x, contact_type: "email", position: i + 1, is_primary: i === 0 })),
       ].map(({ id, ...x }) => ({
         ...x,
         user_id: userId,
@@ -136,11 +137,13 @@ export default function ProfileContactsLinks({ userId }) {
       }));
       if (socialRows.some((x) => !validUrl(x.url))) throw new Error("Un réseau social contient un lien invalide.");
 
-      await Promise.all([
+      const deletes = await Promise.all([
         supabase.from("profile_contacts").delete().eq("user_id", userId),
         supabase.from("profile_links").delete().eq("user_id", userId),
         supabase.from("profile_social_links").delete().eq("user_id", userId),
       ]);
+      const deleteError = deletes.find((result) => result.error)?.error;
+      if (deleteError) throw deleteError;
 
       const inserts = [
         contactRows.length ? supabase.from("profile_contacts").insert(contactRows) : null,
@@ -203,7 +206,6 @@ export default function ProfileContactsLinks({ userId }) {
     </div>
   );
 
-  const selectedPlatforms = useMemo(() => new Set(socials.map((x) => x.platform)), [socials]);
 
   if (!userId) return null;
   if (loading) return <div className="text-sm" style={{ color: COLORS.muted }}>Chargement...</div>;
