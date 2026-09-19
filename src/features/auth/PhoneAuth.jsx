@@ -1,118 +1,273 @@
 import { useState, useEffect, useRef } from 'react';
 import PhoneInput, { isValidPhoneNumber } from 'react-phone-number-input';
 import 'react-phone-number-input/style.css';
-import { supabase } from '../../supabaseClient.js'; // ✅ Utilisation du client centralisé
-import { COLORS } from '../../theme.js'; // ✅ Intégration du thème BAARO
+import { supabase } from '../../supabaseClient.js';
+import { COLORS } from '../../theme.js';
 
-const RESEND_DELAY = 30; // secondes
+const RESEND_DELAY = 30;
 
 function guessDefaultCountry() {
   try {
     const locale = navigator.language || navigator.languages?.[0] || '';
     const region = locale.split('-')[1];
-    if (region && region.length === 2) return region.toUpperCase();
+
+    if (region && region.length === 2) {
+      return region.toUpperCase();
+    }
   } catch {
-    // ignore
+    // Ignore
   }
-  return 'ML'; // Repli par défaut (Mali)
+
+  return 'ML';
+}
+
+function normalizePhone(value) {
+  if (!value) return '';
+
+  const normalized = value.replace(/[^\d+]/g, '');
+
+  if (normalized.startsWith('+')) {
+    return normalized;
+  }
+
+  return normalized;
+}
+
+function buildFallbackHandle(userId) {
+  const cleanId = String(userId)
+    .replace(/-/g, '')
+    .slice(0, 12);
+
+  return `@user_${cleanId}`;
 }
 
 export default function PhoneAuth({ onAuthSuccess }) {
-  const [step, setStep] = useState('phone'); // 'phone' | 'otp'
-  const [phone, setPhone] = useState(''); 
+  const [step, setStep] = useState('phone');
+  const [phone, setPhone] = useState('');
   const [defaultCountry] = useState(guessDefaultCountry);
   const [otp, setOtp] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [resendCooldown, setResendCooldown] = useState(0);
+
   const timerRef = useRef(null);
 
   useEffect(() => {
-    return () => clearInterval(timerRef.current);
+    return () => {
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+      }
+    };
   }, []);
 
   function startCooldown() {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+    }
+
     setResendCooldown(RESEND_DELAY);
+
     timerRef.current = setInterval(() => {
-      setResendCooldown((s) => {
-        if (s <= 1) {
+      setResendCooldown((seconds) => {
+        if (seconds <= 1) {
           clearInterval(timerRef.current);
+          timerRef.current = null;
           return 0;
         }
-        return s - 1;
+
+        return seconds - 1;
       });
     }, 1000);
   }
 
-  async function sendOtp(e) {
-    e?.preventDefault();
-    setError('');
+  async function ensureProfile(user) {
+    if (!user?.id) {
+      throw new Error('Identifiant du compte introuvable.');
+    }
 
-    if (!phone || !isValidPhoneNumber(phone)) {
-      setError('Numéro de téléphone invalide pour ce pays.');
+    const userId = user.id;
+    const normalizedPhone = normalizePhone(user.phone || phone);
+
+    const { data: existingProfile, error: profileReadError } =
+      await supabase
+        .from('profiles')
+        .select('id, display_name, handle, flag, bio, phone')
+        .eq('id', userId)
+        .maybeSingle();
+
+    if (profileReadError) {
+      throw profileReadError;
+    }
+
+    if (existingProfile) {
+      const updates = {};
+
+      if (!existingProfile.phone && normalizedPhone) {
+        updates.phone = normalizedPhone;
+      }
+
+      if (!existingProfile.display_name) {
+        updates.display_name = normalizedPhone || 'Membre BAARO';
+      }
+
+      if (!existingProfile.handle) {
+        updates.handle = buildFallbackHandle(userId);
+      }
+
+      if (!existingProfile.flag) {
+        updates.flag = '🌍';
+      }
+
+      if (Object.keys(updates).length > 0) {
+        updates.updated_at = new Date().toISOString();
+
+        const { error: updateError } = await supabase
+          .from('profiles')
+          .update(updates)
+          .eq('id', userId);
+
+        if (updateError) {
+          throw updateError;
+        }
+      }
+
       return;
     }
 
-    setLoading(true);
-    const { error: otpError } = await supabase.auth.signInWithOtp({
-      phone, 
-    });
-    setLoading(false);
+    const profile = {
+      id: userId,
+      display_name: normalizedPhone || 'Membre BAARO',
+      handle: buildFallbackHandle(userId),
+      flag: '🌍',
+      bio: '',
+      phone: normalizedPhone || null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
 
-    if (otpError) {
-      setError(otpError.message);
-      return;
+    const { error: insertError } = await supabase
+      .from('profiles')
+      .insert(profile);
+
+    if (insertError) {
+      throw insertError;
     }
-
-    setStep('otp');
-    startCooldown();
   }
 
-  async function verifyOtp(e) {
-    e.preventDefault();
+  async function sendOtp(event) {
+    event?.preventDefault();
+
     setError('');
 
-    if (otp.trim().length < 4) {
-      setError('Code invalide.');
+    const normalizedPhone = normalizePhone(phone);
+
+    if (!normalizedPhone || !isValidPhoneNumber(normalizedPhone)) {
+      setError('Numéro de téléphone invalide.');
       return;
     }
 
     setLoading(true);
-    const { data, error: verifyError } = await supabase.auth.verifyOtp({
-      phone,
-      token: otp.trim(),
-      type: 'sms',
-    });
 
-    if (verifyError) {
+    try {
+      const { error: otpError } = await supabase.auth.signInWithOtp({
+        phone: normalizedPhone,
+      });
+
+      if (otpError) {
+        throw otpError;
+      }
+
+      setPhone(normalizedPhone);
+      setStep('otp');
+      setOtp('');
+      startCooldown();
+    } catch (err) {
+      console.error('BAARO - erreur envoi OTP:', err);
+
+      setError(
+        err?.message ||
+          "Impossible d'envoyer le code de vérification."
+      );
+    } finally {
       setLoading(false);
-      setError(verifyError.message);
+    }
+  }
+
+  async function verifyOtp(event) {
+    event.preventDefault();
+
+    setError('');
+
+    const normalizedOtp = otp.replace(/\D/g, '');
+
+    if (normalizedOtp.length !== 6) {
+      setError('Le code doit contenir 6 chiffres.');
       return;
     }
 
-    // Vérifie/crée la ligne profiles liée à cet utilisateur
-    const userId = data.user.id;
-    const { data: existingProfile } = await supabase
-      .from('profiles')
-      .select('id')
-      .eq('id', userId)
-      .maybeSingle();
+    const normalizedPhone = normalizePhone(phone);
 
-    if (!existingProfile) {
-      await supabase.from('profiles').insert({
-        id: userId,
-        phone,
-        created_at: new Date().toISOString(),
-      });
+    setLoading(true);
+
+    try {
+      const { data, error: verifyError } =
+        await supabase.auth.verifyOtp({
+          phone: normalizedPhone,
+          token: normalizedOtp,
+          type: 'sms',
+        });
+
+      if (verifyError) {
+        throw verifyError;
+      }
+
+      if (!data?.user?.id) {
+        throw new Error(
+          "Authentification réussie mais l'identifiant du compte est introuvable."
+        );
+      }
+
+      await ensureProfile(data.user);
+
+      onAuthSuccess?.(data.user);
+    } catch (err) {
+      console.error('BAARO - erreur vérification OTP:', err);
+
+      setError(
+        err?.message ||
+          'Code incorrect ou expiré.'
+      );
+    } finally {
+      setLoading(false);
     }
-
-    setLoading(false);
-    onAuthSuccess?.(data.user);
   }
 
   async function resendOtp() {
-    if (resendCooldown > 0) return;
+    if (resendCooldown > 0 || loading) {
+      return;
+    }
+
     await sendOtp();
+  }
+
+  function changePhone() {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+
+    setResendCooldown(0);
+    setOtp('');
+    setError('');
+    setStep('phone');
+  }
+
+  function handleOtpChange(event) {
+    const value = event.target.value
+      .replace(/\D/g, '')
+      .slice(0, 6);
+
+    setOtp(value);
   }
 
   return (
@@ -120,9 +275,13 @@ export default function PhoneAuth({ onAuthSuccess }) {
       {step === 'phone' && (
         <form onSubmit={sendOtp} className="space-y-4">
           <div>
-            <label className="block text-xs font-semibold mb-1" style={{ color: COLORS.muted }}>
+            <label
+              className="block text-xs font-semibold mb-1"
+              style={{ color: COLORS.muted }}
+            >
               Numéro de téléphone
             </label>
+
             <PhoneInput
               international
               defaultCountry={defaultCountry}
@@ -130,17 +289,31 @@ export default function PhoneAuth({ onAuthSuccess }) {
               onChange={setPhone}
               placeholder="Entre ton numéro"
               className="w-full border rounded-xl px-3 py-2.5 text-xs outline-none phone-input-baaro bg-slate-950/60"
-              style={{ borderColor: COLORS.border, color: COLORS.ivory }}
+              style={{
+                borderColor: COLORS.border,
+                color: COLORS.ivory,
+              }}
             />
           </div>
-          {error && <p className="text-rose-400 text-xs">{error}</p>}
+
+          {error && (
+            <p className="text-rose-400 text-xs">
+              {error}
+            </p>
+          )}
+
           <button
             type="submit"
             disabled={loading}
             className="w-full py-3 rounded-xl font-bold text-xs shadow-lg transition disabled:opacity-50"
-            style={{ background: COLORS.gold, color: COLORS.bg }}
+            style={{
+              background: COLORS.gold,
+              color: COLORS.bg,
+            }}
           >
-            {loading ? 'Envoi en cours...' : 'Recevoir le code'}
+            {loading
+              ? 'Envoi en cours...'
+              : 'Recevoir le code'}
           </button>
         </form>
       )}
@@ -148,44 +321,71 @@ export default function PhoneAuth({ onAuthSuccess }) {
       {step === 'otp' && (
         <form onSubmit={verifyOtp} className="space-y-4">
           <div>
-            <label className="block text-xs font-semibold mb-1" style={{ color: COLORS.muted }}>
+            <label
+              className="block text-xs font-semibold mb-1"
+              style={{ color: COLORS.muted }}
+            >
               Code reçu par SMS ({phone})
             </label>
+
             <input
               type="text"
               inputMode="numeric"
+              autoComplete="one-time-code"
+              maxLength={6}
               placeholder="123456"
               value={otp}
-              onChange={(e) => setOtp(e.target.value)}
+              onChange={handleOtpChange}
               className="w-full border rounded-xl px-3 py-2.5 tracking-widest text-center text-sm outline-none font-mono bg-slate-950/60"
-              style={{ borderColor: COLORS.border, color: COLORS.ivory }}
+              style={{
+                borderColor: COLORS.border,
+                color: COLORS.ivory,
+              }}
               required
               autoFocus
             />
           </div>
-          {error && <p className="text-rose-400 text-xs">{error}</p>}
+
+          {error && (
+            <p className="text-rose-400 text-xs">
+              {error}
+            </p>
+          )}
+
           <button
             type="submit"
-            disabled={loading}
+            disabled={loading || otp.length !== 6}
             className="w-full py-3 rounded-xl font-bold text-xs shadow-lg transition disabled:opacity-50"
-            style={{ background: COLORS.teal, color: COLORS.bg }}
+            style={{
+              background: COLORS.teal,
+              color: COLORS.bg,
+            }}
           >
-            {loading ? 'Vérification...' : 'Valider le code'}
+            {loading
+              ? 'Vérification...'
+              : 'Valider le code'}
           </button>
+
           <div className="flex justify-between text-xs pt-1">
             <button
               type="button"
-              onClick={() => setStep('phone')}
+              onClick={changePhone}
               style={{ color: COLORS.muted }}
               className="hover:underline"
             >
               Changer de numéro
             </button>
+
             <button
               type="button"
               onClick={resendOtp}
-              disabled={resendCooldown > 0}
-              style={{ color: resendCooldown > 0 ? COLORS.muted : COLORS.gold }}
+              disabled={resendCooldown > 0 || loading}
+              style={{
+                color:
+                  resendCooldown > 0
+                    ? COLORS.muted
+                    : COLORS.gold,
+              }}
               className="disabled:opacity-50 hover:underline"
             >
               {resendCooldown > 0
