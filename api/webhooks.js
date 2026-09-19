@@ -5,6 +5,7 @@ const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const CINETPAY_API_KEY = process.env.CINETPAY_API_KEY;
 const CINETPAY_SITE_ID = process.env.CINETPAY_SITE_ID;
+const SEND_SMS_HOOK_SECRET = process.env.SEND_SMS_HOOK_SECRET;
 
 function admin() {
   return createClient(supabaseUrl, supabaseServiceKey);
@@ -25,7 +26,7 @@ async function readRawBody(req) {
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Stripe-Signature');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Stripe-Signature, Authorization');
 
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') {
@@ -33,11 +34,20 @@ export default async function handler(req, res) {
   }
 
   const stripeSig = req.headers['stripe-signature'];
+  const authHeader = req.headers['authorization'];
 
   try {
+    // 1. Gestion du webhook Stripe
     if (stripeSig) {
       return await handleStripeWebhook(req, res, stripeSig);
     }
+
+    // 2. Gestion du webhook InfiniReach (Vérification du secret pour le 0401)
+    if (authHeader) {
+      return await handleInfiniReachWebhook(req, res, authHeader);
+    }
+
+    // 3. Gestion du webhook CinetPay (par défaut)
     return await handleCinetPayWebhook(req, res);
   } catch (error) {
     console.error('Erreur Webhook:', error);
@@ -49,6 +59,82 @@ export default async function handler(req, res) {
   }
 }
 
+// ---------------------------------------------------------
+// Gestionnaire InfiniReach (Authentification par téléphone)
+// ---------------------------------------------------------
+async function handleInfiniReachWebhook(req, res, authHeader) {
+  const expectedAuth = `Bearer ${SEND_SMS_HOOK_SECRET}`;
+  if (authHeader !== expectedAuth) {
+    console.error('[webhook] InfiniReach unauthorized: invalid token');
+    return res.status(401).json({
+      code: 'UNAUTHORIZED_NO_AUTH_HEADER',
+      message: 'En-tête d’autorisation invalide ou manquant',
+    });
+  }
+
+  let body = req.body;
+  if (Buffer.isBuffer(body) || typeof body === 'string') {
+    try {
+      body = JSON.parse(body.toString());
+    } catch {
+      body = {};
+    }
+  }
+  if (!body || Object.keys(body).length === 0) {
+    const raw = await readRawBody(req);
+    try {
+      body = JSON.parse(raw.toString());
+    } catch {
+      body = {};
+    }
+  }
+
+  console.log('Webhook InfiniReach reçu:', body);
+
+  const { phone, sender } = body;
+  const targetPhone = phone || sender;
+
+  if (!targetPhone) {
+    return res.status(400).json({ error: 'Numéro de téléphone introuvable dans le payload' });
+  }
+
+  const supabase = admin();
+
+  // Ajustez 'profiles' ou 'companies' selon la table exacte contenant vos numéros
+  const { data: userProfile, error: searchError } = await supabase
+    .from('profiles') 
+    .select('id, phone')
+    .eq('phone', targetPhone)
+    .maybeSingle();
+
+  if (searchError) throw searchError;
+
+  if (!userProfile) {
+    const { data: newUser, error: createError } = await supabase
+      .from('profiles')
+      .insert([{ phone: targetPhone, created_at: new Date().toISOString() }])
+      .select('id')
+      .single();
+
+    if (createError) throw createError;
+
+    return res.status(200).json({
+      received: true,
+      action: 'user_created',
+      userId: newUser.id,
+    });
+  }
+
+  return res.status(200).json({
+    received: true,
+    action: 'authenticated',
+    userId: userProfile.id,
+  });
+}
+
+// ---------------------------------------------------------
+// Gestionnaire Stripe
+// ---------------------------------------------------------
 async function handleStripeWebhook(req, res, signature) {
   const rawBody = await readRawBody(req);
 
@@ -127,6 +213,9 @@ async function handleStripeWebhook(req, res, signature) {
   }
 }
 
+// ---------------------------------------------------------
+// Gestionnaire CinetPay
+// ---------------------------------------------------------
 async function handleCinetPayWebhook(req, res) {
   let body = req.body;
   if (Buffer.isBuffer(body) || typeof body === 'string') {
