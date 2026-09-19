@@ -10,18 +10,19 @@ serve(async (req) => {
 
     const message = `Votre code de vérification BAARO est : ${otp}`;
 
-    // Identifiants récupérés depuis ton application SMSGate
-    const CLOUD_API_URL = "https://api.sms-gate.app/mobile/v1/message";
-    const USERNAME = "ZSYJ8J";
-    const PASSWORD = "whxrgofa1avj1w";
+    // Configuration InfiniReach
+    const INFINIREACH_API_URL = "https://app.infinireach.io/api/v1/messages"; // Remplace par l'URL d'API officielle d'InfiniReach si différente
+    const API_KEY = "TA_CLE_API_INFINIREACH"; // Récupérée depuis ton dashboard web InfiniReach
+    const DEVICE_ID = "607647c5-5682-4a16-a3a0-7a03a36570cc";
 
-    const response = await fetch(CLOUD_API_URL, {
+    const response = await fetch(INFINIREACH_API_URL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": "Basic " + btoa(`${USERNAME}:${PASSWORD}`),
+        "Authorization": `Bearer ${API_KEY}`,
       },
       body: JSON.stringify({
+        device_id: DEVICE_ID,
         phone: phone,
         message: message,
       }),
@@ -29,7 +30,7 @@ serve(async (req) => {
 
     if (!response.ok) {
       const errorDetail = await response.text();
-      console.error("Erreur d'envoi SMSGate :", errorDetail);
+      console.error("Erreur d'envoi InfiniReach :", errorDetail);
       return new Response(JSON.stringify({ error: errorDetail }), {
         status: 400,
         headers: { "Content-Type": "application/json" },
