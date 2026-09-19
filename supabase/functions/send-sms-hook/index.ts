@@ -88,7 +88,10 @@ Deno.serve(async (req: Request) => {
      * ---------------------------------------------------------
      */
 
-    const phone = payload?.user?.phone;
+    // Nettoyage du numéro : suppression des espaces et tirets
+    const rawPhone = payload?.user?.phone;
+    const phone = rawPhone ? rawPhone.replace(/[\s-]/g, "") : null;
+    
     const otp = payload?.sms?.otp;
 
     if (!phone) {
@@ -102,6 +105,24 @@ Deno.serve(async (req: Request) => {
             http_code: 400,
             message:
               "Numéro de téléphone absent.",
+          },
+        },
+        400,
+      );
+    }
+
+    if (!phone.startsWith("+")) {
+      console.error(
+        "BAARO SMS Hook: format de numéro invalide.",
+        rawPhone,
+      );
+
+      return response(
+        {
+          error: {
+            http_code: 400,
+            message:
+              "Format de numéro invalide. Utilisez le format E.164 (ex: +223...).",
           },
         },
         400,
@@ -179,7 +200,7 @@ Deno.serve(async (req: Request) => {
      */
 
     const message =
-      `Votre code de vérification BAARO est : ${otp}`;
+      `Votre code de vérification BAARO est : ${otp}. Ne partagez pas ce code.`;
 
     /*
      * ---------------------------------------------------------
@@ -189,6 +210,15 @@ Deno.serve(async (req: Request) => {
 
     const externalId =
       `baaro-otp-${crypto.randomUUID()}`;
+
+    console.log(
+      "BAARO - Envoi SMS en cours:",
+      {
+        to: phone,
+        from: fromPhone,
+        externalId,
+      },
+    );
 
     const infinireachResponse =
       await fetch(
@@ -248,6 +278,7 @@ Deno.serve(async (req: Request) => {
           },
           provider_status:
             infinireachResponse.status,
+          provider_response: providerData,
         },
         502,
       );
@@ -269,6 +300,7 @@ Deno.serve(async (req: Request) => {
 
     return response({
       success: true,
+      message: "SMS envoyé avec succès",
     });
   } catch (error) {
     console.error(
