@@ -93,7 +93,7 @@ export function AuthModal({ isOpen, onClose, onAuthSuccess }) {
           const { data, error } = await supabase.auth.verifyOtp({
             phone: formattedPhone,
             token: otpCode.trim(),
-            type: "sms"
+            type: authMethod === "whatsapp" ? "whatsapp" : "sms"
           });
 
           if (error) throw error;
