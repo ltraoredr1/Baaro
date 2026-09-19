@@ -1,50 +1,292 @@
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { Webhook } from "https://esm.sh/standardwebhooks@1.0.0";
 
-serve(async (req) => {
-  try {
-    const payload = await req.json();
+type AuthHookPayload = {
+  user?: {
+    id?: string;
+    phone?: string;
+  };
+  sms?: {
+    otp?: string;
+  };
+};
 
-    // Récupération du numéro de téléphone et du code OTP généré par Supabase Auth
-    const phone = payload.user.phone;
-    const otp = payload.sms.otp;
+const jsonHeaders = {
+  "Content-Type": "application/json",
+};
 
-    const message = `Votre code de vérification BAARO est : ${otp}`;
+function response(
+  body: Record<string, unknown>,
+  status = 200,
+) {
+  return new Response(
+    JSON.stringify(body),
+    {
+      status,
+      headers: jsonHeaders,
+    },
+  );
+}
 
-    // Paramètres de l'API InfiniReach et de ton appareil lié
-    const INFINIREACH_API_URL = "https://app.infinireach.io/api/v1/messages";
-    const DEVICE_ID = "607647c5-5682-4a16-a3a0-7a03a36570cc";
-
-    // Envoi de la requête vers l'API de la passerelle Android
-    const response = await fetch(INFINIREACH_API_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
+Deno.serve(async (req: Request) => {
+  if (req.method !== "POST") {
+    return response(
+      {
+        error: {
+          http_code: 405,
+          message: "Méthode non autorisée.",
+        },
       },
-      body: JSON.stringify({
-        device_id: DEVICE_ID,
-        phone: phone,
-        message: message,
-      }),
-    });
+      405,
+    );
+  }
 
-    if (!response.ok) {
-      const errorDetail = await response.text();
-      console.error("Erreur d'envoi InfiniReach :", errorDetail);
-      return new Response(JSON.stringify({ error: errorDetail }), {
-        status: 400,
-        headers: { "Content-Type": "application/json" },
-      });
+  try {
+    /*
+     * ---------------------------------------------------------
+     * 1. Vérification de la signature Supabase Auth Hook
+     * ---------------------------------------------------------
+     */
+
+    const hookSecret = Deno.env
+      .get("SEND_SMS_HOOK_SECRET")
+      ?.replace(/^v1,whsec_/, "");
+
+    if (!hookSecret) {
+      console.error(
+        "SEND_SMS_HOOK_SECRET est manquant.",
+      );
+
+      return response(
+        {
+          error: {
+            http_code: 500,
+            message:
+              "Configuration du SMS Hook incomplète.",
+          },
+        },
+        500,
+      );
     }
 
-    return new Response(JSON.stringify({ success: true }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
+    const rawBody = await req.text();
+
+    const headers = Object.fromEntries(
+      req.headers.entries(),
+    );
+
+    const webhook = new Webhook(hookSecret);
+
+    const payload =
+      webhook.verify(
+        rawBody,
+        headers,
+      ) as AuthHookPayload;
+
+    /*
+     * ---------------------------------------------------------
+     * 2. Récupération du téléphone et du code OTP
+     * ---------------------------------------------------------
+     */
+
+    const phone = payload?.user?.phone;
+    const otp = payload?.sms?.otp;
+
+    if (!phone) {
+      console.error(
+        "BAARO SMS Hook: numéro absent.",
+      );
+
+      return response(
+        {
+          error: {
+            http_code: 400,
+            message:
+              "Numéro de téléphone absent.",
+          },
+        },
+        400,
+      );
+    }
+
+    if (!otp) {
+      console.error(
+        "BAARO SMS Hook: OTP absent.",
+      );
+
+      return response(
+        {
+          error: {
+            http_code: 400,
+            message: "OTP absent.",
+          },
+        },
+        400,
+      );
+    }
+
+    /*
+     * ---------------------------------------------------------
+     * 3. Secrets InfiniReach
+     * ---------------------------------------------------------
+     */
+
+    const apiKey = Deno.env.get(
+      "INFINIREACH_API_KEY",
+    );
+
+    const fromPhone = Deno.env.get(
+      "INFINIREACH_FROM_PHONE",
+    );
+
+    if (!apiKey) {
+      console.error(
+        "INFINIREACH_API_KEY est manquant.",
+      );
+
+      return response(
+        {
+          error: {
+            http_code: 500,
+            message:
+              "Clé API InfiniReach non configurée.",
+          },
+        },
+        500,
+      );
+    }
+
+    if (!fromPhone) {
+      console.error(
+        "INFINIREACH_FROM_PHONE est manquant.",
+      );
+
+      return response(
+        {
+          error: {
+            http_code: 500,
+            message:
+              "Numéro expéditeur InfiniReach non configuré.",
+          },
+        },
+        500,
+      );
+    }
+
+    /*
+     * ---------------------------------------------------------
+     * 4. Message SMS
+     * ---------------------------------------------------------
+     */
+
+    const message =
+      `Votre code de vérification BAARO est : ${otp}`;
+
+    /*
+     * ---------------------------------------------------------
+     * 5. Envoi vers InfiniReach
+     * ---------------------------------------------------------
+     */
+
+    const externalId =
+      `baaro-otp-${crypto.randomUUID()}`;
+
+    const infinireachResponse =
+      await fetch(
+        "https://api.infinireach.io/api/v1/messages",
+        {
+          method: "POST",
+
+          headers: {
+            "Content-Type":
+              "application/json",
+            "X-API-Key": apiKey,
+          },
+
+          body: JSON.stringify({
+            to: phone,
+            message,
+            from: fromPhone,
+            channel: "sms",
+            externalId,
+          }),
+        },
+      );
+
+    const providerText =
+      await infinireachResponse.text();
+
+    let providerData: unknown = null;
+
+    try {
+      providerData =
+        providerText
+          ? JSON.parse(providerText)
+          : null;
+    } catch {
+      providerData = providerText;
+    }
+
+    /*
+     * ---------------------------------------------------------
+     * 6. Gestion erreur InfiniReach
+     * ---------------------------------------------------------
+     */
+
+    if (!infinireachResponse.ok) {
+      console.error(
+        "BAARO - InfiniReach erreur:",
+        infinireachResponse.status,
+        providerData,
+      );
+
+      return response(
+        {
+          error: {
+            http_code: 502,
+            message:
+              "Le fournisseur SMS a refusé l'envoi.",
+          },
+          provider_status:
+            infinireachResponse.status,
+        },
+        502,
+      );
+    }
+
+    /*
+     * ---------------------------------------------------------
+     * 7. Succès
+     * ---------------------------------------------------------
+     */
+
+    console.log(
+      "BAARO - SMS OTP envoyé avec succès.",
+      {
+        to: phone,
+        provider: providerData,
+      },
+    );
+
+    return response({
+      success: true,
     });
   } catch (error) {
-    console.error("Erreur Edge Function SMS :", error);
-    return new Response(JSON.stringify({ error: error.message }), {
-      status: 500,
-      headers: { "Content-Type": "application/json" },
-    });
+    console.error(
+      "BAARO - erreur Send SMS Hook:",
+      error,
+    );
+
+    return response(
+      {
+        error: {
+          http_code: 500,
+          message:
+            error instanceof Error
+              ? error.message
+              : "Erreur interne du SMS Hook.",
+        },
+      },
+      500,
+    );
   }
 });
