@@ -10,10 +10,10 @@ serve(async (req) => {
 
     const message = `Votre code de vérification BAARO est : ${otp}`;
 
-    // Identifiants récupérés depuis votre application SMSGate
-    const CLOUD_API_URL = "https://api.sms-gate.app/3rdparty/v1/message";
-    const USERNAME = "JRIJQ2";
-    const PASSWORD = "DOCTORMED6399plus*";
+    // Identifiants récupérés depuis ton application SMSGate
+    const CLOUD_API_URL = "https://api.sms-gate.app/mobile/v1/message";
+    const USERNAME = "ZSYJ8J";
+    const PASSWORD = "whxrgofa1avj1w";
 
     const response = await fetch(CLOUD_API_URL, {
       method: "POST",
@@ -22,10 +22,8 @@ serve(async (req) => {
         "Authorization": "Basic " + btoa(`${USERNAME}:${PASSWORD}`),
       },
       body: JSON.stringify({
-        phoneNumbers: [phone],
-        textMessage: {
-          text: message,
-        },
+        phone: phone,
+        message: message,
       }),
     });
 
