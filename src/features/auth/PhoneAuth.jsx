@@ -1,21 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
-import { createClient } from '@supabase/supabase-js';
-import PhoneInput, {
-  isValidPhoneNumber,
-} from 'react-phone-number-input';
+import PhoneInput, { isValidPhoneNumber } from 'react-phone-number-input';
 import 'react-phone-number-input/style.css';
-
-// Réutilise ton client existant si tu en as déjà un ailleurs dans le projet
-const supabase = createClient(
-  import.meta.env.VITE_SUPABASE_URL,
-  import.meta.env.VITE_SUPABASE_ANON_KEY
-);
+import { supabase } from '../../supabaseClient.js'; // ✅ Utilisation du client centralisé
+import { COLORS } from '../../theme.js'; // ✅ Intégration du thème BAARO
 
 const RESEND_DELAY = 30; // secondes
 
-// Devine un pays par défaut à partir de la locale du navigateur.
-// Reste un simple point de départ : l'utilisateur peut toujours changer
-// le pays lui-même dans le sélecteur (aucune restriction géographique).
 function guessDefaultCountry() {
   try {
     const locale = navigator.language || navigator.languages?.[0] || '';
@@ -24,12 +14,12 @@ function guessDefaultCountry() {
   } catch {
     // ignore
   }
-  return 'ML'; // repli neutre, n'importe quel autre code pays ferait l'affaire
+  return 'ML'; // Repli par défaut (Mali)
 }
 
 export default function PhoneAuth({ onAuthSuccess }) {
   const [step, setStep] = useState('phone'); // 'phone' | 'otp'
-  const [phone, setPhone] = useState(''); // toujours au format E.164 (+223..., +33..., +1...)
+  const [phone, setPhone] = useState(''); 
   const [defaultCountry] = useState(guessDefaultCountry);
   const [otp, setOtp] = useState('');
   const [loading, setLoading] = useState(false);
@@ -65,7 +55,7 @@ export default function PhoneAuth({ onAuthSuccess }) {
 
     setLoading(true);
     const { error: otpError } = await supabase.auth.signInWithOtp({
-      phone, // déjà en E.164 grâce à react-phone-number-input
+      phone, 
     });
     setLoading(false);
 
@@ -126,33 +116,31 @@ export default function PhoneAuth({ onAuthSuccess }) {
   }
 
   return (
-    <div className="max-w-sm mx-auto p-6 space-y-4">
+    <div className="w-full max-w-sm mx-auto space-y-4">
       {step === 'phone' && (
         <form onSubmit={sendOtp} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium mb-1">
+            <label className="block text-xs font-semibold mb-1" style={{ color: COLORS.muted }}>
               Numéro de téléphone
             </label>
-            {/* Sélecteur de pays (drapeaux + indicatif) + saisie du numéro.
-                `international` force le format E.164 dans `phone`,
-                `defaultCountry` ne fait que présélectionner un pays,
-                l'utilisateur reste libre d'en choisir un autre. */}
             <PhoneInput
               international
               defaultCountry={defaultCountry}
               value={phone}
               onChange={setPhone}
               placeholder="Entre ton numéro"
-              className="w-full border rounded-lg px-3 py-2 phone-input-baaro"
+              className="w-full border rounded-xl px-3 py-2.5 text-xs outline-none phone-input-baaro bg-slate-950/60"
+              style={{ borderColor: COLORS.border, color: COLORS.ivory }}
             />
           </div>
-          {error && <p className="text-red-600 text-sm">{error}</p>}
+          {error && <p className="text-rose-400 text-xs">{error}</p>}
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-blue-600 text-white rounded-lg py-2 disabled:opacity-50"
+            className="w-full py-3 rounded-xl font-bold text-xs shadow-lg transition disabled:opacity-50"
+            style={{ background: COLORS.gold, color: COLORS.bg }}
           >
-            {loading ? 'Envoi...' : 'Recevoir le code'}
+            {loading ? 'Envoi en cours...' : 'Recevoir le code'}
           </button>
         </form>
       )}
@@ -160,7 +148,7 @@ export default function PhoneAuth({ onAuthSuccess }) {
       {step === 'otp' && (
         <form onSubmit={verifyOtp} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium mb-1">
+            <label className="block text-xs font-semibold mb-1" style={{ color: COLORS.muted }}>
               Code reçu par SMS ({phone})
             </label>
             <input
@@ -169,24 +157,27 @@ export default function PhoneAuth({ onAuthSuccess }) {
               placeholder="123456"
               value={otp}
               onChange={(e) => setOtp(e.target.value)}
-              className="w-full border rounded-lg px-3 py-2 tracking-widest text-center"
+              className="w-full border rounded-xl px-3 py-2.5 tracking-widest text-center text-sm outline-none font-mono bg-slate-950/60"
+              style={{ borderColor: COLORS.border, color: COLORS.ivory }}
               required
               autoFocus
             />
           </div>
-          {error && <p className="text-red-600 text-sm">{error}</p>}
+          {error && <p className="text-rose-400 text-xs">{error}</p>}
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-blue-600 text-white rounded-lg py-2 disabled:opacity-50"
+            className="w-full py-3 rounded-xl font-bold text-xs shadow-lg transition disabled:opacity-50"
+            style={{ background: COLORS.teal, color: COLORS.bg }}
           >
-            {loading ? 'Vérification...' : 'Valider'}
+            {loading ? 'Vérification...' : 'Valider le code'}
           </button>
-          <div className="flex justify-between text-sm">
+          <div className="flex justify-between text-xs pt-1">
             <button
               type="button"
               onClick={() => setStep('phone')}
-              className="text-gray-500"
+              style={{ color: COLORS.muted }}
+              className="hover:underline"
             >
               Changer de numéro
             </button>
@@ -194,7 +185,8 @@ export default function PhoneAuth({ onAuthSuccess }) {
               type="button"
               onClick={resendOtp}
               disabled={resendCooldown > 0}
-              className="text-blue-600 disabled:text-gray-400"
+              style={{ color: resendCooldown > 0 ? COLORS.muted : COLORS.gold }}
+              className="disabled:opacity-50 hover:underline"
             >
               {resendCooldown > 0
                 ? `Renvoyer (${resendCooldown}s)`
