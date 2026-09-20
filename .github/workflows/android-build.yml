@@ -20,7 +20,7 @@ jobs:
     - name: Set up Node.js
       uses: actions/setup-node@v4
       with:
-        node-version: '20'
+        node-version: '22' # Fix: Node 20 est déprécié, passe en 22
         
     - name: Install dependencies
       run: npm install
@@ -36,7 +36,6 @@ jobs:
       
     - name: Inject Nearby Chat plugin into Gradle files
       run: |
-        # Vérifier que le dossier source du plugin Android existe
         if [ -d "native-plugins/nearby/android" ]; then
           if ! grep -q "nearby-chat" android/settings.gradle; then
             echo "" >> android/settings.gradle
@@ -48,7 +47,6 @@ jobs:
           exit 1
         fi
         
-        # Ajouter la dépendance dans app/build.gradle si elle n'y est pas
         if [ -f "android/app/build.gradle" ]; then
           if ! grep -q "nearby-chat" android/app/build.gradle; then
             sed -i "/implementation project(':capacitor-android')/a \\    implementation project(':nearby-chat')" android/app/build.gradle
@@ -56,7 +54,7 @@ jobs:
         fi
       
     - name: Set up JDK 17
-      uses: actions/setup-java@v4
+      uses: actions/setup-java@v5 # Fix: v4 est déprécié
       with:
         java-version: '17'
         distribution: 'temurin'
@@ -64,8 +62,14 @@ jobs:
     - name: Setup Android SDK
       uses: android-actions/setup-android@v3
       with:
+        cmdline-tools-version: 12266719
+        log-accepted-android-sdk-licenses: true
         accept-android-sdk-licenses: true
-        packages: 'platform-tools build-tools-34.0.0 platforms-34'
+        packages: |
+          platform-tools
+          build-tools;34.0.0
+          platforms;android-34
+          platforms;android-35
 
     - name: Build with Gradle
       run: |
