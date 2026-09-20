@@ -61,15 +61,11 @@ jobs:
         java-version: '17'
         distribution: 'temurin'
         
-    - name: Ensure Gradle Wrapper exists and build
+    - name: Build with Gradle
       run: |
         cd android
-        # Si gradlew n'existe pas, on le génère proprement
-        if [ ! -f "gradlew" ]; then
-          gradle wrapper
-        fi
         chmod +x gradlew
-        ./gradlew assembleDebug --no-daemon
+        ./gradlew assembleDebug --no-daemon --stacktrace
       
     - name: Upload APK
       uses: actions/upload-artifact@v4
