@@ -1,0 +1,29 @@
+{
+  "name": "@baaro/nearby-chat",
+  "version": "1.0.0",
+  "description": "Plugin Capacitor pour Google Nearby Connections (chat hors-ligne BAARO)",
+  "main": "dist/esm/index.js",
+  "types": "dist/esm/index.d.ts",
+  "scripts": {
+    "build": "tsc"
+  },
+  "keywords": [
+    "capacitor",
+    "plugin",
+    "nearby",
+    "bluetooth",
+    "offline",
+    "baaro"
+  ],
+  "capacitor": {
+    "android": {
+      "src": "android"
+    }
+  },
+  "peerDependencies": {
+    "@capacitor/core": "^6.0.0"
+  },
+  "devDependencies": {
+    "typescript": "~5.7.2"
+  }
+}
