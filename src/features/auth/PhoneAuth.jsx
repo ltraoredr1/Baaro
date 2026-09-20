@@ -2,7 +2,6 @@ import { useState, useEffect, useRef } from 'react';
 import PhoneInput, { isValidPhoneNumber } from 'react-phone-number-input';
 import 'react-phone-number-input/style.css';
 import { supabase } from '../../supabaseClient.js';
-import { COLORS } from '../../theme.js';
 
 const RESEND_DELAY = 30;
 
@@ -40,6 +39,7 @@ export default function PhoneAuth({ onAuthSuccess }) {
   const expiryTimerRef = useRef(null);
   const otpInputRef = useRef(null);
 
+  // Nettoyage des timers
   useEffect(() => {
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
@@ -47,6 +47,7 @@ export default function PhoneAuth({ onAuthSuccess }) {
     };
   }, []);
 
+  // Auto-focus et WebOTP
   useEffect(() => {
     if (step === 'otp') {
       setTimeout(() => {
@@ -105,49 +106,43 @@ export default function PhoneAuth({ onAuthSuccess }) {
   }
 
   async function ensureProfile(user) {
-    if (!user || !user.id) throw new Error('Identifiant introuvable.');
+    if (!user || !user.id) return; // Échec silencieux si pas d'ID pour éviter le crash
     const userId = user.id;
     const normalizedPhone = normalizePhone(user.phone || phone);
 
-    const { data: existingProfile, error: profileReadError } = await supabase
-      .from('profiles')
-      .select('id, display_name, handle, flag, bio, phone')
-      .eq('id', userId)
-      .maybeSingle();
+    try {
+      const { data: existingProfile } = await supabase
+        .from('profiles')
+        .select('id, display_name, handle, flag, phone')
+        .eq('id', userId)
+        .maybeSingle();
 
-    if (profileReadError) throw profileReadError;
+      if (existingProfile) {
+        const updates = {};
+        if (!existingProfile.phone && normalizedPhone) updates.phone = normalizedPhone;
+        if (!existingProfile.display_name) updates.display_name = normalizedPhone || 'Membre BAARO';
+        if (!existingProfile.handle) updates.handle = buildFallbackHandle(userId);
+        if (!existingProfile.flag) updates.flag = '🌍';
 
-    if (existingProfile) {
-      const updates = {};
-      if (!existingProfile.phone && normalizedPhone) updates.phone = normalizedPhone;
-      if (!existingProfile.display_name) updates.display_name = normalizedPhone || 'Membre BAARO';
-      if (!existingProfile.handle) updates.handle = buildFallbackHandle(userId);
-      if (!existingProfile.flag) updates.flag = '🌍';
-
-      if (Object.keys(updates).length > 0) {
-        updates.updated_at = new Date().toISOString();
-        const { error: updateError } = await supabase
-          .from('profiles')
-          .update(updates)
-          .eq('id', userId);
-        if (updateError) throw updateError;
+        if (Object.keys(updates).length > 0) {
+          await supabase.from('profiles').update(updates).eq('id', userId);
+        }
+        return;
       }
-      return;
+
+      await supabase.from('profiles').insert({
+        id: userId,
+        display_name: normalizedPhone || 'Membre BAARO',
+        handle: buildFallbackHandle(userId),
+        flag: '🌍',
+        phone: normalizedPhone || null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+    } catch (err) {
+      console.error('Erreur mise à jour profil:', err);
+      // On ne bloque pas la connexion si la mise à jour du profil échoue
     }
-
-    const profile = {
-      id: userId,
-      display_name: normalizedPhone || 'Membre BAARO',
-      handle: buildFallbackHandle(userId),
-      flag: '🌍',
-      bio: '',
-      phone: normalizedPhone || null,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    };
-
-    const { error: insertError } = await supabase.from('profiles').insert(profile);
-    if (insertError) throw insertError;
   }
 
   async function sendOtp(event) {
@@ -267,12 +262,13 @@ export default function PhoneAuth({ onAuthSuccess }) {
     }
   }
 
+  // --- RENDU JSX ---
   return (
     <div className="w-full max-w-sm mx-auto space-y-4">
       {step === 'phone' && (
         <form onSubmit={sendOtp} className="space-y-4">
           <div>
-            <label className="block text-xs font-semibold mb-1" style={{ color: COLORS.muted }}>
+            <label className="block text-xs font-semibold mb-1 text-slate-400">
               Numéro de téléphone
             </label>
             <PhoneInput
@@ -281,8 +277,7 @@ export default function PhoneAuth({ onAuthSuccess }) {
               value={phone}
               onChange={setPhone}
               placeholder="Entre ton numéro"
-              className="w-full border rounded-xl px-3 py-2.5 text-xs outline-none phone-input-baaro bg-slate-950/60"
-              style={{ borderColor: COLORS.border, color: COLORS.ivory }}
+              className="w-full border border-slate-700 rounded-xl px-3 py-2.5 text-xs outline-none bg-slate-950/60 text-slate-100"
             />
           </div>
 
@@ -291,8 +286,7 @@ export default function PhoneAuth({ onAuthSuccess }) {
           <button
             type="submit"
             disabled={loading}
-            className="w-full py-3 rounded-xl font-bold text-xs shadow-lg transition disabled:opacity-50"
-            style={{ background: COLORS.gold, color: COLORS.bg }}
+            className="w-full py-3 rounded-xl font-bold text-xs shadow-lg transition disabled:opacity-50 bg-amber-500 text-slate-950 hover:bg-amber-400"
           >
             {loading ? 'Envoi en cours...' : 'Recevoir le code'}
           </button>
@@ -302,7 +296,7 @@ export default function PhoneAuth({ onAuthSuccess }) {
       {step === 'otp' && (
         <form id="otp-form" onSubmit={verifyOtp} className="space-y-4">
           <div>
-            <label className="block text-xs font-semibold mb-1" style={{ color: COLORS.muted }}>
+            <label className="block text-xs font-semibold mb-1 text-slate-400">
               Code reçu par SMS ({phone})
             </label>
 
@@ -322,8 +316,7 @@ export default function PhoneAuth({ onAuthSuccess }) {
                 placeholder="123456"
                 value={otp}
                 onChange={handleOtpChange}
-                className="w-full border rounded-xl px-3 py-2.5 tracking-widest text-center text-sm outline-none font-mono bg-slate-950/60 pr-20"
-                style={{ borderColor: COLORS.border, color: COLORS.ivory }}
+                className="w-full border border-slate-700 rounded-xl px-3 py-2.5 tracking-widest text-center text-sm outline-none font-mono bg-slate-950/60 text-slate-100 pr-20"
                 required
               />
               <button
@@ -345,22 +338,20 @@ export default function PhoneAuth({ onAuthSuccess }) {
           <button
             type="submit"
             disabled={loading || otp.length !== 6}
-            className="w-full py-3 rounded-xl font-bold text-xs shadow-lg transition disabled:opacity-50"
-            style={{ background: COLORS.teal, color: COLORS.bg }}
+            className="w-full py-3 rounded-xl font-bold text-xs shadow-lg transition disabled:opacity-50 bg-teal-500 text-slate-950 hover:bg-teal-400"
           >
             {loading ? 'Vérification...' : 'Valider le code'}
           </button>
 
           <div className="flex justify-between text-xs pt-1">
-            <button type="button" onClick={changePhone} style={{ color: COLORS.muted }} className="hover:underline">
+            <button type="button" onClick={changePhone} className="text-slate-400 hover:text-slate-200 hover:underline">
               Changer de numéro
             </button>
             <button
               type="button"
               onClick={resendOtp}
               disabled={resendCooldown > 0 || loading}
-              style={{ color: resendCooldown > 0 ? COLORS.muted : COLORS.gold }}
-              className="disabled:opacity-50 hover:underline"
+              className={`hover:underline disabled:opacity-50 ${resendCooldown > 0 ? 'text-slate-500' : 'text-amber-500'}`}
             >
               {resendCooldown > 0 ? `Renvoyer (${resendCooldown}s)` : 'Renvoyer le code'}
             </button>
@@ -369,4 +360,4 @@ export default function PhoneAuth({ onAuthSuccess }) {
       )}
     </div>
   );
-            }
+}
