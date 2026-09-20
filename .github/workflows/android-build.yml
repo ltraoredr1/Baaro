@@ -65,6 +65,10 @@ jobs:
       uses: android-actions/setup-android@v3
       with:
         accept-android-sdk-licenses: true
+
+    - name: Accept all Android SDK licenses explicitly
+      run: |
+        yes | sdkmanager --licenses || true
         
     - name: Build with Gradle
       run: |
