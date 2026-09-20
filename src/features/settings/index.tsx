@@ -175,6 +175,7 @@ const STRINGS: Record<string, Record<string, string>> = {
     birth_date: "Date de naissance",
     location: "Localisation",
     account_email: "E-mail du compte",
+    account_phone: "Téléphone du compte",
     registered_country: "Pays d'inscription",
     current_country: "Pays actuel",
     country_change_wait: "Le changement de pays sera disponible après 4 mois.",
@@ -313,6 +314,8 @@ const STRINGS: Record<string, Record<string, string>> = {
     save_profile: "Save",
     cancel: "Cancel",
     display_name: "Display name",
+    account_email: "Account email",
+    account_phone: "Account phone",
     flag_emoji: "Flag (emoji)",
     bio: "Bio",
     profile_saved: "✅ Profile updated",
@@ -396,7 +399,7 @@ const STRINGS: Record<string, Record<string, string>> = {
     country: "البلد",
     currency: "العملة المفضلة",
     data_network: "البيانات والشبكة",
-    data_network_desc: "مُحسَّن لشبكات 2G/3G.",
+    data_network_desc: "مُحسَّن لشبكات 2G/3G.",
     data_saver: "وضع توفير البيانات",
     data_saver_desc: "تحميل أقل وصور أخف",
     autoplay_video: "تشغيل تلقائي للفيديو",
@@ -503,7 +506,7 @@ const STRINGS: Record<string, Record<string, string>> = {
     logout: "تسجيل الخروج",
     logout_confirm: "هل تريد حقًا تسجيل الخروج؟",
     guest: "زائر",
-    vs_competitors: "مُصمَّم لأفريقيا والأسواق الناشئة",
+    vs_competitors: "مُصمَّم لأفريقيا والأسواق الناشئة",
     version: "الإصدار",
   },
   bm: {
@@ -871,6 +874,7 @@ export default function SettingsTab({
   const [user, setUser] = useState<{
     id: string;
     email?: string;
+    phone?: string;
     is_anonymous?: boolean;
   } | null>(null);
   const [settings, setSettings] = useState<SettingsState>(loadLocal);
@@ -965,11 +969,13 @@ export default function SettingsTab({
         setUser({
           id: data.user.id,
           email: data.user.email ?? undefined,
+          phone: data.user.phone ?? undefined,
           is_anonymous: data.user.is_anonymous === true,
         });
 
-        // Profil public/identité : l'e-mail du compte reste celui de Supabase Auth
-        // et n'est jamais copié dans la table publique profiles.
+        // Profil public/identité : l'e-mail (ou le téléphone) du compte
+        // reste celui de Supabase Auth et n'est jamais copié dans la
+        // table publique profiles.
         const { data: profile } = await supabase
           .from("profiles")
           .select("id, display_name, handle, flag, bio, avatar_url, cover_url, country, registered_country, country_changed_at, country_change_available_at, first_name, last_name, birth_date, location, is_verified, created_at")
@@ -1757,16 +1763,31 @@ export default function SettingsTab({
                 />
               </div>
 
+              {/*
+                Compte via téléphone (SMS) : pas d'e-mail Supabase Auth.
+                On affiche le champ pertinent selon la méthode
+                d'authentification réelle du compte, plutôt que de
+                toujours supposer un e-mail (ce qui laissait ce champ
+                vide et trompeur pour les comptes SMS).
+              */}
               <div className="rounded-xl border p-3" style={{ borderColor: COLORS.border }}>
-                <label className="text-xs font-semibold block mb-1" style={{ color: COLORS.muted }}>{t("account_email")}</label>
+                <label className="text-xs font-semibold block mb-1" style={{ color: COLORS.muted }}>
+                  {user?.email ? t("account_email") : t("account_phone")}
+                </label>
                 <input
-                  value={user?.email || ""}
+                  value={user?.email || user?.phone || ""}
                   readOnly
                   disabled
                   className="w-full rounded-xl p-3 text-sm border opacity-80"
                   style={inputStyle}
                 />
-                <p className="text-[11px] mt-1" style={{ color: COLORS.muted }}>E-mail d'authentification du compte, géré par Supabase Auth.</p>
+                <p className="text-[11px] mt-1" style={{ color: COLORS.muted }}>
+                  {user?.email
+                    ? "E-mail d'authentification du compte, géré par Supabase Auth."
+                    : user?.phone
+                    ? "Numéro de téléphone d'authentification du compte, géré par Supabase Auth."
+                    : "Aucune méthode d'authentification stable détectée sur ce compte."}
+                </p>
               </div>
 
               <div className="rounded-xl border p-3" style={{ borderColor: COLORS.border }}>
