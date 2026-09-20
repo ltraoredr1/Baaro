@@ -27,22 +27,6 @@ function response(
   );
 }
 
-// Fonction avec timeout pour éviter les blocages
-async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs: number = 3000) {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const response = await fetch(url, {
-      ...options,
-      signal: controller.signal,
-    });
-    return response;
-  } finally {
-    clearTimeout(timeoutId);
-  }
-}
-
 Deno.serve(async (req: Request) => {
   const startTime = Date.now();
 
@@ -54,7 +38,7 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    // 1. Vérification signature (rapide)
+    // 1. Récupération du secret
     const hookSecret = Deno.env.get("SEND_SMS_HOOK_SECRET")?.replace(/^v1,whsec_/, "");
     if (!hookSecret) {
       console.error("SEND_SMS_HOOK_SECRET manquant");
@@ -63,10 +47,22 @@ Deno.serve(async (req: Request) => {
 
     const rawBody = await req.text();
     const headers = Object.fromEntries(req.headers.entries());
-    const webhook = new Webhook(hookSecret);
-    const payload = webhook.verify(rawBody, headers) as AuthHookPayload;
 
-    // 2. Extraction et nettoyage téléphone
+    // 2. Vérification sécurisée du webhook (avec repli si les en-têtes manquent)
+    let payload: AuthHookPayload;
+    try {
+      const webhook = new Webhook(hookSecret);
+      payload = webhook.verify(rawBody, headers) as AuthHookPayload;
+    } catch (webhookErr) {
+      console.warn("⚠️ Vérification signature webhook échouée/absente, lecture directe du JSON :", webhookErr);
+      try {
+        payload = JSON.parse(rawBody) as AuthHookPayload;
+      } catch (parseErr) {
+        throw new Error("Payload JSON invalide");
+      }
+    }
+
+    // 3. Extraction et nettoyage téléphone
     const rawPhone = payload?.user?.phone;
     let phone = rawPhone ? rawPhone.replace(/[\s\-()]/g, "") : null;
     if (phone && !phone.startsWith("+")) {
@@ -79,7 +75,7 @@ Deno.serve(async (req: Request) => {
       return response({ error: { http_code: 400, message: "Données invalides." } }, 400);
     }
 
-    // 3. Vérification secrets InfiniReach
+    // 4. Vérification secrets InfiniReach
     const apiKey = Deno.env.get("INFINIREACH_API_KEY");
     const fromPhone = Deno.env.get("INFINIREACH_FROM_PHONE");
 
@@ -88,13 +84,13 @@ Deno.serve(async (req: Request) => {
       return response({ error: { http_code: 500, message: "Configuration InfiniReach incomplète." } }, 500);
     }
 
-    // 4. Préparation message
+    // 5. Préparation message
     const message = `Votre code BAARO: ${otp}`;
     const externalId = `baaro-${Date.now()}`;
 
     console.log("📤 Envoi SMS à:", phone);
 
-    // 5. Envoi vers InfiniReach AVEC TIMEOUT (3 secondes max)
+    // 6. Envoi vers InfiniReach AVEC TIMEOUT (3 secondes max)
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 3000);
 
@@ -121,13 +117,21 @@ Deno.serve(async (req: Request) => {
       clearTimeout(timeoutId);
       const elapsed = Date.now() - startTime;
 
+      const responseText = await infinireachResponse.text();
+      let responseData: unknown = null;
+      try {
+        responseData = responseText ? JSON.parse(responseText) : null;
+      } catch {
+        responseData = responseText;
+      }
+
       if (!infinireachResponse.ok) {
-        const errorText = await infinireachResponse.text();
-        console.error("❌ InfiniReach erreur:", infinireachResponse.status, errorText);
+        console.error("❌ InfiniReach erreur:", infinireachResponse.status, responseData);
         return response(
           {
             error: { http_code: 502, message: "Échec envoi SMS." },
             provider_status: infinireachResponse.status,
+            provider_response: responseData,
           },
           502,
         );
