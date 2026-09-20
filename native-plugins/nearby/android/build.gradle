@@ -54,7 +54,7 @@ dependencies {
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
-    
-    // ✅ Google Nearby Connections API
+
+    // Google Nearby Connections API
     implementation 'com.google.android.gms:play-services-nearby:18.5.0'
 }
