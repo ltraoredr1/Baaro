@@ -1,0 +1,22 @@
+baaro/
+├── package.json                                    ← À MODIFIER
+── capacitor.config.json                           ← Inchangé
+── android/app/src/main/AndroidManifest.xml        ← À MODIFIER
+├── src/
+│   ├── lib/
+│   │   └── nearby.js                               ← À REMPLACER
+│   └── hooks/
+│       └── useNearbyChat.js                        ← À CRÉER
+└── native-plugins/
+    └── nearby/
+        ├── package.json                            ← À CRÉER
+        ├── tsconfig.json                           ← À CRÉER
+        ├── src/
+        │   └── index.ts                            ← À CRÉER
+        └── android/
+            ├── build.gradle                        ← À CRÉER
+            ├── settings.gradle                     ← À CRÉER
+            ── src/main/
+                ├── AndroidManifest.xml             ← À CRÉER
+                └── java/com/baaro/nearby/
+                    └── NearbyChatPlugin.kt         ← À CRÉER
