@@ -1,56 +1,29 @@
 {
-  "name": "baaro",
-  "private": true,
-  "version": "0.1.0",
-  "type": "module",
+  "name": "@baaro/nearby-chat",
+  "version": "1.0.0",
+  "description": "Plugin Capacitor pour Google Nearby Connections (chat hors-ligne BAARO)",
+  "main": "dist/esm/index.js",
+  "types": "dist/esm/index.d.ts",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc -b && vite build",
-    "lint": "eslint .",
-    "preview": "vite preview"
+    "build": "tsc"
   },
-  "dependencies": {
-    "@capacitor-community/contacts": "^6.0.0",
-    "@capacitor/app": "^6.0.0",
-    "@capacitor/core": "^6.0.0",
-    "@capacitor/haptics": "^6.0.0",
-    "@capacitor/keyboard": "^6.0.0",
-    "@capacitor/status-bar": "^6.0.0",
-    "@daily-co/daily-js": "^0.78.0",
-    "@hookform/resolvers": "^3.10.0",
-    "@supabase/supabase-js": "^2.49.1",
-    "@tanstack/react-query": "^5.66.11",
-    "clsx": "^2.1.1",
-    "date-fns": "^4.1.0",
-    "i18next": "^24.2.2",
-    "i18next-browser-languagedetector": "^8.0.4",
-    "lucide-react": "^0.475.0",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "react-hook-form": "^7.54.2",
-    "react-i18next": "^15.4.1",
-    "react-phone-number-input": "^3.4.11",
-    "react-router-dom": "^7.2.0",
-    "recharts": "^2.12.7",
-    "tailwind-merge": "^3.0.1",
-    "zod": "^3.24.2"
+  "keywords": [
+    "capacitor",
+    "plugin",
+    "nearby",
+    "bluetooth",
+    "offline",
+    "baaro"
+  ],
+  "capacitor": {
+    "android": {
+      "src": "android"
+    }
+  },
+  "peerDependencies": {
+    "@capacitor/core": "^6.0.0"
   },
   "devDependencies": {
-    "@eslint/js": "^9.20.0",
-    "@types/node": "^22.13.4",
-    "@types/react": "^18.3.18",
-    "@types/react-dom": "^18.3.5",
-    "@vitejs/plugin-react": "^4.3.4",
-    "autoprefixer": "^10.4.20",
-    "eslint": "^9.20.1",
-    "eslint-plugin-react-hooks": "^5.0.0",
-    "eslint-plugin-react-refresh": "^0.4.19",
-    "globals": "^15.15.0",
-    "postcss": "^8.5.2",
-    "tailwindcss": "^3.4.17",
-    "typescript": "~5.7.2",
-    "typescript-eslint": "^8.24.0",
-    "vite": "^6.1.0",
-    "vite-plugin-pwa": "^1.0.0"
+    "typescript": "~5.7.2"
   }
 }
