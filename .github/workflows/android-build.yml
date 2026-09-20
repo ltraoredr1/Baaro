@@ -34,14 +34,14 @@ jobs:
       
     - name: Inject Nearby Chat plugin into Gradle files
       run: |
-        # Ajouter le plugin dans settings.gradle (s'il n'y est pas déjà)
+        # Ajouter le plugin dans settings.gradle
         if ! grep -q "nearby-chat" android/settings.gradle; then
           echo "" >> android/settings.gradle
           echo "include ':nearby-chat'" >> android/settings.gradle
           echo "project(':nearby-chat').projectDir = new File('../native-plugins/nearby/android')" >> android/settings.gradle
         fi
         
-        # Ajouter la dépendance dans app/build.gradle (si elle n'y est pas déjà)
+        # Ajouter la dépendance dans app/build.gradle
         if ! grep -q "nearby-chat" android/app/build.gradle; then
           sed -i "/implementation project(':capacitor-android')/a \\    implementation project(':nearby-chat')" android/app/build.gradle
         fi
@@ -52,11 +52,15 @@ jobs:
         java-version: '17'
         distribution: 'temurin'
         
-    - name: Grant execute permission for gradlew
-      run: chmod +x android/gradlew
-      
+    - name: Generate Gradle Wrapper
+      run: |
+        cd android
+        gradle wrapper
+        
     - name: Build with Gradle
-      run: cd android && ./gradlew assembleDebug
+      run: |
+        cd android
+        ./gradlew assembleDebug --no-daemon
       
     - name: Upload APK
       uses: actions/upload-artifact@v4
