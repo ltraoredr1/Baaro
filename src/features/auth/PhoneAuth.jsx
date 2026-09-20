@@ -5,6 +5,7 @@ import { supabase } from '../../supabaseClient.js';
 import { COLORS } from '../../theme.js';
 
 const RESEND_DELAY = 30;
+const OTP_DISPLAY_TIME = 300; // 5 minutes (affichage UX)
 
 function guessDefaultCountry() {
   try {
@@ -16,17 +17,22 @@ function guessDefaultCountry() {
   } catch {
     // Ignore
   }
-  return 'ML'; // Fallback sur le Mali, ajustez si besoin (ex: 'SN', 'CI', 'FR')
+  return 'ML';
 }
 
 function normalizePhone(value) {
   if (!value) return '';
   const normalized = value.replace(/[^\d+]/g, '');
-  return normalized.startsWith('+') ? normalized : '+' + normalized;
+  if (normalized.startsWith('+')) {
+    return normalized;
+  }
+  return '+' + normalized;
 }
 
 function buildFallbackHandle(userId) {
-  const cleanId = String(userId).replace(/-/g, '').slice(0, 12);
+  const cleanId = String(userId)
+    .replace(/-/g, '')
+    .slice(0, 12);
   return `@user_${cleanId}`;
 }
 
@@ -38,26 +44,27 @@ export default function PhoneAuth({ onAuthSuccess }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [resendCooldown, setResendCooldown] = useState(0);
+  const [timeLeft, setTimeLeft] = useState(OTP_DISPLAY_TIME);
 
   const timerRef = useRef(null);
-  const otpInputRef = useRef(null); // Référence pour l'auto-focus
+  const expiryTimerRef = useRef(null);
+  const otpInputRef = useRef(null);
 
-  // Nettoyage du timer au démontage
   useEffect(() => {
     return () => {
       if (timerRef.current) {
         clearInterval(timerRef.current);
       }
+      if (expiryTimerRef.current) {
+        clearInterval(expiryTimerRef.current);
+      }
     };
   }, []);
 
-  // Auto-focus et WebOTP API quand on passe à l'étape du code
   useEffect(() => {
     if (step === 'otp') {
-      // 1. Auto-focus sur le champ
       setTimeout(() => otpInputRef.current?.focus(), 100);
 
-      // 2. WebOTP API (Chrome Android uniquement)
       if ('credentials' in navigator && 'OTPCredential' in window) {
         const abortController = new AbortController();
         navigator.credentials
@@ -69,7 +76,6 @@ export default function PhoneAuth({ onAuthSuccess }) {
             if (credential?.code) {
               const code = credential.code.replace(/\D/g, '').slice(0, 6);
               setOtp(code);
-              // Auto-soumission après un court délai pour une UX fluide
               setTimeout(() => {
                 document.getElementById('otp-form')?.requestSubmit();
               }, 500);
@@ -101,26 +107,58 @@ export default function PhoneAuth({ onAuthSuccess }) {
     }, 1000);
   }
 
-  async function ensureProfile(user) {
-    if (!user?.id) throw new Error('Identifiant du compte introuvable.');
+  function startExpiryTimer() {
+    if (expiryTimerRef.current) {
+      clearInterval(expiryTimerRef.current);
+    }
+    setTimeLeft(OTP_DISPLAY_TIME);
+    expiryTimerRef.current = setInterval(() => {
+      setTimeLeft((prev) => {
+        if (prev === 60) {
+          setError('⚠️ Le code expire dans moins d\'une minute');
+        }
+        if (prev <= 1) {
+          clearInterval(expiryTimerRef.current);
+          setError('Code expiré. Veuillez en demander un nouveau.');
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  }
 
+  async function ensureProfile(user) {
+    if (!user?.id) {
+      throw new Error('Identifiant du compte introuvable.');
+    }
     const userId = user.id;
     const normalizedPhone = normalizePhone(user.phone || phone);
 
-    const { data: existingProfile, error: profileReadError } = await supabase
-      .from('profiles')
-      .select('id, display_name, handle, flag, bio, phone')
-      .eq('id', userId)
-      .maybeSingle();
+    const { data: existingProfile, error: profileReadError } =
+      await supabase
+        .from('profiles')
+        .select('id, display_name, handle, flag, bio, phone')
+        .eq('id', userId)
+        .maybeSingle();
 
-    if (profileReadError) throw profileReadError;
+    if (profileReadError) {
+      throw profileReadError;
+    }
 
     if (existingProfile) {
       const updates = {};
-      if (!existingProfile.phone && normalizedPhone) updates.phone = normalizedPhone;
-      if (!existingProfile.display_name) updates.display_name = normalizedPhone || 'Membre BAARO';
-      if (!existingProfile.handle) updates.handle = buildFallbackHandle(userId);
-      if (!existingProfile.flag) updates.flag = '🌍';
+      if (!existingProfile.phone && normalizedPhone) {
+        updates.phone = normalizedPhone;
+      }
+      if (!existingProfile.display_name) {
+        updates.display_name = normalizedPhone || 'Membre BAARO';
+      }
+      if (!existingProfile.handle) {
+        updates.handle = buildFallbackHandle(userId);
+      }
+      if (!existingProfile.flag) {
+        updates.flag = '🌍';
+      }
 
       if (Object.keys(updates).length > 0) {
         updates.updated_at = new Date().toISOString();
@@ -128,7 +166,9 @@ export default function PhoneAuth({ onAuthSuccess }) {
           .from('profiles')
           .update(updates)
           .eq('id', userId);
-        if (updateError) throw updateError;
+        if (updateError) {
+          throw updateError;
+        }
       }
       return;
     }
@@ -137,15 +177,19 @@ export default function PhoneAuth({ onAuthSuccess }) {
       id: userId,
       display_name: normalizedPhone || 'Membre BAARO',
       handle: buildFallbackHandle(userId),
-      flag: '🌍',
+      flag: '',
       bio: '',
       phone: normalizedPhone || null,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
 
-    const { error: insertError } = await supabase.from('profiles').insert(profile);
-    if (insertError) throw insertError;
+    const { error: insertError } = await supabase
+      .from('profiles')
+      .insert(profile);
+    if (insertError) {
+      throw insertError;
+    }
   }
 
   async function sendOtp(event) {
@@ -163,16 +207,19 @@ export default function PhoneAuth({ onAuthSuccess }) {
       const { error: otpError } = await supabase.auth.signInWithOtp({
         phone: normalizedPhone,
       });
-
-      if (otpError) throw otpError;
-
+      if (otpError) {
+        throw otpError;
+      }
       setPhone(normalizedPhone);
       setStep('otp');
       setOtp('');
       startCooldown();
+      startExpiryTimer();
     } catch (err) {
       console.error('BAARO - erreur envoi OTP:', err);
-      setError(err?.message || "Impossible d'envoyer le code de vérification.");
+      setError(
+        err?.message || "Impossible d'envoyer le code de vérification."
+      );
     } finally {
       setLoading(false);
     }
@@ -192,14 +239,32 @@ export default function PhoneAuth({ onAuthSuccess }) {
     setLoading(true);
 
     try {
-      const { data, error: verifyError } = await supabase.auth.verifyOtp({
-        phone: normalizedPhone,
-        token: normalizedOtp,
-        type: 'sms',
-      });
+      const { data, error: verifyError } =
+        await supabase.auth.verifyOtp({
+          phone: normalizedPhone,
+          token: normalizedOtp,
+          type: 'sms',
+        });
 
-      if (verifyError) throw verifyError;
-      if (!data?.user?.id) throw new Error("L'identifiant du compte est introuvable.");
+      if (verifyError) {
+        if (
+          verifyError.message.includes('expired') ||
+          verifyError.message.includes('invalid')
+        ) {
+          setError(
+            'Code expiré ou invalide. Cliquez sur "Renvoyer le code".'
+          );
+        } else {
+          throw verifyError;
+        }
+        return;
+      }
+
+      if (!data?.user?.id) {
+        throw new Error(
+          "Authentification réussie mais l'identifiant du compte est introuvable."
+        );
+      }
 
       await ensureProfile(data.user);
       onAuthSuccess?.(data.user);
@@ -212,7 +277,9 @@ export default function PhoneAuth({ onAuthSuccess }) {
   }
 
   async function resendOtp() {
-    if (resendCooldown > 0 || loading) return;
+    if (resendCooldown > 0 || loading) {
+      return;
+    }
     await sendOtp();
   }
 
@@ -221,7 +288,12 @@ export default function PhoneAuth({ onAuthSuccess }) {
       clearInterval(timerRef.current);
       timerRef.current = null;
     }
+    if (expiryTimerRef.current) {
+      clearInterval(expiryTimerRef.current);
+      expiryTimerRef.current = null;
+    }
     setResendCooldown(0);
+    setTimeLeft(OTP_DISPLAY_TIME);
     setOtp('');
     setError('');
     setStep('phone');
@@ -232,14 +304,12 @@ export default function PhoneAuth({ onAuthSuccess }) {
     setOtp(value);
   }
 
-  // Fonction pour coller le code depuis le presse-papiers (Desktop)
   async function handlePasteCode() {
     try {
       const text = await navigator.clipboard.readText();
       const code = text.replace(/\D/g, '').slice(0, 6);
       if (code.length === 6) {
         setOtp(code);
-        // Auto-soumission après collage
         setTimeout(() => {
           document.getElementById('otp-form')?.requestSubmit();
         }, 300);
@@ -248,17 +318,21 @@ export default function PhoneAuth({ onAuthSuccess }) {
       }
     } catch (err) {
       console.error('Erreur de collage:', err);
-      setError('Impossible de lire le presse-papiers. Veuillez coller manuellement.');
+      setError(
+        'Impossible de lire le presse-papiers. Veuillez coller manuellement.'
+      );
     }
   }
 
   return (
     <div className="w-full max-w-sm mx-auto space-y-4">
-      {/* ÉTAPE 1 : SAISIE DU NUMÉRO */}
       {step === 'phone' && (
         <form onSubmit={sendOtp} className="space-y-4">
           <div>
-            <label className="block text-xs font-semibold mb-1" style={{ color: COLORS.muted }}>
+            <label
+              className="block text-xs font-semibold mb-1"
+              style={{ color: COLORS.muted }}
+            >
               Numéro de téléphone
             </label>
             <PhoneInput
@@ -268,7 +342,10 @@ export default function PhoneAuth({ onAuthSuccess }) {
               onChange={setPhone}
               placeholder="Entre ton numéro"
               className="w-full border rounded-xl px-3 py-2.5 text-xs outline-none phone-input-baaro bg-slate-950/60"
-              style={{ borderColor: COLORS.border, color: COLORS.ivory }}
+              style={{
+                borderColor: COLORS.border,
+                color: COLORS.ivory,
+              }}
             />
           </div>
 
@@ -278,20 +355,35 @@ export default function PhoneAuth({ onAuthSuccess }) {
             type="submit"
             disabled={loading}
             className="w-full py-3 rounded-xl font-bold text-xs shadow-lg transition disabled:opacity-50"
-            style={{ background: COLORS.gold, color: COLORS.bg }}
+            style={{
+              background: COLORS.gold,
+              color: COLORS.bg,
+            }}
           >
             {loading ? 'Envoi en cours...' : 'Recevoir le code'}
           </button>
         </form>
       )}
 
-      {/* ÉTAPE 2 : SAISIE DU CODE OTP */}
       {step === 'otp' && (
         <form id="otp-form" onSubmit={verifyOtp} className="space-y-4">
           <div>
-            <label className="block text-xs font-semibold mb-1" style={{ color: COLORS.muted }}>
+            <label
+              className="block text-xs font-semibold mb-1"
+              style={{ color: COLORS.muted }}
+            >
               Code reçu par SMS ({phone})
             </label>
+
+            {/* Compte à rebours */}
+            <div
+              className={`mb-3 text-center text-sm font-semibold ${
+                timeLeft < 60 ? 'text-rose-400' : 'text-emerald-400'
+              }`}
+            >
+              ⏱️ {Math.floor(timeLeft / 60)}:
+              {String(timeLeft % 60).padStart(2, '0')}
+            </div>
 
             <div className="relative">
               <input
@@ -306,11 +398,12 @@ export default function PhoneAuth({ onAuthSuccess }) {
                 value={otp}
                 onChange={handleOtpChange}
                 className="w-full border rounded-xl px-3 py-2.5 tracking-widest text-center text-sm outline-none font-mono bg-slate-950/60 pr-20"
-                style={{ borderColor: COLORS.border, color: COLORS.ivory }}
+                style={{
+                  borderColor: COLORS.border,
+                  color: COLORS.ivory,
+                }}
                 required
               />
-              
-              {/* Bouton Coller pour Desktop */}
               <button
                 type="button"
                 onClick={handlePasteCode}
@@ -320,7 +413,7 @@ export default function PhoneAuth({ onAuthSuccess }) {
                 Coller
               </button>
             </div>
-            
+
             <p className="text-xs text-slate-500 text-center mt-2">
               Nous avons envoyé un code à 6 chiffres au {phone}
             </p>
@@ -332,7 +425,10 @@ export default function PhoneAuth({ onAuthSuccess }) {
             type="submit"
             disabled={loading || otp.length !== 6}
             className="w-full py-3 rounded-xl font-bold text-xs shadow-lg transition disabled:opacity-50"
-            style={{ background: COLORS.teal, color: COLORS.bg }}
+            style={{
+              background: COLORS.teal,
+              color: COLORS.bg,
+            }}
           >
             {loading ? 'Vérification...' : 'Valider le code'}
           </button>
@@ -351,10 +447,14 @@ export default function PhoneAuth({ onAuthSuccess }) {
               type="button"
               onClick={resendOtp}
               disabled={resendCooldown > 0 || loading}
-              style={{ color: resendCooldown > 0 ? COLORS.muted : COLORS.gold }}
+              style={{
+                color: resendCooldown > 0 ? COLORS.muted : COLORS.gold,
+              }}
               className="disabled:opacity-50 hover:underline"
             >
-              {resendCooldown > 0 ? `Renvoyer (${resendCooldown}s)` : 'Renvoyer le code'}
+              {resendCooldown > 0
+                ? `Renvoyer (${resendCooldown}s)`
+                : 'Renvoyer le code'}
             </button>
           </div>
         </form>
