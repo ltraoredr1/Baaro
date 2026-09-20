@@ -65,11 +65,8 @@ jobs:
       uses: android-actions/setup-android@v3
       with:
         accept-android-sdk-licenses: true
+        packages: 'platform-tools build-tools-34.0.0 platforms-34'
 
-    - name: Accept all Android SDK licenses explicitly
-      run: |
-        yes | sdkmanager --licenses || true
-        
     - name: Build with Gradle
       run: |
         cd android
