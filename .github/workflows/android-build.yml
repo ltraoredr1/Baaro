@@ -48,7 +48,7 @@ jobs:
           exit 1
         fi
         
-        # Ajouter la dépendance dans app/build.gradle
+        # Ajouter la dépendance dans app/build.gradle si elle n'y est pas
         if [ -f "android/app/build.gradle" ]; then
           if ! grep -q "nearby-chat" android/app/build.gradle; then
             sed -i "/implementation project(':capacitor-android')/a \\    implementation project(':nearby-chat')" android/app/build.gradle
