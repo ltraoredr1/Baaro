@@ -52,16 +52,13 @@ Deno.serve(async (req: Request) => {
       ?.replace(/^v1,whsec_/, "");
 
     if (!hookSecret) {
-      console.error(
-        "SEND_SMS_HOOK_SECRET est manquant.",
-      );
+      console.error("SEND_SMS_HOOK_SECRET est manquant.");
 
       return response(
         {
           error: {
             http_code: 500,
-            message:
-              "Configuration du SMS Hook incomplète.",
+            message: "Configuration du SMS Hook incomplète.",
           },
         },
         500,
@@ -69,60 +66,36 @@ Deno.serve(async (req: Request) => {
     }
 
     const rawBody = await req.text();
-
-    const headers = Object.fromEntries(
-      req.headers.entries(),
-    );
-
+    const headers = Object.fromEntries(req.headers.entries());
     const webhook = new Webhook(hookSecret);
 
-    const payload =
-      webhook.verify(
-        rawBody,
-        headers,
-      ) as AuthHookPayload;
+    const payload = webhook.verify(rawBody, headers) as AuthHookPayload;
 
     /*
      * ---------------------------------------------------------
-     * 2. Récupération du téléphone et du code OTP
+     * 2. Récupération et nettoyage du téléphone et du code OTP
      * ---------------------------------------------------------
      */
 
-    // Nettoyage du numéro : suppression des espaces et tirets
     const rawPhone = payload?.user?.phone;
-    const phone = rawPhone ? rawPhone.replace(/[\s-]/g, "") : null;
     
+    // Nettoyage : suppression des espaces, tirets et parenthèses
+    let phone = rawPhone ? rawPhone.replace(/[\s\-()]/g, "") : null;
+
+    // CORRECTION : Si le numéro ne commence pas par '+', on l'ajoute automatiquement
+    if (phone && !phone.startsWith("+")) {
+      phone = "+" + phone;
+    }
+
     const otp = payload?.sms?.otp;
 
     if (!phone) {
-      console.error(
-        "BAARO SMS Hook: numéro absent.",
-      );
-
+      console.error("BAARO SMS Hook: numéro absent.");
       return response(
         {
           error: {
             http_code: 400,
-            message:
-              "Numéro de téléphone absent.",
-          },
-        },
-        400,
-      );
-    }
-
-    if (!phone.startsWith("+")) {
-      console.error(
-        "BAARO SMS Hook: format de numéro invalide.",
-        rawPhone,
-      );
-
-      return response(
-        {
-          error: {
-            http_code: 400,
-            message:
-              "Format de numéro invalide. Utilisez le format E.164 (ex: +223...).",
+            message: "Numéro de téléphone absent.",
           },
         },
         400,
@@ -130,10 +103,7 @@ Deno.serve(async (req: Request) => {
     }
 
     if (!otp) {
-      console.error(
-        "BAARO SMS Hook: OTP absent.",
-      );
-
+      console.error("BAARO SMS Hook: OTP absent.");
       return response(
         {
           error: {
@@ -151,25 +121,16 @@ Deno.serve(async (req: Request) => {
      * ---------------------------------------------------------
      */
 
-    const apiKey = Deno.env.get(
-      "INFINIREACH_API_KEY",
-    );
-
-    const fromPhone = Deno.env.get(
-      "INFINIREACH_FROM_PHONE",
-    );
+    const apiKey = Deno.env.get("INFINIREACH_API_KEY");
+    const fromPhone = Deno.env.get("INFINIREACH_FROM_PHONE");
 
     if (!apiKey) {
-      console.error(
-        "INFINIREACH_API_KEY est manquant.",
-      );
-
+      console.error("INFINIREACH_API_KEY est manquant.");
       return response(
         {
           error: {
             http_code: 500,
-            message:
-              "Clé API InfiniReach non configurée.",
+            message: "Clé API InfiniReach non configurée.",
           },
         },
         500,
@@ -177,16 +138,12 @@ Deno.serve(async (req: Request) => {
     }
 
     if (!fromPhone) {
-      console.error(
-        "INFINIREACH_FROM_PHONE est manquant.",
-      );
-
+      console.error("INFINIREACH_FROM_PHONE est manquant.");
       return response(
         {
           error: {
             http_code: 500,
-            message:
-              "Numéro expéditeur InfiniReach non configuré.",
+            message: "Numéro expéditeur InfiniReach non configuré.",
           },
         },
         500,
@@ -199,8 +156,14 @@ Deno.serve(async (req: Request) => {
      * ---------------------------------------------------------
      */
 
-    const message =
-      `Votre code de vérification BAARO est : ${otp}. Ne partagez pas ce code.`;
+    const message = `Votre code de vérification BAARO est : ${otp}. Ne partagez pas ce code.`;
+    const externalId = `baaro-otp-${crypto.randomUUID()}`;
+
+    console.log("BAARO - Envoi SMS en cours:", {
+      to: phone,
+      from: fromPhone,
+      externalId,
+    });
 
     /*
      * ---------------------------------------------------------
@@ -208,50 +171,29 @@ Deno.serve(async (req: Request) => {
      * ---------------------------------------------------------
      */
 
-    const externalId =
-      `baaro-otp-${crypto.randomUUID()}`;
-
-    console.log(
-      "BAARO - Envoi SMS en cours:",
+    const infinireachResponse = await fetch(
+      "https://api.infinireach.io/api/v1/messages",
       {
-        to: phone,
-        from: fromPhone,
-        externalId,
-      },
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-API-Key": apiKey,
+        },
+        body: JSON.stringify({
+          to: phone,
+          message,
+          from: fromPhone,
+          channel: "sms",
+          externalId,
+        }),
+      }
     );
 
-    const infinireachResponse =
-      await fetch(
-        "https://api.infinireach.io/api/v1/messages",
-        {
-          method: "POST",
-
-          headers: {
-            "Content-Type":
-              "application/json",
-            "X-API-Key": apiKey,
-          },
-
-          body: JSON.stringify({
-            to: phone,
-            message,
-            from: fromPhone,
-            channel: "sms",
-            externalId,
-          }),
-        },
-      );
-
-    const providerText =
-      await infinireachResponse.text();
-
+    const providerText = await infinireachResponse.text();
     let providerData: unknown = null;
 
     try {
-      providerData =
-        providerText
-          ? JSON.parse(providerText)
-          : null;
+      providerData = providerText ? JSON.parse(providerText) : null;
     } catch {
       providerData = providerText;
     }
@@ -263,21 +205,15 @@ Deno.serve(async (req: Request) => {
      */
 
     if (!infinireachResponse.ok) {
-      console.error(
-        "BAARO - InfiniReach erreur:",
-        infinireachResponse.status,
-        providerData,
-      );
+      console.error("BAARO - InfiniReach erreur:", infinireachResponse.status, providerData);
 
       return response(
         {
           error: {
             http_code: 502,
-            message:
-              "Le fournisseur SMS a refusé l'envoi.",
+            message: "Le fournisseur SMS a refusé l'envoi.",
           },
-          provider_status:
-            infinireachResponse.status,
+          provider_status: infinireachResponse.status,
           provider_response: providerData,
         },
         502,
@@ -290,32 +226,24 @@ Deno.serve(async (req: Request) => {
      * ---------------------------------------------------------
      */
 
-    console.log(
-      "BAARO - SMS OTP envoyé avec succès.",
-      {
-        to: phone,
-        provider: providerData,
-      },
-    );
+    console.log("BAARO - SMS OTP envoyé avec succès.", {
+      to: phone,
+      provider: providerData,
+    });
 
     return response({
       success: true,
       message: "SMS envoyé avec succès",
     });
+
   } catch (error) {
-    console.error(
-      "BAARO - erreur Send SMS Hook:",
-      error,
-    );
+    console.error("BAARO - erreur Send SMS Hook:", error);
 
     return response(
       {
         error: {
           http_code: 500,
-          message:
-            error instanceof Error
-              ? error.message
-              : "Erreur interne du SMS Hook.",
+          message: error instanceof Error ? error.message : "Erreur interne du SMS Hook.",
         },
       },
       500,
