@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">BAARO</string>
+    <string name="title_activity_main">BAARO</string>
+    <string name="package_name">com.baaro.app</string>
+    <string name="custom_url_scheme">com.baaro.app</string>
+</resources>
