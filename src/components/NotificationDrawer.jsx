@@ -9,7 +9,7 @@ const COLORS = {
   border: "#2A2A2A",
 };
 
-export default function NotificationDrawer({
+export function NotificationDrawer({
   userId,
   isOpen,
   onClose,
@@ -17,18 +17,6 @@ export default function NotificationDrawer({
   const [notifs, setNotifs] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-
-  /*
-   * ============================================================
-   * CHARGEMENT DES NOTIFICATIONS
-   * ============================================================
-   *
-   * Nouveau schéma :
-   *
-   * notification_id = identifiant unique de la notification
-   * user_id         = destinataire
-   * actor_id        = utilisateur à l'origine de l'action
-   */
 
   const load = useCallback(async () => {
     if (!userId) {
@@ -57,7 +45,10 @@ export default function NotificationDrawer({
       .limit(30);
 
     if (fetchError) {
-      console.error("Erreur chargement notifications:", fetchError);
+      console.error(
+        "Erreur chargement notifications:",
+        fetchError
+      );
       setError(fetchError.message);
       setNotifs([]);
     } else {
@@ -67,32 +58,11 @@ export default function NotificationDrawer({
     setLoading(false);
   }, [userId]);
 
-  /*
-   * ============================================================
-   * CHARGEMENT INITIAL
-   * ============================================================
-   */
-
   useEffect(() => {
     if (!isOpen || !userId) return;
 
     load();
   }, [isOpen, userId, load]);
-
-  /*
-   * ============================================================
-   * REALTIME
-   * ============================================================
-   *
-   * Important :
-   * L'ancien filtre utilisait :
-   *
-   *   id=eq.${userId}
-   *
-   * Le nouveau schéma utilise :
-   *
-   *   user_id=eq.${userId}
-   */
 
   useEffect(() => {
     if (!userId) return undefined;
@@ -111,9 +81,6 @@ export default function NotificationDrawer({
           const notification = payload.new;
 
           setNotifs((prev) => {
-            /*
-             * Protection contre les doublons Realtime.
-             */
             if (
               prev.some(
                 (item) =>
@@ -141,7 +108,8 @@ export default function NotificationDrawer({
 
           setNotifs((prev) =>
             prev.map((item) =>
-              item.notification_id === updated.notification_id
+              item.notification_id ===
+              updated.notification_id
                 ? updated
                 : item
             )
@@ -186,30 +154,22 @@ export default function NotificationDrawer({
     };
   }, [userId, load]);
 
-  /*
-   * ============================================================
-   * NOTIFICATIONS NON LUES
-   * ============================================================
-   */
-
   const unreadCount = useMemo(() => {
-    return notifs.filter((notification) => !notification.read).length;
+    return notifs.filter(
+      (notification) => !notification.read
+    ).length;
   }, [notifs]);
 
-  /*
-   * ============================================================
-   * MARQUER UNE NOTIFICATION COMME LUE
-   * ============================================================
-   */
-
   const markAsRead = async (notificationId) => {
-    if (!notificationId) return;
+    if (!notificationId || !userId) return;
+
+    const now = new Date().toISOString();
 
     const { error: updateError } = await supabase
       .from("notifications")
       .update({
         read: true,
-        read_at: new Date().toISOString(),
+        read_at: now,
       })
       .eq("notification_id", notificationId)
       .eq("user_id", userId);
@@ -228,18 +188,12 @@ export default function NotificationDrawer({
           ? {
               ...notification,
               read: true,
-              read_at: new Date().toISOString(),
+              read_at: now,
             }
           : notification
       )
     );
   };
-
-  /*
-   * ============================================================
-   * MARQUER TOUTES LES NOTIFICATIONS COMME LUES
-   * ============================================================
-   */
 
   const markAllAsRead = async () => {
     if (!userId || unreadCount === 0) return;
@@ -272,14 +226,8 @@ export default function NotificationDrawer({
     );
   };
 
-  /*
-   * ============================================================
-   * SUPPRIMER UNE NOTIFICATION
-   * ============================================================
-   */
-
   const deleteNotification = async (notificationId) => {
-    if (!notificationId) return;
+    if (!notificationId || !userId) return;
 
     const { error: deleteError } = await supabase
       .from("notifications")
@@ -303,12 +251,6 @@ export default function NotificationDrawer({
     );
   };
 
-  /*
-   * ============================================================
-   * SUPPRIMER TOUTES LES NOTIFICATIONS
-   * ============================================================
-   */
-
   const deleteAllNotifications = async () => {
     if (!userId || notifs.length === 0) return;
 
@@ -328,12 +270,6 @@ export default function NotificationDrawer({
     setNotifs([]);
   };
 
-  /*
-   * ============================================================
-   * FORMATAGE DE LA DATE
-   * ============================================================
-   */
-
   const formatDate = (value) => {
     if (!value) return "";
 
@@ -351,31 +287,17 @@ export default function NotificationDrawer({
     });
   };
 
-  /*
-   * ============================================================
-   * DRAWER FERME
-   * ============================================================
-   */
-
   if (!isOpen) {
     return null;
   }
-
-  /*
-   * ============================================================
-   * INTERFACE
-   * ============================================================
-   */
 
   return (
     <div
       className="fixed inset-0 z-[100]"
       onClick={onClose}
     >
-      {/* Overlay */}
       <div className="absolute inset-0 bg-black/60" />
 
-      {/* Drawer */}
       <aside
         className="absolute right-0 top-0 h-full w-full max-w-md overflow-hidden shadow-2xl"
         style={{
@@ -384,7 +306,6 @@ export default function NotificationDrawer({
         }}
         onClick={(event) => event.stopPropagation()}
       >
-        {/* Header */}
         <div
           className="flex items-center justify-between px-4 py-4"
           style={{
@@ -421,7 +342,6 @@ export default function NotificationDrawer({
           </button>
         </div>
 
-        {/* Actions */}
         <div
           className="flex items-center justify-between gap-2 px-4 py-3"
           style={{
@@ -432,157 +352,4 @@ export default function NotificationDrawer({
             type="button"
             onClick={markAllAsRead}
             disabled={unreadCount === 0}
-            className="text-xs disabled:opacity-40"
-            style={{ color: COLORS.gold }}
-          >
-            Tout marquer comme lu
-          </button>
-
-          <button
-            type="button"
-            onClick={deleteAllNotifications}
-            disabled={notifs.length === 0}
-            className="text-xs disabled:opacity-40"
-            style={{ color: COLORS.muted }}
-          >
-            Tout supprimer
-          </button>
-        </div>
-
-        {/* Content */}
-        <div className="h-[calc(100%-126px)] overflow-y-auto">
-          {loading && (
-            <div
-              className="px-4 py-8 text-center text-sm"
-              style={{ color: COLORS.muted }}
-            >
-              Chargement…
-            </div>
-          )}
-
-          {!loading && error && (
-            <div className="px-4 py-8 text-center">
-              <div
-                className="text-sm"
-                style={{ color: "#F87171" }}
-              >
-                Impossible de charger les notifications.
-              </div>
-
-              <button
-                type="button"
-                onClick={load}
-                className="mt-3 rounded-lg border px-3 py-2 text-xs"
-                style={{
-                  color: COLORS.ivory,
-                  borderColor: COLORS.border,
-                }}
-              >
-                Réessayer
-              </button>
-            </div>
-          )}
-
-          {!loading &&
-            !error &&
-            notifs.length === 0 && (
-              <div
-                className="px-4 py-12 text-center text-sm"
-                style={{ color: COLORS.muted }}
-              >
-                Aucune notification.
-              </div>
-            )}
-
-          {!loading &&
-            !error &&
-            notifs.length > 0 && (
-              <div>
-                {notifs.map((notification) => {
-                  const unread = !notification.read;
-
-                  return (
-                    <div
-                      key={notification.notification_id}
-                      className="relative flex gap-3 px-4 py-4"
-                      style={{
-                        backgroundColor: unread
-                          ? "rgba(212,175,55,0.06)"
-                          : "transparent",
-                        borderBottom: `1px solid ${COLORS.border}`,
-                      }}
-                    >
-                      {/* Indicateur non lu */}
-                      <div className="pt-1">
-                        <span
-                          className="block h-2.5 w-2.5 rounded-full"
-                          style={{
-                            backgroundColor: unread
-                              ? COLORS.gold
-                              : "transparent",
-                          }}
-                        />
-                      </div>
-
-                      {/* Contenu */}
-                      <button
-                        type="button"
-                        onClick={() =>
-                          !notification.read &&
-                          markAsRead(
-                            notification.notification_id
-                          )
-                        }
-                        className="min-w-0 flex-1 text-left"
-                      >
-                        <div
-                          className="text-sm"
-                          style={{
-                            color: COLORS.ivory,
-                            fontWeight: unread
-                              ? 600
-                              : 400,
-                          }}
-                        >
-                          {notification.message ||
-                            "Nouvelle notification"}
-                        </div>
-
-                        <div
-                          className="mt-1 text-xs"
-                          style={{
-                            color: COLORS.muted,
-                          }}
-                        >
-                          {formatDate(
-                            notification.created_at
-                          )}
-                        </div>
-                      </button>
-
-                      {/* Suppression */}
-                      <button
-                        type="button"
-                        onClick={() =>
-                          deleteNotification(
-                            notification.notification_id
-                          )
-                        }
-                        className="shrink-0 text-sm"
-                        style={{
-                          color: COLORS.muted,
-                        }}
-                        aria-label="Supprimer la notification"
-                      >
-                        ×
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-        </div>
-      </aside>
-    </div>
-  );
-}
+            className="text-xs disabled:opacity-
