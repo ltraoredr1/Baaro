@@ -352,4 +352,139 @@ export function NotificationDrawer({
             type="button"
             onClick={markAllAsRead}
             disabled={unreadCount === 0}
-            className="text-xs disabled:opacity-
+            className="text-xs disabled:opacity-40"
+            style={{ color: COLORS.gold }}
+          >
+            Tout marquer comme lu
+          </button>
+
+          <button
+            type="button"
+            onClick={deleteAllNotifications}
+            disabled={notifs.length === 0}
+            className="text-xs disabled:opacity-40"
+            style={{ color: COLORS.muted }}
+          >
+            Tout supprimer
+          </button>
+        </div>
+
+        <div className="h-[calc(100%-126px)] overflow-y-auto">
+          {loading && (
+            <div
+              className="px-4 py-8 text-center text-sm"
+              style={{ color: COLORS.muted }}
+            >
+              Chargement…
+            </div>
+          )}
+
+          {!loading && error && (
+            <div className="px-4 py-8 text-center">
+              <div
+                className="text-sm"
+                style={{ color: "#F87171" }}
+              >
+                Impossible de charger les notifications.
+              </div>
+
+              <button
+                type="button"
+                onClick={load}
+                className="mt-3 rounded-lg border px-3 py-2 text-xs"
+                style={{
+                  color: COLORS.ivory,
+                  borderColor: COLORS.border,
+                }}
+              >
+                Réessayer
+              </button>
+            </div>
+          )}
+
+          {!loading && !error && notifs.length === 0 && (
+            <div
+              className="px-4 py-12 text-center text-sm"
+              style={{ color: COLORS.muted }}
+            >
+              Aucune notification.
+            </div>
+          )}
+
+          {!loading && !error && notifs.length > 0 && (
+            <div>
+              {notifs.map((notification) => {
+                const unread = !notification.read;
+
+                return (
+                  <div
+                    key={notification.notification_id}
+                    className="relative flex gap-3 px-4 py-4"
+                    style={{
+                      backgroundColor: unread
+                        ? "rgba(212,175,55,0.06)"
+                        : "transparent",
+                      borderBottom: `1px solid ${COLORS.border}`,
+                    }}
+                  >
+                    <div className="pt-1">
+                      <span
+                        className="block h-2.5 w-2.5 rounded-full"
+                        style={{
+                          backgroundColor: unread
+                            ? COLORS.gold
+                            : "transparent",
+                        }}
+                      />
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() =>
+                        !notification.read &&
+                        markAsRead(notification.notification_id)
+                      }
+                      className="min-w-0 flex-1 text-left"
+                    >
+                      <div
+                        className="text-sm"
+                        style={{
+                          color: COLORS.ivory,
+                          fontWeight: unread ? 600 : 400,
+                        }}
+                      >
+                        {notification.message ||
+                          "Nouvelle notification"}
+                      </div>
+
+                      <div
+                        className="mt-1 text-xs"
+                        style={{ color: COLORS.muted }}
+                      >
+                        {formatDate(notification.created_at)}
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() =>
+                        deleteNotification(
+                          notification.notification_id
+                        )
+                      }
+                      className="shrink-0 text-sm"
+                      style={{ color: COLORS.muted }}
+                      aria-label="Supprimer la notification"
+                    >
+                      ×
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </aside>
+    </div>
+  );
+}
