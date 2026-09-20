@@ -52,14 +52,10 @@ jobs:
         java-version: '17'
         distribution: 'temurin'
         
-    - name: Generate Gradle Wrapper
+    - name: Make gradlew executable and build with Gradle
       run: |
         cd android
-        gradle wrapper
-        
-    - name: Build with Gradle
-      run: |
-        cd android
+        chmod +x gradlew
         ./gradlew assembleDebug --no-daemon
       
     - name: Upload APK
