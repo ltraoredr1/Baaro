@@ -586,7 +586,3 @@ export default function NotificationDrawer({
     </div>
   );
 }
-
-Important : ce fichier est aligné sur le schéma SQL que nous venons de valider. Il n'utilise plus "notifications.id", utilise "user_id" pour le destinataire et "notification_id" pour l'identité unique de chaque notification.
-
-Après remplacement, lance le build du projet. Ne modifie pas encore les migrations Supabase.
