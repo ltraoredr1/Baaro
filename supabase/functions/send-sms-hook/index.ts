@@ -1,15 +1,3 @@
-import { Webhook } from "https://esm.sh/standardwebhooks@1.0.0";
-
-type AuthHookPayload = {
-  user?: {
-    id?: string;
-    phone?: string;
-  };
-  sms?: {
-    otp?: string;
-  };
-};
-
 const jsonHeaders = {
   "Content-Type": "application/json",
 };
@@ -38,41 +26,51 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    // 1. Récupération du secret
-    const hookSecret = Deno.env.get("SEND_SMS_HOOK_SECRET")?.replace(/^v1,whsec_/, "");
-    if (!hookSecret) {
-      console.error("SEND_SMS_HOOK_SECRET manquant");
-      return response({ error: { http_code: 500, message: "Configuration incomplète." } }, 500);
+    // 1. Lecture du payload
+    const rawBody = await req.text();
+    let payload;
+    
+    try {
+      payload = JSON.parse(rawBody);
+    } catch (parseError) {
+      console.error("❌ Payload JSON invalide:", rawBody);
+      return response(
+        { error: { http_code: 400, message: "Payload invalide." } },
+        400
+      );
     }
 
-    const rawBody = await req.text();
-    const headers = Object.fromEntries(req.headers.entries());
+    // 🔍 LOG DÉTAILLÉ DU PAYLOAD (TRÈS IMPORTANT)
+    console.log("📩 Payload complet reçu de Supabase:", JSON.stringify(payload, null, 2));
+    console.log(" Structure user:", payload?.user);
+    console.log("📩 Structure sms:", payload?.sms);
 
-    // 2. Vérification sécurisée du webhook (avec repli si les en-têtes manquent)
-    let payload: AuthHookPayload;
-    try {
-      const webhook = new Webhook(hookSecret);
-      payload = webhook.verify(rawBody, headers) as AuthHookPayload;
-    } catch (webhookErr) {
-      console.warn("⚠️ Vérification signature webhook échouée/absente, lecture directe du JSON :", webhookErr);
-      try {
-        payload = JSON.parse(rawBody) as AuthHookPayload;
-      } catch (parseErr) {
-        throw new Error("Payload JSON invalide");
+    // 2. Extraction téléphone (avec fallback)
+    let phone = payload?.user?.phone || payload?.phone || payload?.user?.identities?.[0]?.identity_data?.phone;
+    
+    // Nettoyage
+    if (phone) {
+      phone = phone.replace(/[\s\-()]/g, "");
+      if (!phone.startsWith("+")) {
+        phone = "+" + phone;
       }
     }
 
-    // 3. Extraction et nettoyage téléphone
-    const rawPhone = payload?.user?.phone;
-    let phone = rawPhone ? rawPhone.replace(/[\s\-()]/g, "") : null;
-    if (phone && !phone.startsWith("+")) {
-      phone = "+" + phone;
-    }
-    const otp = payload?.sms?.otp;
+    // 3. Extraction OTP (avec fallback)
+    const otp = payload?.sms?.otp || payload?.otp;
+
+    console.log("📱 Téléphone extrait:", phone);
+    console.log("🔢 OTP extrait:", otp);
 
     if (!phone || !otp) {
-      console.error("Numéro ou OTP manquant");
-      return response({ error: { http_code: 400, message: "Données invalides." } }, 400);
+      console.error("❌ Données manquantes:", { phone, otp, rawPayload: payload });
+      return response(
+        { 
+          error: { http_code: 400, message: "Données invalides." },
+          debug: { phone, otp, payload_keys: Object.keys(payload) }
+        },
+        400
+      );
     }
 
     // 4. Vérification secrets InfiniReach
@@ -80,8 +78,11 @@ Deno.serve(async (req: Request) => {
     const fromPhone = Deno.env.get("INFINIREACH_FROM_PHONE");
 
     if (!apiKey || !fromPhone) {
-      console.error("Secrets InfiniReach manquants");
-      return response({ error: { http_code: 500, message: "Configuration InfiniReach incomplète." } }, 500);
+      console.error("❌ Secrets InfiniReach manquants");
+      return response(
+        { error: { http_code: 500, message: "Configuration InfiniReach incomplète." } },
+        500
+      );
     }
 
     // 5. Préparation message
@@ -90,7 +91,7 @@ Deno.serve(async (req: Request) => {
 
     console.log("📤 Envoi SMS à:", phone);
 
-    // 6. Envoi vers InfiniReach AVEC TIMEOUT (3 secondes max)
+    // 6. Envoi vers InfiniReach AVEC TIMEOUT
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 3000);
 
@@ -117,21 +118,13 @@ Deno.serve(async (req: Request) => {
       clearTimeout(timeoutId);
       const elapsed = Date.now() - startTime;
 
-      const responseText = await infinireachResponse.text();
-      let responseData: unknown = null;
-      try {
-        responseData = responseText ? JSON.parse(responseText) : null;
-      } catch {
-        responseData = responseText;
-      }
-
       if (!infinireachResponse.ok) {
-        console.error("❌ InfiniReach erreur:", infinireachResponse.status, responseData);
+        const errorText = await infinireachResponse.text();
+        console.error("❌ InfiniReach erreur:", infinireachResponse.status, errorText);
         return response(
           {
             error: { http_code: 502, message: "Échec envoi SMS." },
             provider_status: infinireachResponse.status,
-            provider_response: responseData,
           },
           502,
         );
