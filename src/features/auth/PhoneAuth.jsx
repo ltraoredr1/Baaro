@@ -35,6 +35,12 @@ export default function PhoneAuth({ onAuthSuccess }) {
   const [resendCooldown, setResendCooldown] = useState(0);
   const [timeLeft, setTimeLeft] = useState(300);
 
+  // true si on est en train de LIER ce numéro à une session anonyme
+  // existante, plutôt que de créer/connecter un compte séparé.
+  // Déterminé au moment de l'envoi du code, réutilisé à la vérification
+  // pour que les deux étapes restent cohérentes.
+  const [isLinkingAnonymous, setIsLinkingAnonymous] = useState(false);
+
   const timerRef = useRef(null);
   const expiryTimerRef = useRef(null);
   const otpInputRef = useRef(null);
@@ -118,6 +124,8 @@ export default function PhoneAuth({ onAuthSuccess }) {
         .maybeSingle();
 
       if (existingProfile) {
+        // Ne touche jamais bio / avatar_url : on ne fait que compléter
+        // les champs manquants, jamais écraser ce qui existe déjà.
         const updates = {};
         if (!existingProfile.phone && normalizedPhone) updates.phone = normalizedPhone;
         if (!existingProfile.display_name) updates.display_name = normalizedPhone || 'Membre BAARO';
@@ -157,9 +165,18 @@ export default function PhoneAuth({ onAuthSuccess }) {
 
     setLoading(true);
     try {
-      const { error: otpError } = await supabase.auth.signInWithOtp({
-        phone: normalizedPhone,
-      });
+      // Si une session anonyme est active, on LIE ce numéro à ce compte
+      // (updateUser + vérif type "phone_change") au lieu de créer/connecter
+      // un compte séparé (signInWithOtp + vérif type "sms") : même id,
+      // donc même ligne `profiles`, donc bio/avatar_url préservés.
+      const { data: sessionData } = await supabase.auth.getSession();
+      const anonymous = Boolean(sessionData?.session?.user?.is_anonymous);
+      setIsLinkingAnonymous(anonymous);
+
+      const { error: otpError } = anonymous
+        ? await supabase.auth.updateUser({ phone: normalizedPhone })
+        : await supabase.auth.signInWithOtp({ phone: normalizedPhone });
+
       if (otpError) throw otpError;
 
       setPhone(normalizedPhone);
@@ -192,7 +209,7 @@ export default function PhoneAuth({ onAuthSuccess }) {
       const { data, error: verifyError } = await supabase.auth.verifyOtp({
         phone: normalizedPhone,
         token: normalizedOtp,
-        type: 'sms',
+        type: isLinkingAnonymous ? 'phone_change' : 'sms',
       });
 
       if (verifyError) {
