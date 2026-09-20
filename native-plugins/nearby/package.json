@@ -9,8 +9,7 @@
     "plugin",
     "nearby",
     "bluetooth",
-    "offline",
-    "baaro"
+    "offline"
   ],
   "capacitor": {
     "android": {
