@@ -56,6 +56,9 @@ class NearbyChatPlugin : Plugin() {
 
     private val connectionLifecycleCallback = object : ConnectionLifecycleCallback() {
         override fun onConnectionInitiated(endpointId: String, connectionInfo: ConnectionInfo) {
+            // On sauvegarde temporairement le nom associé à cet endpoint
+            connectedEndpoints[endpointId] = connectionInfo.endpointName
+
             val ret = JSObject().apply {
                 put("type", "CONNECTION_REQUESTED")
                 put("endpointId", endpointId)
@@ -67,8 +70,7 @@ class NearbyChatPlugin : Plugin() {
 
         override fun onConnectionResult(endpointId: String, result: ConnectionResolution) {
             if (result.status.isSuccess) {
-                val name = connectedEndpoints[endpointId] ?: connectionInfo.endpointName
-                connectedEndpoints[endpointId] = name
+                val name = connectedEndpoints[endpointId] ?: "Appareil distant"
 
                 val ret = JSObject().apply {
                     put("type", "DEVICE_CONNECTED")
@@ -76,6 +78,8 @@ class NearbyChatPlugin : Plugin() {
                     put("deviceName", name)
                 }
                 notifyListeners("nearbyEvent", ret)
+            } else {
+                connectedEndpoints.remove(endpointId)
             }
         }
 
@@ -91,9 +95,7 @@ class NearbyChatPlugin : Plugin() {
 
     private val endpointDiscoveryCallback = object : EndpointDiscoveryCallback() {
         override fun onEndpointFound(endpointId: String, info: DiscoveredEndpointInfo) {
-            if (!connectedEndpoints.containsKey(endpointId)) {
-                connectedEndpoints[endpointId] = info.endpointName
-            }
+            connectedEndpoints[endpointId] = info.endpointName
             val ret = JSObject().apply {
                 put("type", "DEVICE_FOUND")
                 put("endpointId", endpointId)
