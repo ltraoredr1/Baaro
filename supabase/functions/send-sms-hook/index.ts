@@ -40,30 +40,35 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // 🔍 LOG DÉTAILLÉ DU PAYLOAD (TRÈS IMPORTANT)
+    // 🔍 Log détaillé du payload pour débogage
     console.log("📩 Payload complet reçu de Supabase:", JSON.stringify(payload, null, 2));
-    console.log(" Structure user:", payload?.user);
-    console.log("📩 Structure sms:", payload?.sms);
 
-    // 2. Extraction téléphone (avec fallback)
-    let phone = payload?.user?.phone || payload?.phone || payload?.user?.identities?.[0]?.identity_data?.phone;
+    // 2. Extraction téléphone (avec fallback sur plusieurs chemins)
+    let phone = 
+      payload?.user?.phone || 
+      payload?.phone || 
+      payload?.user?.identities?.[0]?.identity_data?.phone ||
+      payload?.data?.phone;
     
-    // Nettoyage
+    // Nettoyage et formatage E.164
     if (phone) {
-      phone = phone.replace(/[\s\-()]/g, "");
+      phone = String(phone).replace(/[\s\-()]/g, "");
       if (!phone.startsWith("+")) {
         phone = "+" + phone;
       }
     }
 
     // 3. Extraction OTP (avec fallback)
-    const otp = payload?.sms?.otp || payload?.otp;
+    const otp = 
+      payload?.sms?.otp || 
+      payload?.otp || 
+      payload?.data?.otp;
 
     console.log("📱 Téléphone extrait:", phone);
     console.log("🔢 OTP extrait:", otp);
 
     if (!phone || !otp) {
-      console.error("❌ Données manquantes:", { phone, otp, rawPayload: payload });
+      console.error("❌ Données manquantes:", { phone, otp, payload_keys: Object.keys(payload) });
       return response(
         { 
           error: { http_code: 400, message: "Données invalides." },
@@ -85,15 +90,23 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // 5. Préparation message
-    const message = `Votre code BAARO: ${otp}`;
+    // 5. Préparation du message SMS optimisé pour l'auto-remplissage
+    // Format reconnu par :
+    // - iOS : "BAARO: Votre code..." déclenche la suggestion au-dessus du clavier
+    // - Chrome Android : "@domaine #code" déclenche WebOTP
+    // - Desktop : texte lisible pour copier-coller
+    const message = 
+      `BAARO: Votre code de vérification est ${otp}\n\n` +
+      `@baaro-xi.vercel.app #${otp}\n\n` +
+      `Ne partagez pas ce code.`;
+
     const externalId = `baaro-${Date.now()}`;
 
     console.log("📤 Envoi SMS à:", phone);
 
-    // 6. Envoi vers InfiniReach AVEC TIMEOUT
+    // 6. Envoi vers InfiniReach AVEC TIMEOUT (4 secondes)
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 3000);
+    const timeoutId = setTimeout(() => controller.abort(), 4000);
 
     try {
       const infinireachResponse = await fetch(
