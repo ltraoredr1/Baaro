@@ -10,7 +10,6 @@ function response(body: Record<string, unknown>, status = 200) {
 }
 
 Deno.serve(async (req: Request) => {
-  // Toujours répondre rapidement pour éviter le timeout Supabase
   if (req.method !== "POST") {
     return response({ success: true });
   }
@@ -25,7 +24,6 @@ Deno.serve(async (req: Request) => {
       console.error("Payload JSON invalide");
     }
 
-    // Extraction téléphone
     let phone =
       payload?.user?.phone ||
       payload?.phone ||
@@ -39,7 +37,6 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    // Extraction OTP
     const otp =
       payload?.sms?.otp ||
       payload?.otp ||
@@ -47,7 +44,6 @@ Deno.serve(async (req: Request) => {
 
     console.log("Phone:", phone, "| OTP:", otp);
 
-    // Envoi du SMS seulement si on a les données
     if (phone && otp) {
       const apiKey = Deno.env.get("INFINIREACH_API_KEY");
       const fromPhone = Deno.env.get("INFINIREACH_FROM_PHONE");
@@ -58,7 +54,6 @@ Deno.serve(async (req: Request) => {
           `@baaro-xi.vercel.app #${otp}\n\n` +
           `Ne partagez pas ce code.`;
 
-        // Envoi en arrière-plan (ne bloque pas la réponse)
         fetch("https://api.infinireach.io/api/v1/messages", {
           method: "POST",
           headers: {
@@ -82,12 +77,10 @@ Deno.serve(async (req: Request) => {
       console.error("Téléphone ou OTP manquant");
     }
 
-    // 🔥 TOUJOURS renvoyer 200 → plus de { rouge
     return response({ success: true });
 
   } catch (error) {
     console.error("Erreur inattendue:", error);
-    // Même en cas d'erreur → on renvoie succès
     return response({ success: true });
   }
 });
