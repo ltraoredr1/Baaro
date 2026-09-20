@@ -36,16 +36,23 @@ jobs:
       
     - name: Inject Nearby Chat plugin into Gradle files
       run: |
-        # Ajouter le plugin dans settings.gradle
-        if ! grep -q "nearby-chat" android/settings.gradle; then
-          echo "" >> android/settings.gradle
-          echo "include ':nearby-chat'" >> android/settings.gradle
-          echo "project(':nearby-chat').projectDir = new File('../native-plugins/nearby/android')" >> android/settings.gradle
+        # Vérifier que le dossier source du plugin Android existe
+        if [ -d "native-plugins/nearby/android" ]; then
+          if ! grep -q "nearby-chat" android/settings.gradle; then
+            echo "" >> android/settings.gradle
+            echo "include ':nearby-chat'" >> android/settings.gradle
+            echo "project(':nearby-chat').projectDir = new File('../native-plugins/nearby/android')" >> android/settings.gradle
+          fi
+        else
+          echo "Erreur: Le dossier native-plugins/nearby/android est introuvable."
+          exit 1
         fi
         
         # Ajouter la dépendance dans app/build.gradle
-        if ! grep -q "nearby-chat" android/app/build.gradle; then
-          sed -i "/implementation project(':capacitor-android')/a \\    implementation project(':nearby-chat')" android/app/build.gradle
+        if [ -f "android/app/build.gradle" ]; then
+          if ! grep -q "nearby-chat" android/app/build.gradle; then
+            sed -i "/implementation project(':capacitor-android')/a \\    implementation project(':nearby-chat')" android/app/build.gradle
+          fi
         fi
       
     - name: Set up JDK 17
