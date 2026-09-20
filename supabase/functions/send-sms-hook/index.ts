@@ -14,53 +14,31 @@ const jsonHeaders = {
   "Content-Type": "application/json",
 };
 
-function response(
-  body: Record<string, unknown>,
-  status = 200,
-) {
-  return new Response(
-    JSON.stringify(body),
-    {
-      status,
-      headers: jsonHeaders,
-    },
-  );
+function response(body: Record<string, unknown>, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: jsonHeaders,
+  });
 }
 
 Deno.serve(async (req: Request) => {
   if (req.method !== "POST") {
     return response(
-      {
-        error: {
-          http_code: 405,
-          message: "Méthode non autorisée.",
-        },
-      },
+      { error: { http_code: 405, message: "Méthode non autorisée." } },
       405,
     );
   }
 
   try {
-    /*
-     * ---------------------------------------------------------
-     * 1. Vérification de la signature Supabase Auth Hook
-     * ---------------------------------------------------------
-     */
-
+    // 1. Vérification de la signature Supabase
     const hookSecret = Deno.env
       .get("SEND_SMS_HOOK_SECRET")
       ?.replace(/^v1,whsec_/, "");
 
     if (!hookSecret) {
       console.error("SEND_SMS_HOOK_SECRET est manquant.");
-
       return response(
-        {
-          error: {
-            http_code: 500,
-            message: "Configuration du SMS Hook incomplète.",
-          },
-        },
+        { error: { http_code: 500, message: "Configuration du SMS Hook incomplète." } },
         500,
       );
     }
@@ -68,21 +46,12 @@ Deno.serve(async (req: Request) => {
     const rawBody = await req.text();
     const headers = Object.fromEntries(req.headers.entries());
     const webhook = new Webhook(hookSecret);
-
     const payload = webhook.verify(rawBody, headers) as AuthHookPayload;
 
-    /*
-     * ---------------------------------------------------------
-     * 2. Récupération et nettoyage du téléphone et du code OTP
-     * ---------------------------------------------------------
-     */
-
+    // 2. Nettoyage du numéro
     const rawPhone = payload?.user?.phone;
-    
-    // Nettoyage : suppression des espaces, tirets et parenthèses
     let phone = rawPhone ? rawPhone.replace(/[\s\-()]/g, "") : null;
 
-    // CORRECTION : Si le numéro ne commence pas par '+', on l'ajoute automatiquement
     if (phone && !phone.startsWith("+")) {
       phone = "+" + phone;
     }
@@ -92,12 +61,7 @@ Deno.serve(async (req: Request) => {
     if (!phone) {
       console.error("BAARO SMS Hook: numéro absent.");
       return response(
-        {
-          error: {
-            http_code: 400,
-            message: "Numéro de téléphone absent.",
-          },
-        },
+        { error: { http_code: 400, message: "Numéro de téléphone absent." } },
         400,
       );
     }
@@ -105,91 +69,47 @@ Deno.serve(async (req: Request) => {
     if (!otp) {
       console.error("BAARO SMS Hook: OTP absent.");
       return response(
-        {
-          error: {
-            http_code: 400,
-            message: "OTP absent.",
-          },
-        },
+        { error: { http_code: 400, message: "OTP absent." } },
         400,
       );
     }
 
-    /*
-     * ---------------------------------------------------------
-     * 3. Secrets InfiniReach
-     * ---------------------------------------------------------
-     */
+    // 3. Identifiants SMS Gateway
+    const username = Deno.env.get("SMS_GATEWAY_USER");
+    const password = Deno.env.get("SMS_GATEWAY_PASS");
 
-    const apiKey = Deno.env.get("INFINIREACH_API_KEY");
-    const fromPhone = Deno.env.get("INFINIREACH_FROM_PHONE");
-
-    if (!apiKey) {
-      console.error("INFINIREACH_API_KEY est manquant.");
+    if (!username || !password) {
+      console.error("SMS_GATEWAY_USER ou SMS_GATEWAY_PASS manquant.");
       return response(
-        {
-          error: {
-            http_code: 500,
-            message: "Clé API InfiniReach non configurée.",
-          },
-        },
+        { error: { http_code: 500, message: "Identifiants SMS Gateway non configurés." } },
         500,
       );
     }
 
-    if (!fromPhone) {
-      console.error("INFINIREACH_FROM_PHONE est manquant.");
-      return response(
-        {
-          error: {
-            http_code: 500,
-            message: "Numéro expéditeur InfiniReach non configuré.",
-          },
-        },
-        500,
-      );
-    }
-
-    /*
-     * ---------------------------------------------------------
-     * 4. Message SMS
-     * ---------------------------------------------------------
-     */
-
+    // 4. Message
     const message = `Votre code de vérification BAARO est : ${otp}. Ne partagez pas ce code.`;
-    const externalId = `baaro-otp-${crypto.randomUUID()}`;
 
-    console.log("BAARO - Envoi SMS en cours:", {
-      to: phone,
-      from: fromPhone,
-      externalId,
-    });
+    console.log("BAARO - Envoi SMS via Gateway:", { to: phone });
 
-    /*
-     * ---------------------------------------------------------
-     * 5. Envoi vers InfiniReach
-     * ---------------------------------------------------------
-     */
+    // 5. Envoi via SMS Gateway (Cloud API)
+    const credentials = btoa(`\( {username}: \){password}`);
 
-    const infinireachResponse = await fetch(
-      "https://api.infinireach.io/api/v1/messages",
+    const gatewayResponse = await fetch(
+      "https://api.sms-gate.app/3rdparty/v1/messages",
       {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-API-Key": apiKey,
+          Authorization: `Basic ${credentials}`,
         },
         body: JSON.stringify({
-          to: phone,
-          message,
-          from: fromPhone,
-          channel: "sms",
-          externalId,
+          textMessage: { text: message },
+          phoneNumbers: [phone],
         }),
-      }
+      },
     );
 
-    const providerText = await infinireachResponse.text();
+    const providerText = await gatewayResponse.text();
     let providerData: unknown = null;
 
     try {
@@ -198,35 +118,25 @@ Deno.serve(async (req: Request) => {
       providerData = providerText;
     }
 
-    /*
-     * ---------------------------------------------------------
-     * 6. Gestion erreur InfiniReach
-     * ---------------------------------------------------------
-     */
-
-    if (!infinireachResponse.ok) {
-      console.error("BAARO - InfiniReach erreur:", infinireachResponse.status, providerData);
+    // 6. Gestion d'erreur
+    if (!gatewayResponse.ok) {
+      console.error("BAARO - SMS Gateway erreur:", gatewayResponse.status, providerData);
 
       return response(
         {
           error: {
             http_code: 502,
-            message: "Le fournisseur SMS a refusé l'envoi.",
+            message: "Le SMS Gateway a refusé l'envoi.",
           },
-          provider_status: infinireachResponse.status,
+          provider_status: gatewayResponse.status,
           provider_response: providerData,
         },
         502,
       );
     }
 
-    /*
-     * ---------------------------------------------------------
-     * 7. Succès
-     * ---------------------------------------------------------
-     */
-
-    console.log("BAARO - SMS OTP envoyé avec succès.", {
+    // 7. Succès
+    console.log("BAARO - SMS OTP envoyé avec succès via Gateway.", {
       to: phone,
       provider: providerData,
     });
