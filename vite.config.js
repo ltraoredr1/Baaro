@@ -35,7 +35,6 @@ export default defineConfig({
         ]
       },
       workbox: {
-        // Empêche le plugin d'échouer si un type de fichier manque au build
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
         globIgnores: ['**/node_modules/**/*', 'sw.js', 'workbox-*.js'],
         runtimeCaching: [
@@ -46,7 +45,7 @@ export default defineConfig({
               cacheName: 'supabase-cache',
               expiration: {
                 maxEntries: 50,
-                maxAgeSeconds: 60 * 60 * 24 // 24h
+                maxAgeSeconds: 60 * 60 * 24
               },
               cacheableResponse: {
                 statuses: [0, 200]
@@ -60,7 +59,7 @@ export default defineConfig({
               cacheName: 'images-cache',
               expiration: {
                 maxEntries: 100,
-                maxAgeSeconds: 60 * 60 * 24 * 30 // 30 jours
+                maxAgeSeconds: 60 * 60 * 24 * 30
               }
             }
           }
@@ -69,10 +68,9 @@ export default defineConfig({
     })
   ],
   build: {
+    outDir: 'dist', // Spécifie explicitement le dossier de sortie
     rollupOptions: {
-      input: {
-        main: resolve(__dirname, 'index.html'), // Directif explicite pour l'entrée HTML
-      },
+      input: resolve(process.cwd(), 'index.html'), // Utilisation de process.cwd() plus robuste sur Vercel
       output: {
         manualChunks: {
           vendor: ['react', 'react-dom'],
