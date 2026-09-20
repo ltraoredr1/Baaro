@@ -61,9 +61,13 @@ jobs:
         java-version: '17'
         distribution: 'temurin'
         
-    - name: Make gradlew executable and build with Gradle
+    - name: Ensure Gradle Wrapper exists and build
       run: |
         cd android
+        # Si gradlew n'existe pas, on le génère proprement
+        if [ ! -f "gradlew" ]; then
+          gradle wrapper
+        fi
         chmod +x gradlew
         ./gradlew assembleDebug --no-daemon
       
