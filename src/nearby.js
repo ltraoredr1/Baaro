@@ -23,17 +23,38 @@ export function isNearbyAvailable() {
 
 /** Démarre la recherche + la diffusion de présence auprès des appareils proches. */
 export async function startNearby(displayName) {
-  return NearbyChat.start({ displayName });
+  if (!isNearbyAvailable()) throw new Error("Nearby indisponible sur cette plateforme");
+  try {
+    return await NearbyChat.start({ displayName });
+  } catch (error) {
+    console.error("Erreur startNearby:", error);
+    throw error;
+  }
 }
 
 /** Arrête toute activité Bluetooth/Wi-Fi de proximité liée à BAARO. */
 export async function stopNearby() {
-  return NearbyChat.stop();
+  if (!isNearbyAvailable()) return;
+  try {
+    return await NearbyChat.stop();
+  } catch (error) {
+    console.error("Erreur stopNearby:", error);
+  }
 }
 
-/** Envoie un message texte à tous les appareils BAARO connectés à proximité. */
-export async function sendNearbyMessage(text) {
-  return NearbyChat.send({ text });
+/**
+ * Envoie un message texte.
+ * - Si endpointId est fourni : envoi à cet appareil uniquement
+ * - Sinon : broadcast à tous les appareils BAARO connectés à proximité
+ */
+export async function sendNearbyMessage(text, endpointId = null) {
+  if (!isNearbyAvailable()) throw new Error("Nearby indisponible");
+  try {
+    return await NearbyChat.send({ text, endpointId });
+  } catch (error) {
+    console.error("Erreur sendNearbyMessage:", error);
+    throw error;
+  }
 }
 
 /** S'abonne aux événements : appareil trouvé, message reçu, déconnexion. */
@@ -41,15 +62,52 @@ export function onNearbyEvent(eventName, callback) {
   return NearbyChat.addListener(eventName, callback);
 }
 
-
-/** Accept a pending Nearby connection only after user/app-level verification. */
+/** Accepte une connexion Nearby en attente après vérification utilisateur/app. */
 export async function acceptNearbyConnection(endpointId) {
   if (!isNearbyAvailable()) throw new Error("Nearby indisponible");
-  return NearbyChat.accept({ endpointId });
+  try {
+    return await NearbyChat.accept({ endpointId });
+  } catch (error) {
+    console.error("Erreur acceptNearbyConnection:", error);
+    throw error;
+  }
 }
 
-/** Reject a pending Nearby connection. */
+/** Refuse une connexion Nearby en attente. */
 export async function rejectNearbyConnection(endpointId) {
   if (!isNearbyAvailable()) throw new Error("Nearby indisponible");
-  return NearbyChat.reject({ endpointId });
+  try {
+    return await NearbyChat.reject({ endpointId });
+  } catch (error) {
+    console.error("Erreur rejectNearbyConnection:", error);
+    throw error;
+  }
+}
+
+/**
+ * Vérifie l'état actuel des permissions Bluetooth et Localisation.
+ * Retourne un objet { nearby: 'granted'|'denied'|'unavailable', location: '...' }
+ */
+export async function checkNearbyPermissions() {
+  if (!isNearbyAvailable()) return { nearby: "unavailable", location: "unavailable" };
+  try {
+    return await NearbyChat.checkPermissions();
+  } catch (error) {
+    console.error("Erreur checkNearbyPermissions:", error);
+    return { nearby: "unavailable", location: "unavailable" };
+  }
+}
+
+/**
+ * Demande les permissions à l'utilisateur (affiche la popup Android).
+ * Les alias "nearby" et "location" sont définis dans le plugin Kotlin.
+ */
+export async function requestNearbyPermissions() {
+  if (!isNearbyAvailable()) throw new Error("Nearby indisponible");
+  try {
+    return await NearbyChat.requestPermissions();
+  } catch (error) {
+    console.error("Erreur requestNearbyPermissions:", error);
+    throw error;
+  }
 }
