@@ -4,9 +4,7 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ============================================================
-   Base
-   ============================================================ */
+/* Base */
 html,
 body,
 #root {
@@ -15,21 +13,16 @@ body,
   padding: 0;
   background-color: #0b1220;
   color: #f4efe3;
-  font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI',
-    Roboto, sans-serif;
+  font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   overflow-x: hidden;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
-  /* FIX NATIF BAARO - obligatoire pour APK */
   overscroll-behavior-y: none;
   -webkit-tap-highlight-color: transparent;
   -webkit-touch-callout: none;
 }
 
-/* ============================================================
-   Skip link accessibilité
-   ============================================================ */
 .skip-link {
   position: absolute;
   left: -9999px;
@@ -45,9 +38,6 @@ body,
   left: 0;
 }
 
-/* ============================================================
-   Scrollbar
-   ============================================================ */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -71,9 +61,6 @@ body,
   display: none;
 }
 
-/* ============================================================
-   Glassmorphism
-   ============================================================ */
 .glass-panel {
   background: rgba(17, 26, 44, 0.75);
   backdrop-filter: blur(16px);
@@ -82,11 +69,7 @@ body,
 }
 
 .glass-card {
-  background: linear-gradient(
-    135deg,
-    rgba(26, 39, 64, 0.6) 0%,
-    rgba(17, 26, 44, 0.8) 100%
-  );
+  background: linear-gradient(135deg, rgba(26, 39, 64, 0.6) 0%, rgba(17, 26, 44, 0.8) 100%);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -119,10 +102,184 @@ body,
   -webkit-text-fill-color: transparent;
 }
 
-/* ============================================================
-   Animations
-   ============================================================ */
 @keyframes pulse-slow {
-  0%,
-  100% {
-    opacity: 
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.85;
+    transform: scale(1.02);
+  }
+}
+
+.animate-pulse-slow {
+  animation: pulse-slow 4s infinite ease-in-out;
+}
+
+@keyframes float {
+  0%, 100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
+}
+
+.animate-float {
+  animation: float 3s ease-in-out infinite;
+}
+
+.privacy-blur {
+  filter: blur(14px) brightness(0.7);
+  transition: filter 0.12s ease;
+  pointer-events: none;
+  user-select: none;
+}
+
+.mobile-nav-spacer {
+  padding-bottom: calc(5.5rem + env(safe-area-inset-bottom, 0px));
+}
+@media (min-width: 768px) {
+  .mobile-nav-spacer {
+    padding-bottom: 1.5rem;
+  }
+}
+
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+.safe-top {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+button,
+[role='button'],
+a {
+  touch-action: manipulation;
+}
+
+@media (pointer: coarse) {
+  button:not(.icon-sm),
+  [role='button']:not(.icon-sm) {
+    min-height: 44px;
+  }
+}
+
+.nav-tab-btn,
+button.touch-target {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+.feed-card,
+.content-visibility-auto {
+  content-visibility: auto;
+  contain-intrinsic-size: 80px 280px;
+}
+
+.virtual-list-item {
+  content-visibility: auto;
+  contain-intrinsic-size: 60px 120px;
+}
+
+.lazy-media-box {
+  contain: layout paint;
+}
+
+:focus:not(:focus-visible) {
+  outline: none;
+}
+:focus-visible {
+  outline: 2px solid #d9ae52;
+  outline-offset: 2px;
+}
+
+.baaro-readable {
+  line-height: 1.55;
+  letter-spacing: 0.01em;
+}
+
+html.baaro-large-text {
+  font-size: 112.5%;
+}
+
+html.baaro-reduce-motion *,
+html.baaro-reduce-motion *::before,
+html.baaro-reduce-motion *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .animate-pulse-slow,
+  .animate-float {
+    animation: none !important;
+  }
+}
+
+.line-clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.line-clamp-3 {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+::selection {
+  background: rgba(217, 174, 82, 0.35);
+  color: #f4efe3;
+}
+
+.baaro-feed-item {
+  content-visibility: auto;
+  contain-intrinsic-size: 1px 320px;
+}
+
+.baaro-tap {
+  min-height: 44px;
+  min-width: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.baaro-safe-bottom {
+  padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+}
+.baaro-safe-top {
+  padding-top: max(0.5rem, env(safe-area-inset-top));
+}
+
+.baaro-skeleton {
+  background: linear-gradient(90deg, rgba(255,255,255,0.04) 25%, rgba(255,255,255,0.08) 50%, rgba(255,255,255,0.04) 75%);
+  background-size: 200% 100%;
+  animation: baaro-shimmer 1.2s ease-in-out infinite;
+}
+
+@keyframes baaro-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .baaro-skeleton {
+    animation: none;
+  }
+}
