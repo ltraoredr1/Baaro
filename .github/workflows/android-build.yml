@@ -24,8 +24,8 @@ jobs:
     - name: Build Web (Vite)
       run: npm run build
       env:
-        # OBLIGATOIRE pour ton APK - mets tes vraies valeurs dans GitHub Secrets
-        VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL || 'https://baaro-three.vercel.app' }}
+        VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
+        VITE_API_SECONDARY_URL: ${{ secrets.VITE_API_SECONDARY_URL }}
         VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
         VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
         VITE_TURNSTILE_SITE_KEY: ${{ secrets.VITE_TURNSTILE_SITE_KEY }}
