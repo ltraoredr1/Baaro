@@ -3,21 +3,23 @@
   "appName": "BAARO",
   "webDir": "dist",
   "server": {
-    "androidScheme": "https",
-    "url": "https://baaro.three.vercel.app",
-    "cleartext": true
+    "androidScheme": "https"
   },
   "plugins": {
     "SplashScreen": {
       "launchAutoHide": true,
-      "showSpinner": false
+      "showSpinner": false,
+      "androidScaleType": "CENTER_CROP",
+      "backgroundColor": "#ffffff"
     },
     "PushNotifications": {
-      "presentationOptions": [
-        "badge",
-        "sound",
-        "alert"
-      ]
+      "presentationOptions": ["badge", "sound", "alert"]
+    },
+    "Keyboard": {
+      "resize": "native"
     }
+  },
+  "android": {
+    "allowMixedContent": true
   }
 }
