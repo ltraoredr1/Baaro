@@ -11,16 +11,12 @@ import { App as CapacitorApp } from '@capacitor/app';
 function InviteRouteGate() {
   const { code } = useParams();
   const { user, loading } = useApp();
-
   useEffect(() => {
     if (!code) return;
-    if (!loading && !user?.id) {
-      try {
-        localStorage.setItem("pending_invite_code", code);
-      } catch {}
+    if (!loading &&!user?.id) {
+      try { localStorage.setItem("pending_invite_code", code); } catch {}
     }
   }, [code, user?.id, loading]);
-
   if (loading) return <LoadingScreen />;
   return <InvitePage />;
 }
@@ -34,9 +30,8 @@ function AppShell() {
   const { user, isGuest, loading } = useApp();
   const navigate = useNavigate();
 
-  // Restaure l'invitation après login + Deep Link natif
+  // 1. TON ANCIEN CODE QUI MARCHAIT (on le garde)
   useEffect(() => {
-    // 1. Restauration classique web
     if (!loading && user?.id) {
       try {
         const pending = localStorage.getItem("pending_invite_code");
@@ -46,46 +41,35 @@ function AppShell() {
         }
       } catch {}
     }
-
-    // 2. FIX NATIF BAARO : écoute les liens qui ouvrent l'APK
-    const setupDeepLinks = async () => {
-      const listener = await CapacitorApp.addListener('appUrlOpen', (event) => {
-        try {
-          const url = new URL(event.url);
-          // Gère baaro.three.vercel.app/invite/CODE et com.baaro.app://invite/CODE
-          if (url.pathname.startsWith('/invite/')) {
-            const code = url.pathname.split('/').pop();
-            if (code) navigate(`/invite/${code}`, { replace: true });
-          }
-        } catch {}
-      });
-      return () => listener.remove();
-    };
-    
-    const cleanupPromise = setupDeepLinks();
-    return () => { cleanupPromise.then(f => f && f()); };
-
   }, [user?.id, loading, navigate]);
 
-  if (loading) {
-    return <LoadingScreen />;
-  }
+  // 2. DEEP LINK NATIF SÉPARÉ (ne relance pas Auth)
+  useEffect(() => {
+    let listener;
+    CapacitorApp.addListener('appUrlOpen', (event) => {
+      try {
+        const url = new URL(event.url);
+        let code = null;
+        if (url.pathname.startsWith('/invite/')) {
+          code = url.pathname.split('/').pop();
+        } else if (url.host === 'invite') {
+          code = url.pathname.slice(1); // com.baaro.app://invite/CODE
+        }
+        if (code) navigate(`/invite/${code}`, { replace: true });
+      } catch {}
+    }).then(l => listener = l);
+    return () => listener?.remove();
+  }, []);
 
-  const isRealUser = Boolean(user?.id && user.is_anonymous !== true);
-
+  if (loading) return <LoadingScreen />;
+  const isRealUser = Boolean(user?.id && user.is_anonymous!== true);
   let guestOk = false;
-  try {
-    guestOk = sessionStorage.getItem("baaro_guest_ok") === "1";
-  } catch {
-    guestOk = false;
-  }
-
+  try { guestOk = sessionStorage.getItem("baaro_guest_ok") === "1"; } catch {}
   const isAnonymousAllowed = Boolean(user?.is_anonymous && guestOk);
 
-  if (!isRealUser && !isGuest && !isAnonymousAllowed) {
+  if (!isRealUser &&!isGuest &&!isAnonymousAllowed) {
     return <AuthScreen />;
   }
-
   return <MainShell />;
 }
 
