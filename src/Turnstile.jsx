@@ -8,10 +8,12 @@ function loadTurnstileScript() {
   if (typeof window === "undefined") return Promise.resolve(false);
   if (window.turnstile) return Promise.resolve(true);
   if (scriptPromise) return scriptPromise;
+
   scriptPromise = new Promise((resolve) => {
     const s = document.createElement("script");
     s.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
-    s.async = true; s.defer = true;
+    s.async = true;
+    s.defer = true;
     s.onload = () => resolve(true);
     s.onerror = () => resolve(false);
     document.head.appendChild(s);
@@ -25,12 +27,13 @@ export function TurnstileWidget({ onVerify, isGuest = false }) {
   const [status, setStatus] = useState("loading");
   const onVerifyRef = useRef(onVerify);
 
-  // on garde toujours la dernière version sans relancer le useEffect
-  useEffect(() => { onVerifyRef.current = onVerify; }, [onVerify]);
+  useEffect(() => {
+    onVerifyRef.current = onVerify;
+  }, [onVerify]);
 
   useEffect(() => {
+    // BYPASS INVITE + APK NATIF = pas de widget, pas de boucle
     if (isGuest) {
-      console.log("[BAARO] Guest bypass");
       onVerifyRef.current("guest-bypass-token");
       setStatus("bypass");
       return;
@@ -72,7 +75,7 @@ export function TurnstileWidget({ onVerify, isGuest = false }) {
           },
         });
         setStatus("ready");
-      } catch (e) {
+      } catch {
         setStatus("error");
         onVerifyRef.current(null);
       }
@@ -84,15 +87,14 @@ export function TurnstileWidget({ onVerify, isGuest = false }) {
         try { window.turnstile.remove(widgetId.current); } catch {}
       }
     };
-  }, [isGuest]); // <--- FIX ICI : on a enlevé onVerify des dépendances
+  }, [isGuest]); // FIX BOUCLE: onVerify retiré des dépendances
 
   if (isGuest || Capacitor.isNativePlatform()) return null;
-  if (!SITE_KEY) return <div style={{color:'#ff6b6b', fontSize:12}}>ERREUR: VITE_TURNSTILE_SITE_KEY manquant</div>;
 
   return (
     <div>
       <div ref={containerRef} />
-      {status === "loading" && <p style={{fontSize:12, opacity:0.6}}>Chargement...</p>}
+      {status === "loading" && <p style={{fontSize:12, opacity:0.6}}>Chargement vérification...</p>}
     </div>
   );
 }
