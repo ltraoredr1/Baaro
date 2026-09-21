@@ -64,6 +64,9 @@ jobs:
       with:
         packages: platform-tools
 
+    - name: Accept Android SDK Licenses
+      run: yes | sdkmanager --licenses
+
     - name: Build with Gradle
       run: |
         cd android
