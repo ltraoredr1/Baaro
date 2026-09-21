@@ -1,67 +1,80 @@
+import { useState, useEffect, useCallback } from "react";
+import {
+  isNearbyAvailable,
+  getNearbyDebug,
+  startNearby,
+  stopNearby,
+  sendNearbyMessage,
+  onNearbyEvent,
+  acceptNearbyConnection,
+  rejectNearbyConnection,
+  checkNearbyPermissions,
+  requestNearbyPermissions,
+} from "../lib/nearby.js";
 import { Capacitor } from "@capacitor/core";
 
-const PLUGIN_NAME = "NearbyConnections";
-let NearbyPlugin = null;
+export function useNearbyChat(displayName = "Utilisateur BAARO") {
+  const [isAvailable, setIsAvailable] = useState(false);
+  const [isNative, setIsNative] = useState(false);
+  const [debug, setDebug] = useState({});
+  const [isScanning, setIsScanning] = useState(false);
+  const [devices, setDevices] = useState([]);
+  const [messages, setMessages] = useState([]);
+  const [error, setError] = useState(null);
 
-try {
-  // @ts-ignore
-  const { NearbyConnections } = Capacitor.Plugins;
-  NearbyPlugin = Capacitor.isPluginAvailable(PLUGIN_NAME)? NearbyConnections : null;
-} catch {
-  NearbyPlugin = null;
-}
+  useEffect(() => {
+    setIsNative(Capacitor.isNativePlatform());
+    setIsAvailable(isNearbyAvailable());
+    setDebug(getNearbyDebug());
+  }, []);
 
-export function isNearbyAvailable() {
-  // Sur web = toujours false, c'est normal
-  if (!Capacitor.isNativePlatform()) return false;
-  return Capacitor.isPluginAvailable(PLUGIN_NAME) &&!!NearbyPlugin;
-}
+  useEffect(() => {
+    if (!isAvailable) return;
+    const listener = onNearbyEvent("nearbyEvent", (event) => {
+      if (event.type === "DEVICE_FOUND") {
+        setDevices((prev) => prev.find((d) => d.endpointId === event.endpointId)? prev : [...prev, { endpointId: event.endpointId, name: event.deviceName || "Inconnu", status: "available" }]);
+      } else if (event.type === "DEVICE_CONNECTED") {
+        setDevices((prev) => prev.map((d) => d.endpointId === event.endpointId? {...d, status: "connected" } : d));
+      } else if (event.type === "MESSAGE_RECEIVED") {
+        setMessages((prev) => [...prev, { from: event.senderName || "Inconnu", text: event.text, timestamp: Date.now(), isMe: false }]);
+      } else if (event.type === "DEVICE_LOST") {
+        setDevices((prev) => prev.filter((d) => d.endpointId!== event.endpointId));
+      } else if (event.type === "ERROR") {
+        setError(event.message);
+      }
+    });
+    return () => {
+      listener.remove();
+      stopNearby();
+    };
+  }, [isAvailable]);
 
-export function getNearbyDebug() {
-  return {
-    isNative: Capacitor.isNativePlatform(),
-    isPluginAvailable: Capacitor.isPluginAvailable(PLUGIN_NAME),
-    platform: Capacitor.getPlatform(),
-    hasPlugin:!!NearbyPlugin,
-  };
-}
-
-export async function checkNearbyPermissions() {
-  if (!isNearbyAvailable()) return { nearby: "denied", location: "denied" };
-  try {
-    if (NearbyPlugin.checkPermissions) {
-      return await NearbyPlugin.checkPermissions();
+  const start = useCallback(async () => {
+    try {
+      setError(null);
+      const perms = await checkNearbyPermissions();
+      if (perms.nearby!== "granted" || perms.location!== "granted") {
+        const req = await requestNearbyPermissions();
+        if (req.nearby!== "granted") throw new Error("Permission Bluetooth refusée");
+      }
+      await startNearby(displayName);
+      setIsScanning(true);
+    } catch (err) {
+      setError(err.message);
+      throw err;
     }
-    return { nearby: "granted", location: "granted" };
-  } catch {
-    return { nearby: "granted", location: "granted" };
-  }
-}
+  }, [displayName]);
 
-export async function requestNearbyPermissions() {
-  if (!isNearbyAvailable()) throw new Error("Plugin Nearby non installé");
-  return await NearbyPlugin.requestPermissions();
-}
+  const stop = useCallback(async () => {
+    await stopNearby();
+    setIsScanning(false);
+    setDevices([]);
+  }, []);
 
-export async function startNearby(displayName) {
-  if (!isNearbyAvailable()) throw new Error("Nearby indisponible sur web - build l'APK");
-  return await NearbyPlugin.start({ displayName });
-}
+  const sendMessage = useCallback(async (text, endpointId = null) => {
+    await sendNearbyMessage(text, endpointId);
+    setMessages((prev) => [...prev, { from: "Moi", text, timestamp: Date.now(), isMe: true }]);
+  }, []);
 
-export async function stopNearby() {
-  if (!NearbyPlugin) return;
-  return await NearbyPlugin.stop();
+  return { isAvailable, isNative, debug, isScanning, devices, messages, error, start, stop, sendMessage, acceptConnection: acceptNearbyConnection, rejectConnection: rejectNearbyConnection };
 }
-
-export async function sendNearbyMessage(text, endpointId = null) {
-  if (!isNearbyAvailable()) throw new Error("Nearby indisponible");
-  return await NearbyPlugin.sendMessage({ text, endpointId });
-}
-
-export function onNearbyEvent(eventName, callback) {
-  if (!NearbyPlugin) return { remove: () => {} };
-  return NearbyPlugin.addListener(eventName, callback);
-}
-
-export const acceptNearbyConnection = (endpointId) => NearbyPlugin?.acceptConnection({ endpointId });
-export const rejectNearbyConnection = (endpointId) => NearbyPlugin?.rejectConnection({ endpointId });
