@@ -21,12 +21,20 @@ function loadTurnstileScript() {
   return scriptPromise;
 }
 
-export function TurnstileWidget({ onVerify }) {
+export function TurnstileWidget({ onVerify, isGuest = false }) {
   const containerRef = useRef(null);
   const widgetId = useRef(null);
   const [status, setStatus] = useState("loading");
 
   useEffect(() => {
+    // 0. MODE INVITÉ = bypass direct, pas de widget
+    if (isGuest) {
+      console.log("[BAARO] Guest mode -> Turnstile bypass");
+      onVerify("guest-bypass-token");
+      setStatus("bypass");
+      return;
+    }
+
     // 1. APK = bypass direct, pas de widget
     if (Capacitor.isNativePlatform()) {
       console.log("[BAARO] Native -> Turnstile bypass");
@@ -35,7 +43,7 @@ export function TurnstileWidget({ onVerify }) {
       return;
     }
 
-    // 2. Pas de clé = ERREUR VISIBLE, pas bypass silencieux
+    // 2. Pas de clé = ERREUR VISIBLE
     if (!SITE_KEY) {
       console.error("[BAARO] VITE_TURNSTILE_SITE_KEY manquant! Check Vercel Env Vars");
       setStatus("no-key");
@@ -46,10 +54,10 @@ export function TurnstileWidget({ onVerify }) {
     let cancelled = false;
     loadTurnstileScript().then((loaded) => {
       if (cancelled) return;
-      if (!loaded ||!window.turnstile ||!containerRef.current) {
+      if (!loaded || !window.turnstile || !containerRef.current) {
         console.warn("[BAARO] Turnstile script bloqué (AdBlock/CSP)");
         setStatus("blocked");
-        onVerify(null); // Laisse passer mais log
+        onVerify(null);
         return;
       }
       try {
@@ -79,13 +87,14 @@ export function TurnstileWidget({ onVerify }) {
 
     return () => {
       cancelled = true;
-      if (widgetId.current!== null && window.turnstile) {
+      if (widgetId.current !== null && window.turnstile) {
         try { window.turnstile.remove(widgetId.current); } catch {}
       }
     };
-  }, [onVerify]);
+  }, [onVerify, isGuest]);
 
-  if (Capacitor.isNativePlatform()) return null;
+  // Pas de widget pour invité et APK
+  if (isGuest || Capacitor.isNativePlatform()) return null;
 
   if (!SITE_KEY) {
     return <div style={{color:'#ff6b6b', fontSize:12}}>ERREUR: VITE_TURNSTILE_SITE_KEY manquant sur Vercel</div>;
