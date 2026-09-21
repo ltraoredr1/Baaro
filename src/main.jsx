@@ -30,7 +30,7 @@ const setupNative = async () => {
 
 setupNative();
 
-ReactDOM.createRoot(document.getElementById("root")!).render(
+ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>
     <ErrorBoundary>
       <BrowserRouter>
@@ -45,16 +45,13 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
 );
 
 // FIX NATIF : Pas de Service Worker sur l'APK
-// Sur Android, le cache du SW bloque les mises à jour OTA
 if ("serviceWorker" in navigator && !Capacitor.isNativePlatform()) {
   window.addEventListener("load", () => {
     if (!navigator.serviceWorker.controller) {
-      // VitePWA génère sw.js, pas service-worker.js
       navigator.serviceWorker.register("/sw.js").catch(() => {});
     }
   });
 } else if (Capacitor.isNativePlatform() && "serviceWorker" in navigator) {
-  // On force le nettoyage du SW si un ancien build l'avait installé
   navigator.serviceWorker.getRegistrations().then((regs) => {
     regs.forEach((reg) => reg.unregister());
   });
