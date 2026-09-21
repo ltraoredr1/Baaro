@@ -32,10 +32,12 @@ jobs:
 
     - name: Init Capacitor Android if missing
       run: |
+        npm install -D @capacitor/cli @capacitor/core @capacitor/android
         if [ ! -d "android" ]; then
           npx cap add android
         fi
         npx cap sync android
+        npx cap copy android
 
     - name: Set up JDK 21
       uses: actions/setup-java@v5
