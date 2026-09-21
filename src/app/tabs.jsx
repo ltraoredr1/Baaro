@@ -41,13 +41,11 @@ export const tabs = {
   shop: lazy(() =>
     import("../features/shop/index.js").then((m) => ({ default: m.ShopTab }))
   ),
-  // Entreprises (CompanyCard / Detail / Manager / Registration)
   companies: lazy(() =>
     import("../components/EnterprisesTab.jsx").then((m) => ({
       default: m.default,
     }))
   ),
-  // Communauté (groupes / canaux) — distinct de companies
   community: lazy(() =>
     import("../components/CommunityTab.jsx").then((m) => ({
       default: m.default,
@@ -63,13 +61,14 @@ export const tabs = {
       default: m.PrivacyPage,
     }))
   ),
+  // FIX : on enlève le .tsx en dur, Vite va le résoudre tout seul (JS ou TS)
   settings: lazy(() =>
-    import("../features/settings/index.tsx").then((m) => ({
+    import("../features/settings/index").then((m) => ({
       default: m.default,
     }))
   ),
   plus: lazy(() =>
-    import("../features/settings/index.tsx").then((m) => ({
+    import("../features/settings/index").then((m) => ({
       default: m.default,
     }))
   ),
