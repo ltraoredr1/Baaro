@@ -1,38 +1,51 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { supabase } from '../supabaseClient'
 
 export default function InvitePage() {
   const { code } = useParams()
   const navigate = useNavigate()
-  const [status, setStatus] = useState('loading') // loading | success | error
+  const [status, setStatus] = useState('loading')
   const [error, setError] = useState('')
   const [groupName, setGroupName] = useState('')
+  const handledRef = useRef(false)
 
   useEffect(() => {
     async function handleInvite() {
-      if (!code) return
+      if (!code || handledRef.current) return
+      handledRef.current = true
+
       try {
         const { data: { session } } = await supabase.auth.getSession()
+        
+        // PAS DE SESSION -> on laisse App.jsx gérer le pending
         if (!session) {
-          // Sauvegarde le code pour après login
-          localStorage.setItem('pending_invite_code', code)
-          navigate('/login?redirect=/invite/' + code)
+          try {
+            localStorage.setItem('pending_invite_code', code.toUpperCase())
+          } catch {}
+          // On renvoie vers / qui affichera AuthScreen, pas /login qui n'existe pas
+          navigate('/', { replace: true })
           return
         }
 
-        // Appelle l'API sécurisée
         const res = await fetch(`/api/invite/${code.toUpperCase()}`, {
           headers: { Authorization: `Bearer ${session.access_token}` }
         })
         const data = await res.json()
-        if (!res.ok) throw new Error(data.error || 'Code invalide')
+        if (!res.ok) throw new Error(data.error || 'Code invalide ou expiré')
+
+        // Succès -> on nettoie
+        try {
+          localStorage.removeItem('pending_invite_code')
+        } catch {}
 
         setGroupName(data.group_name || 'le groupe')
         setStatus('success')
+        
         setTimeout(() => {
-          navigate('/community?group=' + data.group_id)
+          navigate(`/community?group=${data.group_id}`, { replace: true })
         }, 1500)
+
       } catch (e) {
         setStatus('error')
         setError(e.message)
@@ -47,10 +60,7 @@ export default function InvitePage() {
         <div className="text-5xl mb-4">👥</div>
         <h1 className="text-xl font-bold mb-2">Invitation Baaro</h1>
         <p className="text-sm text-white/50 mb-6">
-          Code:{' '}
-          <span className="font-mono bg-white/10 px-2 py-1 rounded">
-            {code?.toUpperCase()}
-          </span>
+          Code: <span className="font-mono bg-white/10 px-2 py-1 rounded">{code?.toUpperCase()}</span>
         </p>
 
         {status === 'loading' && (
@@ -59,26 +69,19 @@ export default function InvitePage() {
             <p className="text-sm text-white/60">Vérification du lien...</p>
           </div>
         )}
-
         {status === 'success' && (
           <div className="flex flex-col items-center gap-3">
             <div className="w-12 h-12 bg-green-500 rounded-full flex items-center justify-center">✓</div>
-            <p className="text-sm">
-              Tu as rejoint <b>{groupName}</b> !
-            </p>
+            <p className="text-sm">Tu as rejoint <b>{groupName}</b> !</p>
             <p className="text-xs text-white/40">Redirection...</p>
           </div>
         )}
-
         {status === 'error' && (
           <div className="flex flex-col items-center gap-3">
             <div className="w-12 h-12 bg-red-500 rounded-full flex items-center justify-center">✕</div>
             <p className="text-sm text-red-400">{error}</p>
-            <button
-              onClick={() => navigate('/community')}
-              className="mt-2 text-xs bg-white/10 px-4 py-2 rounded-full"
-            >
-              Retour communauté
+            <button onClick={() => navigate('/', { replace: true })} className="mt-2 text-xs bg-white/10 px-4 py-2 rounded-full">
+              Accueil
             </button>
           </div>
         )}
