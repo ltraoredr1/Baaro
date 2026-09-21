@@ -71,6 +71,10 @@ jobs:
           platforms;android-34
           platforms;android-35
 
+    - name: Force accept Android SDK licenses
+      run: |
+        yes | ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager --licenses || true
+
     - name: Build with Gradle
       run: |
         cd android
@@ -82,4 +86,3 @@ jobs:
       with:
         name: baaro-app-debug
         path: android/app/build/outputs/apk/debug/app-debug.apk
-
