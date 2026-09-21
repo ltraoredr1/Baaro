@@ -22,11 +22,11 @@ android {
         abortOnError false
     }
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_17
-        targetCompatibility JavaVersion.VERSION_17
+        sourceCompatibility JavaVersion.VERSION_21
+        targetCompatibility JavaVersion.VERSION_21
     }
     kotlinOptions {
-        jvmTarget = '17'
+        jvmTarget = '21'
     }
 }
 
@@ -38,12 +38,12 @@ repositories {
 dependencies {
     implementation fileTree(dir: 'libs', include: ['*.jar'])
     implementation project(':capacitor-android')
+    implementation project(':capacitor-cordova-android-plugins')
     implementation 'androidx.appcompat:appcompat:1.7.1'
     implementation "org.jetbrains.kotlin:kotlin-stdlib:2.0.21"
     testImplementation 'junit:junit:4.13.2'
     androidTestImplementation 'androidx.test.ext:junit:1.2.1'
     androidTestImplementation 'androidx.test.espresso:espresso-core:3.6.1'
-
     // Google Nearby Connections API
-    implementation 'com.google.android.gms:play-services-nearby:18.5.0'
+    implementation 'com.google.android.gms:play-services-nearby:19.3.0'
 }
