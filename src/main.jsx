@@ -3,6 +3,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import { Capacitor } from "@capacitor/core";
+import { StatusBar, Style } from "@capacitor/status-bar";
 import App from "./app/App.jsx";
 import { AppProvider } from "./contexts/AppContext.jsx";
 import { ToastProvider } from "./components/ToastContext.jsx";
@@ -14,7 +15,22 @@ import "./index.css";
 captureRefFromUrl();
 initPerf();
 
-ReactDOM.createRoot(document.getElementById("root")).render(
+// FIX NATIF : Config StatusBar pour APK
+const setupNative = async () => {
+  if (Capacitor.isNativePlatform()) {
+    try {
+      await StatusBar.setOverlaysWebView({ overlay: false });
+      await StatusBar.setStyle({ style: Style.Dark });
+      await StatusBar.setBackgroundColor({ color: "#0b1220" });
+    } catch (e) {
+      console.log("StatusBar not available", e);
+    }
+  }
+};
+
+setupNative();
+
+ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <ErrorBoundary>
       <BrowserRouter>
@@ -29,11 +45,17 @@ ReactDOM.createRoot(document.getElementById("root")).render(
 );
 
 // FIX NATIF : Pas de Service Worker sur l'APK
-// Sur Android/iOS, le cache du SW bloque les mises à jour
+// Sur Android, le cache du SW bloque les mises à jour OTA
 if ("serviceWorker" in navigator && !Capacitor.isNativePlatform()) {
   window.addEventListener("load", () => {
     if (!navigator.serviceWorker.controller) {
-      navigator.serviceWorker.register("/service-worker.js").catch(() => {});
+      // VitePWA génère sw.js, pas service-worker.js
+      navigator.serviceWorker.register("/sw.js").catch(() => {});
     }
+  });
+} else if (Capacitor.isNativePlatform() && "serviceWorker" in navigator) {
+  // On force le nettoyage du SW si un ancien build l'avait installé
+  navigator.serviceWorker.getRegistrations().then((regs) => {
+    regs.forEach((reg) => reg.unregister());
   });
 }
