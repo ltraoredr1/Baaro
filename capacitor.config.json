@@ -3,8 +3,7 @@
   "appName": "BAARO",
   "webDir": "dist",
   "server": {
-    "androidScheme": "https",
-    "cleartext": true
+    "androidScheme": "https"
   },
   "plugins": {
     "SplashScreen": {
@@ -29,7 +28,6 @@
     }
   },
   "android": {
-    "allowMixedContent": true,
     "backgroundColor": "#0b1220"
   }
 }
