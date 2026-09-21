@@ -5,7 +5,7 @@ const root = process.cwd();
 const required = [
   "supabase/migrations/021_economy_payout_foundation.sql",
   "api/payout.js",
-  "docs-BAARO-v17-PAYOUT.md"
+  "docs/versions/docs-BAARO-v17-PAYOUT.md"
 ];
 const missing = required.filter((f) => !fs.existsSync(path.join(root, f)));
 if (missing.length) {

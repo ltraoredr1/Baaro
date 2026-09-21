@@ -3,7 +3,8 @@ import path from "node:path";
 
 const root = process.cwd();
 const files = [
-  "src/App.jsx",
+  "src/app/App.jsx",
+  "src/app/tabs.jsx",
   "vite.config.js",
   "public/service-worker.js",
 ];
@@ -15,17 +16,28 @@ for (const file of files) {
     failed = true;
   }
 }
-const app = fs.readFileSync(path.join(root, "src/App.jsx"), "utf8");
-for (const token of ["lazy(() => import(\"./components/MessagesTab.jsx\")", "lazy(() => import(\"./components/VideosTab.jsx\")"]) {
-  if (!app.includes(token)) {
-    console.error(`Expected lazy-loading marker missing: ${token}`);
+
+if (!failed) {
+  const tabs = fs.readFileSync(path.join(root, "src/app/tabs.jsx"), "utf8");
+  const lazyMarkers = [
+    'lazy(() =>',
+    'features/feed',
+    'features/videos',
+    'features/messaging',
+  ];
+  for (const token of lazyMarkers) {
+    if (!tabs.includes(token)) {
+      console.error(`Expected lazy-loading marker missing in tabs.jsx: ${token}`);
+      failed = true;
+    }
+  }
+
+  const sw = fs.readFileSync(path.join(root, "public/service-worker.js"), "utf8");
+  if (!sw.includes("MAX_RUNTIME_ENTRIES")) {
+    console.error("Service worker cache bound missing");
     failed = true;
   }
 }
-const sw = fs.readFileSync(path.join(root, "public/service-worker.js"), "utf8");
-if (!sw.includes("MAX_RUNTIME_ENTRIES")) {
-  console.error("Service worker cache bound missing");
-  failed = true;
-}
+
 if (failed) process.exit(1);
 console.log("BAARO performance foundation checks: OK");

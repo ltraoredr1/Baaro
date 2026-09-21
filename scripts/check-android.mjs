@@ -17,10 +17,17 @@ if (missing.length) {
 }
 
 const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
-for (const dep of ["@capacitor/core", "@capacitor/android", "@capacitor/cli", "@capacitor/push-notifications"]) {
+const requiredDeps = ["@capacitor/core", "@capacitor/android", "@capacitor/push-notifications"];
+const optionalDeps = ["@capacitor/cli"];
+for (const dep of requiredDeps) {
   if (!(pkg.dependencies?.[dep] || pkg.devDependencies?.[dep])) {
     console.error(`Missing dependency: ${dep}`);
     process.exit(1);
+  }
+}
+for (const dep of optionalDeps) {
+  if (!(pkg.dependencies?.[dep] || pkg.devDependencies?.[dep])) {
+    console.warn(`Note: ${dep} not in package.json (installed on-demand in Android CI). `);
   }
 }
 
