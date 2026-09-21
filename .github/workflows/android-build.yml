@@ -3,26 +3,75 @@ name: Android Build
 on:
   push:
     branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
-      - name: Référentiel du code (Checkout)
-        uses: actions/checkout@v4
+    - name: Checkout code
+      uses: actions/checkout@v4
 
-      - name: Configurer Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
 
-      - name: Configurer le SDK Android
-        uses: android-actions/setup-android@v3
+    - name: Install dependencies
+      run: npm install
 
-      - name: Accepter les licences du SDK Android
-        run: yes | sdkmanager --licenses
+    - name: Build frontend (Vite)
+      run: npm run build
 
-      - name: Compiler l'application (Gradle)
-        run: ./gradlew build
+    - name: Install Capacitor
+      run: npm install @capacitor/cli @capacitor/android
+
+    - name: Sync Capacitor
+      run: npx cap sync android
+
+    - name: Inject Nearby Chat plugin into Gradle files
+      run: |
+        if [ -d "native-plugins/nearby/android" ]; then
+          if ! grep -q "nearby-chat" android/settings.gradle; then
+            echo "" >> android/settings.gradle
+            echo "include ':nearby-chat'" >> android/settings.gradle
+            echo "project(':nearby-chat').projectDir = new File('../native-plugins/nearby/android')" >> android/settings.gradle
+          fi
+        else
+          echo "Erreur: Le dossier native-plugins/nearby/android est introuvable."
+          exit 1
+        fi
+        
+        if [ -f "android/app/build.gradle" ]; then
+          if ! grep -q "nearby-chat" android/app/build.gradle; then
+            sed -i "/implementation project(':capacitor-android')/a \\    implementation project(':nearby-chat')" android/app/build.gradle
+          fi
+        fi
+
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+
+    - name: Setup Android SDK
+      uses: android-actions/setup-android@v4
+      with:
+        packages: platform-tools
+
+    - name: Build with Gradle
+      run: |
+        cd android
+        chmod +x gradlew
+        ./gradlew assembleDebug --no-daemon --stacktrace
+
+    - name: Upload APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: baaro-app-debug
+        path: android/app/build/outputs/apk/debug/app-debug.apk
