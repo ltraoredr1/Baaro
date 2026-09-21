@@ -12,13 +12,30 @@ jobs:
       contents: write
     steps:
     - uses: actions/checkout@v4
+
     - uses: actions/setup-node@v4
       with:
         node-version: '22'
-    - run: npm install
-    - run: npm run build
-    - run: npm install @capacitor/cli @capacitor/android
-    - run: npx cap sync android
+        cache: 'npm'
+
+    - name: Install deps
+      run: npm ci
+
+    - name: Build Web (Vite)
+      run: npm run build
+      env:
+        # OBLIGATOIRE pour ton APK - mets tes vraies valeurs dans GitHub Secrets
+        VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL || 'https://baaro-three.vercel.app' }}
+        VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+        VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+        VITE_TURNSTILE_SITE_KEY: ${{ secrets.VITE_TURNSTILE_SITE_KEY }}
+
+    - name: Init Capacitor Android if missing
+      run: |
+        if [ ! -d "android" ]; then
+          npx cap add android
+        fi
+        npx cap sync android
 
     - name: Set up JDK 21
       uses: actions/setup-java@v5
@@ -29,7 +46,7 @@ jobs:
     - name: Setup Android SDK
       uses: android-actions/setup-android@v3
       with:
-        packages: platform-tools build-tools;36.0.0 platforms;android-36
+        packages: platform-tools build-tools;34.0.0 platforms;android-34
 
     - name: Build with Gradle
       run: |
