@@ -7,7 +7,19 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "check:production": "node scripts/check-production.mjs",
+    "audit:security": "node scripts/security-audit-scan.mjs",
+    "check:lock": "node scripts/check-lock.mjs",
+    "check:e2e": "node scripts/check-e2e-readiness.mjs",
+    "check:e2e:smoke": "node scripts/check-e2e-smoke.mjs",
+    "check:payout": "node scripts/check-payout.mjs",
+    "check:ai": "node scripts/check-ai-config.mjs",
+    "check:notifications": "node scripts/check-notifications.mjs",
+    "check:performance": "node scripts/check-performance.mjs",
+    "check:android": "node scripts/check-android.mjs",
+    "cap:sync": "npx cap sync",
+    "ci": "npm run check:lock && npm run check:production && npm run audit:security && npm run check:e2e && npm run check:e2e:smoke && npm run check:payout && npm run check:performance && npm run check:android && npm run build"
   },
   "dependencies": {
     "@capacitor-community/contacts": "^6.0.0",
