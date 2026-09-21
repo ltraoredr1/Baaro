@@ -3,80 +3,24 @@
   "buildCommand": "npm run build",
   "framework": "vite",
   "rewrites": [
-    {
-      "source": "/api/live-roles",
-      "destination": "/api/live"
-    },
-    {
-      "source": "/api/create-room",
-      "destination": "/api/live"
-    },
-    {
-      "source": "/api/invite",
-      "destination": "/api/referral"
-    },
-    {
-      "source": "/api/invite/:code",
-      "destination": "/api/referral?code=:code"
-    },
-    {
-      "source": "/api/stripe-redeem",
-      "destination": "/api/payout"
-    },
-    {
-      "source": "/create-payment",
-      "destination": "/api/payments"
-    },
-    {
-      "source": "/api/create-payment",
-      "destination": "/api/payments"
-    },
-    {
-      "source": "/payment-webhook",
-      "destination": "/api/webhooks"
-    },
-    {
-      "source": "/api/payment-webhook",
-      "destination": "/api/webhooks"
-    },
-    {
-      "source": "/stripe-webhook",
-      "destination": "/api/webhooks"
-    },
-    {
-      "source": "/api/stripe-webhook",
-      "destination": "/api/webhooks"
-    },
-    {
-      "source": "/((?!api/).*)",
-      "destination": "/index.html"
-    }
+    { "source": "/api/live-roles", "destination": "/api/live" },
+    { "source": "/api/create-room", "destination": "/api/live" },
+    { "source": "/api/invite", "destination": "/api/referral" },
+    { "source": "/api/invite/:code", "destination": "/api/referral?code=:code" },
+    { "source": "/api/stripe-redeem", "destination": "/api/payout" },
+    { "source": "/create-payment", "destination": "/api/payments" },
+    { "source": "/api/create-payment", "destination": "/api/payments" },
+    { "source": "/payment-webhook", "destination": "/api/webhooks" },
+    { "source": "/api/payment-webhook", "destination": "/api/webhooks" },
+    { "source": "/stripe-webhook", "destination": "/api/webhooks" },
+    { "source": "/api/stripe-webhook", "destination": "/api/webhooks" },
+    { "source": "/((?!api/).*)", "destination": "/index.html" }
   ],
   "headers": [
     {
       "source": "/api/(.*)",
       "headers": [
-        {
-          "key": "Cache-Control",
-          "value": "no-store"
-        }
-      ]
-    },
-    {
-      "source": "/(.*)",
-      "headers": [
-        {
-          "key": "X-Content-Type-Options",
-          "value": "nosniff"
-        },
-        {
-          "key": "Referrer-Policy",
-          "value": "strict-origin-when-cross-origin"
-        },
-        {
-          "key": "Content-Security-Policy",
-          "value": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://challenges.cloudflare.com https://static.cloudflareinsights.com; frame-src https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; connect-src 'self' https://*.supabase.co https://*.vercel.app https://challenges.cloudflare.com; font-src 'self' data:[STRIPPED]
-        }
+        { "key": "Cache-Control", "value": "no-store" }
       ]
     }
   ]
