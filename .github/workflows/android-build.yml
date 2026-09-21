@@ -65,11 +65,11 @@ jobs:
         cmdline-tools-version: 12266719
         log-accepted-android-sdk-licenses: true
         accept-android-sdk-licenses: true
-        packages:
-          - platform-tools
-          - build-tools;34.0.0
-          - platforms;android-34
-          - platforms;android-35
+        packages: |
+          platform-tools
+          build-tools;34.0.0
+          platforms;android-34
+          platforms;android-35
 
     - name: Build with Gradle
       run: |
@@ -82,3 +82,4 @@ jobs:
       with:
         name: baaro-app-debug
         path: android/app/build/outputs/apk/debug/app-debug.apk
+
