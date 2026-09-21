@@ -2,18 +2,16 @@ import { useEffect, useRef, useState } from "react";
 import { Capacitor } from "@capacitor/core";
 
 const SITE_KEY = import.meta.env.VITE_TURNSTILE_SITE_KEY;
-
 let scriptPromise = null;
+
 function loadTurnstileScript() {
   if (typeof window === "undefined") return Promise.resolve(false);
   if (window.turnstile) return Promise.resolve(true);
   if (scriptPromise) return scriptPromise;
-
   scriptPromise = new Promise((resolve) => {
     const s = document.createElement("script");
     s.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
-    s.async = true;
-    s.defer = true;
+    s.async = true; s.defer = true;
     s.onload = () => resolve(true);
     s.onerror = () => resolve(false);
     document.head.appendChild(s);
@@ -25,39 +23,35 @@ export function TurnstileWidget({ onVerify, isGuest = false }) {
   const containerRef = useRef(null);
   const widgetId = useRef(null);
   const [status, setStatus] = useState("loading");
+  const onVerifyRef = useRef(onVerify);
+
+  // on garde toujours la dernière version sans relancer le useEffect
+  useEffect(() => { onVerifyRef.current = onVerify; }, [onVerify]);
 
   useEffect(() => {
-    // 0. MODE INVITÉ = bypass direct, pas de widget
     if (isGuest) {
-      console.log("[BAARO] Guest mode -> Turnstile bypass");
-      onVerify("guest-bypass-token");
+      console.log("[BAARO] Guest bypass");
+      onVerifyRef.current("guest-bypass-token");
       setStatus("bypass");
       return;
     }
-
-    // 1. APK = bypass direct, pas de widget
     if (Capacitor.isNativePlatform()) {
-      console.log("[BAARO] Native -> Turnstile bypass");
-      onVerify("native-bypass");
+      onVerifyRef.current("native-bypass");
       setStatus("bypass");
       return;
     }
-
-    // 2. Pas de clé = ERREUR VISIBLE
     if (!SITE_KEY) {
-      console.error("[BAARO] VITE_TURNSTILE_SITE_KEY manquant! Check Vercel Env Vars");
       setStatus("no-key");
-      onVerify(null);
+      onVerifyRef.current(null);
       return;
     }
 
     let cancelled = false;
     loadTurnstileScript().then((loaded) => {
-      if (cancelled) return;
-      if (!loaded || !window.turnstile || !containerRef.current) {
-        console.warn("[BAARO] Turnstile script bloqué (AdBlock/CSP)");
+      if (cancelled ||!containerRef.current) return;
+      if (!loaded ||!window.turnstile) {
         setStatus("blocked");
-        onVerify(null);
+        onVerifyRef.current(null);
         return;
       }
       try {
@@ -66,45 +60,39 @@ export function TurnstileWidget({ onVerify, isGuest = false }) {
           theme: "dark",
           callback: (token) => {
             setStatus("verified");
-            onVerify(token);
+            onVerifyRef.current(token);
           },
           "error-callback": () => {
             setStatus("error");
-            onVerify(null);
+            onVerifyRef.current(null);
           },
           "expired-callback": () => {
             setStatus("expired");
-            onVerify(null);
+            onVerifyRef.current(null);
           },
         });
         setStatus("ready");
       } catch (e) {
-        console.error(e);
         setStatus("error");
-        onVerify(null);
+        onVerifyRef.current(null);
       }
     });
 
     return () => {
       cancelled = true;
-      if (widgetId.current !== null && window.turnstile) {
+      if (widgetId.current!== null && window.turnstile) {
         try { window.turnstile.remove(widgetId.current); } catch {}
       }
     };
-  }, [onVerify, isGuest]);
+  }, [isGuest]); // <--- FIX ICI : on a enlevé onVerify des dépendances
 
-  // Pas de widget pour invité et APK
   if (isGuest || Capacitor.isNativePlatform()) return null;
-
-  if (!SITE_KEY) {
-    return <div style={{color:'#ff6b6b', fontSize:12}}>ERREUR: VITE_TURNSTILE_SITE_KEY manquant sur Vercel</div>;
-  }
+  if (!SITE_KEY) return <div style={{color:'#ff6b6b', fontSize:12}}>ERREUR: VITE_TURNSTILE_SITE_KEY manquant</div>;
 
   return (
     <div>
       <div ref={containerRef} />
-      {status === "loading" && <p style={{fontSize:12, opacity:0.6}}>Chargement vérification...</p>}
-      {status === "blocked" && <p style={{fontSize:12, opacity:0.6}}>Vérification bloquée par AdBlock - continuons</p>}
+      {status === "loading" && <p style={{fontSize:12, opacity:0.6}}>Chargement...</p>}
     </div>
   );
 }
