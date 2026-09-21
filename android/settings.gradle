@@ -3,5 +3,4 @@ include ':capacitor-cordova-android-plugins'
 project(':capacitor-cordova-android-plugins').projectDir = new File('./capacitor-cordova-android-plugins/')
 include ':nearby-chat'
 project(':nearby-chat').projectDir = new File('../native-plugins/nearby/android')
-
 apply from: 'capacitor.settings.gradle'
