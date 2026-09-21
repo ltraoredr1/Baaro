@@ -62,10 +62,7 @@ jobs:
     - name: Setup Android SDK
       uses: android-actions/setup-android@v4
       with:
-        packages: platform-tools
-
-    - name: Accept Android SDK Licenses
-      run: yes | sdkmanager --licenses
+        packages: platform-tools build-tools;36.0.0 platforms;android-36
 
     - name: Build with Gradle
       run: |
