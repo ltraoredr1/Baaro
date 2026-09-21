@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- BASE - Obligatoire -->
+    <!-- BASE -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
-    <!-- BAARO Live / Appels Daily.co -->
+    <!-- BAARO Live / Daily.co -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
@@ -13,7 +13,7 @@
     <!-- BAARO Contacts -->
     <uses-permission android:name="android.permission.READ_CONTACTS" />
 
-    <!-- BAARO NearbyChat - Bluetooth / Wi-Fi direct sans internet -->
+    <!-- BAARO NearbyChat -->
     <uses-permission android:name="android.permission.BLUETOOTH" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />
@@ -25,7 +25,7 @@
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
 
-    <!-- BAARO Fichiers / Photos / Vidéos -->
+    <!-- Fichiers -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
@@ -52,6 +52,23 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
+            <!-- 1. POUR APP NATIVE : com.baaro.app://auth/callback -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="com.baaro.app" />
+            </intent-filter>
+
+            <!-- 2. POUR WEB PRINCIPAL : https://baaro-xi.vercel.app -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="baaro-xi.vercel.app" />
+                <data android:scheme="https" android:host="baaro-three.vercel.app" />
+            </intent-filter>
+
         </activity>
 
         <provider
@@ -64,5 +81,4 @@
                 android:resource="@xml/file_paths"></meta-data>
         </provider>
     </application>
-
 </manifest>
