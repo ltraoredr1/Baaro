@@ -14,6 +14,9 @@ import { tabs } from "./tabs.jsx";
 import { TabFallback } from "./TabFallback.jsx";
 import { OfflineBanner } from "../components/OfflineBanner.jsx";
 import { saveLastTab, loadLastTab } from "../lib/perf.js";
+import { App as CapacitorApp } from '@capacitor/app';
+import { StatusBar, Style } from '@capacitor/status-bar';
+import { Capacitor } from '@capacitor/core';
 
 const THEME_BG_MAP = {
   midnight: "#0B1220",
@@ -35,20 +38,59 @@ export function MainShell() {
   } = useApp();
 
   const { showToast, showPointsReward } = useToast();
-  const id = user?.id; // SEULEMENT id, jamais userId
+  const id = user?.id;
 
   useApplyPendingReferral({ showToast });
 
   const [activeTab, setActiveTab] = useState(() => loadLastTab("feed"));
   const [lang, setLang] = useState("fr");
   const [currentTheme, setCurrentTheme] = useState("midnight");
-  
-  // États des modales et de l'UI
+
   const [inspectingProfileId, setInspectingProfileId] = useState(null);
   const [notifDrawerOpen, setNotifDrawerOpen] = useState(false);
   const [searchModalOpen, setSearchModalOpen] = useState(false);
   const [forceOnboarding, setForceOnboarding] = useState(false);
   const [pulsePoints, setPulsePoints] = useState(false);
+
+  // --- FIX NATIF BAARO ---
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+
+    // 1. StatusBar couleur selon thème
+    const setStatusBar = async () => {
+      try {
+        await StatusBar.setOverlaysWebView({ overlay: false });
+        await StatusBar.setStyle({ style: currentTheme === 'midnight' || currentTheme === 'oled'? Style.Dark : Style.Light });
+        await StatusBar.setBackgroundColor({ color: THEME_BG_MAP[currentTheme] || THEME_BG_MAP.midnight });
+      } catch {}
+    };
+    setStatusBar();
+
+    // 2. Bouton retour Android
+    const backButtonListener = CapacitorApp.addListener('backButton', ({ canGoBack }) => {
+      if (notifDrawerOpen || searchModalOpen || inspectingProfileId || forceOnboarding) {
+        setNotifDrawerOpen(false);
+        setSearchModalOpen(false);
+        setInspectingProfileId(null);
+        setForceOnboarding(false);
+        return;
+      }
+      if (activeTab === 'videos' || activeTab === 'privacy') {
+        setActiveTab('feed');
+        return;
+      }
+      if (activeTab!== 'feed') {
+        setActiveTab('feed');
+        return;
+      }
+      // Sur feed, on quitte
+      CapacitorApp.exitApp();
+    });
+
+    return () => {
+      backButtonListener.then(l => l.remove());
+    };
+  }, [activeTab, currentTheme, notifDrawerOpen, searchModalOpen, inspectingProfileId, forceOnboarding]);
 
   useEffect(() => {
     if (!id) return;
@@ -58,7 +100,7 @@ export function MainShell() {
       if (isAnonymous) {
         showToast("Bienvenue! Explore librement. Crée un compte pour gagner.", "info", 5500);
       } else if (pointsBalance > 0) {
-        showPointsReward(pointsBalance >= 50 ? 50 : pointsBalance, "Bonus de bienvenue");
+        showPointsReward(pointsBalance >= 50? 50 : pointsBalance, "Bonus de bienvenue");
       } else {
         showToast("Bienvenue sur BAARO — like, publie et débat pour gagner.", "info", 4500);
       }
@@ -74,18 +116,14 @@ export function MainShell() {
   const isImmersive = activeTab === "videos";
   const Tab = tabs[activeTab] || null;
 
-  // Tous les tabs reçoivent id, pas userId
   const tabProps = {
     feed: { id, onOpenProfile: setInspectingProfileId, onRewardPoints: earnPoints },
     friends: { id, onOpenProfile: setInspectingProfileId },
-    
-    // ✅ CORRECTION ICI : Passage explicite des props nécessaires pour CommunityTab / ContactsTab
-    community: { 
-      id, 
-      userId: id, 
-      onOpenProfile: setInspectingProfileId 
+    community: {
+      id,
+      userId: id,
+      onOpenProfile: setInspectingProfileId
     },
-
     companies: { id, onOpenProfile: setInspectingProfileId },
     discover: {
       userId: id,
@@ -110,14 +148,13 @@ export function MainShell() {
       onReplayOnboarding: () => setForceOnboarding(true),
       onOpenPrivacy: () => setActiveTab("privacy"),
     },
-    // ShopTab attend userId ; on passe id + alias
     shop: { id, userId: id },
   };
 
   return (
     <div
-      className="min-h-screen flex flex-col transition-colors duration-500"
-      style={{ background: isImmersive ? "#000" : themeBg, color: COLORS.ivory }}
+      className="min-h-screen min-h-[100dvh] flex flex-col transition-colors duration-500"
+      style={{ background: isImmersive? "#000" : themeBg, color: COLORS.ivory, paddingTop: 'env(safe-area-inset-top)' }}
     >
       <OfflineBanner />
       <OnboardingModal forceOpen={forceOnboarding} onClose={() => setForceOnboarding(false)} />
@@ -136,11 +173,11 @@ export function MainShell() {
         />
       )}
 
-      {isImmersive ? (
+      {isImmersive? (
         <main id="main-content" className="flex-1 relative" tabIndex={-1}>
           <ErrorBoundary>
             <Suspense fallback={<TabFallback />}>
-              {Tab ? <Tab {...(tabProps[activeTab] || {})} /> : null}
+              {Tab? <Tab {...(tabProps[activeTab] || {})} /> : null}
             </Suspense>
           </ErrorBoundary>
         </main>
@@ -152,7 +189,7 @@ export function MainShell() {
           <main id="main-content" className="md:col-span-3 mobile-nav-spacer" tabIndex={-1}>
             <ErrorBoundary>
               <Suspense fallback={<TabFallback />}>
-                {Tab ? <Tab {...(tabProps[activeTab] || {})} /> : null}
+                {Tab? <Tab {...(tabProps[activeTab] || {})} /> : null}
               </Suspense>
             </ErrorBoundary>
           </main>
@@ -161,7 +198,6 @@ export function MainShell() {
 
       {isImmersive && <div className="md:hidden"><Navigation activeTab={activeTab} setActiveTab={setActiveTab} /></div>}
 
-      {/* Modale de consultation de profil */}
       {inspectingProfileId && (
         <ProfileModal
           id={inspectingProfileId}
@@ -175,16 +211,16 @@ export function MainShell() {
         />
       )}
 
-      <NotificationDrawer 
-        isOpen={notifDrawerOpen} 
-        onClose={() => setNotifDrawerOpen(false)} 
-        id={id} 
+      <NotificationDrawer
+        isOpen={notifDrawerOpen}
+        onClose={() => setNotifDrawerOpen(false)}
+        id={id}
       />
-      
-      <GlobalSearchModal 
-        isOpen={searchModalOpen} 
-        onClose={() => setSearchModalOpen(false)} 
-        onSelectUser={(profileId) => setInspectingProfileId(profileId)} 
+
+      <GlobalSearchModal
+        isOpen={searchModalOpen}
+        onClose={() => setSearchModalOpen(false)}
+        onSelectUser={(profileId) => setInspectingProfileId(profileId)}
         onSelectTab={(tabId) => setActiveTab(tabId)}
         onSelectShop={() => {
           setActiveTab("shop");
