@@ -3,7 +3,9 @@
   "appName": "BAARO",
   "webDir": "dist",
   "server": {
-    "androidScheme": "https"
+    "androidScheme": "https",
+    "url": "https://baaro-xi.vercel.app",
+    "cleartext": true
   },
   "plugins": {
     "SplashScreen": {
@@ -11,11 +13,7 @@
       "showSpinner": false
     },
     "PushNotifications": {
-      "presentationOptions": [
-        "badge",
-        "sound",
-        "alert"
-      ]
+      "presentationOptions": ["badge", "sound", "alert"]
     }
   }
 }
