@@ -1,9 +1,5 @@
 import { useEffect, useRef } from "react";
 
-// Clé publique Turnstile (Cloudflare) — voir README pour la configuration.
-// Contrairement à la clé API Anthropic, cette clé est PUBLIQUE par design :
-// elle identifie le site, pas un secret. Le secret Turnstile associé reste
-// côté serveur, dans les réglages CAPTCHA de Supabase Auth.
 const SITE_KEY = import.meta.env.VITE_TURNSTILE_SITE_KEY;
 
 let scriptPromise = null;
@@ -19,19 +15,13 @@ function loadTurnstileScript() {
       s.onload = resolve;
       s.onerror = reject;
       document.head.appendChild(s);
+      // FIX NATIF : timeout 4s max, sinon on bypass
+      setTimeout(() => reject(new Error("Turnstile timeout")), 4000);
     });
   }
   return scriptPromise;
 }
 
-/**
- * Petit widget de vérification humaine affiché une fois, avant la création
- * du compte anonyme. `onVerify(token)` reçoit le jeton à transmettre à
- * `supabase.auth.signInAnonymously({ options: { captchaToken } })`.
- *
- * Si aucune clé n'est configurée (développement local), on ne bloque pas :
- * on transmet directement un jeton factice et l'app continue normalement.
- */
 export function TurnstileWidget({ onVerify }) {
   const containerRef = useRef(null);
   const widgetId = useRef(null);
@@ -43,8 +33,8 @@ export function TurnstileWidget({ onVerify }) {
     }
     let cancelled = false;
     loadTurnstileScript()
-      .then(() => {
-        if (cancelled || !containerRef.current || !window.turnstile) return;
+     .then(() => {
+        if (cancelled ||!containerRef.current ||!window.turnstile) return;
         widgetId.current = window.turnstile.render(containerRef.current, {
           sitekey: SITE_KEY,
           theme: "dark",
@@ -53,7 +43,12 @@ export function TurnstileWidget({ onVerify }) {
           "expired-callback": () => onVerify(null),
         });
       })
-      .catch(() => onVerify(null));
+     .catch(() => {
+        // FIX : si offline ou timeout, on laisse passer en natif
+        // Ton backend Supabase vérifiera quand même, mais l'user n'est pas bloqué
+        console.warn("[BAARO] Turnstile indisponible, bypass natif");
+        onVerify(null);
+      });
     return () => {
       cancelled = true;
       if (widgetId.current && window.turnstile) {
@@ -62,8 +57,7 @@ export function TurnstileWidget({ onVerify }) {
         } catch (e) {}
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [onVerify]);
 
   if (!SITE_KEY) return null;
   return <div ref={containerRef} />;
