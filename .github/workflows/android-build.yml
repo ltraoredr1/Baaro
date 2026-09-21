@@ -32,7 +32,7 @@ jobs:
 
     - name: Init Capacitor Android if missing
       run: |
-        npm install -D @capacitor/cli @capacitor/core @capacitor/android
+        npm install -D @capacitor/cli@6 --legacy-peer-deps
         if [ ! -d "android" ]; then
           npx cap add android
         fi
