@@ -32,6 +32,23 @@ Compte anonyme créé automatiquement pour chaque visiteur (auth e-mail possible
 - Notifications realtime
 - Mode hors-ligne Nearby (Android natif uniquement)
 - Protection anti-fraude : Turnstile, limite appareils, plafonds gains, âge min. cashout
+## Identifications:
+### Modèle d’identité définitivement retenu:
+auth.users.id
+    ├── profiles.id
+    ├── wallets.id
+    ├── crypto_holdings.id
+    └── device_accounts.id
+
+    Donc :
+auth.users.id = seule identité technique utilisateur
+profiles.id = auth.users.id
+wallets.id = auth.users.id
+crypto_holdings.id = auth.users.id
+device_accounts.id = auth.users.id
+handle, téléphone, email ≠ identité
+follower_id, followed_id, sender_id, recipient_id, etc. restent des FK vers cette identité
+follows.id, quand présent, identifie la relation, pas l'utilisateur.
 
 ## Démarrage rapide
 
