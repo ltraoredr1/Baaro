@@ -1,40 +1,38 @@
 import { useEffect, useRef } from "react";
 import { useApp } from "../contexts/AppContext.jsx";
-import {
-  applyReferralCode,
-  getPendingRef,
-  clearPendingRef,
-} from "../lib/referralApi.js";
+import { applyReferralCode, getPendingRef, clearPendingRef } from "../lib/referralApi.js";
 
-/**
- * Applique automatiquement le code ?ref= stocké dès que l'utilisateur
- * a un compte non-anonyme. À monter une seule fois dans l'app (ex. MainAppContent).
- */
 export function useApplyPendingReferral({ showToast } = {}) {
   const { isAnonymous, session, refreshWalletStatus } = useApp();
-  const tried = useRef(false);
+  const tried = useRef(new Set()); // évite re-apply même si ?ref= change
 
   useEffect(() => {
-    if (!session?.user || isAnonymous || tried.current) return;
+    const userId = session?.user?.id;
+    if (!userId || isAnonymous) return;
 
-    const pending = getPendingRef();
-    if (!pending) return;
+    const pending = getPendingRef()?.trim().toUpperCase();
+    if (!pending || tried.current.has(`${userId}:${pending}`)) return;
 
-    tried.current = true;
+    // pending peut être BAARO-XXXX ou invite groupe/live
+    if (!/^BAARO-|^GRP-/.test(pending)) return;
+
+    tried.current.add(`${userId}:${pending}`);
 
     (async () => {
-      const res = await applyReferralCode(pending);
-      if (res.ok) {
-        clearPendingRef();
-        showToast?.(res.message || `Parrainage : +${res.ptsEarned} pts`, "success");
-        await refreshWalletStatus?.();
-      } else if (
-        res.error?.includes("déjà") ||
-        res.error?.includes("propre code")
-      ) {
-        clearPendingRef();
-      }
-      // Sinon on garde le pending pour saisie manuelle dans Wallet
+      try {
+        const res = await applyReferralCode(pending); // POST /api/referral { action: "apply", code }
+        if (res.ok) {
+          clearPendingRef();
+          showToast?.(res.message || `Parrainage : +${res.ptsEarned || res.bonus || 0} pts`, "success");
+          await refreshWalletStatus?.();
+        } else if (/déjà|propre code|expiré|invalide/i.test(res.error || "")) {
+          // on nettoie pour ne pas bloquer l'UX Wallet
+          clearPendingRef();
+          if (/propre code/.test(res.error || "")) {
+            showToast?.("Tu ne peux pas utiliser ton propre code", "info");
+          }
+        }
+      } catch {}
     })();
-  }, [session, isAnonymous, refreshWalletStatus, showToast]);
+  }, [session?.user?.id, isAnonymous, refreshWalletStatus, showToast]);
 }
