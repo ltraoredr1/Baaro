@@ -50,6 +50,11 @@ handle, téléphone, email ≠ identité
 follower_id, followed_id, sender_id, recipient_id, etc. restent des FK vers cette identité
 follows.id, quand présent, identifie la relation, pas l'utilisateur.
 
+# Systeme d'abonnement et amis :
+Table follows : colonnes follower_id, followed_id, status, is_friend ✅
+Fonctions SQL : get_user_friends(), toggle_follow() ✅
+Trigger : on_follow_created pour les notifications ✅
+Politiques RLS : activées et fonctionnelles ✅
 ## Démarrage rapide
 
 ```bash
