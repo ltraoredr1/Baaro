@@ -12,15 +12,28 @@ const ChatMessage = memo(function ChatMessage({ msg, currentId }) {
   return (
     <div className={`flex gap-2 ${isMe ? "flex-row-reverse" : "flex-row"}`}>
       <div
-        className={`max-w-[75%] px-4 py-2.5 rounded-2xl text-sm ${isMe ? "rounded-tr-sm" : "rounded-tl-sm"}`}
+        className={`max-w-[75%] px-4 py-2.5 rounded-2xl text-sm ${
+          isMe ? "rounded-tr-sm" : "rounded-tl-sm"
+        }`}
         style={{
-          background: isMe ? COLORS.gold : isAI ? "rgba(167,139,250,0.15)" : COLORS.surface2,
+          background: isMe
+            ? COLORS.gold
+            : isAI
+              ? "rgba(167,139,250,0.15)"
+              : COLORS.surface2,
           color: isMe ? "#000" : COLORS.ivory,
         }}
       >
         <p className="break-words">{msg.text}</p>
-        <p className={`text-[10px] mt-1.5 ${isMe ? "text-black/60" : "text-gray-400"}`}>
-          {new Date(msg.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+        <p
+          className={`text-[10px] mt-1.5 ${
+            isMe ? "text-black/60" : "text-gray-400"
+          }`}
+        >
+          {new Date(msg.created_at).toLocaleTimeString([], {
+            hour: "2-digit",
+            minute: "2-digit",
+          })}
         </p>
       </div>
     </div>
@@ -41,6 +54,15 @@ export function DebateRoom({ inviteCode, onBack }) {
     let mounted = true;
     let channel = null;
 
+    const tryEq = async (column, value) => {
+      const { data, error } = await supabase
+        .from("debate_rooms")
+        .select("*")
+        .eq(column, value)
+        .maybeSingle();
+      return { data, error };
+    };
+
     const init = async () => {
       try {
         const {
@@ -54,38 +76,58 @@ export function DebateRoom({ inviteCode, onBack }) {
         if (!raw) throw new Error("Code de salle manquant");
 
         const codeLower = raw.toLowerCase();
+        const codeUpper = raw.toUpperCase();
         const isUuid = UUID_RE.test(raw);
 
-        // 1) Recherche stable : invite_code d'abord, id seulement si UUID
         let roomData = null;
         let roomErr = null;
 
+        // Recherche progressive (casse mixte + UUID)
         if (isUuid) {
-          const res = await supabase
-            .from("debate_rooms")
-            .select("*")
-            .or(`id.eq.\( {raw},invite_code.eq. \){codeLower}`)
-            .maybeSingle();
-          roomData = res.data;
-          roomErr = res.error;
-        } else {
-          const res = await supabase
-            .from("debate_rooms")
-            .select("*")
-            .eq("invite_code", codeLower)
-            .maybeSingle();
-          roomData = res.data;
-          roomErr = res.error;
-
-          // Fallback si ancien code stocké en majuscules
+          ({ data: roomData, error: roomErr } = await tryEq("id", raw));
           if (!roomData && !roomErr) {
-            const res2 = await supabase
+            ({ data: roomData, error: roomErr } = await tryEq(
+              "invite_code",
+              codeLower
+            ));
+          }
+        } else {
+          // 1) minuscules (format CreateDebateModal)
+          ({ data: roomData, error: roomErr } = await tryEq(
+            "invite_code",
+            codeLower
+          ));
+
+          // 2) MAJUSCULES
+          if (!roomData && !roomErr && codeUpper !== codeLower) {
+            ({ data: roomData, error: roomErr } = await tryEq(
+              "invite_code",
+              codeUpper
+            ));
+          }
+
+          // 3) casse exacte / mixte
+          if (
+            !roomData &&
+            !roomErr &&
+            raw !== codeLower &&
+            raw !== codeUpper
+          ) {
+            ({ data: roomData, error: roomErr } = await tryEq(
+              "invite_code",
+              raw
+            ));
+          }
+
+          // 4) ilike (insensible à la casse)
+          if (!roomData && !roomErr) {
+            const { data, error } = await supabase
               .from("debate_rooms")
               .select("*")
-              .eq("invite_code", raw.toUpperCase())
+              .ilike("invite_code", codeLower)
               .maybeSingle();
-            roomData = res2.data;
-            roomErr = res2.error;
+            roomData = data;
+            roomErr = error;
           }
         }
 
@@ -97,19 +139,20 @@ export function DebateRoom({ inviteCode, onBack }) {
 
         if (mounted) setRoom(roomData);
 
-        // 2) S'enregistrer participant (identité = auth.users.id)
-        const { error: partErr } = await supabase.from("debate_participants").upsert(
-          {
-            room_id: roomData.id,
-            user_id: uid,
-            role: roomData.host_id === uid ? "host" : "member",
-            left_at: null,
-          },
-          { onConflict: "room_id,user_id" }
-        );
+        // Participant : user_id = auth.users.id
+        const { error: partErr } = await supabase
+          .from("debate_participants")
+          .upsert(
+            {
+              room_id: roomData.id,
+              user_id: uid,
+              role: roomData.host_id === uid ? "host" : "member",
+              left_at: null,
+            },
+            { onConflict: "room_id,user_id" }
+          );
         if (partErr) console.warn("participant upsert", partErr.message);
 
-        // 3) Messages
         const { data: msgs } = await supabase
           .from("debate_messages")
           .select("*")
@@ -190,7 +233,10 @@ export function DebateRoom({ inviteCode, onBack }) {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-full" style={{ background: COLORS.surface }}>
+      <div
+        className="flex items-center justify-center h-full"
+        style={{ background: COLORS.surface }}
+      >
         <div className="animate-spin w-8 h-8 border-4 border-yellow-500 border-t-transparent rounded-full" />
       </div>
     );
@@ -198,15 +244,29 @@ export function DebateRoom({ inviteCode, onBack }) {
 
   return (
     <div className="flex flex-col h-full" style={{ background: COLORS.surface }}>
-      <div className="flex items-center gap-3 p-4 border-b" style={{ borderColor: COLORS.border }}>
-        <button type="button" onClick={onBack} className="p-2 rounded-full" style={{ color: COLORS.ivory }}>
+      <div
+        className="flex items-center gap-3 p-4 border-b"
+        style={{ borderColor: COLORS.border }}
+      >
+        <button
+          type="button"
+          onClick={onBack}
+          className="p-2 rounded-full"
+          style={{ color: COLORS.ivory }}
+        >
           <ArrowLeft size={20} />
         </button>
         <div className="flex-1 min-w-0">
-          <h2 className="font-bold text-sm truncate" style={{ color: COLORS.ivory }}>
+          <h2
+            className="font-bold text-sm truncate"
+            style={{ color: COLORS.ivory }}
+          >
             {room?.title}
           </h2>
-          <div className="text-xs flex items-center gap-1" style={{ color: COLORS.muted }}>
+          <div
+            className="text-xs flex items-center gap-1"
+            style={{ color: COLORS.muted }}
+          >
             <Hash size={12} /> {room?.topic}
             <button
               type="button"
@@ -243,13 +303,21 @@ export function DebateRoom({ inviteCode, onBack }) {
         <div ref={messagesEndRef} />
       </div>
 
-      <form onSubmit={handleSendMessage} className="p-4 border-t flex gap-2" style={{ borderColor: COLORS.border }}>
+      <form
+        onSubmit={handleSendMessage}
+        className="p-4 border-t flex gap-2"
+        style={{ borderColor: COLORS.border }}
+      >
         <input
           value={newMessage}
           onChange={(e) => setNewMessage(e.target.value)}
           placeholder="Ton message..."
           className="flex-1 px-4 py-3 rounded-xl border text-sm outline-none"
-          style={{ background: COLORS.surface2, borderColor: COLORS.border, color: COLORS.ivory }}
+          style={{
+            background: COLORS.surface2,
+            borderColor: COLORS.border,
+            color: COLORS.ivory,
+          }}
         />
         <button
           type="submit"
