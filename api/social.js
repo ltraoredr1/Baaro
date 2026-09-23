@@ -4,20 +4,132 @@
  * Racine identité : auth.users.id
  *
  * Corrections :
- * - INSERT commentaires : erreurs désormais contrôlées
- * - Retour API commentaire toujours cohérent
- * - comments_count synchronisé dans posts
- * - suppression commentaire : décrément sécurisé
- * - notifications adaptées au schéma actuel :
- *   notification_id / user_id / actor_id / source_id
+ * - commentaires contrôlés
+ * - comments_count recalculé depuis la base
+ * - synchronisation posts / commentaires
+ * - synchronisation videos / video_comments
+ * - notifications compatibles avec le schéma actuel
  */
 
-import { getAdminClient, requireUser, rateLimitAsync, applyCors } from "./_shared.js";
+import {
+  getAdminClient,
+  requireUser,
+  rateLimitAsync,
+  applyCors,
+} from "./_shared.js";
 
 function jsonError(res, status, message) {
   return res.status(status).json({
     ok: false,
     error: message,
+  });
+}
+
+// ============================================================
+// SYNC POST COMMENT COUNT
+// ============================================================
+
+async function handleSyncPostCommentCount({
+  admin,
+  postId,
+  res,
+}) {
+  if (!postId) {
+    return jsonError(res, 400, "post_id requis");
+  }
+
+  const { count, error } = await admin
+    .from("comments")
+    .select("id", {
+      count: "exact",
+      head: true,
+    })
+    .eq("post_id", postId);
+
+  if (error) {
+    console.error(
+      "[social][sync_post_comment_count][count]",
+      error
+    );
+
+    return jsonError(res, 500, error.message);
+  }
+
+  const nextCount = count ?? 0;
+
+  const { error: updateError } = await admin
+    .from("posts")
+    .update({
+      comments_count: nextCount,
+    })
+    .eq("id", postId);
+
+  if (updateError) {
+    console.error(
+      "[social][sync_post_comment_count][update]",
+      updateError
+    );
+
+    return jsonError(res, 500, updateError.message);
+  }
+
+  return res.status(200).json({
+    ok: true,
+    comments_count: nextCount,
+  });
+}
+
+// ============================================================
+// SYNC VIDEO COMMENT COUNT
+// ============================================================
+
+async function handleSyncVideoCommentCount({
+  admin,
+  videoId,
+  res,
+}) {
+  if (!videoId) {
+    return jsonError(res, 400, "video_id requis");
+  }
+
+  const { count, error } = await admin
+    .from("video_comments")
+    .select("id", {
+      count: "exact",
+      head: true,
+    })
+    .eq("video_id", videoId);
+
+  if (error) {
+    console.error(
+      "[social][sync_video_comment_count][count]",
+      error
+    );
+
+    return jsonError(res, 500, error.message);
+  }
+
+  const nextCount = count ?? 0;
+
+  const { error: updateError } = await admin
+    .from("videos")
+    .update({
+      comments_count: nextCount,
+    })
+    .eq("id", videoId);
+
+  if (updateError) {
+    console.error(
+      "[social][sync_video_comment_count][update]",
+      updateError
+    );
+
+    return jsonError(res, 500, updateError.message);
+  }
+
+  return res.status(200).json({
+    ok: true,
+    comments_count: nextCount,
   });
 }
 
@@ -37,35 +149,54 @@ async function handleComment(admin, userId, body, res) {
   // DELETE COMMENT
   // ----------------------------------------------------------
 
-  if (action === "delete" || action === "delete_comment") {
+  if (
+    action === "delete" ||
+    action === "delete_comment"
+  ) {
     if (!comment_id) {
-      return jsonError(res, 400, "comment_id requis");
+      return jsonError(
+        res,
+        400,
+        "comment_id requis"
+      );
     }
 
-    // Vérifier que le commentaire existe et appartient à l'utilisateur
     const {
       data: existingComment,
       error: findError,
     } = await admin
       .from("comments")
-      .select("id, post_id, author_id")
+      .select(
+        "id, post_id, author_id"
+      )
       .eq("id", comment_id)
       .maybeSingle();
 
     if (findError) {
-      console.error("[social][delete_comment][find]", findError);
+      console.error(
+        "[social][delete_comment][find]",
+        findError
+      );
+
       return jsonError(
         res,
         500,
-        findError.message || "Impossible de trouver le commentaire"
+        findError.message ||
+          "Impossible de trouver le commentaire"
       );
     }
 
     if (!existingComment) {
-      return jsonError(res, 404, "Commentaire introuvable");
+      return jsonError(
+        res,
+        404,
+        "Commentaire introuvable"
+      );
     }
 
-    if (existingComment.author_id !== userId) {
+    if (
+      existingComment.author_id !== userId
+    ) {
       return jsonError(
         res,
         403,
@@ -82,42 +213,35 @@ async function handleComment(admin, userId, body, res) {
       .eq("author_id", userId);
 
     if (deleteError) {
-      console.error("[social][delete_comment][delete]", deleteError);
+      console.error(
+        "[social][delete_comment][delete]",
+        deleteError
+      );
+
       return jsonError(
         res,
         500,
-        deleteError.message || "Impossible de supprimer le commentaire"
+        deleteError.message ||
+          "Impossible de supprimer le commentaire"
       );
     }
 
-    // Synchronisation du compteur du post.
-    // On évite de descendre sous 0.
-    try {
-      const { data: post } = await admin
-        .from("posts")
-        .select("comments_count")
-        .eq("id", existingComment.post_id)
-        .maybeSingle();
-
-      if (post) {
-        const currentCount = Number(post.comments_count || 0);
-        const nextCount = Math.max(0, currentCount - 1);
-
-        await admin
-          .from("posts")
-          .update({
-            comments_count: nextCount,
-          })
-          .eq("id", existingComment.post_id);
-      }
-    } catch (countError) {
-      // Le commentaire est déjà supprimé.
-      // On journalise seulement l'échec de synchronisation du compteur.
+    // Recalcul exact du compteur.
+    // Cela évite les compteurs faux ou négatifs.
+    await handleSyncPostCommentCount({
+      admin,
+      postId: existingComment.post_id,
+      res: {
+        status: () => ({
+          json: () => null,
+        }),
+      },
+    }).catch((error) => {
       console.error(
         "[social][delete_comment][count]",
-        countError
+        error
       );
-    }
+    });
 
     return res.status(200).json({
       ok: true,
@@ -131,9 +255,16 @@ async function handleComment(admin, userId, body, res) {
   // LIST COMMENTS
   // ----------------------------------------------------------
 
-  if (action === "list" || action === "list_comments") {
+  if (
+    action === "list" ||
+    action === "list_comments"
+  ) {
     if (!post_id) {
-      return jsonError(res, 400, "post_id requis");
+      return jsonError(
+        res,
+        400,
+        "post_id requis"
+      );
     }
 
     const {
@@ -159,12 +290,16 @@ async function handleComment(admin, userId, body, res) {
       .limit(100);
 
     if (error) {
-      console.error("[social][list_comments]", error);
+      console.error(
+        "[social][list_comments]",
+        error
+      );
 
       return jsonError(
         res,
         500,
-        error.message || "Erreur chargement commentaires"
+        error.message ||
+          "Erreur chargement commentaires"
       );
     }
 
@@ -178,14 +313,24 @@ async function handleComment(admin, userId, body, res) {
   // CREATE COMMENT
   // ----------------------------------------------------------
 
-  const cleanText = String(text || "").trim();
+  const cleanText = String(
+    text || ""
+  ).trim();
 
   if (!post_id) {
-    return jsonError(res, 400, "post_id requis");
+    return jsonError(
+      res,
+      400,
+      "post_id requis"
+    );
   }
 
   if (!cleanText) {
-    return jsonError(res, 400, "text requis");
+    return jsonError(
+      res,
+      400,
+      "text requis"
+    );
   }
 
   if (cleanText.length > 1000) {
@@ -196,28 +341,37 @@ async function handleComment(admin, userId, body, res) {
     );
   }
 
-  // Vérifier que le post existe.
   const {
     data: post,
     error: postError,
   } = await admin
     .from("posts")
-    .select("id, author_id, comments_count")
+    .select(
+      "id, author_id, comments_count"
+    )
     .eq("id", post_id)
     .maybeSingle();
 
   if (postError) {
-    console.error("[social][comment][post]", postError);
+    console.error(
+      "[social][comment][post]",
+      postError
+    );
 
     return jsonError(
       res,
       500,
-      postError.message || "Impossible de vérifier le post"
+      postError.message ||
+        "Impossible de vérifier le post"
     );
   }
 
   if (!post) {
-    return jsonError(res, 404, "Post introuvable");
+    return jsonError(
+      res,
+      404,
+      "Post introuvable"
+    );
   }
 
   // ----------------------------------------------------------
@@ -243,23 +397,21 @@ async function handleComment(admin, userId, body, res) {
     `)
     .single();
 
-  // IMPORTANT :
-  // L'ancien code ignorait complètement cette erreur.
   if (insertError) {
-    console.error("[social][comment][insert]", insertError);
+    console.error(
+      "[social][comment][insert]",
+      insertError
+    );
 
     return jsonError(
       res,
       500,
-      insertError.message || "Impossible d'ajouter le commentaire"
+      insertError.message ||
+        "Impossible d'ajouter le commentaire"
     );
   }
 
   if (!comment) {
-    console.error(
-      "[social][comment][insert] Aucun commentaire retourné"
-    );
-
     return jsonError(
       res,
       500,
@@ -268,38 +420,70 @@ async function handleComment(admin, userId, body, res) {
   }
 
   // ----------------------------------------------------------
-  // SYNCHRONISER comments_count
+  // RECALCUL EXACT DU COMPTEUR
   // ----------------------------------------------------------
 
-  try {
-    const currentCount = Number(post.comments_count || 0);
+  const {
+    count: commentsCount,
+    error: countError,
+  } = await admin
+    .from("comments")
+    .select("id", {
+      count: "exact",
+      head: true,
+    })
+    .eq("post_id", post_id);
 
-    await admin
-      .from("posts")
-      .update({
-        comments_count: currentCount + 1,
-      })
-      .eq("id", post_id);
-  } catch (countError) {
+  if (countError) {
     console.error(
       "[social][comment][count]",
       countError
     );
   }
 
+  const nextCount =
+    countError
+      ? Number(post.comments_count || 0) + 1
+      : commentsCount ?? 0;
+
+  const {
+    error: updateCountError,
+  } = await admin
+    .from("posts")
+    .update({
+      comments_count: nextCount,
+    })
+    .eq("id", post_id);
+
+  if (updateCountError) {
+    console.error(
+      "[social][comment][count-update]",
+      updateCountError
+    );
+  }
+
   // ----------------------------------------------------------
-  // NOTIFICATION DU PROPRIÉTAIRE DU POST
+  // NOTIFICATION DU PROPRIÉTAIRE
   // ----------------------------------------------------------
 
   try {
-    if (post.author_id && post.author_id !== userId) {
+    if (
+      post.author_id &&
+      post.author_id !== userId
+    ) {
       const {
         data: blocked,
       } = await admin
         .from("blocks")
         .select("id")
-        .eq("blocker_id", post.author_id)
-        .eq("blocked_id", userId)
+        .eq(
+          "blocker_id",
+          post.author_id
+        )
+        .eq(
+          "blocked_id",
+          userId
+        )
         .maybeSingle();
 
       if (!blocked) {
@@ -330,14 +514,10 @@ async function handleComment(admin, userId, body, res) {
     );
   }
 
-  // ----------------------------------------------------------
-  // RÉPONSE
-  // ----------------------------------------------------------
-
   return res.status(200).json({
     ok: true,
     comment,
-    comments_count: Number(post.comments_count || 0) + 1,
+    comments_count: nextCount,
   });
 }
 
@@ -345,7 +525,12 @@ async function handleComment(admin, userId, body, res) {
 // REACTIONS
 // ============================================================
 
-async function handleReaction(admin, userId, body, res) {
+async function handleReaction(
+  admin,
+  userId,
+  body,
+  res
+) {
   const {
     post_id,
     type,
@@ -353,17 +538,23 @@ async function handleReaction(admin, userId, body, res) {
   } = body || {};
 
   if (!post_id) {
-    return jsonError(res, 400, "post_id requis");
+    return jsonError(
+      res,
+      400,
+      "post_id requis"
+    );
   }
 
-  if (action === "unlike" || action === "remove") {
+  if (
+    action === "unlike" ||
+    action === "remove"
+  ) {
     await admin
       .from("post_reactions")
       .delete()
       .eq("post_id", post_id)
       .eq("user_id", userId);
 
-    // Compatibilité ancienne structure
     await admin
       .from("post_reactions")
       .delete()
@@ -389,7 +580,8 @@ async function handleReaction(admin, userId, body, res) {
         reaction_type: t,
       },
       {
-        onConflict: "post_id,user_id",
+        onConflict:
+          "post_id,user_id",
       }
     );
 
@@ -399,24 +591,27 @@ async function handleReaction(admin, userId, body, res) {
       error
     );
 
-    const fallback = await admin
-      .from("post_reactions")
-      .upsert(
-        {
-          post_id,
-          author_id: userId,
-          reaction_type: t,
-        },
-        {
-          onConflict: "post_id,author_id",
-        }
-      );
+    const fallback =
+      await admin
+        .from("post_reactions")
+        .upsert(
+          {
+            post_id,
+            author_id: userId,
+            reaction_type: t,
+          },
+          {
+            onConflict:
+              "post_id,author_id",
+          }
+        );
 
     if (fallback.error) {
       return jsonError(
         res,
         500,
-        fallback.error.message || "Réaction impossible"
+        fallback.error.message ||
+          "Réaction impossible"
       );
     }
   }
@@ -432,23 +627,40 @@ async function handleReaction(admin, userId, body, res) {
 // BLOCKS
 // ============================================================
 
-async function handleBlock(admin, userId, body, res) {
+async function handleBlock(
+  admin,
+  userId,
+  body,
+  res
+) {
   const {
     blocked_id,
     action,
   } = body || {};
 
-  if (action === "list" || action === "list_blocks") {
+  if (
+    action === "list" ||
+    action === "list_blocks"
+  ) {
     const {
       data,
       error,
     } = await admin
       .from("blocks")
-      .select("blocked_id, created_at")
-      .eq("blocker_id", userId);
+      .select(
+        "blocked_id, created_at"
+      )
+      .eq(
+        "blocker_id",
+        userId
+      );
 
     if (error) {
-      return jsonError(res, 500, error.message);
+      return jsonError(
+        res,
+        500,
+        error.message
+      );
     }
 
     return res.status(200).json({
@@ -458,7 +670,11 @@ async function handleBlock(admin, userId, body, res) {
   }
 
   if (!blocked_id) {
-    return jsonError(res, 400, "blocked_id requis");
+    return jsonError(
+      res,
+      400,
+      "blocked_id requis"
+    );
   }
 
   if (blocked_id === userId) {
@@ -473,8 +689,14 @@ async function handleBlock(admin, userId, body, res) {
     await admin
       .from("blocks")
       .delete()
-      .eq("blocker_id", userId)
-      .eq("blocked_id", blocked_id);
+      .eq(
+        "blocker_id",
+        userId
+      )
+      .eq(
+        "blocked_id",
+        blocked_id
+      );
 
     return res.status(200).json({
       ok: true,
@@ -491,7 +713,10 @@ async function handleBlock(admin, userId, body, res) {
       blocked_id,
     });
 
-  if (error && error.code !== "23505") {
+  if (
+    error &&
+    error.code !== "23505"
+  ) {
     throw error;
   }
 
@@ -505,14 +730,22 @@ async function handleBlock(admin, userId, body, res) {
 // REPORTS
 // ============================================================
 
-async function handleReport(admin, userId, body, res) {
+async function handleReport(
+  admin,
+  userId,
+  body,
+  res
+) {
   const {
     target_type,
     target_id,
     reason,
   } = body || {};
 
-  if (!target_type || !target_id) {
+  if (
+    !target_type ||
+    !target_id
+  ) {
     return jsonError(
       res,
       400,
@@ -527,15 +760,23 @@ async function handleReport(admin, userId, body, res) {
     .from("reports")
     .insert({
       reporter_id: userId,
-      target_type: String(target_type).slice(0, 50),
+      target_type: String(
+        target_type
+      ).slice(0, 50),
       target_id,
-      reason: String(reason || "").slice(0, 500),
+      reason: String(
+        reason || ""
+      ).slice(0, 500),
     })
     .select("id")
     .single();
 
   if (error) {
-    return jsonError(res, 500, error.message);
+    return jsonError(
+      res,
+      500,
+      error.message
+    );
   }
 
   return res.status(200).json({
@@ -548,7 +789,12 @@ async function handleReport(admin, userId, body, res) {
 // STORIES
 // ============================================================
 
-async function handleStory(admin, userId, body, res) {
+async function handleStory(
+  admin,
+  userId,
+  body,
+  res
+) {
   const {
     action,
     story_id,
@@ -556,17 +802,24 @@ async function handleStory(admin, userId, body, res) {
     media_url,
   } = body || {};
 
-  if (action === "list" || action === "list_stories") {
+  if (
+    action === "list" ||
+    action === "list_stories"
+  ) {
     const {
       data: blocks,
     } = await admin
       .from("blocks")
       .select("blocked_id")
-      .eq("blocker_id", userId);
+      .eq(
+        "blocker_id",
+        userId
+      );
 
-    const blockedIds = (blocks || []).map(
-      (b) => b.blocked_id
-    );
+    const blockedIds =
+      (blocks || []).map(
+        (b) => b.blocked_id
+      );
 
     let q = admin
       .from("stories")
@@ -586,9 +839,12 @@ async function handleStory(admin, userId, body, res) {
         "expires_at",
         new Date().toISOString()
       )
-      .order("created_at", {
-        ascending: false,
-      })
+      .order(
+        "created_at",
+        {
+          ascending: false,
+        }
+      )
       .limit(50);
 
     if (blockedIds.length) {
@@ -605,7 +861,11 @@ async function handleStory(admin, userId, body, res) {
     } = await q;
 
     if (error) {
-      return jsonError(res, 500, error.message);
+      return jsonError(
+        res,
+        500,
+        error.message
+      );
     }
 
     return res.status(200).json({
@@ -630,7 +890,10 @@ async function handleStory(admin, userId, body, res) {
       .from("stories")
       .delete()
       .eq("id", story_id)
-      .eq("author_id", userId);
+      .eq(
+        "author_id",
+        userId
+      );
 
     return res.status(200).json({
       ok: true,
@@ -653,11 +916,16 @@ async function handleStory(admin, userId, body, res) {
     .from("stories")
     .insert({
       author_id: userId,
-      text: String(text || "").slice(0, 500),
-      media_url: media_url || null,
-      expires_at: new Date(
-        Date.now() + 24 * 60 * 60 * 1000
-      ).toISOString(),
+      text: String(
+        text || ""
+      ).slice(0, 500),
+      media_url:
+        media_url || null,
+      expires_at:
+        new Date(
+          Date.now() +
+            24 * 60 * 60 * 1000
+        ).toISOString(),
     })
     .select(
       "id, text, media_url, created_at, expires_at"
@@ -665,7 +933,11 @@ async function handleStory(admin, userId, body, res) {
     .single();
 
   if (error) {
-    return jsonError(res, 500, error.message);
+    return jsonError(
+      res,
+      500,
+      error.message
+    );
   }
 
   return res.status(200).json({
@@ -676,9 +948,6 @@ async function handleStory(admin, userId, body, res) {
 
 // ============================================================
 // NOTIFICATIONS
-// SCHÉMA ACTUEL :
-// notification_id / user_id / actor_id / type / message
-// source_id / read / created_at / read_at
 // ============================================================
 
 async function handleNotification(
@@ -702,10 +971,7 @@ async function handleNotification(
   const notificationId =
     notification_id || id;
 
-  // ----------------------------------------------------------
   // UNREAD COUNT
-  // ----------------------------------------------------------
-
   if (
     action === "unread_count" ||
     action === "count"
@@ -722,11 +988,21 @@ async function handleNotification(
           head: true,
         }
       )
-      .eq("user_id", userId)
-      .eq("read", false);
+      .eq(
+        "user_id",
+        userId
+      )
+      .eq(
+        "read",
+        false
+      );
 
     if (error) {
-      return jsonError(res, 500, error.message);
+      return jsonError(
+        res,
+        500,
+        error.message
+      );
     }
 
     return res.status(200).json({
@@ -735,10 +1011,7 @@ async function handleNotification(
     });
   }
 
-  // ----------------------------------------------------------
   // READ ALL
-  // ----------------------------------------------------------
-
   if (action === "read_all") {
     const {
       error,
@@ -746,13 +1019,24 @@ async function handleNotification(
       .from("notifications")
       .update({
         read: true,
-        read_at: new Date().toISOString(),
+        read_at:
+          new Date().toISOString(),
       })
-      .eq("user_id", userId)
-      .eq("read", false);
+      .eq(
+        "user_id",
+        userId
+      )
+      .eq(
+        "read",
+        false
+      );
 
     if (error) {
-      return jsonError(res, 500, error.message);
+      return jsonError(
+        res,
+        500,
+        error.message
+      );
     }
 
     return res.status(200).json({
@@ -761,13 +1045,12 @@ async function handleNotification(
     });
   }
 
-  // ----------------------------------------------------------
   // READ ONE
-  // ----------------------------------------------------------
-
   if (
-    (action === "read" ||
-      action === "mark_read") &&
+    (
+      action === "read" ||
+      action === "mark_read"
+    ) &&
     notificationId
   ) {
     const {
@@ -776,16 +1059,24 @@ async function handleNotification(
       .from("notifications")
       .update({
         read: true,
-        read_at: new Date().toISOString(),
+        read_at:
+          new Date().toISOString(),
       })
       .eq(
         "notification_id",
         notificationId
       )
-      .eq("user_id", userId);
+      .eq(
+        "user_id",
+        userId
+      );
 
     if (error) {
-      return jsonError(res, 500, error.message);
+      return jsonError(
+        res,
+        500,
+        error.message
+      );
     }
 
     return res.status(200).json({
@@ -794,10 +1085,7 @@ async function handleNotification(
     });
   }
 
-  // ----------------------------------------------------------
   // DELETE
-  // ----------------------------------------------------------
-
   if (
     action === "delete" &&
     notificationId
@@ -811,10 +1099,17 @@ async function handleNotification(
         "notification_id",
         notificationId
       )
-      .eq("user_id", userId);
+      .eq(
+        "user_id",
+        userId
+      );
 
     if (error) {
-      return jsonError(res, 500, error.message);
+      return jsonError(
+        res,
+        500,
+        error.message
+      );
     }
 
     return res.status(200).json({
@@ -823,10 +1118,7 @@ async function handleNotification(
     });
   }
 
-  // ----------------------------------------------------------
   // LIST
-  // ----------------------------------------------------------
-
   const limit = Math.min(
     Number(query?.limit) || 30,
     100
@@ -851,19 +1143,30 @@ async function handleNotification(
         avatar_url
       )
     `)
-    .eq("user_id", userId)
-    .order("created_at", {
-      ascending: false,
-    })
+    .eq(
+      "user_id",
+      userId
+    )
+    .order(
+      "created_at",
+      {
+        ascending: false,
+      }
+    )
     .limit(limit);
 
   if (error) {
-    return jsonError(res, 500, error.message);
+    return jsonError(
+      res,
+      500,
+      error.message
+    );
   }
 
   return res.status(200).json({
     ok: true,
-    notifications: data || [],
+    notifications:
+      data || [],
   });
 }
 
@@ -871,23 +1174,29 @@ async function handleNotification(
 // MAIN HANDLER
 // ============================================================
 
-export default async function handler(req, res) {
+export default async function handler(
+  req,
+  res
+) {
   if (applyCors(req, res)) {
     return;
   }
 
   if (req.method === "OPTIONS") {
-    return res.status(200).end();
+    return res
+      .status(200)
+      .end();
   }
 
-  const limit = await rateLimitAsync(
-    req,
-    {
-      key: "social",
-      max: 60,
-      windowMs: 60000,
-    }
-  );
+  const limit =
+    await rateLimitAsync(
+      req,
+      {
+        key: "social",
+        max: 60,
+        windowMs: 60000,
+      }
+    );
 
   if (!limit.ok) {
     return res
@@ -899,22 +1208,65 @@ export default async function handler(req, res) {
   let user;
 
   try {
-    admin = getAdminClient();
-    user = await requireUser(req, admin);
+    admin =
+      getAdminClient();
+
+    user =
+      await requireUser(
+        req,
+        admin
+      );
   } catch (e) {
-    return res.status(e.status || 401).json({
-      ok: false,
-      error: e.message,
-    });
+    return res
+      .status(
+        e.status || 401
+      )
+      .json({
+        ok: false,
+        error: e.message,
+      });
   }
 
-  const action = String(
-    req.body?.action ||
-    req.query?.action ||
-    ""
-  ).toLowerCase();
+  const action =
+    String(
+      req.body?.action ||
+        req.query?.action ||
+        ""
+    ).toLowerCase();
 
   try {
+    // ========================================================
+    // SYNCHRONISATION COMPTEURS
+    // ========================================================
+
+    if (
+      action ===
+      "sync_post_comment_count"
+    ) {
+      return await handleSyncPostCommentCount(
+        {
+          admin,
+          postId:
+            req.body?.post_id,
+          res,
+        }
+      );
+    }
+
+    if (
+      action ===
+      "sync_video_comment_count"
+    ) {
+      return await handleSyncVideoCommentCount(
+        {
+          admin,
+          videoId:
+            req.body?.video_id,
+          res,
+        }
+      );
+    }
+
     // ========================================================
     // COMMENTS
     // ========================================================
@@ -937,7 +1289,9 @@ export default async function handler(req, res) {
 
     // Compatibilité ancienne API
     if (
-      ["list", "delete"].includes(action) &&
+      ["list", "delete"].includes(
+        action
+      ) &&
       (
         req.body?.post_id ||
         req.body?.comment_id
@@ -998,7 +1352,9 @@ export default async function handler(req, res) {
     // REPORTS
     // ========================================================
 
-    if (action === "report") {
+    if (
+      action === "report"
+    ) {
       return await handleReport(
         admin,
         user.id,
@@ -1038,7 +1394,6 @@ export default async function handler(req, res) {
       req.query,
       res
     );
-
   } catch (e) {
     console.error(
       "[social]",
