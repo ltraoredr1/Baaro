@@ -39,7 +39,6 @@ export function ChatCallModal({
   const [micOn, setMicOn] = useState(true);
   const [camOn, setCamOn] = useState(callType === "video");
   const [duration, setDuration] = useState(0);
-
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
   const timerRef = useRef(null);
@@ -48,10 +47,10 @@ export function ChatCallModal({
 
   const cleanupMedia = useCallback(() => {
     clearInterval(timerRef.current);
-    const audio = document.getElementById("baaro-call-remote-audio");
-    if (audio) {
-      audio.srcObject = null;
-      audio.remove();
+    const el = document.getElementById("baaro-call-remote-audio");
+    if (el) {
+      el.srcObject = null;
+      el.remove();
     }
     if (localVideoRef.current) localVideoRef.current.srcObject = null;
     if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
@@ -84,9 +83,7 @@ export function ChatCallModal({
           }
         }
       });
-    } catch {
-      // ignore
-    }
+    } catch {}
   }, []);
 
   const endCall = useCallback(
@@ -95,9 +92,7 @@ export function ChatCallModal({
       const dur = startedAtRef.current? Math.floor((Date.now() - startedAtRef.current) / 1000) : 0;
       try {
         await leaveCall();
-      } catch {
-        // ignore
-      }
+      } catch {}
       if (callRecord?.id) {
         updateCallStatus(callRecord.id, {
           status: finalStatus,
@@ -116,7 +111,6 @@ export function ChatCallModal({
     mountedRef.current = true;
     if (mode!== "outgoing" ||!roomUrl ||!token) return;
     let cancelled = false;
-
     (async () => {
       try {
         await startCall({ roomUrl, token, video: callType === "video" });
@@ -144,7 +138,6 @@ export function ChatCallModal({
         if (mountedRef.current) onClose?.();
       }
     })();
-
     return () => {
       cancelled = true;
     };
@@ -207,18 +200,14 @@ export function ChatCallModal({
     try {
       await enableMic(!micOn);
       setMicOn((v) =>!v);
-    } catch {
-      // ignore
-    }
+    } catch {}
   };
 
   const toggleCam = async () => {
     try {
       await enableCamera(!camOn);
       setCamOn((v) =>!v);
-    } catch {
-      // ignore
-    }
+    } catch {}
   };
 
   const formatTime = (s) => {
@@ -229,10 +218,7 @@ export function ChatCallModal({
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4" style={{ background: "rgba(0,0,0,0.85)" }}>
-      <div
-        className="w-full max-w-md rounded-3xl border overflow-hidden shadow-2xl flex flex-col"
-        style={{ background: C.surface, borderColor: C.borderGold, minHeight: callType === "video"? 480 : 360 }}
-      >
+      <div className="w-full max-w-md rounded-3xl border overflow-hidden shadow-2xl flex flex-col" style={{ background: C.surface, borderColor: C.borderGold, minHeight: callType === "video"? 480 : 360 }}>
         <div className="flex items-center justify-between p-4 border-b" style={{ borderColor: C.border }}>
           <div className="flex items-center gap-3">
             <div className="w-12 h-12 rounded-full bg-white/10 flex items-center justify-center text-xl overflow-hidden">
@@ -242,9 +228,9 @@ export function ChatCallModal({
               <p className="font-bold text-sm" style={{ color: C.ivory }}>{otherUser.name || "Membre"}</p>
               <p className="text-xs" style={{ color: C.muted }}>
                 {status === "outgoing" && "Appel en cours..."}
-                {status === "incoming" && (callType === "video"? "Appel vidéo entrant" : "Appel vocal entrant")}
+                {status === "incoming" && (callType === "video"? "Appel video entrant" : "Appel vocal entrant")}
                 {status === "active" && formatTime(duration)}
-                {status === "ended" && "Terminé"}
+                {status === "ended" && "Termine"}
               </p>
             </div>
           </div>
@@ -252,7 +238,6 @@ export function ChatCallModal({
             <X size={20} />
           </button>
         </div>
-
         <div className="flex-1 relative flex items-center justify-center bg-black/40 min-h-[200px]">
           {callType === "video"? (
             <>
@@ -269,7 +254,6 @@ export function ChatCallModal({
             </div>
           )}
         </div>
-
         <div className="p-5 flex items-center justify-center gap-4">
           {status === "incoming"? (
             <>
