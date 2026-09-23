@@ -3,12 +3,15 @@
  * Routes (via vercel.json) :
  *   POST /api/live          → actions token | create-room | roles
  *   POST /api/create-room   → rewrite → /api/live
- *   POST /api/live/token    → peut être géré via body.action = "token"
  *   POST /api/live-roles    → rewrite → /api/live
+ *
+ * Identité : uniquement auth.users.id (via requireUser / JWT).
+ * body.userId n'est JAMAIS utilisé pour l'autorisation.
+ * host_id / debate_participants.user_id = FK vers auth.users.id.
  *
  * Variables requises :
  *   DAILY_API_KEY
- *   DAILY_DOMAIN          (ex: "baaro" → https://baaro.daily.co/...)
+ *   DAILY_DOMAIN (ex: "baaro" → https://baaro.daily.co/...)
  *   SUPABASE_SERVICE_ROLE_KEY + VITE_SUPABASE_URL (ou SUPABASE_URL)
  */
 import {
@@ -73,7 +76,6 @@ async function createDailyRoom(roomName, { maxParticipants = 50, expHours = 12 }
 
   const data = await res.json().catch(() => ({}));
 
-  // Room déjà existante → on la récupère
   if (res.status === 400 && /already exists/i.test(data?.info || data?.error || "")) {
     const get = await fetch(`\( {DAILY_API}/rooms/ \){encodeURIComponent(roomName)}`, {
       headers: dailyHeaders(),
@@ -96,7 +98,7 @@ async function createDailyRoom(roomName, { maxParticipants = 50, expHours = 12 }
   return data;
 }
 
-/** Génère un meeting token Daily. */
+/** Génère un meeting token Daily — userId = auth.users.id uniquement. */
 async function createMeetingToken(roomName, { userId, userName, isOwner }) {
   const exp = Math.floor(Date.now() / 1000) + TOKEN_TTL_SEC;
   const res = await fetch(`${DAILY_API}/meeting-tokens`, {
@@ -125,7 +127,6 @@ async function createMeetingToken(roomName, { userId, userName, isOwner }) {
   return data.token;
 }
 
-/** Normalise le nom de room Daily (alphanum + tirets, max 40). */
 function sanitizeRoomName(raw) {
   const s = String(raw || "")
     .toLowerCase()
@@ -136,9 +137,8 @@ function sanitizeRoomName(raw) {
   return s || `baaro-${Date.now().toString(36)}`;
 }
 
-// ─── Actions ───────────────────────────────────────────────────────────
-
 async function handleCreateRoom(req, res, user, admin) {
+  // user.id = auth.users.id (jamais body.userId)
   const body = req.body || {};
   const title = String(body.title || "Live").slice(0, 120);
   const topic = String(body.topic || "").slice(0, 300);
@@ -146,7 +146,6 @@ async function handleCreateRoom(req, res, user, admin) {
   const inviteCode = sanitizeRoomName(body.inviteCode || body.invite_code);
   const maxParticipants = Math.min(Math.max(Number(body.maxParticipants) || 12, 2), 50);
 
-  // 1) Créer / récupérer la room Daily (sauf mode texte pur)
   let dailyRoomName = null;
   let dailyUrl = null;
   if (mode !== "text") {
@@ -159,12 +158,10 @@ async function handleCreateRoom(req, res, user, admin) {
         message: e.message,
         userId: user.id,
       });
-      // On ne bloque pas : la salle texte/chat reste utilisable
     }
   }
 
-  // 2) Upsert éventuel en base si le client n'a pas encore créé la ligne
-  //    (le modal actuel crée déjà en base ; on met juste à jour daily_room_name)
+  // Mise à jour uniquement pour les salles de CET hôte (auth.users.id)
   if (dailyRoomName && inviteCode) {
     try {
       await admin
@@ -197,13 +194,13 @@ async function handleCreateRoom(req, res, user, admin) {
 }
 
 async function handleToken(req, res, user, admin) {
+  // Autorisation basée uniquement sur user.id (auth.users.id)
   const body = req.body || {};
   const liveId = String(body.liveId || body.roomName || body.inviteCode || "").trim();
   if (!liveId) {
     return res.status(400).json({ error: "liveId requis" });
   }
 
-  // Vérifier que l'utilisateur a le droit (host ou participant)
   const { data: room } = await admin
     .from("debate_rooms")
     .select("id, host_id, daily_room_name, invite_code, status, mode")
@@ -214,6 +211,7 @@ async function handleToken(req, res, user, admin) {
     return res.status(404).json({ error: "Live introuvable ou terminé" });
   }
 
+  // host_id et participants.user_id = FK vers auth.users.id
   const isHost = room.host_id === user.id;
   if (!isHost) {
     const { data: part } = await admin
@@ -230,14 +228,13 @@ async function handleToken(req, res, user, admin) {
 
   const roomName = room.daily_room_name || sanitizeRoomName(room.invite_code || liveId);
 
-  // S'assurer que la room Daily existe
   try {
     await createDailyRoom(roomName);
   } catch (e) {
     logWarn("live", "ensure Daily room", { message: e.message });
   }
 
-  const isOwner = body.isOwner === true || isHost;
+  const isOwner = isHost || body.isOwner === true;
   const token = await createMeetingToken(roomName, {
     userId: user.id,
     userName: body.userName || (isOwner ? "Hôte" : "Participant"),
@@ -253,15 +250,14 @@ async function handleToken(req, res, user, admin) {
   });
 }
 
-async function handleRoles(req, res, user, admin) {
-  // Stub minimal — les rôles passent surtout par les RPC Supabase
-  // (respond_debate_role_request). On accepte la route pour éviter 404.
+async function handleRoles(req, res, user) {
   const body = req.body || {};
   logInfo("live", "roles action", { userId: user.id, action: body.action });
-  return res.status(200).json({ ok: true, message: "Utilise les RPC Supabase pour les rôles" });
+  return res.status(200).json({
+    ok: true,
+    message: "Utilise les RPC Supabase pour les rôles",
+  });
 }
-
-// ─── Handler principal ─────────────────────────────────────────────────
 
 export default async function handler(req, res) {
   if (applyCors(req, res)) return;
@@ -283,13 +279,13 @@ export default async function handler(req, res) {
   let admin, user;
   try {
     admin = getAdminClient();
+    // requireUser → auth.users.id uniquement (JWT Bearer)
     user = await requireUser(req, admin);
   } catch (e) {
     return res.status(e.status || 500).json({ error: e.message });
   }
 
   const body = req.body || {};
-  // Détection de l'action : body.action, path, ou rewrite
   const urlPath = (req.url || "").split("?")[0];
   let action = body.action || "token";
 
@@ -306,7 +302,7 @@ export default async function handler(req, res) {
       return await handleCreateRoom(req, res, user, admin);
     }
     if (action === "roles") {
-      return await handleRoles(req, res, user, admin);
+      return await handleRoles(req, res, user);
     }
     return await handleToken(req, res, user, admin);
   } catch (err) {
