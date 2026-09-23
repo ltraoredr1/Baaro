@@ -1,4 +1,31 @@
-const handleCreate = async (e) => {
+import { useState } from "react";
+import { X, Mic, Video, MessageSquare, Sparkles, Zap, Paperclip, Layers } from "lucide-react";
+import { COLORS } from "../theme.js";
+import { supabase } from "../supabaseClient.js";
+import { API_BASE } from "../config.js";
+
+const TOPIC_SUGGESTIONS = ["Tech & IA", "Afrique", "Économie", "Culture", "Sport", "Société"];
+const MODES = [
+  { id: "hybrid", icon: Layers, label: "Tout", hint: "Texte · Voix · Vidéo · Fichiers" },
+  { id: "video", icon: Video, label: "Vidéo", hint: "Caméra + chat" },
+  { id: "audio", icon: Mic, label: "Audio", hint: "Voix + chat" },
+  { id: "text", icon: MessageSquare, label: "Texte", hint: "Chat + fichiers" },
+];
+
+function randomCode(n = 6) {
+  return Math.random().toString(36).substring(2, 2 + n).toUpperCase();
+}
+
+export function CreateDebateModal({ isOpen, onClose, onSuccess }) {
+  const [title, setTitle] = useState("");
+  const [topic, setTopic] = useState("");
+  const [mode, setMode] = useState("hybrid");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  if (!isOpen) return null;
+
+  const handleCreate = async (e) => {
     e?.preventDefault?.();
     const titleVal = title.trim();
     const topicVal = topic.trim();
@@ -40,7 +67,6 @@ const handleCreate = async (e) => {
         .single();
 
       if (roomErr) {
-        // Messages plus clairs que "Failed to fetch"
         const msg = roomErr.message || "";
         if (/fetch|network|Failed to fetch/i.test(msg)) {
           throw new Error(
@@ -113,3 +139,157 @@ const handleCreate = async (e) => {
       setLoading(false);
     }
   };
+
+  const canSubmit = title.trim() && topic.trim() && !loading;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/80 backdrop-blur-md"
+      onClick={onClose}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="w-full sm:max-w-md rounded-t-3xl sm:rounded-3xl p-6 border shadow-2xl flex flex-col gap-5 max-h-[92vh] overflow-y-auto"
+        style={{ background: COLORS.surface, borderColor: COLORS.borderGold }}
+      >
+        <div className="flex items-center justify-between">
+          <h2
+            className="text-lg font-bold flex items-center gap-2"
+            style={{ color: COLORS.ivory }}
+          >
+            <Zap size={20} style={{ color: COLORS.gold }} /> Nouveau live
+          </h2>
+          <button
+            onClick={onClose}
+            className="p-2 rounded-full"
+            style={{ color: COLORS.muted }}
+          >
+            <X size={20} />
+          </button>
+        </div>
+
+        {error && (
+          <div className="p-3 rounded-xl text-xs border border-red-500/40 bg-red-500/10 text-red-300">
+            {error}
+          </div>
+        )}
+
+        <div>
+          <label
+            className="text-[11px] font-bold uppercase tracking-wider mb-1.5 block"
+            style={{ color: COLORS.muted }}
+          >
+            Titre
+          </label>
+          <input
+            type="text"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="Ex : L'avenir de l'IA en Afrique"
+            maxLength={80}
+            autoFocus
+            className="w-full px-4 py-3 rounded-xl border text-sm outline-none"
+            style={{
+              background: COLORS.surface2,
+              borderColor: COLORS.border,
+              color: COLORS.ivory,
+            }}
+          />
+        </div>
+
+        <div>
+          <label
+            className="text-[11px] font-bold uppercase tracking-wider mb-1.5 block"
+            style={{ color: COLORS.muted }}
+          >
+            Thème
+          </label>
+          <input
+            type="text"
+            value={topic}
+            onChange={(e) => setTopic(e.target.value)}
+            placeholder="Ex : #Tech"
+            maxLength={40}
+            className="w-full px-4 py-3 rounded-xl border text-sm outline-none mb-2"
+            style={{
+              background: COLORS.surface2,
+              borderColor: COLORS.border,
+              color: COLORS.ivory,
+            }}
+          />
+          <div className="flex flex-wrap gap-1.5">
+            {TOPIC_SUGGESTIONS.map((t) => (
+              <button
+                key={t}
+                type="button"
+                onClick={() => setTopic(t)}
+                className="text-[10px] px-2.5 py-1 rounded-full border font-medium"
+                style={{
+                  background: topic === t ? `${COLORS.teal}22` : COLORS.surface2,
+                  borderColor: topic === t ? COLORS.teal : COLORS.border,
+                  color: topic === t ? COLORS.teal : COLORS.muted,
+                }}
+              >
+                {t}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <label
+            className="text-[11px] font-bold uppercase tracking-wider mb-2 block"
+            style={{ color: COLORS.muted }}
+          >
+            Format
+          </label>
+          <div className="grid grid-cols-2 gap-2">
+            {MODES.map((m) => {
+              const Icon = m.icon;
+              const active = mode === m.id;
+              return (
+                <button
+                  key={m.id}
+                  type="button"
+                  onClick={() => setMode(m.id)}
+                  className="flex flex-col items-center gap-1 py-3 px-2 rounded-xl border"
+                  style={{
+                    background: active ? `${COLORS.gold}18` : COLORS.surface2,
+                    borderColor: active ? COLORS.gold : COLORS.border,
+                    color: active ? COLORS.gold : COLORS.muted,
+                  }}
+                >
+                  <Icon size={20} />
+                  <span className="text-xs font-bold">{m.label}</span>
+                  <span className="text-[9px] opacity-70 text-center">{m.hint}</span>
+                </button>
+              );
+            })}
+          </div>
+          <p
+            className="text-[10px] mt-2 flex items-center gap-1"
+            style={{ color: COLORS.muted }}
+          >
+            <Paperclip size={12} /> Fichiers disponibles dans tous les formats
+          </p>
+        </div>
+
+        <button
+          type="button"
+          onClick={handleCreate}
+          disabled={!canSubmit}
+          className="w-full py-3.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2 disabled:opacity-40 active:scale-[0.98]"
+          style={{ background: COLORS.gold, color: COLORS.bg }}
+        >
+          {loading ? (
+            <span className="animate-pulse">Création…</span>
+          ) : (
+            <>
+              <Sparkles size={16} /> Lancer le live
+            </>
+          )}
+        </button>
+      </div>
+    </div>
+  );
+}
