@@ -1,29 +1,35 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 
 export default function AnimatedTab({ children, tabKey }) {
-  const [visibleKey, setVisibleKey] = useState(tabKey);
-  const [animating, setAnimating] = useState(false);
+  const [displayChildren, setDisplayChildren] = useState(children);
+  const [displayKey, setDisplayKey] = useState(tabKey);
+  const [phase, setPhase] = useState('in'); // in | out
 
   useEffect(() => {
-    if (tabKey !== visibleKey) {
-      setAnimating(true);
-      const timer = setTimeout(() => {
-        setVisibleKey(tabKey);
-        setAnimating(false);
+    if (tabKey !== displayKey) {
+      setPhase('out');
+      const t = setTimeout(() => {
+        setDisplayKey(tabKey);
+        setDisplayChildren(children);
+        // Force reflow pour que le 'in' se rejoue
+        requestAnimationFrame(() => setPhase('in'));
       }, 150);
-      return () => clearTimeout(timer);
+      return () => clearTimeout(t);
+    } else {
+      // Même onglet mais props qui changent (ex: id)
+      setDisplayChildren(children);
     }
-  }, [tabKey, visibleKey]);
+  }, [tabKey, children, displayKey]);
 
   return (
     <div
-      className={`transition-all duration-200 ease-out transform ${
-        animating
+      className={`transition-all duration-200 ease-out will-change-transform ${
+        phase === 'out'
           ? 'opacity-0 translate-y-2 scale-[0.99]'
           : 'opacity-100 translate-y-0 scale-100'
       } h-full w-full`}
     >
-      {children}
+      {displayChildren}
     </div>
   );
 }
