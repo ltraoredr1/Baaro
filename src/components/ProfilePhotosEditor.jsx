@@ -1,15 +1,30 @@
 /**
  * Édition photo de profil + couverture
+ * Identité : userId = auth.users.id = profiles.id (jamais handle / email)
  * Place : src/components/ProfilePhotosEditor.jsx
- * Usage dans SettingsTab : <ProfilePhotosEditor userId={accountUserId} profile={userProfile} onUpdated={...} />
+ *
+ * Usage :
+ *   <ProfilePhotosEditor
+ *     userId={session.user.id}
+ *     profile={userProfile}
+ *     onUpdated={(patch) => { /* merge dans le state parent *\/ }}
+ *   />
  */
-import { useRef, useState } from "react";
+import { useRef, useState, useEffect } from "react";
 import { Camera, ImagePlus, Loader2, Trash2 } from "lucide-react";
 import { COLORS } from "../theme.js";
 import { supabase } from "../supabaseClient.js";
 import { uploadProfileMedia } from "../lib/profileMedia.js";
 import { useToast } from "./ToastContext.jsx";
 import { LazyImage } from "./LazyMedia.jsx";
+
+function isAuthUserId(id) {
+  if (!id || typeof id !== "string") return false;
+  // Refuser handle (@xxx) ou email comme "identité"
+  if (id.startsWith("@")) return false;
+  if (id.includes("@") && id.includes(".")) return false;
+  return id.length >= 32;
+}
 
 export default function ProfilePhotosEditor({ userId, profile, onUpdated }) {
   const { showToast } = useToast();
@@ -19,24 +34,34 @@ export default function ProfilePhotosEditor({ userId, profile, onUpdated }) {
   const [coverUrl, setCoverUrl] = useState(profile?.cover_url || null);
   const [busy, setBusy] = useState(null); // 'avatar' | 'cover' | null
 
+  // Resync quand le profil est rechargé (profiles.id = auth.users.id)
+  useEffect(() => {
+    setAvatarUrl(profile?.avatar_url || null);
+    setCoverUrl(profile?.cover_url || null);
+  }, [profile?.avatar_url, profile?.cover_url]);
+
   async function persist(patch) {
-    if (!userId) return;
-    const { error } = await supabase
-      .from("profiles")
-      .upsert(
-        {
-          id: userId,
-          ...patch,
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: "id" }
-      );
+    if (!isAuthUserId(userId)) {
+      throw new Error("Identité invalide : auth.users.id requis");
+    }
+    const { error } = await supabase.from("profiles").upsert(
+      {
+        id: userId, // = auth.users.id
+        ...patch,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "id" }
+    );
     if (error) throw error;
     onUpdated?.(patch);
   }
 
   async function onPick(kind, file) {
-    if (!file || !userId) return;
+    if (!file) return;
+    if (!isAuthUserId(userId)) {
+      showToast?.("Connexion requise", "error");
+      return;
+    }
     setBusy(kind);
     try {
       const url = await uploadProfileMedia(file, { userId, kind });
@@ -47,8 +72,14 @@ export default function ProfilePhotosEditor({ userId, profile, onUpdated }) {
         setCoverUrl(url);
         await persist({ cover_url: url });
       }
-      showToast?.(kind === "avatar" ? "Photo de profil mise à jour" : "Couverture mise à jour", "success");
+      showToast?.(
+        kind === "avatar"
+          ? "Photo de profil mise à jour"
+          : "Couverture mise à jour",
+        "success"
+      );
     } catch (e) {
+      console.error("[BAARO] upload profile media", e);
       showToast?.(e.message || "Échec de l'envoi", "error");
     } finally {
       setBusy(null);
@@ -56,6 +87,7 @@ export default function ProfilePhotosEditor({ userId, profile, onUpdated }) {
   }
 
   async function clear(kind) {
+    if (!isAuthUserId(userId)) return;
     setBusy(kind);
     try {
       if (kind === "avatar") {
@@ -73,36 +105,51 @@ export default function ProfilePhotosEditor({ userId, profile, onUpdated }) {
     }
   }
 
-  const initial = (profile?.display_name || "?").charAt(0).toUpperCase();
+  const initial = (profile?.display_name || profile?.handle || "?").charAt(0).toUpperCase();
 
   return (
     <div className="flex flex-col gap-3">
       <p className="text-xs font-semibold" style={{ color: COLORS.muted }}>
-        Photos
+        Photos de profil
       </p>
 
-      {/* Couverture */}
+      {/* ── Couverture ── */}
       <div
         className="relative w-full h-28 rounded-2xl overflow-hidden border"
         style={{ borderColor: COLORS.border, background: COLORS.surface2 }}
       >
         {coverUrl ? (
-          <LazyImage src={coverUrl} alt="" variant="full" className="w-full h-28 object-cover" />
+          <LazyImage
+            src={coverUrl}
+            alt="Couverture"
+            className="w-full h-full object-cover"
+          />
         ) : (
-          <div className="w-full h-full flex items-center justify-center" style={{ color: COLORS.muted }}>
-            <ImagePlus size={28} />
+          <div
+            className="w-full h-full flex items-center justify-center"
+            style={{ background: `linear-gradient(135deg, ${COLORS.surface2}, ${COLORS.surface})` }}
+          >
+            <ImagePlus size={28} style={{ color: COLORS.muted }} />
           </div>
         )}
-        <div className="absolute inset-0 bg-gradient-to-t from-black/50 to-transparent" />
-        <div className="absolute bottom-2 right-2 flex gap-1.5">
+
+        <div className="absolute inset-0 flex items-end justify-end gap-2 p-2">
           <button
             type="button"
-            disabled={!!busy || !userId}
+            disabled={!!busy}
             onClick={() => coverRef.current?.click()}
-            className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold flex items-center gap-1"
-            style={{ background: COLORS.gold, color: "#0B1220", opacity: busy === "cover" ? 0.7 : 1 }}
+            className="text-[11px] font-bold px-3 py-1.5 rounded-lg border flex items-center gap-1"
+            style={{
+              borderColor: COLORS.borderGold,
+              color: COLORS.gold,
+              background: "rgba(0,0,0,0.45)",
+            }}
           >
-            {busy === "cover" ? <Loader2 size={12} className="animate-spin" /> : <Camera size={12} />}
+            {busy === "cover" ? (
+              <Loader2 size={12} className="animate-spin" />
+            ) : (
+              <Camera size={12} />
+            )}
             Couverture
           </button>
           {coverUrl && (
@@ -110,14 +157,19 @@ export default function ProfilePhotosEditor({ userId, profile, onUpdated }) {
               type="button"
               disabled={!!busy}
               onClick={() => clear("cover")}
-              className="p-1.5 rounded-lg border"
-              style={{ borderColor: COLORS.border, background: "rgba(0,0,0,0.5)", color: "#fff" }}
+              className="text-[11px] px-2 py-1.5 rounded-lg border flex items-center gap-1"
+              style={{
+                borderColor: COLORS.border,
+                color: COLORS.muted,
+                background: "rgba(0,0,0,0.45)",
+              }}
               aria-label="Retirer la couverture"
             >
               <Trash2 size={12} />
             </button>
           )}
         </div>
+
         <input
           ref={coverRef}
           type="file"
@@ -131,40 +183,42 @@ export default function ProfilePhotosEditor({ userId, profile, onUpdated }) {
         />
       </div>
 
-      {/* Avatar */}
-      <div className="flex items-center gap-3 -mt-8 ml-3 relative z-10">
-        <button
-          type="button"
-          disabled={!!busy || !userId}
-          onClick={() => avatarRef.current?.click()}
-          className="w-20 h-20 rounded-full overflow-hidden border-4 flex items-center justify-center relative"
-          style={{
-            borderColor: COLORS.bg || "#0B1220",
-            background: COLORS.surface,
-            boxShadow: `0 0 0 1px ${COLORS.borderGold}`,
-          }}
+      {/* ── Avatar ── */}
+      <div className="flex items-center gap-4">
+        <div
+          className="relative w-20 h-20 rounded-full overflow-hidden border-2 shrink-0"
+          style={{ borderColor: COLORS.borderGold, background: COLORS.surface2 }}
         >
           {avatarUrl ? (
-            <LazyImage src={avatarUrl} alt="" variant="avatar" className="w-20 h-20 rounded-full" />
+            <LazyImage
+              src={avatarUrl}
+              alt="Photo de profil"
+              className="w-full h-full object-cover"
+            />
           ) : (
-            <span className="text-2xl font-bold" style={{ color: COLORS.gold }}>
+            <div
+              className="w-full h-full flex items-center justify-center text-2xl font-bold"
+              style={{ color: COLORS.gold }}
+            >
               {initial}
-            </span>
+            </div>
           )}
           {busy === "avatar" && (
-            <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
+            <div className="absolute inset-0 flex items-center justify-center bg-black/50">
               <Loader2 size={20} className="animate-spin" style={{ color: COLORS.gold }} />
             </div>
           )}
-        </button>
-        <div className="flex flex-col gap-1 pt-6">
+        </div>
+
+        <div className="flex flex-col gap-1.5 min-w-0">
           <button
             type="button"
-            disabled={!!busy || !userId}
+            disabled={!!busy}
             onClick={() => avatarRef.current?.click()}
-            className="text-xs font-bold px-3 py-1.5 rounded-lg border self-start"
+            className="text-[11px] font-bold px-3 py-1.5 rounded-lg border self-start flex items-center gap-1.5"
             style={{ borderColor: COLORS.borderGold, color: COLORS.gold }}
           >
+            <Camera size={12} />
             Photo de profil
           </button>
           {avatarUrl && (
@@ -172,13 +226,18 @@ export default function ProfilePhotosEditor({ userId, profile, onUpdated }) {
               type="button"
               disabled={!!busy}
               onClick={() => clear("avatar")}
-              className="text-[11px] self-start"
+              className="text-[11px] self-start flex items-center gap-1"
               style={{ color: COLORS.muted }}
             >
+              <Trash2 size={12} />
               Retirer
             </button>
           )}
+          <p className="text-[10px]" style={{ color: COLORS.muted }}>
+            JPEG, PNG, WebP · max 5 Mo
+          </p>
         </div>
+
         <input
           ref={avatarRef}
           type="file"
