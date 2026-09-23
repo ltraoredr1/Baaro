@@ -3,6 +3,7 @@ import { X, Image as ImageIcon, Video, Type, BarChart3, Smile, Send } from "luci
 import { supabase } from "../supabaseClient.js";
 import { StoriesBar } from "./StoriesBar.jsx";
 import { StoryViewer } from "./StoryViewer.jsx";
+import { StoryComposer } from "./StoryComposer.jsx";
 import { COLORS } from "../theme.js";
 import { useToast } from "./ToastContext.jsx";
 
@@ -28,6 +29,7 @@ export function FeedStories({ userId, onRewardPoints }) {
   const [pollQuestion, setPollQuestion] = useState("");
   const [pollOptions, setPollOptions] = useState(["", ""]);
   const [publishing, setPublishing] = useState(false);
+  const [carouselOpen, setCarouselOpen] = useState(false);
 
   const reset = () => {
     if (preview) URL.revokeObjectURL(preview);
@@ -171,9 +173,19 @@ export function FeedStories({ userId, onRewardPoints }) {
         <div className="fixed inset-0 z-[100] bg-black/85 backdrop-blur-sm flex items-end sm:items-center justify-center">
           <div className="w-full max-w-md max-h-[92vh] overflow-y-auto rounded-t-3xl sm:rounded-3xl p-5 border"
                style={{ background: COLORS.surface || "#111827", borderColor: COLORS.borderGold || "#80652c" }}>
-            <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center justify-between mb-4 gap-2">
               <h3 className="text-white font-bold text-lg">Créer une story</h3>
-              <button onClick={reset} className="p-2 text-white/70"><X size={22} /></button>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => { setOpen(false); setCarouselOpen(true); }}
+                  className="text-[11px] font-bold px-2.5 py-1.5 rounded-lg border"
+                  style={{ borderColor: COLORS.borderGold || "#80652c", color: COLORS.gold }}
+                >
+                  Carousel + audio
+                </button>
+                <button type="button" onClick={reset} className="p-2 text-white/70"><X size={22} /></button>
+              </div>
             </div>
 
             <div className="grid grid-cols-4 gap-2 mb-4">
@@ -258,6 +270,19 @@ export function FeedStories({ userId, onRewardPoints }) {
             </button>
           </div>
         </div>
+      )}
+
+      {carouselOpen && (
+        <StoryComposer
+          currentUserId={userId}
+          onClose={() => setCarouselOpen(false)}
+          onCreated={() => {
+            setCarouselOpen(false);
+            setStoryRefreshKey((k) => k + 1);
+            showToast?.("Story carousel publiée !", "success");
+            onRewardPoints?.("publish_story", "Story carousel", null);
+          }}
+        />
       )}
     </>
   );
