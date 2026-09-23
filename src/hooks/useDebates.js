@@ -24,17 +24,34 @@ export function useDebates(userId) {
       return;
     }
     setLoadingRooms(true);
-    const { data, error } = await supabase
-     .from("debate_rooms")
-     .select(`*, debate_participants!inner(user_id, left_at, role)`)
-     .eq("debate_participants.user_id", userId)
-     .is("debate_participants.left_at", null)
-     .order("created_at", { ascending: false })
-     .limit(50);
+    try {
+      const { data: parts, error: e1 } = await supabase
+       .from("debate_participants")
+       .select("room_id")
+       .eq("user_id", userId)
+       .is("left_at", null);
 
-    if (error) console.error("loadRooms", error.message);
-    setRooms(data || []);
-    setLoadingRooms(false);
+      if (e1) throw e1;
+      if (!parts?.length) {
+        setRooms([]);
+        return;
+      }
+
+      const ids = parts.map(p => p.room_id);
+      const { data: roomsData, error: e2 } = await supabase
+       .from("debate_rooms")
+       .select("*")
+       .in("id", ids)
+       .order("created_at", { ascending: false });
+
+      if (e2) throw e2;
+      setRooms(roomsData || []);
+    } catch (err) {
+      console.error("loadRooms", err.message);
+      setRooms([]);
+    } finally {
+      setLoadingRooms(false);
+    }
   }, [userId]);
 
   useEffect(() => {
@@ -101,7 +118,6 @@ export function useRoomChat(roomId, userId) {
   const messagesRef = useRef([]);
   useEffect(() => { messagesRef.current = messages; }, [messages]);
 
-  // CHAT - Fix visibilité
   useEffect(() => {
     if (!roomId) return;
     let cancelled = false;
@@ -124,10 +140,10 @@ export function useRoomChat(roomId, userId) {
     const content = (text?? inputText).trim().slice(0, 1000);
     if (!content ||!roomId ||!userId ||!canSend()) return;
     setInputText("");
-    const tmp = { id: `tmp_${Date.now()}`, room_id: roomId, sender_id: userId, sender_type: "user", text: content, created_at: new Date().toISOString(), _optimistic: true };
-    setMessages(p => [...p, tmp]);
+    const tmpId = `tmp_${Date.now()}`;
+    setMessages(p => [...p, { id: tmpId, room_id: roomId, sender_id: userId, sender_type: "user", text: content, created_at: new Date().toISOString(), _optimistic: true }]);
     const { error } = await supabase.from("debate_messages").insert({ room_id: roomId, sender_id: userId, sender_type: "user", text: content });
-    if (error) setMessages(p => p.filter(m => m.id!== tmp.id));
+    if (error) setMessages(p => p.filter(m => m.id!== tmpId));
   }, [roomId, userId, inputText]);
 
   const askAI = useCallback(async (topic) => {
@@ -152,38 +168,85 @@ export function useRoomChat(roomId, userId) {
   return { messages, loading, sendText, askAI, aiThinking, inputText, setInputText };
 }
 
-// NOUVEAU : Hook Live Audio/Video pour mode audio/video
-export function useDebateLive(roomId, userId, isHost) {
+export function useDebateLive(room, userId, isHost) {
   const callRef = useRef(null);
-  const [camOn, setCamOn] = useState(true);
+  const [camOn, setCamOn] = useState(room?.mode!== "audio");
   const [micOn, setMicOn] = useState(true);
   const [joined, setJoined] = useState(false);
+  const [error, setError] = useState(null);
 
   const joinLive = useCallback(async (containerEl) => {
-    if (!roomId ||!userId ||!containerEl) return;
+    if (!room?.id ||!userId ||!containerEl) return;
     try {
-      await navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then(s => s.getTracks().forEach(t => t.stop())).catch(() => {});
+      setError(null);
+      try {
+        const s = await navigator.mediaDevices.getUserMedia({
+          video: room.mode!== "audio"? { facingMode: "user" } : false,
+          audio: true
+        });
+        s.getTracks().forEach(t => t.stop());
+      } catch {}
+
       const { data: { session } } = await supabase.auth.getSession();
       const res = await fetch(`${API_BASE}/api/live/token`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token || ""}` },
-        body: JSON.stringify({ liveId: roomId, userId, isOwner: isHost }),
+        body: JSON.stringify({ liveId: room.invite_code || room.id, userId, isOwner:!!isHost }),
       });
       const { token } = await res.json();
-      if (!token) throw new Error("No token");
+      if (!token) throw new Error("No Daily token");
 
-      const call = DailyIframe.createFrame(containerEl, { iframeStyle: { width: "100%", height: "100%", border: "0" } });
+      const call = DailyIframe.createFrame(containerEl, {
+        iframeStyle: { width: "100%", height: "100%", border: "0", borderRadius: "16px" },
+        showLeaveButton: false,
+        showFullscreenButton: true,
+      });
       callRef.current = call;
-      await call.join({ url: `https://${import.meta.env.VITE_DAILY_DOMAIN}.daily.co/${roomId}`, token });
-      await call.setLocalVideo(camOn);
+
+      await call.join({
+        url: `https://${import.meta.env.VITE_DAILY_DOMAIN}.daily.co/${room.invite_code || room.id}`,
+        token,
+        videoSource: room.mode === "audio"? false : true,
+      });
+
+      await call.setLocalVideo(room.mode!== "audio"? camOn : false);
       await call.setLocalAudio(micOn);
       setJoined(true);
-    } catch (e) { console.error("joinLive", e.message); }
-  }, [roomId, userId, isHost, camOn, micOn]);
+    } catch (e) {
+      setError(e.message);
+      console.error("joinLive", e);
+    }
+  }, [room, userId, isHost, camOn, micOn]);
 
-  const toggleCam = async () => { const n =!camOn; setCamOn(n); await callRef.current?.setLocalVideo(n); };
-  const toggleMic = async () => { const n =!micOn; setMicOn(n); await callRef.current?.setLocalAudio(n); };
-  const leaveLive = async () => { await callRef.current?.leave(); setJoined(false); };
+  const toggleCam = useCallback(async () => {
+    setCamOn(prev => {
+      const next =!prev;
+      callRef.current?.setLocalVideo(next);
+      return next;
+    });
+  }, []);
 
-  return { joinLive, leaveLive, toggleCam, toggleMic, camOn, micOn, joined, callRef };
+  const toggleMic = useCallback(async () => {
+    setMicOn(prev => {
+      const next =!prev;
+      callRef.current?.setLocalAudio(next);
+      return next;
+    });
+  }, []);
+
+  const leaveLive = useCallback(async () => {
+    try {
+      await callRef.current?.leave();
+      await callRef.current?.destroy();
+    } finally {
+      callRef.current = null;
+      setJoined(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    return () => { callRef.current?.destroy(); };
+  }, []);
+
+  return { joinLive, leaveLive, toggleCam, toggleMic, camOn, micOn, joined, error, callRef };
 }
