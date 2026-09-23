@@ -1,16 +1,16 @@
 /**
  * Image / vidéo optimisées + miniatures Supabase.
  * Place : src/components/LazyMedia.jsx
- * (remplace l'ancien fichier du même nom)
  */
 import { useState } from "react";
-import { COLORS } from "../theme.js";
+import { COLORS as THEME_COLORS } from "../theme.js";
 import { feedImageUrl, avatarUrl, fullImageUrl } from "../lib/mediaUrl.js";
 
-/**
- * @param {object} props
- * @param {'feed'|'avatar'|'full'|'raw'} [props.variant]
- */
+const FALLBACK = {
+  surface2: "rgba(255,255,255,0.06)",
+  muted: "rgba(245,243,239,0.5)",
+};
+
 export function LazyImage({
   src,
   alt = "",
@@ -21,11 +21,12 @@ export function LazyImage({
   variant = "feed",
   width,
 }) {
+  const C = {...FALLBACK,...(THEME_COLORS||{}) };
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
 
   let resolved = src;
-  if (src && variant !== "raw") {
+  if (src && variant!== "raw") {
     if (variant === "avatar") resolved = avatarUrl(src, width || 96);
     else if (variant === "full") resolved = fullImageUrl(src);
     else resolved = feedImageUrl(src);
@@ -36,31 +37,28 @@ export function LazyImage({
       <div
         className={`flex items-center justify-center bg-black/40 text-xs ${className}`}
         style={{
-          color: COLORS.muted,
+          color: C.muted,
           aspectRatio: aspectRatio || undefined,
-          minHeight: aspectRatio ? undefined : 120,
+          minHeight: aspectRatio? undefined : 120,
+          background: C.surface2,
           ...style,
         }}
         role="img"
         aria-label={alt || "Média indisponible"}
       >
-        {failed ? "Image indisponible" : ""}
+        {failed? "Image indisponible" : ""}
       </div>
     );
   }
 
   return (
     <div
-      className={`relative overflow-hidden ${className}`}
+      className={`relative overflow-hidden bg-black/20 ${className}`}
       style={{ aspectRatio: aspectRatio || undefined, ...style }}
       onClick={onClick}
     >
       {!loaded && (
-        <div
-          className="absolute inset-0 animate-pulse"
-          style={{ background: COLORS.surface2 }}
-          aria-hidden
-        />
+        <div className="absolute inset-0 animate-pulse" style={{ background: C.surface2 }} aria-hidden />
       )}
       <img
         src={resolved}
@@ -69,9 +67,7 @@ export function LazyImage({
         decoding="async"
         onLoad={() => setLoaded(true)}
         onError={() => setFailed(true)}
-        className={`w-full h-full object-cover transition-opacity duration-300 ${
-          loaded ? "opacity-100" : "opacity-0"
-        }`}
+        className={`w-full h-full object-cover transition-opacity duration-300 ${loaded? "opacity-100" : "opacity-0"}`}
       />
     </div>
   );
@@ -85,30 +81,10 @@ export function LazyVideo({
   controls = true,
   ...rest
 }) {
+  const C = {...FALLBACK,...(THEME_COLORS||{}) };
   const [failed, setFailed] = useState(false);
 
   if (!src || failed) {
     return (
-      <div
-        className={`flex items-center justify-center bg-black text-xs ${className}`}
-        style={{ color: COLORS.muted, minHeight: 160 }}
-      >
-        Vidéo indisponible
-      </div>
-    );
-  }
-
-  return (
-    <video
-      src={src}
-      poster={poster}
-      className={className}
-      controls={controls}
-      muted={muted}
-      playsInline
-      preload="metadata"
-      onError={() => setFailed(true)}
-      {...rest}
-    />
-  );
-}
+      <div className={`flex items-center justify-center bg-black text-xs ${className}`} style={{ color: C.muted, minHeight: 160, background: C.surface2 }}>
+       
