@@ -1,0 +1,14 @@
+                    BAARO
+                      │
+        ┌─────────────┴─────────────┐
+        │                           │
+     SUPABASE                    FIREBASE
+        │                           │
+ PostgreSQL                    FCM Push
+ Auth                         Analytics
+ RLS                          Crashlytics
+ Realtime
+ Storage
+ Edge Functions
+        │
+        └────── BAARO Backend ──────┘
