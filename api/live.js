@@ -1,517 +1,237 @@
-/**
- * BAARO Live — Daily.co + debate_rooms
- * Routes (via vercel rewrite, max 12 endpoints) :
- *   POST /api/live
- *   POST /api/create-room  → /api/live
- *   POST /api/live-roles   → /api/live
- *
- * Env : DAILY_API_KEY, DAILY_DOMAIN (optionnel), SUPABASE_*
- * Actions : create-room | join-room | resolve-code | pause-room | resume-room | delete-room
- *           request | respond | set-role  (rôles)
- */
-import { applyCors, getAdminClient, requireUser } from "./_shared.js";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { supabase } from "../supabaseClient.js";
+import { API_BASE } from "../config.js";
+import DailyIframe from "@daily-co/daily-js";
 
-const DAILY_API = "https://api.daily.co/v1";
-
-function dailyKey() {
-  const key = process.env.DAILY_API_KEY;
-  if (!key) {
-    const err = new Error(
-      "DAILY_API_KEY manquante sur Vercel. Configurez la clé Daily.co."
-    );
-    err.status = 503;
-    throw err;
-  }
-  return key;
-}
-
-function dailyDomain() {
-  return (process.env.DAILY_DOMAIN || "baaro").replace(/\.daily\.co$/i, "");
-}
-
-async function dailyFetch(path, options = {}) {
-  const res = await fetch(`${DAILY_API}${path}`, {
-    ...options,
-    headers: {
-      Authorization: `Bearer ${dailyKey()}`,
-      "Content-Type": "application/json",
-      ...(options.headers || {}),
-    },
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    const msg =
-      data?.info || data?.error || data?.message || `Daily HTTP ${res.status}`;
-    const err = new Error(String(msg));
-    err.status = res.status >= 400 && res.status < 600 ? res.status : 502;
-    throw err;
-  }
-  return data;
-}
-
-function inviteCode() {
-  const chars = "abcdefghjkmnpqrstuvwxyz23456789";
-  let s = "";
-  for (let i = 0; i < 8; i++) s += chars[Math.floor(Math.random() * chars.length)];
-  return s;
-}
-
-function roomUrl(name) {
-  return `https://${dailyDomain()}.daily.co/${name}`;
-}
-
-async function createMeetingToken(roomName, { isOwner = false, userName = "BAARO", userId } = {}) {
-  const body = {
-    properties: {
-      room_name: roomName,
-      is_owner: !!isOwner,
-      enable_screenshare: true,
-      start_audio_off: !isOwner,
-      start_video_off: true,
-      user_name: String(userName || "BAARO").slice(0, 40),
-    },
+const canSend = (() => {
+  let last = 0;
+  return () => {
+    const now = Date.now();
+    if (now - last < 700) return false;
+    last = now;
+    return true;
   };
-  if (userId) body.properties.user_id = String(userId);
-  const tok = await dailyFetch("/meeting-tokens", {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
-  return tok.token;
-}
+})();
 
-async function handleCreateRoom(admin, user, body, res) {
-  const title = String(body.title || "Live BAARO").slice(0, 120);
-  const topic = String(body.topic || "").slice(0, 500);
-  const mode = ["audio", "video", "text", "hybrid"].includes(body.mode)
-    ? body.mode === "hybrid"
-      ? "video"
-      : body.mode
-    : "audio";
-  const userName = String(body.userName || "Hôte").slice(0, 40);
-  const enableHLS = !!body.enableHLS;
+export function useDebates(userId) {
+  const [rooms, setRooms] = useState([]);
+  const [loadingRooms, setLoadingRooms] = useState(true);
 
-  const code = inviteCode();
-  const roomName = `baaro-${code}-${Date.now().toString(36)}`;
-
-  // Room Daily
-  const properties = {
-    exp: Math.floor(Date.now() / 1000) + 60 * 60 * 6, // 6h
-    enable_chat: false,
-    start_audio_off: false,
-    start_video_off: mode !== "video",
-    max_participants: 20,
-  };
-  if (enableHLS) {
-    properties.enable_recording = "cloud";
-  }
-
-  await dailyFetch("/rooms", {
-    method: "POST",
-    body: JSON.stringify({ name: roomName, properties }),
-  });
-
-  const token = await createMeetingToken(roomName, {
-    isOwner: true,
-    userName,
-    userId: user.id,
-  });
-
-  // debate_rooms
-  const { data: room, error } = await admin
+  const loadRooms = useCallback(async () => {
+    if (!userId) {
+      setRooms([]);
+      setLoadingRooms(false);
+      return;
+    }
+    setLoadingRooms(true);
+    const { data, error } = await supabase
     .from("debate_rooms")
-    .insert({
-      title,
-      topic,
-      mode,
-      invite_code: code,
-      status: "active",
-      host_id: user.id,
-      daily_room_name: roomName,
-      max_participants: 12,
-    })
-    .select("id, title, topic, mode, invite_code, status, host_id, daily_room_name")
-    .single();
+    .select(`*, debate_participants!inner(user_id, left_at, role)`)
+    .eq("debate_participants.user_id", userId)
+    .is("debate_participants.left_at", null)
+    .order("created_at", { ascending: false })
+    .limit(50);
+    if (error) console.error("loadRooms", error.message);
+    setRooms(data || []);
+    setLoadingRooms(false);
+  }, [userId]);
 
-  if (error) {
-    console.error("[live] debate_rooms insert", error);
-    // tente cleanup Daily
+  useEffect(() => {
+    loadRooms();
+    if (!userId) return;
+    const ch = supabase
+    .channel(`debate-rooms:${userId}`)
+    .on("postgres_changes", { event: "*", schema: "public", table: "debate_participants", filter: `user_id=eq.${userId}` }, loadRooms)
+    .on("postgres_changes", { event: "*", schema: "public", table: "debate_rooms" }, loadRooms)
+    .subscribe();
+    return () => supabase.removeChannel(ch);
+  }, [loadRooms, userId]);
+
+  const createRoom = useCallback(async ({ title, topic, mode, maxParticipants, aiEnabled }) => {
+    if (!userId) return { ok: false, reason: "Non authentifié" };
     try {
-      await dailyFetch(`/rooms/${roomName}`, { method: "DELETE" });
-    } catch (_) {}
-    return res.status(500).json({ error: error.message || "Création salle DB échouée" });
-  }
-
-  // host participant
-  try {
-    await admin.from("debate_participants").upsert(
-      {
-        room_id: room.id,
-        user_id: user.id,
-        role: "host",
-      },
-      { onConflict: "room_id,user_id" }
-    );
-  } catch (e) {
-    console.warn("[live] participant host", e);
-  }
-
-  return res.status(200).json({
-    ok: true,
-    roomId: room.id,
-    roomName,
-    roomUrl: roomUrl(roomName),
-    token,
-    inviteCode: code,
-    hlsEnabled: enableHLS,
-    title: room.title,
-    mode: room.mode,
-  });
-}
-
-async function handleJoinRoom(admin, user, body, res) {
-  const roomId = body.roomId;
-  const roomName = body.roomName;
-  const userName = String(body.userName || "BAARO").slice(0, 40);
-
-  let room;
-  if (roomId) {
-    const { data } = await admin
-      .from("debate_rooms")
-      .select("id, status, daily_room_name, host_id, mode, invite_code")
-      .eq("id", roomId)
-      .maybeSingle();
-    room = data;
-  } else if (roomName) {
-    const { data } = await admin
-      .from("debate_rooms")
-      .select("id, status, daily_room_name, host_id, mode, invite_code")
-      .eq("daily_room_name", roomName)
-      .maybeSingle();
-    room = data;
-  }
-
-  if (!room?.daily_room_name) {
-    return res.status(404).json({ error: "Salle introuvable" });
-  }
-  if (room.status === "ended") {
-    return res.status(410).json({ error: "Live terminé" });
-  }
-
-  const isHost = room.host_id === user.id;
-  let role = "viewer";
-  if (isHost) role = "host";
-  else {
-    const { data: part } = await admin
-      .from("debate_participants")
-      .select("role")
-      .eq("room_id", room.id)
-      .eq("user_id", user.id)
-      .maybeSingle();
-    if (part?.role === "co_host" || part?.role === "host") role = part.role;
-  }
-
-  if (!isHost) {
-    await admin.from("debate_participants").upsert(
-      {
-        room_id: room.id,
-        user_id: user.id,
-        role: role === "host" ? "host" : role === "co_host" ? "co_host" : "viewer",
-      },
-      { onConflict: "room_id,user_id" }
-    );
-  }
-
-  const token = await createMeetingToken(room.daily_room_name, {
-    isOwner: isHost,
-    userName,
-    userId: user.id,
-  });
-
-  return res.status(200).json({
-    ok: true,
-    roomId: room.id,
-    roomName: room.daily_room_name,
-    roomUrl: roomUrl(room.daily_room_name),
-    token,
-    role,
-    status: room.status,
-  });
-}
-
-async function handleResolveCode(admin, body, res) {
-  const code = String(body.inviteCode || body.code || "")
-    .trim()
-    .toLowerCase();
-  if (!code) return res.status(400).json({ error: "Code manquant" });
-
-  const { data: room } = await admin
-    .from("debate_rooms")
-    .select("id, daily_room_name, status, invite_code")
-    .ilike("invite_code", code)
-    .in("status", ["active", "paused"])
-    .maybeSingle();
-
-  if (!room) return res.status(404).json({ error: "Code invalide" });
-
-  return res.status(200).json({
-    ok: true,
-    roomId: room.id,
-    roomName: room.daily_room_name,
-    status: room.status,
-    inviteCode: room.invite_code,
-  });
-}
-
-async function handlePauseResume(admin, user, body, res, status) {
-  const roomId = body.roomId;
-  if (!roomId) return res.status(400).json({ error: "roomId requis" });
-
-  const { data: room } = await admin
-    .from("debate_rooms")
-    .select("id, host_id")
-    .eq("id", roomId)
-    .maybeSingle();
-
-  if (!room) return res.status(404).json({ error: "Salle introuvable" });
-  if (room.host_id !== user.id) {
-    return res.status(403).json({ error: "Réservé à l'hôte" });
-  }
-
-  const { error } = await admin
-    .from("debate_rooms")
-    .update({ status })
-    .eq("id", roomId);
-  if (error) return res.status(500).json({ error: error.message });
-
-  return res.status(200).json({ ok: true, status });
-}
-
-async function handleDeleteRoom(admin, user, body, res) {
-  const roomName = body.roomName;
-  if (!roomName) return res.status(400).json({ error: "roomName requis" });
-
-  const { data: room } = await admin
-    .from("debate_rooms")
-    .select("id, host_id, daily_room_name")
-    .eq("daily_room_name", roomName)
-    .maybeSingle();
-
-  if (room && room.host_id !== user.id) {
-    return res.status(403).json({ error: "Réservé à l'hôte" });
-  }
-
-  if (room) {
-    await admin
-      .from("debate_rooms")
-      .update({ status: "ended" })
-      .eq("id", room.id);
-  }
-
-  try {
-    await dailyFetch(`/rooms/${encodeURIComponent(roomName)}`, {
-      method: "DELETE",
-    });
-  } catch (e) {
-    console.warn("[live] delete daily room", e.message);
-  }
-
-  return res.status(200).json({ ok: true });
-}
-
-/** Rôles : request / respond / set-role */
-async function handleRoles(admin, user, body, res) {
-  const action = body.action;
-
-  if (action === "request") {
-    const roomId = body.roomId;
-    const targetUserId = body.targetUserId || user.id;
-    if (!roomId) return res.status(400).json({ error: "roomId requis" });
-
-    const { data: room } = await admin
-      .from("debate_rooms")
-      .select("id, host_id")
-      .eq("id", roomId)
-      .maybeSingle();
-    if (!room) return res.status(404).json({ error: "Salle introuvable" });
-
-    // Table optionnelle debate_role_requests
-    const { data: reqRow, error } = await admin
-      .from("debate_role_requests")
-      .insert({
-        room_id: roomId,
-        user_id: targetUserId,
-        requested_role: "co_host",
-        status: "pending",
-      })
-      .select("id")
-      .maybeSingle();
-
-    if (error) {
-      // fallback sans table dédiée
-      console.warn("[live] role request table", error.message);
-      return res.status(200).json({
-        ok: true,
-        requestId: null,
-        message: "Demande enregistrée (hôte notifié via realtime si dispo)",
+      const { data, error } = await supabase.rpc("create_debate_room_secure", {
+        p_title: title?.trim().slice(0, 120),
+        p_topic: topic?.trim().slice(0, 300),
+        p_mode: mode || "text",
+        p_max_participants: Math.min(Math.max(maxParticipants || 8, 2), 100),
+        p_ai_enabled:!!aiEnabled,
       });
+      if (error) throw error;
+      await loadRooms();
+      return { ok: true, room: data };
+    } catch (e) {
+      return { ok: false, reason: e.message };
     }
+  }, [userId, loadRooms]);
 
-    return res.status(200).json({ ok: true, requestId: reqRow?.id });
-  }
-
-  if (action === "respond") {
-    const { requestId, accept } = body;
-    if (!requestId) return res.status(400).json({ error: "requestId requis" });
-
-    const { data: reqRow } = await admin
-      .from("debate_role_requests")
-      .select("id, room_id, user_id, status")
-      .eq("id", requestId)
-      .maybeSingle();
-
-    if (!reqRow) return res.status(404).json({ error: "Demande introuvable" });
-
-    const { data: room } = await admin
-      .from("debate_rooms")
-      .select("host_id")
-      .eq("id", reqRow.room_id)
-      .maybeSingle();
-
-    if (room?.host_id !== user.id) {
-      return res.status(403).json({ error: "Réservé à l'hôte" });
+  const joinByCode = useCallback(async (code) => {
+    const c = code?.trim().toUpperCase();
+    if (!c) return { ok: false, reason: "Code requis" };
+    try {
+      const { data, error } = await supabase.rpc("join_debate_by_code", { p_code: c });
+      if (error) throw error;
+      await loadRooms();
+      return { ok: true, room: data };
+    } catch (e) {
+      return { ok: false, reason: e.message.replace(/^.*?:\s*/, "") };
     }
+  }, [loadRooms]);
 
-    const newStatus = accept ? "accepted" : "rejected";
-    await admin
-      .from("debate_role_requests")
-      .update({ status: newStatus })
-      .eq("id", requestId);
+  const leaveRoom = useCallback(async (roomId) => {
+    if (!userId ||!roomId) return;
+    await supabase.from("debate_participants").update({ left_at: new Date().toISOString() }).eq("room_id", roomId).eq("user_id", userId).is("left_at", null);
+    setRooms(r => r.filter(x => x.id!== roomId));
+  }, [userId]);
 
-    if (accept) {
-      await admin.from("debate_participants").upsert(
-        {
-          room_id: reqRow.room_id,
-          user_id: reqRow.user_id,
-          role: "co_host",
-        },
-        { onConflict: "room_id,user_id" }
-      );
-    }
+  const endRoom = useCallback(async (roomId) => {
+    if (!roomId ||!userId) return;
+    await supabase.rpc("end_debate_room", { p_room_id: roomId });
+    setRooms(r => r.filter(x => x.id!== roomId));
+  }, [userId]);
 
-    return res.status(200).json({ ok: true, status: newStatus });
-  }
-
-  if (action === "set-role") {
-    const { roomId, targetUserId, role } = body;
-    if (!roomId || !targetUserId || !role) {
-      return res.status(400).json({ error: "roomId, targetUserId, role requis" });
-    }
-
-    const { data: room } = await admin
-      .from("debate_rooms")
-      .select("host_id")
-      .eq("id", roomId)
-      .maybeSingle();
-
-    if (room?.host_id !== user.id) {
-      return res.status(403).json({ error: "Réservé à l'hôte" });
-    }
-
-    const safeRole = ["viewer", "co_host", "host"].includes(role)
-      ? role
-      : "viewer";
-
-    await admin.from("debate_participants").upsert(
-      {
-        room_id: roomId,
-        user_id: targetUserId,
-        role: safeRole,
-      },
-      { onConflict: "room_id,user_id" }
-    );
-
-    return res.status(200).json({ ok: true, role: safeRole });
-  }
-
-  return res.status(400).json({ error: "Action rôles inconnue" });
+  return { rooms, loadingRooms, createRoom, joinByCode, leaveRoom, endRoom, refreshRooms: loadRooms };
 }
 
-export default async function handler(req, res) {
-  if (applyCors(req, res)) return;
+export function useRoomChat(roomId, userId) {
+  const [messages, setMessages] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [aiThinking, setAiThinking] = useState(false);
+  const [inputText, setInputText] = useState("");
+  const messagesRef = useRef([]);
+  useEffect(() => { messagesRef.current = messages; }, [messages]);
 
-  if (req.method === "OPTIONS") return res.status(204).end();
-  if (req.method !== "POST" && req.method !== "GET") {
-    return res.status(405).json({ error: "Méthode non autorisée" });
-  }
+  useEffect(() => {
+    if (!roomId) return;
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      const { data } = await supabase.from("debate_messages").select("*").eq("room_id", roomId).order("created_at", { ascending: true }).limit(300);
+      if (!cancelled) {
+        setMessages(data || []);
+        setLoading(false);
+      }
+    })();
+    const ch = supabase.channel(`debate-messages:${roomId}`)
+    .on("postgres_changes", { event: "INSERT", schema: "public", table: "debate_messages", filter: `room_id=eq.${roomId}` },
+        (payload) => setMessages(prev => prev.some(m => m.id === payload.new.id)? prev : [...prev, payload.new])
+      ).subscribe();
+    return () => { cancelled = true; supabase.removeChannel(ch); };
+  }, [roomId]);
 
-  let admin;
-  try {
-    admin = getAdminClient();
-  } catch (e) {
-    return res.status(500).json({ error: e.message || "Config serveur" });
-  }
+  const sendText = useCallback(async (text) => {
+    const content = (text?? inputText).trim().slice(0, 1000);
+    if (!content ||!roomId ||!userId ||!canSend()) return;
+    setInputText("");
+    const tmpId = `tmp_${Date.now()}`;
+    setMessages(p => [...p, { id: tmpId, room_id: roomId, sender_id: userId, sender_type: "user", text: content, created_at: new Date().toISOString(), _optimistic: true }]);
+    const { error } = await supabase.from("debate_messages").insert({ room_id: roomId, sender_id: userId, sender_type: "user", text: content });
+    if (error) setMessages(p => p.filter(m => m.id!== tmpId));
+  }, [roomId, userId, inputText]);
 
-  let user;
-  try {
-    user = await requireUser(req, admin);
-  } catch (e) {
-    return res.status(e.status || 401).json({
-      error: e.message || "Non autorisé",
+  const askAI = useCallback(async (topic) => {
+    if (!roomId || aiThinking) return;
+    setAiThinking(true);
+    try {
+      const recent = messagesRef.current.slice(-16).map(m => `${m.sender_type === "ai"? "IA" : m.sender_id === userId? "Moi" : "Autre"}: ${m.text}`).join("\n");
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch(`${API_BASE}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token || ""}` },
+        body: JSON.stringify({ system: `IA neutre BAARO débat ${topic || ""}. 4-8 phrases max, nuancé, FR.`, messages: [{ role: "user", content: recent || "Débat commence." }], max_tokens: 600 }),
+      });
+      const data = await res.json();
+      const reply = (data.content || []).find(b => b.type === "text")?.text || data.reply || "Pas de réponse.";
+      if (!data.inserted) await supabase.from("debate_messages").insert({ room_id: roomId, sender_id: null, sender_type: "ai", text: reply });
+    } catch {
+      await supabase.from("debate_messages").insert({ room_id: roomId, sender_id: null, sender_type: "system", text: "IA indisponible." });
+    } finally { setAiThinking(false); }
+  }, [roomId, userId, aiThinking]);
+
+  return { messages, loading, sendText, askAI, aiThinking, inputText, setInputText };
+}
+
+export function useDebateLive(room, userId, isHost) {
+  const callRef = useRef(null);
+  const [camOn, setCamOn] = useState(room?.mode!== "audio");
+  const [micOn, setMicOn] = useState(true);
+  const [joined, setJoined] = useState(false);
+  const [error, setError] = useState(null);
+
+  const joinLive = useCallback(async (containerEl) => {
+    if (!room?.id ||!userId ||!containerEl) return;
+    try {
+      setError(null);
+      // Permission AVANT Daily - fix Android Capacitor
+      try {
+        const s = await navigator.mediaDevices.getUserMedia({
+          video: room.mode!== "audio"? { facingMode: "user" } : false,
+          audio: true
+        });
+        s.getTracks().forEach(t => t.stop());
+      } catch {}
+
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch(`${API_BASE}/api/live/token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token || ""}` },
+        body: JSON.stringify({ liveId: room.invite_code || room.id, userId, isOwner:!!isHost }),
+      });
+      const { token } = await res.json();
+      if (!token) throw new Error("No Daily token");
+
+      const call = DailyIframe.createFrame(containerEl, {
+        iframeStyle: { width: "100%", height: "100%", border: "0", borderRadius: "16px" },
+        showLeaveButton: false,
+        showFullscreenButton: true,
+      });
+      callRef.current = call;
+
+      await call.join({
+        url: `https://${import.meta.env.VITE_DAILY_DOMAIN}.daily.co/${room.invite_code || room.id}`,
+        token,
+        videoSource: room.mode === "audio"? false : true,
+      });
+
+      await call.setLocalVideo(room.mode!== "audio"? camOn : false);
+      await call.setLocalAudio(micOn);
+      setJoined(true);
+    } catch (e) {
+      setError(e.message);
+      console.error("joinLive", e);
+    }
+  }, [room, userId, isHost]); // eslint-disable-line
+
+  const toggleCam = useCallback(async () => {
+    setCamOn(prev => {
+      const next =!prev;
+      callRef.current?.setLocalVideo(next);
+      return next;
     });
-  }
+  }, []);
 
-  const body = req.method === "GET" ? req.query || {} : req.body || {};
-  const action = body.action || (req.method === "GET" ? "list" : null);
-
-  try {
-    // Rôles (aussi via /api/live-roles rewrite)
-    if (
-      action === "request" ||
-      action === "respond" ||
-      action === "set-role"
-    ) {
-      return await handleRoles(admin, user, body, res);
-    }
-
-    if (action === "create-room") {
-      return await handleCreateRoom(admin, user, body, res);
-    }
-    if (action === "join-room") {
-      return await handleJoinRoom(admin, user, body, res);
-    }
-    if (action === "resolve-code") {
-      return await handleResolveCode(admin, body, res);
-    }
-    if (action === "pause-room") {
-      return await handlePauseResume(admin, user, body, res, "paused");
-    }
-    if (action === "resume-room") {
-      return await handlePauseResume(admin, user, body, res, "active");
-    }
-    if (action === "delete-room") {
-      return await handleDeleteRoom(admin, user, body, res);
-    }
-
-    // GET list battles legacy (pk_battles optionnel)
-    if (req.method === "GET" || action === "list") {
-      const { data: battles } = await admin
-        .from("pk_battles")
-        .select("id, status, created_at")
-        .eq("status", "active")
-        .order("created_at", { ascending: false })
-        .limit(10);
-      return res.status(200).json({ success: true, battles: battles || [] });
-    }
-
-    return res.status(400).json({
-      error:
-        "Action inconnue (create-room | join-room | resolve-code | pause-room | resume-room | delete-room | request | respond | set-role)",
+  const toggleMic = useCallback(async () => {
+    setMicOn(prev => {
+      const next =!prev;
+      callRef.current?.setLocalAudio(next);
+      return next;
     });
-  } catch (e) {
-    console.error("[api/live]", e);
-    const status = e.status || 500;
-    return res.status(status).json({
-      error: e.message || "Erreur live",
-    });
-  }
+  }, []);
+
+  const leaveLive = useCallback(async () => {
+    try {
+      await callRef.current?.leave();
+      await callRef.current?.destroy();
+    } finally {
+      callRef.current = null;
+      setJoined(false);
+    }
+  }, []);
+
+  // Cleanup auto si changement de room
+  useEffect(() => {
+    return () => { callRef.current?.destroy(); };
+  }, []);
+
+  return { joinLive, leaveLive, toggleCam, toggleMic, camOn, micOn, joined, error, callRef };
 }
