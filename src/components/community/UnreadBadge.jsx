@@ -1,20 +1,31 @@
-import React from 'react';
-import { COLORS } from '../../theme.js';
+import React, { memo } from 'react';
+import { COLORS as THEME_COLORS } from '../../theme.js';
 
-export default function UnreadBadge({ count, isMention = false }) {
+const FALLBACK = {
+  gold: "#D9AE52",
+  bg: "#0B1220",
+};
+
+function UnreadBadge({ count, isMention = false }) {
   if (!count || count <= 0) return null;
+
+  const C = {...FALLBACK,...(THEME_COLORS || {}) };
+  const display = count > 99? '99+' : count;
 
   return (
     <span
-      className={`inline-flex items-center justify-center min-w-[18px] h-[18px] px-1.5 text-[10px] font-black rounded-full shadow-lg border border-black/20 animate-pulse ${
-        isMention ? 'bg-red-500 text-white' : ''
+      aria-label={isMention? `${display} mentions` : `${display} non lus`}
+      className={`inline-flex items-center justify-center min-w-[18px] h-[18px] px-1.5 text-[10px] font-black rounded-full shadow-lg border border-black/20 ${
+        isMention? 'animate-pulse' : ''
       }`}
       style={{
-        background: isMention ? '#ef4444' : COLORS.gold,
-        color: isMention ? '#ffffff' : COLORS.bg
+        background: isMention? '#ef4444' : C.gold,
+        color: isMention? '#ffffff' : C.bg,
       }}
     >
-      {count > 99 ? '99+' : count}
+      {display}
     </span>
   );
 }
+
+export default memo(UnreadBadge);
