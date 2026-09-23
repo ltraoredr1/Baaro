@@ -1,13 +1,13 @@
-BAARO
+## BAARO
 Réseau social mondial avec portefeuille de points, crypto interne (BARO Coin),
 messagerie, marketplace, lives, abonnements et assistant IA intégré.
 
 Données (points, transactions, avoirs crypto, social) stockées dans Postgres via Supabase.
 Compte anonyme créé automatiquement pour chaque visiteur (auth e-mail possible ensuite).
 
-Site : baaro-xi.vercel.app
+# Site : baaro-xi.vercel.app
 
-Stack
+### Stack
 Couche	Techno
 Frontend	React 18 + Vite + Tailwind + PWA
 Backend data	Supabase (Postgres, Auth, Realtime, Storage, RLS)
@@ -27,7 +27,7 @@ Assistant IA (multi-modèles)
 Notifications realtime (via /api/social)
 Mode hors-ligne Nearby (Android natif uniquement)
 Protection anti-fraude : Turnstile, limite appareils, plafonds gains, âge min. cashout
-Identifications
+## Identifications
 Modèle d’identité définitivement retenu:
 auth.users.id
     ├── profiles.id = auth.users.id
