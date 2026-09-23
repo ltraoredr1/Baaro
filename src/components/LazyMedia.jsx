@@ -1,7 +1,3 @@
-/**
- * Image / vidéo optimisées + miniatures Supabase.
- * Place : src/components/LazyMedia.jsx
- */
 import { useState } from "react";
 import { COLORS as THEME_COLORS } from "../theme.js";
 import { feedImageUrl, avatarUrl, fullImageUrl } from "../lib/mediaUrl.js";
@@ -21,7 +17,7 @@ export function LazyImage({
   variant = "feed",
   width,
 }) {
-  const C = {...FALLBACK,...(THEME_COLORS||{}) };
+  const C = {...FALLBACK,...(THEME_COLORS || {}) };
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
 
@@ -41,7 +37,7 @@ export function LazyImage({
           aspectRatio: aspectRatio || undefined,
           minHeight: aspectRatio? undefined : 120,
           background: C.surface2,
-          ...style,
+         ...style,
         }}
         role="img"
         aria-label={alt || "Média indisponible"}
@@ -54,11 +50,15 @@ export function LazyImage({
   return (
     <div
       className={`relative overflow-hidden bg-black/20 ${className}`}
-      style={{ aspectRatio: aspectRatio || undefined, ...style }}
+      style={{ aspectRatio: aspectRatio || undefined,...style }}
       onClick={onClick}
     >
       {!loaded && (
-        <div className="absolute inset-0 animate-pulse" style={{ background: C.surface2 }} aria-hidden />
+        <div
+          className="absolute inset-0 animate-pulse"
+          style={{ background: C.surface2 }}
+          aria-hidden="true"
+        />
       )}
       <img
         src={resolved}
@@ -67,7 +67,9 @@ export function LazyImage({
         decoding="async"
         onLoad={() => setLoaded(true)}
         onError={() => setFailed(true)}
-        className={`w-full h-full object-cover transition-opacity duration-300 ${loaded? "opacity-100" : "opacity-0"}`}
+        className={`w-full h-full object-cover transition-opacity duration-300 ${
+          loaded? "opacity-100" : "opacity-0"
+        }`}
       />
     </div>
   );
@@ -79,12 +81,33 @@ export function LazyVideo({
   poster,
   muted = true,
   controls = true,
-  ...rest
+ ...rest
 }) {
-  const C = {...FALLBACK,...(THEME_COLORS||{}) };
+  const C = {...FALLBACK,...(THEME_COLORS || {}) };
   const [failed, setFailed] = useState(false);
 
   if (!src || failed) {
     return (
-      <div className={`flex items-center justify-center bg-black text-xs ${className}`} style={{ color: C.muted, minHeight: 160, background: C.surface2 }}>
-       
+      <div
+        className={`flex items-center justify-center bg-black text-xs ${className}`}
+        style={{ color: C.muted, minHeight: 160, background: C.surface2 }}
+      >
+        Vidéo indisponible
+      </div>
+    );
+  }
+
+  return (
+    <video
+      src={src}
+      poster={poster}
+      className={className}
+      controls={controls}
+      muted={muted}
+      playsInline
+      preload="metadata"
+      onError={() => setFailed(true)}
+      {...rest}
+    />
+  );
+}
