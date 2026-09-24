@@ -2,7 +2,7 @@ import * as webrtc from "../lib/webrtc.js";
 import * as liveRoles from "../lib/liveRoles.js";
 import { fetchGiftCatalog, sendGift, subscribeGifts } from "../lib/gifts.js";
 import { useState, useEffect, useRef, memo } from "react";
-import { ArrowLeft, Hash, Users, Send, Copy, Check } from "lucide-react";
+import { ArrowLeft, Hash, Users, Send, Copy, Check, Gift, X } from "lucide-react";
 import { COLORS } from "../theme.js";
 import { supabase } from "../supabaseClient.js";
 
@@ -51,6 +51,11 @@ export function DebateRoom({ inviteCode, onBack }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [codeCopied, setCodeCopied] = useState(false);
+  const [giftOpen, setGiftOpen] = useState(false);
+  const [giftCatalog, setGiftCatalog] = useState([]);
+  const [giftSending, setGiftSending] = useState(false);
+  const [giftFlash, setGiftFlash] = useState(null);
+  const giftContainerRef = useRef(null);
   const messagesEndRef = useRef(null);
 
   useEffect(() => {
@@ -198,6 +203,51 @@ export function DebateRoom({ inviteCode, onBack }) {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+
+  useEffect(() => {
+    if (!room?.id) return;
+    let unsub = () => {};
+    (async () => {
+      try {
+        const cat = await fetchGiftCatalog();
+        setGiftCatalog(cat || []);
+      } catch (e) {
+        console.warn("gifts catalog:", e);
+      }
+    })();
+    try {
+      unsub = subscribeGifts(room.id, (row) => {
+        setGiftFlash(row);
+        setTimeout(() => setGiftFlash(null), 2800);
+      });
+    } catch (e) {
+      console.warn("gifts sub:", e);
+    }
+    return () => { try { unsub?.(); } catch {} };
+  }, [room?.id]);
+
+  const handleSendGift = async (gift) => {
+    if (!room?.id || !userId || giftSending) return;
+    setGiftSending(true);
+    try {
+      await sendGift({
+        roomId: room.id,
+        debateId: room.id,
+        giftId: gift.id,
+        amount: 1,
+        receiverId: room.host_id !== userId ? room.host_id : undefined,
+      });
+      setGiftFlash({ icon: gift.icon || "🎁", name: gift.name });
+      setTimeout(() => setGiftFlash(null), 2500);
+      setGiftOpen(false);
+    } catch (e) {
+      console.error(e);
+      alert(e.message || "Envoi cadeau impossible");
+    } finally {
+      setGiftSending(false);
+    }
+  };
+
   const handleSendMessage = async (e) => {
     e.preventDefault();
     if (!newMessage.trim() || !room || !userId) return;
@@ -246,7 +296,7 @@ export function DebateRoom({ inviteCode, onBack }) {
   }
 
   return (
-    <div className="flex flex-col h-full" style={{ background: COLORS.surface }}>
+    <div className="flex flex-col h-full relative" style={{ background: COLORS.surface }}>
       <div
         className="flex items-center gap-3 p-4 border-b"
         style={{ borderColor: COLORS.border }}
@@ -306,11 +356,61 @@ export function DebateRoom({ inviteCode, onBack }) {
         <div ref={messagesEndRef} />
       </div>
 
+      {/* Flash cadeau */}
+      {giftFlash && (
+        <div className="absolute inset-x-0 top-20 flex justify-center pointer-events-none z-20">
+          <div className="px-4 py-2 rounded-2xl border text-sm font-bold shadow-lg"
+            style={{ background: "rgba(15,23,42,0.95)", borderColor: COLORS.gold, color: COLORS.gold }}>
+            {(giftFlash.icon || "🎁")} {giftFlash.name || "Cadeau envoyé"}
+          </div>
+        </div>
+      )}
+
+      {/* Panel cadeaux */}
+      {giftOpen && (
+        <div className="border-t p-3" style={{ borderColor: COLORS.border, background: COLORS.surface2 }}>
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-bold" style={{ color: COLORS.gold }}>Envoyer un cadeau</span>
+            <button type="button" onClick={() => setGiftOpen(false)} style={{ color: COLORS.muted }}><X size={16} /></button>
+          </div>
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            {(giftCatalog.length ? giftCatalog : [
+              { id: "heart", name: "Cœur", icon: "❤️", price_points: 5 },
+              { id: "star", name: "Étoile", icon: "⭐", price_points: 15 },
+              { id: "gem", name: "Gemme", icon: "💎", price_points: 50 },
+            ]).map((g) => (
+              <button
+                key={g.id}
+                type="button"
+                disabled={giftSending}
+                onClick={() => handleSendGift(g)}
+                className="shrink-0 flex flex-col items-center gap-1 px-3 py-2 rounded-xl border disabled:opacity-40"
+                style={{ borderColor: COLORS.border, background: COLORS.surface, color: COLORS.ivory }}
+              >
+                <span className="text-xl">{g.icon || "🎁"}</span>
+                <span className="text-[10px] font-bold">{g.name || "Cadeau"}</span>
+                <span className="text-[10px]" style={{ color: COLORS.gold }}>{g.price_points ?? "?"} pts</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       <form
         onSubmit={handleSendMessage}
-        className="p-4 border-t flex gap-2"
+        className="p-4 border-t flex gap-2 relative"
         style={{ borderColor: COLORS.border }}
+        ref={giftContainerRef}
       >
+        <button
+          type="button"
+          onClick={() => setGiftOpen((v) => !v)}
+          className="p-3 rounded-xl border"
+          style={{ borderColor: COLORS.border, color: COLORS.gold }}
+          aria-label="Cadeaux"
+        >
+          <Gift size={18} />
+        </button>
         <input
           value={newMessage}
           onChange={(e) => setNewMessage(e.target.value)}
