@@ -5,11 +5,14 @@ import { handleDbError } from "../lib/dbErrors.js";
 const PROFILE_SELECT =
   "id, display_name, handle, flag, bio, avatar_url, cover_url, first_name, last_name, birth_date, location, country, updated_at, created_at";
 
-/** userId = auth.users.id uniquement */
+/**
+ * userId = auth.users.id (UUID) uniquement.
+ * Rejette email, handle (@xxx) et toute valeur non-UUID.
+ */
 function assertUserId(userId) {
   if (!userId || typeof userId !== "string") return false;
   if (userId.startsWith("@") || (userId.includes("@") && userId.includes("."))) return false;
-  return userId.length >= 32;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId);
 }
 
 export function useProfile(userId, showToast) {
