@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "../supabaseClient";
 
+/** auth.users.id (UUID) uniquement */
+function isValidAuthUserId(value) {
+  if (!value || typeof value !== "string") return false;
+  if (value.startsWith("@") || (value.includes("@") && value.includes("."))) return false;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+}
+
+
 const COLORS = {
   ivory: "#F5F0E6",
   gold: "#D4AF37",
@@ -39,13 +47,13 @@ export function NotificationDrawer({ userId, isOpen, onClose }) {
   }, [userId]);
 
   useEffect(() => {
-    if (!isOpen ||!userId) return;
+    if (!isOpen || !isValidAuthUserId(userId)) return;
     load();
   }, [isOpen, userId, load]);
 
   // Realtime - toujours actif pour badge, mais cleanup propre
   useEffect(() => {
-    if (!userId) return;
+    if (!isValidAuthUserId(userId)) return;
     const channel = supabase
      .channel(`notif-drawer-${userId}`)
      .on("postgres_changes", { event: "INSERT", schema: "public", table: "notifications", filter: `user_id=eq.${userId}` },
