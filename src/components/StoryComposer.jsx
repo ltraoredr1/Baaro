@@ -15,6 +15,14 @@ import { supabase } from "../supabaseClient.js";
 import { MediaCarousel } from "./MediaCarousel.jsx";
 import { AudioPicker } from "./AudioPicker.jsx";
 
+/** auth.users.id (UUID) uniquement */
+function isValidAuthUserId(value) {
+  if (!value || typeof value !== "string") return false;
+  if (value.startsWith("@") || (value.includes("@") && value.includes("."))) return false;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+}
+
+
 const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
 const ALLOWED_VIDEO_TYPES = ["video/mp4", "video/webm", "video/quicktime"];
 const MAX_IMAGE_SIZE = 10 * 1024 * 1024; // 10MB
@@ -180,8 +188,14 @@ export function StoryComposer({ onCreated, onClose, currentUserId }) {
       setIsPublishing(true);
       setUploadProgress(10);
 
-      if (!currentUserId || typeof currentUserId !== "string" || currentUserId.length < 32) {
-        throw new Error("Identité invalide : auth.users.id requis.");
+      // Résoudre l'identité : prop puis session Supabase (auth.users.id)
+      let authorId = currentUserId;
+      if (!isValidAuthUserId(authorId)) {
+        const { data: { user } } = await supabase.auth.getUser();
+        authorId = user?.id || null;
+      }
+      if (!isValidAuthUserId(authorId)) {
+        throw new Error("Identité invalide : auth.users.id requis. Connecte-toi pour publier une story.");
       }
 
       if (mediaItems.length === 0) {
@@ -193,7 +207,7 @@ export function StoryComposer({ onCreated, onClose, currentUserId }) {
       const { data: storyData, error: storyError } = await supabase
         .from("stories")
         .insert({
-          author_id: currentUserId,
+          author_id: authorId,
           story_type: isCarousel ? "carousel" : mediaItems[0].type,
           text: "", // Peut être vide pour média-only stories
           is_carousel: isCarousel,
@@ -216,7 +230,7 @@ export function StoryComposer({ onCreated, onClose, currentUserId }) {
         // Upload fichier
         // Chemin stable identité : auth.users.id / uuid.ext (aligné FeedStories)
         const ext = (media.file.name.split(".").pop() || (media.type === "video" ? "mp4" : "jpg")).toLowerCase();
-        const path = `${currentUserId}/${crypto.randomUUID()}.${ext}`;
+        const path = `${authorId}/${crypto.randomUUID()}.${ext}`;
 
         const { error: uploadError } = await supabase.storage
           .from("stories")

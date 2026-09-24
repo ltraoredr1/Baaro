@@ -7,6 +7,13 @@ import { StoryComposer } from "./StoryComposer.jsx";
 import { COLORS } from "../theme.js";
 import { useToast } from "./ToastContext.jsx";
 
+function isValidAuthUserId(value) {
+  if (!value || typeof value !== "string") return false;
+  if (value.startsWith("@") || (value.includes("@") && value.includes("."))) return false;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+}
+
+
 const MAX_FILE_SIZE = 100 * 1024 * 1024;
 const MAX_TEXT = 500;
 const STORY_BACKGROUNDS = [
@@ -18,8 +25,23 @@ const STORY_BACKGROUNDS = [
 
 export function FeedStories({ userId, onRewardPoints }) {
   const { showToast, showPointsReward } = useToast();
+  const [resolvedUserId, setResolvedUserId] = useState(userId || null);
   const [storyGroup, setStoryGroup] = useState(null);
   const [storyRefreshKey, setStoryRefreshKey] = useState(0);
+
+  useEffect(() => {
+    if (isValidAuthUserId(userId)) {
+      setResolvedUserId(userId);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!cancelled && user?.id) setResolvedUserId(user.id);
+    })();
+    return () => { cancelled = true; };
+  }, [userId]);
+
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState("text");
   const [text, setText] = useState("");
@@ -166,7 +188,7 @@ export function FeedStories({ userId, onRewardPoints }) {
       </div>
 
       {storyGroup && (
-        <StoryViewer group={storyGroup} onClose={() => setStoryGroup(null)} currentUserId={userId} />
+        <StoryViewer group={storyGroup} onClose={() => setStoryGroup(null)} currentUserId={resolvedUserId || userId} />
       )}
 
       {open && (
@@ -274,7 +296,7 @@ export function FeedStories({ userId, onRewardPoints }) {
 
       {carouselOpen && (
         <StoryComposer
-          currentUserId={userId}
+          currentUserId={resolvedUserId || userId}
           onClose={() => setCarouselOpen(false)}
           onCreated={() => {
             setCarouselOpen(false);
