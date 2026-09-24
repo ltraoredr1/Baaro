@@ -54,7 +54,7 @@ function applyCursor(query, cursor) {
   );
 }
 
-export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
+export function FeedTab({ userId, id: idProp, onOpenProfile, onRewardPoints }) {
   const { showToast, showPointsReward } = useToast();
 
   const [posts, setPosts] = useState([]);
@@ -90,7 +90,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
   const cursorRef = useRef(null);
   const sentinelRef = useRef(null);
 
-  const meId = user?.id || userId;
+  const meId = user?.id || userId || idProp || null;
 
   useEffect(() => {
     const getUser = async () => {
@@ -1231,7 +1231,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
   return (
     <div className="flex flex-col gap-4 max-w-2xl mx-auto w-full pb-20">
       <FeedStories
-        userId={userId}
+        userId={meId || userId || idProp}
         onRewardPoints={onRewardPoints}
       />
 
