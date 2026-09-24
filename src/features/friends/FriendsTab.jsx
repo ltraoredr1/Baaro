@@ -1,3 +1,4 @@
+import { useSocial } from '../../hooks/useSocial.js';
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../../supabaseClient';
 import { useCurrentUser } from '../../hooks/useCommunity';
@@ -6,6 +7,7 @@ import { COLORS } from '../../theme';
 export const FriendsTab = ({ onOpenProfile }) => {
   const { id } = useCurrentUser();
   const [friends, setFriends] = useState([]);
+  const { friends: socialFriends, loading: socialLoading, reload: reloadSocial } = useSocial(id);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -40,6 +42,10 @@ export const FriendsTab = ({ onOpenProfile }) => {
     }
     setLoading(false);
   };
+
+  useEffect(() => {
+    if (socialFriends?.length) setFriends(socialFriends);
+  }, [socialFriends]);
 
   useEffect(() => {
     if (id) fetchFriends();
