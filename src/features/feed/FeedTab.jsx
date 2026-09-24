@@ -1,3 +1,8 @@
+import * as feedEvents from "../../lib/feedEvents.js";
+import { useCursorFeed } from "../../hooks/useCursorFeed.js";
+import { usePrefersReducedMotion } from "../../hooks/usePrefersReducedMotion.js";
+import * as queries from "../../lib/queries.js";
+import { reportContent } from "../../lib/reportContent.js";
 import { ConnectionStatus } from "../../components/ConnectionStatus.jsx";
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
@@ -55,6 +60,8 @@ function applyCursor(query, cursor) {
 }
 
 export function FeedTab({ userId, id: idProp, onOpenProfile, onRewardPoints }) {
+  const prefersReducedMotion = usePrefersReducedMotion();
+  const cursorFeed = useCursorFeed({ autoLoad: false });
   const { showToast, showPointsReward } = useToast();
 
   const [posts, setPosts] = useState([]);
