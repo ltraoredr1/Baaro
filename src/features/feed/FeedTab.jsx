@@ -249,7 +249,7 @@ export function FeedTab({ userId, id: idProp, onOpenProfile, onRewardPoints }) {
         const { data: likes } = await supabase
           .from("post_likes")
           .select("post_id")
-          .eq("id", meId)
+          .eq("user_id", meId)
           .in(
             "post_id",
             rows.map((row) => row.id)
@@ -279,7 +279,7 @@ export function FeedTab({ userId, id: idProp, onOpenProfile, onRewardPoints }) {
           const { data: likes } = await supabase
             .from("post_likes")
             .select("post_id")
-            .eq("id", meId)
+            .eq("user_id", meId)
             .in(
               "post_id",
               rows.map((row) => row.id)
@@ -374,7 +374,7 @@ export function FeedTab({ userId, id: idProp, onOpenProfile, onRewardPoints }) {
       const { data: likes } = await supabase
         .from("post_likes")
         .select("post_id")
-        .eq("id", meId)
+        .eq("user_id", meId)
         .in("post_id", ids);
 
       if (!cancelled && likes) {
@@ -743,7 +743,7 @@ export function FeedTab({ userId, id: idProp, onOpenProfile, onRewardPoints }) {
           .from("post_likes")
           .delete()
           .eq("post_id", postId)
-          .eq("id", meId);
+          .eq("user_id", meId);
 
         if (error) throw error;
       } else {
@@ -751,7 +751,7 @@ export function FeedTab({ userId, id: idProp, onOpenProfile, onRewardPoints }) {
           .from("post_likes")
           .insert({
             post_id: postId,
-            id: meId,
+            user_id: meId,
           });
 
         if (error) throw error;
@@ -1388,7 +1388,8 @@ export function FeedTab({ userId, id: idProp, onOpenProfile, onRewardPoints }) {
         <div
           className="flex items-center justify-between pt-2 border-t"
           style={{
-            borderColor: COLORS.border,
+            borderColor:
+              COLORS.border,
           }}
         >
           <div className="flex items-center gap-2">
