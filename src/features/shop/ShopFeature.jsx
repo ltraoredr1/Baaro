@@ -1,3 +1,4 @@
+import ShopCard from "./components/ShopCard.jsx";
 import { useState, useEffect, useCallback } from "react";
 import { Search, MapPin, Store, Plus, Package, Edit3, Trash2, Loader2, AlertCircle, Eye, EyeOff, Tag } from "lucide-react";
 import { COLORS } from "../../theme.js";

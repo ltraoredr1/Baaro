@@ -1,3 +1,4 @@
+import ImageUpload from "../../components/ImageUpload.jsx";
 import { useState, useEffect } from "react";
 import { supabase } from "../../supabaseClient.js";
 import { createPayment, getAvailableProviders } from "../../lib/paymentProvider.js";
