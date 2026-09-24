@@ -112,8 +112,10 @@ export default function PhoneAuth({ onAuthSuccess }) {
   }
 
   async function ensureProfile(user) {
-    if (!user || !user.id) return; // Échec silencieux si pas d'ID pour éviter le crash
+    // profiles.id = auth.users.id (UUID) uniquement
+    if (!user || !user.id) return;
     const userId = user.id;
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId)) return;
     const normalizedPhone = normalizePhone(user.phone || phone);
 
     try {

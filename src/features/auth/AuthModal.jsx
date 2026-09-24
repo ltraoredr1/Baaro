@@ -4,6 +4,52 @@ import { COLORS } from "../../theme.js";
 import { useToast } from "../../components/ToastContext.jsx";
 import { supabase } from "../../supabaseClient.js";
 
+/**
+ * Garantit une ligne profiles avec id = auth.users.id.
+ * Ne touche jamais bio/avatar existants ; complète seulement les champs manquants.
+ */
+async function ensureProfile(profileData) {
+  const userId = profileData?.id;
+  if (!userId || typeof userId !== "string") return;
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId)) return;
+
+  try {
+    const { data: existing } = await supabase
+      .from("profiles")
+      .select("id, display_name, handle, flag, phone")
+      .eq("id", userId)
+      .maybeSingle();
+
+    if (existing) {
+      const updates = {};
+      if (!existing.display_name && profileData.display_name) updates.display_name = profileData.display_name;
+      if (!existing.handle && profileData.handle) updates.handle = profileData.handle;
+      if (!existing.flag && profileData.flag) updates.flag = profileData.flag;
+      if (!existing.phone && profileData.phone) updates.phone = profileData.phone;
+      if (Object.keys(updates).length > 0) {
+        updates.updated_at = new Date().toISOString();
+        await supabase.from("profiles").update(updates).eq("id", userId);
+      }
+      return;
+    }
+
+    await supabase.from("profiles").upsert(
+      {
+        id: userId,
+        display_name: profileData.display_name || "Membre BAARO",
+        handle: profileData.handle || null,
+        flag: profileData.flag || "🌍",
+        phone: profileData.phone || null,
+        bio: profileData.bio || "",
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "id" }
+    );
+  } catch (err) {
+    console.error("[BAARO] ensureProfile:", err);
+  }
+}
+
 export function AuthModal({ isOpen, onClose, onAuthSuccess }) {
   const { showToast } = useToast();
   const [mode, setMode] = useState("signup"); // "signup" ou "login"
@@ -104,13 +150,14 @@ export function AuthModal({ isOpen, onClose, onAuthSuccess }) {
           const userMetaData = data.user.user_metadata || {};
 
           const profileData = {
-            id: userId, // <-- Identifiant unique Supabase (UUID)
+            id: userId, // auth.users.id uniquement
             display_name: userMetaData.display_name || displayName.trim() || phone,
             handle: userMetaData.handle || handle.trim() || `@user_${phone.replace(/\D/g, "")}`,
             flag: userMetaData.flag || flag || "🌍",
             phone: formattedPhone
           };
 
+          await ensureProfile(profileData);
           onAuthSuccess(profileData);
           showToast(
             mode === "signup" 
@@ -154,7 +201,7 @@ export function AuthModal({ isOpen, onClose, onAuthSuccess }) {
         }
 
         const newUserProfile = {
-          id: data.user.id, // <-- Identifiant unique Supabase (UUID)
+          id: data.user.id, // auth.users.id uniquement
           display_name: displayName.trim(),
           handle: handle.trim() ? (handle.startsWith("@") ? handle : `@${handle}`) : `@${displayName.toLowerCase().replace(/\s+/g, "_")}`,
           flag: flag || "🌍",
@@ -162,6 +209,7 @@ export function AuthModal({ isOpen, onClose, onAuthSuccess }) {
           bio: "Membre nouvellement inscrit sur BAARO Network."
         };
 
+        await ensureProfile(newUserProfile);
         onAuthSuccess(newUserProfile);
         showToast(`Bienvenue sur BAARO, ${displayName} ! Compte créé avec succès. (+50 pts)`, "success");
         onClose();
@@ -184,13 +232,14 @@ export function AuthModal({ isOpen, onClose, onAuthSuccess }) {
         const userMetaData = data.user.user_metadata || {};
 
         const loggedInProfile = {
-          id: data.user.id, // <-- Identifiant unique Supabase (UUID)
+          id: data.user.id, // auth.users.id uniquement
           display_name: userMetaData.display_name || email.split("@")[0],
           handle: userMetaData.handle || `@${email.split("@")[0]}`,
           flag: userMetaData.flag || "🌍",
           email: email.trim()
         };
 
+        await ensureProfile(loggedInProfile);
         onAuthSuccess(loggedInProfile);
         showToast("Connexion réussie ! Ravie de vous revoir.", "success");
         onClose();

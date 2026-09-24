@@ -85,8 +85,24 @@ export default function AuthScreen() {
         throw new Error("Impossible d'initialiser la session.");
       }
 
-      // Identifiant unique universel du projet : id
+      // Identifiant unique = auth.users.id
       const id = data?.user?.id;
+      if (id) {
+        try {
+          await supabase.from("profiles").upsert(
+            {
+              id,
+              display_name: "Membre BAARO",
+              handle: `@user_${String(id).replace(/-/g, "").slice(0, 10)}`,
+              flag: "🌍",
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: "id" }
+          );
+        } catch (e) {
+          console.error("[BAARO] Profil invité:", e);
+        }
+      }
 
       setSuccess("Connexion réussie ! Bienvenue sur BAARO.");
     } catch (err) {
@@ -146,10 +162,24 @@ export default function AuthScreen() {
 
       if (authError) throw authError;
 
-      // Récupération directe de l'identifiant unique : id
+      // Identifiant unique = auth.users.id
       const id = data?.user?.id;
 
-      if (data?.session) {
+      if (data?.session && id) {
+        try {
+          await supabase.from("profiles").upsert(
+            {
+              id,
+              display_name: cleanEmail.split("@")[0] || "Membre BAARO",
+              handle: `@user_${String(id).replace(/-/g, "").slice(0, 10)}`,
+              flag: "🌍",
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: "id" }
+          );
+        } catch (e) {
+          console.error("[BAARO] Profil inscription:", e);
+        }
         setSuccess("Votre compte a été créé avec succès !");
         return;
       }
