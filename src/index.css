@@ -34,6 +34,7 @@ body,
   font-weight: 700;
   border-radius: 0 0 0.75rem 0;
 }
+
 .skip-link:focus {
   left: 0;
 }
@@ -42,13 +43,16 @@ body,
   width: 6px;
   height: 6px;
 }
+
 ::-webkit-scrollbar-track {
   background: rgba(11, 18, 32, 0.6);
 }
+
 ::-webkit-scrollbar-thumb {
   background: rgba(217, 174, 82, 0.25);
   border-radius: 9999px;
 }
+
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(217, 174, 82, 0.5);
 }
@@ -57,6 +61,7 @@ body,
   -ms-overflow-style: none;
   scrollbar-width: none;
 }
+
 .no-scrollbar::-webkit-scrollbar {
   display: none;
 }
@@ -69,7 +74,11 @@ body,
 }
 
 .glass-card {
-  background: linear-gradient(135deg, rgba(26, 39, 64, 0.6) 0%, rgba(17, 26, 44, 0.8) 100%);
+  background: linear-gradient(
+    135deg,
+    rgba(26, 39, 64, 0.6) 0%,
+    rgba(17, 26, 44, 0.8) 100%
+  );
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -89,24 +98,35 @@ body,
 }
 
 .text-gradient-gold {
-  background: linear-gradient(135deg, #f5c86b 0%, #d9ae52 50%, #b88b2a 100%);
+  background: linear-gradient(
+    135deg,
+    #f5c86b 0%,
+    #d9ae52 50%,
+    #b88b2a 100%
+  );
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
 }
 
 .text-gradient-teal {
-  background: linear-gradient(135deg, #4ee1c8 0%, #2dbfa6 100%);
+  background: linear-gradient(
+    135deg,
+    #4ee1c8 0%,
+    #2dbfa6 100%
+  );
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
 }
 
 @keyframes pulse-slow {
-  0%, 100% {
+  0%,
+  100% {
     opacity: 1;
     transform: scale(1);
   }
+
   50% {
     opacity: 0.85;
     transform: scale(1.02);
@@ -118,9 +138,11 @@ body,
 }
 
 @keyframes float {
-  0%, 100% {
+  0%,
+  100% {
     transform: translateY(0px);
   }
+
   50% {
     transform: translateY(-4px);
   }
@@ -137,18 +159,48 @@ body,
   user-select: none;
 }
 
+/* =========================================================
+   NAVIGATION BASSE
+   ========================================================= */
+
+/*
+ * La navigation mobile est positionnée en fixed en bas.
+ * Cette classe réserve donc suffisamment d'espace pour que
+ * le dernier contenu ne soit jamais caché derrière elle.
+ */
 .mobile-nav-spacer {
-  padding-bottom: calc(5.5rem + env(safe-area-inset-bottom, 0px));
+  padding-bottom: calc(
+    5.5rem + env(safe-area-inset-bottom, 0px)
+  );
 }
+
+/*
+ * Sur desktop, la navigation est latérale.
+ * Aucun grand espace réservé en bas n'est nécessaire.
+ */
 @media (min-width: 768px) {
   .mobile-nav-spacer {
     padding-bottom: 1.5rem;
   }
 }
 
+/*
+ * Mobile Web + Android/iOS :
+ * améliore le comportement lors des scrolls/focus vers
+ * le bas de la page.
+ */
+@media (max-width: 767px) {
+  #main-content {
+    scroll-padding-bottom: calc(
+      5.5rem + env(safe-area-inset-bottom, 0px)
+    );
+  }
+}
+
 .safe-bottom {
   padding-bottom: env(safe-area-inset-bottom, 0px);
 }
+
 .safe-top {
   padding-top: env(safe-area-inset-top, 0px);
 }
@@ -190,6 +242,7 @@ button.touch-target {
 :focus:not(:focus-visible) {
   outline: none;
 }
+
 :focus-visible {
   outline: 2px solid #d9ae52;
   outline-offset: 2px;
@@ -222,6 +275,7 @@ html.baaro-reduce-motion *::after {
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+
   .animate-pulse-slow,
   .animate-float {
     animation: none !important;
@@ -261,21 +315,38 @@ html.baaro-reduce-motion *::after {
 }
 
 .baaro-safe-bottom {
-  padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+  padding-bottom: max(
+    0.75rem,
+    env(safe-area-inset-bottom, 0px)
+  );
 }
+
 .baaro-safe-top {
-  padding-top: max(0.5rem, env(safe-area-inset-top));
+  padding-top: max(
+    0.5rem,
+    env(safe-area-inset-top, 0px)
+  );
 }
 
 .baaro-skeleton {
-  background: linear-gradient(90deg, rgba(255,255,255,0.04) 25%, rgba(255,255,255,0.08) 50%, rgba(255,255,255,0.04) 75%);
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.04) 25%,
+    rgba(255, 255, 255, 0.08) 50%,
+    rgba(255, 255, 255, 0.04) 75%
+  );
   background-size: 200% 100%;
   animation: baaro-shimmer 1.2s ease-in-out infinite;
 }
 
 @keyframes baaro-shimmer {
-  0% { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
+  0% {
+    background-position: 200% 0;
+  }
+
+  100% {
+    background-position: -200% 0;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
