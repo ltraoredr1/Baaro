@@ -10,6 +10,7 @@ import { ToastProvider } from "./components/ToastContext.jsx";
 import { ErrorBoundary } from "./components/ErrorBoundary.jsx";
 import { captureRefFromUrl } from "./lib/referralApi.js";
 import { initPerf } from "./lib/initPerf.js";
+import { bootstrapNative } from "./lib/nativeBootstrap.js";
 import "./index.css";
 
 captureRefFromUrl();
@@ -29,6 +30,7 @@ const setupNative = async () => {
 };
 
 setupNative();
+bootstrapNative().catch(() => {});
 
 ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>
