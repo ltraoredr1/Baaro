@@ -6,6 +6,14 @@ import { uploadChatFile, uploadVoiceBlob, mimeToMessageType, formatDuration, get
 import { createCallRoom, createCallRecord } from "../lib/chatCalls.js";
 import { ChatCallModal } from "./ChatCallModal.jsx";
 
+/** auth.users.id (UUID) uniquement */
+function isValidAuthUserId(value) {
+  if (!value || typeof value !== "string") return false;
+  if (value.startsWith("@") || (value.includes("@") && value.includes("."))) return false;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+}
+
+
 const FALLBACK = {
   bg: "#0B1220",
   surface: "#111A2C",
@@ -143,6 +151,7 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
     if (!newMessage.trim() || !activeChat || !id) return;
     const text = newMessage.trim();
     setNewMessage("");
+    if (!isValidAuthUserId(id) || !isValidAuthUserId(activeChat.otherUserId)) return;
     await supabase.from("messages").insert({ conversation_id: activeChat.id, sender_id: id, recipient_id: activeChat.otherUserId, text: text, type: "text" });
   };
 
@@ -153,6 +162,7 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
     setUploading(true);
     try {
       const up = await uploadChatFile(file, id);
+      if (!isValidAuthUserId(id) || !isValidAuthUserId(activeChat.otherUserId)) return;
       await supabase.from("messages").insert({ conversation_id: activeChat.id, sender_id: id, recipient_id: activeChat.otherUserId, text: up.fileName, type: mimeToMessageType(up.mime), media_url: up.url, media_mime: up.mime, media_size: up.size, file_name: up.fileName });
     } catch (err) {
       alert(err.message);
@@ -176,6 +186,7 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
         setUploading(true);
         try {
           const up = await uploadVoiceBlob(blob, id, recordSeconds);
+          if (!isValidAuthUserId(id) || !isValidAuthUserId(activeChat.otherUserId)) return;
           await supabase.from("messages").insert({ conversation_id: activeChat.id, sender_id: id, recipient_id: activeChat.otherUserId, text: "Vocal", type: "voice", media_url: up.url, media_mime: up.mime, media_size: up.size, media_duration: up.duration });
         } catch (err) {
           alert(err.message);
