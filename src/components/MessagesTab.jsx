@@ -1,3 +1,4 @@
+import { useMessaging } from "../hooks/useMessaging.js";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { ArrowLeft, Send, MessageCircle, Plus, X, Search, Paperclip, Mic, Phone, Video } from "lucide-react";
 import { COLORS as THEME_COLORS } from "../theme.js";
@@ -31,6 +32,8 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
   const [id, setId] = useState(propId || null);
   const [conversations, setConversations] = useState([]);
   const [activeChat, setActiveChat] = useState(null);
+  // Branche useMessaging (messages temps réel / envoi)
+  const messaging = useMessaging(activeChat?.id, id, activeChat?.otherUserId);
   const [messages, setMessages] = useState([]);
   const [newMessage, setNewMessage] = useState("");
   const [loading, setLoading] = useState(true);

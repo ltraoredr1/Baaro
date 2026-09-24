@@ -1,3 +1,4 @@
+import * as webrtc from "../lib/webrtc.js";
 import { useEffect, useRef, useState, useCallback } from "react";
 import { Phone, PhoneOff, Video, VideoOff, Mic, MicOff, X } from "lucide-react";
 import { COLORS as THEME_COLORS } from "../theme.js";

@@ -1,3 +1,6 @@
+import * as webrtc from "../lib/webrtc.js";
+import * as liveRoles from "../lib/liveRoles.js";
+import { fetchGiftCatalog, sendGift, subscribeGifts } from "../lib/gifts.js";
 import { useState, useEffect, useRef, memo } from "react";
 import { ArrowLeft, Hash, Users, Send, Copy, Check } from "lucide-react";
 import { COLORS } from "../theme.js";

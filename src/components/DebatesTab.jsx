@@ -14,6 +14,7 @@ import { COLORS } from "../theme.js";
 import { supabase } from "../supabaseClient.js";
 import { CreateDebateModal } from "./CreateDebateModal.jsx";
 import { DebateRoom } from "./DebateRoom.jsx";
+import { useDebates } from "../hooks/useDebates.js";
 
 const FILTERS = [
   { id: "all", label: "Tous" },
@@ -172,7 +173,9 @@ function SkeletonCard() {
   );
 }
 
-export default function DebatesTab({ id, onRewardPoints }) {
+export default function DebatesTab({ id, currentUserId, onRewardPoints, onOpenProfile }) {
+  const userId = currentUserId || id || null;
+  const { rooms: myRooms, loadingRooms, createRoom, joinByCode, loadRooms } = useDebates(userId);
   const [debates, setDebates] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -181,6 +184,16 @@ export default function DebatesTab({ id, onRewardPoints }) {
   const [joinCode, setJoinCode] = useState("");
   const [joining, setJoining] = useState(false);
   const [filter, setFilter] = useState("all");
+
+  useEffect(() => {
+    if (!myRooms?.length) return;
+    setDebates((prev) => {
+      const ids = new Set(prev.map((d) => d.id));
+      const extra = myRooms.filter((r) => r?.id && !ids.has(r.id));
+      return extra.length ? [...extra, ...prev] : prev;
+    });
+  }, [myRooms]);
+
 
   const fetchDebates = useCallback(async () => {
     setLoading(true);
