@@ -1,3 +1,4 @@
+import { randomId } from "../lib/id.js";
 import { createContext, useContext, useState, useCallback } from "react";
 import { Sparkles, Coins, CheckCircle2, AlertCircle, X } from "lucide-react";
 import { COLORS } from "../theme.js";
