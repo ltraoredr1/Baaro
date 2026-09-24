@@ -6,6 +6,14 @@ import { COLORS } from "../../theme.js";
 import { supabase } from "../../supabaseClient.js";
 import { useToast } from "../../components/ToastContext.jsx";
 
+/** auth.users.id (UUID) uniquement */
+function isValidAuthUserId(value) {
+  if (!value || typeof value !== "string") return false;
+  if (value.startsWith("@") || (value.includes("@") && value.includes("."))) return false;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+}
+
+
 const REACTIONS = [
   { id: "like", label: "👍", title: "J’aime" },
   { id: "love", label: "❤️", title: "J’adore" },
@@ -103,7 +111,7 @@ export function PollCard({ postId, userId }) {
   );
 
   const vote = async (optionId) => {
-    if (!userId) {
+    if (!isValidAuthUserId(userId)) {
       return showToast("Connectez-vous pour voter", "info");
     }
 
@@ -134,7 +142,7 @@ export function PollCard({ postId, userId }) {
   };
 
   const openVoters = async () => {
-    if (!userId) {
+    if (!isValidAuthUserId(userId)) {
       return showToast(
         "Connectez-vous pour voir les votants",
         "info"
@@ -550,7 +558,7 @@ export function SocialPostEnhancements({ post, userId }) {
    * LIKE
    */
   const chooseReaction = async (value) => {
-    if (!userId) {
+    if (!isValidAuthUserId(userId)) {
       showToast("Connectez-vous pour réagir", "info");
       return;
     }
@@ -638,7 +646,7 @@ export function SocialPostEnhancements({ post, userId }) {
    * Conservé volontairement avec le schéma existant.
    */
   const bookmark = async () => {
-    if (!userId) {
+    if (!isValidAuthUserId(userId)) {
       showToast(
         "Connectez-vous pour enregistrer",
         "info"
@@ -765,7 +773,7 @@ export function SocialPostEnhancements({ post, userId }) {
    * le système follows/friends déjà validé.
    */
   const follow = async () => {
-    if (!userId) {
+    if (!isValidAuthUserId(userId)) {
       showToast(
         "Connectez-vous pour suivre",
         "info"
@@ -959,7 +967,7 @@ export function SocialSuggestions({
   const [busyId, setBusyId] = useState(null);
 
   useEffect(() => {
-    if (!userId) return;
+    if (!isValidAuthUserId(userId)) return;
 
     supabase
       .rpc("get_social_suggestions", {

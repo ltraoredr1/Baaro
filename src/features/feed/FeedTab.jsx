@@ -34,6 +34,14 @@ import { RichTextRenderer } from "../../components/RichTextRenderer.jsx";
 import { NotificationDrawer } from "../../components/NotificationDrawer.jsx";
 import { API_BASE } from "../../config.js";
 
+/** auth.users.id (UUID) uniquement */
+function isValidAuthUserId(value) {
+  if (!value || typeof value !== "string") return false;
+  if (value.startsWith("@") || (value.includes("@") && value.includes("."))) return false;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+}
+
+
 const PAGE_SIZE = 20;
 const MAX_IMAGE_SIZE = 10 * 1024 * 1024;
 const MAX_VIDEO_SIZE = 50 * 1024 * 1024;
@@ -544,7 +552,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
 
     const authorId = meId;
 
-    if (!authorId) {
+    if (!authorId || !isValidAuthUserId(authorId)) {
       showToast(
         "Vous devez être connecté",
         "error"
