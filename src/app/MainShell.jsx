@@ -117,7 +117,7 @@ export function MainShell() {
   const Tab = tabs[activeTab] || null;
 
   const tabProps = {
-    feed: { id, onOpenProfile: setInspectingProfileId, onRewardPoints: earnPoints },
+    feed: { id, userId: id, onOpenProfile: setInspectingProfileId, onRewardPoints: earnPoints },
     friends: { id, onOpenProfile: setInspectingProfileId },
     community: { id, userId: id, onOpenProfile: setInspectingProfileId },
     companies: { id, onOpenProfile: setInspectingProfileId },
