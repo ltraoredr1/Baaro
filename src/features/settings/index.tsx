@@ -1,5 +1,5 @@
+import { NotificationPrefsPanel } from "./NotificationPrefsPanel.jsx";
 import { getNotificationPreferences, saveNotificationPreferences } from "../../lib/notificationPreferences.js";
-import { useSettings } from "./hooks/useSettings.js";
 // src/features/settings/index.tsx
 // Réglages BAARO — différenciation marchés émergents + profil + compte + recherche
 import { useState, useEffect, useCallback, useMemo } from "react";
@@ -873,8 +873,6 @@ export default function SettingsTab({
   onSelectTheme,
   onReplayOnboarding,
 }: Props) {
-  const settingsApi = useSettings();
-
   const [user, setUser] = useState<{
     id: string;
     email?: string;
@@ -2388,7 +2386,7 @@ export default function SettingsTab({
         </CollapsibleSection>
       )}
 
-      {visible.push && <PushSettings />}
+      {visible.push && (<><PushSettings /><div className="mt-4"><NotificationPrefsPanel /></div></>)}
 
       {/* Sessions */}
       {visible.sessions && (
