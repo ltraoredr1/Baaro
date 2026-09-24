@@ -5,7 +5,7 @@ import * as queries from "../../lib/queries.js";
 import { reportContent } from "../../lib/reportContent.js";
 import { ConnectionStatus } from "../../components/ConnectionStatus.jsx";
 import { useState, useEffect, useCallback, useRef } from "react";
-import {
+import { Flag, 
   Heart,
   MessageCircle,
   Share2,
@@ -522,6 +522,22 @@ export function FeedTab({ userId, id: idProp, onOpenProfile, onRewardPoints }) {
         ? "video"
         : "image",
     };
+  };
+
+
+  const handleReportPost = async (postId) => {
+    setMenuOpenId(null);
+    try {
+      await reportContent({
+        targetType: "post",
+        targetId: postId,
+        reason: "signalement_utilisateur",
+        details: "",
+      });
+      showToast?.("Publication signalée. Merci.", "success");
+    } catch (e) {
+      showToast?.(e.message || "Signalement impossible", "error");
+    }
   };
 
   const handleCreatePost = async (e) => {
@@ -1589,79 +1605,60 @@ export function FeedTab({ userId, id: idProp, onOpenProfile, onRewardPoints }) {
                     </div>
                   </div>
 
-                  {post.author_id ===
-                    meId && (
-                    <div className="relative">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setMenuOpenId(
-                            (id) =>
-                              id === post.id
-                                ? null
-                                : post.id
-                          )
-                        }
-                        className="p-2 rounded-lg hover:bg-white/5"
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setMenuOpenId((id) =>
+                          id === post.id ? null : post.id
+                        )
+                      }
+                      className="p-2 rounded-lg hover:bg-white/5"
+                      style={{ color: COLORS.muted }}
+                      aria-label="Actions"
+                    >
+                      <MoreHorizontal size={18} />
+                    </button>
+
+                    {menuOpenId === post.id && (
+                      <div
+                        className="absolute right-0 top-9 z-20 min-w-[160px] rounded-xl border shadow-xl py-1"
                         style={{
-                          color:
-                            COLORS.muted,
+                          background: COLORS.surface,
+                          borderColor: COLORS.borderGold,
                         }}
-                        aria-label="Actions"
                       >
-                        <MoreHorizontal
-                          size={18}
-                        />
-                      </button>
-
-                      {menuOpenId ===
-                        post.id && (
-                        <div
-                          className="absolute right-0 top-9 z-20 min-w-[160px] rounded-xl border shadow-xl py-1"
-                          style={{
-                            background:
-                              COLORS.surface,
-                            borderColor:
-                              COLORS.borderGold,
-                          }}
-                        >
+                        {post.author_id === meId && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => startEditPost(post)}
+                              className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-white/5"
+                              style={{ color: COLORS.ivory }}
+                            >
+                              <Pencil size={14} /> Modifier
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeletePost(post.id)}
+                              className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-white/5 text-red-400"
+                            >
+                              <Trash2 size={14} /> Supprimer
+                            </button>
+                          </>
+                        )}
+                        {post.author_id !== meId && (
                           <button
                             type="button"
-                            onClick={() =>
-                              startEditPost(
-                                post
-                              )
-                            }
-                            className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-white/5"
-                            style={{
-                              color:
-                                COLORS.ivory,
-                            }}
-                          >
-                            <Pencil
-                              size={14}
-                            />{" "}
-                            Modifier
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() =>
-                              handleDeletePost(
-                                post.id
-                              )
-                            }
+                            onClick={() => handleReportPost(post.id)}
                             className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-white/5 text-red-400"
                           >
-                            <Trash2
-                              size={14}
-                            />{" "}
-                            Supprimer
+                            <Flag size={14} /> Signaler
                           </button>
-                        </div>
-                      )}
-                    </div>
-                  )}
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 {editingId ===
