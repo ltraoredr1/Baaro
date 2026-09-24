@@ -765,10 +765,15 @@ function ToggleRow({
   onChange: (v: boolean) => void;
 }) {
   return (
-    <div className="flex items-center justify-between gap-3 py-1">
+    <div
+      className="flex items-center justify-between gap-3 py-2.5 border-t first:border-t-0"
+      style={{ borderColor: COLORS.border }}
+    >
       <div className="min-w-0">
-        <p className="text-sm font-medium">{title}</p>
-        <p className="text-[11px]" style={{ color: COLORS.muted }}>
+        <p className="text-[13.5px] font-medium" style={{ color: COLORS.ivory }}>
+          {title}
+        </p>
+        <p className="text-[11px] mt-0.5" style={{ color: COLORS.muted }}>
           {desc}
         </p>
       </div>
@@ -777,12 +782,53 @@ function ToggleRow({
   );
 }
 
+function ActionRow({
+  icon: Icon,
+  label,
+  onClick,
+  tone = "default",
+  disabled,
+}: {
+  icon: typeof User;
+  label: string;
+  onClick?: () => void;
+  tone?: "default" | "gold" | "danger";
+  disabled?: boolean;
+}) {
+  const color =
+    tone === "danger" ? "#F87171" : tone === "gold" ? COLORS.gold : COLORS.ivory;
+  const badgeColor = tone === "default" ? COLORS.teal : color;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className="w-full flex items-center gap-3 py-3.5 text-left disabled:opacity-50"
+    >
+      <div
+        className="grid h-8 w-8 place-items-center rounded-lg shrink-0"
+        style={{ background: `${badgeColor}1A`, color: badgeColor }}
+      >
+        <Icon size={15} />
+      </div>
+      <span className="flex-1 text-sm font-medium" style={{ color }}>
+        {label}
+      </span>
+      <ChevronDown
+        size={14}
+        className="-rotate-90"
+        style={{ color: COLORS.muted, opacity: 0.6 }}
+      />
+    </button>
+  );
+}
+
 function CollapsibleSection({
   id,
   icon: Icon,
   title,
   desc,
-  accent = COLORS.gold,
+  accent = COLORS.teal,
   open,
   onToggle,
   children,
@@ -805,15 +851,20 @@ function CollapsibleSection({
       <button
         type="button"
         onClick={onToggle}
-        className="w-full px-5 py-4 flex items-center justify-between gap-2 text-left"
+        className="w-full px-4 py-4 flex items-center gap-3 text-left"
         aria-expanded={open}
       >
-        <div className="min-w-0">
+        <div
+          className="grid h-9 w-9 place-items-center rounded-xl shrink-0"
+          style={{ background: `${accent}1A`, color: accent }}
+        >
+          <Icon size={16} />
+        </div>
+        <div className="flex-1 min-w-0">
           <h3
-            className="text-base font-bold flex items-center gap-2"
-            style={{ color: accent }}
+            className="text-[14.5px] font-semibold leading-tight"
+            style={{ color: COLORS.ivory }}
           >
-            <Icon size={18} className="shrink-0" />
             {title}
           </h3>
           {desc && open ? (
@@ -826,12 +877,19 @@ function CollapsibleSection({
           ) : null}
         </div>
         {open ? (
-          <ChevronUp size={18} style={{ color: COLORS.muted }} />
+          <ChevronUp size={16} style={{ color: COLORS.muted }} />
         ) : (
-          <ChevronDown size={18} style={{ color: COLORS.muted }} />
+          <ChevronDown size={16} style={{ color: COLORS.muted }} />
         )}
       </button>
-      {open && <div className="px-5 pb-4 flex flex-col gap-3">{children}</div>}
+      {open && (
+        <div
+          className="px-4 pb-5 pt-1 flex flex-col gap-3 border-t"
+          style={{ borderColor: COLORS.border }}
+        >
+          {children}
+        </div>
+      )}
     </section>
   );
 }
@@ -1536,31 +1594,27 @@ export default function SettingsTab({
       {/* Header */}
       <div className="flex items-center gap-3">
         <div
-          className="grid h-11 w-11 place-items-center rounded-2xl font-black text-sm"
+          className="grid h-10 w-10 place-items-center rounded-xl border text-sm font-bold"
           style={{
-            background: `linear-gradient(135deg, ${COLORS.gold} 0%, ${COLORS.teal} 100%)`,
-            color: COLORS.bg,
+            background: COLORS.surface,
+            borderColor: COLORS.borderTeal,
+            color: COLORS.teal,
           }}
         >
           B
         </div>
         <div className="flex-1 min-w-0">
-          <h2 className="text-xl font-bold leading-none">{t("title")}</h2>
+          <h2
+            className="text-lg font-semibold leading-none"
+            style={{ color: COLORS.ivory }}
+          >
+            {t("title")}
+          </h2>
           <p className="text-[11px] mt-1" style={{ color: COLORS.muted }}>
-            {user ? t("subtitle_connected") : t("subtitle_local")}
+            {user ? t("subtitle_connected") : t("subtitle_local")} ·{" "}
+            {t("vs_competitors")}
           </p>
         </div>
-      </div>
-
-      <div
-        className="rounded-xl px-4 py-2.5 text-[11px] font-medium border"
-        style={{
-          background: "rgba(45,191,166,0.08)",
-          borderColor: COLORS.borderTeal,
-          color: COLORS.teal,
-        }}
-      >
-        {t("vs_competitors")}
       </div>
 
       {/* Search */}
@@ -2447,96 +2501,57 @@ export default function SettingsTab({
           open={openSections.danger || !!q}
           onToggle={() => toggleSection("danger")}
         >
-          <button
-            type="button"
-            disabled={accountBusy}
+          <ActionRow
+            icon={Trash2}
+            label={t("delete_account")}
             onClick={handleDeleteAccount}
-            className="w-full py-3 rounded-xl text-sm font-bold border disabled:opacity-50"
-            style={{
-              borderColor: "rgba(239,68,68,0.5)",
-              color: "#F87171",
-              background: "rgba(239,68,68,0.12)",
-            }}
-          >
-            <span className="inline-flex items-center gap-2 justify-center">
-              <Trash2 size={16} />
-              {t("delete_account")}
-            </span>
-          </button>
+            disabled={accountBusy}
+            tone="danger"
+          />
         </CollapsibleSection>
       )}
 
-      {onReplayOnboarding && (
-        <button
-          type="button"
-          onClick={onReplayOnboarding}
-          className="flex items-center justify-center gap-2 w-full py-3 rounded-xl text-sm font-semibold border"
-          style={{
-            background: COLORS.surface2,
-            borderColor: COLORS.borderGold,
-            color: COLORS.gold,
-          }}
-        >
-          <Sparkles size={16} />
-          {t("replay_onboarding")}
-        </button>
-      )}
-
-      <button
-        type="button"
-        onClick={() => setShowPrivacy(true)}
-        className="flex items-center justify-center gap-2 w-full py-3 rounded-xl text-sm font-semibold border"
-        style={{
-          background: COLORS.surface2,
-          borderColor: COLORS.borderTeal,
-          color: COLORS.teal,
-        }}
+      <section
+        className="rounded-2xl border overflow-hidden"
+        style={{ background: COLORS.surface, borderColor: COLORS.border }}
       >
-        <FileText size={16} />
-        {t("privacy_policy")}
-      </button>
-
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-        <button
-          type="button"
-          onClick={handleExportPrefs}
-          className="flex items-center justify-center gap-2 w-full py-3 rounded-xl text-sm font-semibold border"
-          style={{
-            background: COLORS.surface2,
-            borderColor: COLORS.borderTeal,
-            color: COLORS.teal,
-          }}
-        >
-          <Download size={16} />
-          {t("export_prefs")}
-        </button>
-        <button
-          type="button"
-          onClick={() => fileInputEl?.click()}
-          className="flex items-center justify-center gap-2 w-full py-3 rounded-xl text-sm font-semibold border"
-          style={{
-            background: COLORS.surface2,
-            borderColor: COLORS.borderGold,
-            color: COLORS.gold,
-          }}
-        >
-          <Upload size={16} />
-          {t("import_prefs")}
-        </button>
-        <button
-          type="button"
-          onClick={handleCopyPrefs}
-          className="flex items-center justify-center gap-2 w-full py-3 rounded-xl text-sm font-semibold border"
-          style={{
-            background: COLORS.surface2,
-            borderColor: COLORS.border,
-            color: COLORS.ivory,
-          }}
-        >
-          <Copy size={16} />
-          {t("copy_prefs")}
-        </button>
-      </div>
+        {onReplayOnboarding && (
+          <div className="px-4 border-t first:border-t-0" style={{ borderColor: COLORS.border }}>
+            <ActionRow
+              icon={Sparkles}
+              label={t("replay_onboarding")}
+              onClick={onReplayOnboarding}
+              tone="gold"
+            />
+          </div>
+        )}
+        <div className="px-4 border-t first:border-t-0" style={{ borderColor: COLORS.border }}>
+          <ActionRow
+            icon={FileText}
+            label={t("privacy_policy")}
+            onClick={() => setShowPrivacy(true)}
+          />
+        </div>
+        <div className="px-4 border-t first:border-t-0" style={{ borderColor: COLORS.border }}>
+          <ActionRow icon={Download} label={t("export_prefs")} onClick={handleExportPrefs} />
+        </div>
+        <div className="px-4 border-t first:border-t-0" style={{ borderColor: COLORS.border }}>
+          <ActionRow
+            icon={Upload}
+            label={t("import_prefs")}
+            onClick={() => fileInputEl?.click()}
+          />
+        </div>
+        <div className="px-4 border-t first:border-t-0" style={{ borderColor: COLORS.border }}>
+          <ActionRow icon={Copy} label={t("copy_prefs")} onClick={handleCopyPrefs} />
+        </div>
+        <div className="px-4 border-t first:border-t-0" style={{ borderColor: COLORS.border }}>
+          <ActionRow icon={RotateCcw} label={t("reset_prefs")} onClick={handleResetPrefs} />
+        </div>
+        <div className="px-4 border-t first:border-t-0" style={{ borderColor: COLORS.border }}>
+          <ActionRow icon={LogOut} label={t("logout")} onClick={handleLogout} tone="danger" />
+        </div>
+      </section>
       <input
         ref={setFileInputEl}
         type="file"
@@ -2548,34 +2563,6 @@ export default function SettingsTab({
           e.target.value = "";
         }}
       />
-
-      <button
-        type="button"
-        onClick={handleResetPrefs}
-        className="flex items-center justify-center gap-2 w-full py-3 rounded-xl text-sm font-semibold border"
-        style={{
-          background: COLORS.surface2,
-          borderColor: COLORS.border,
-          color: COLORS.muted,
-        }}
-      >
-        <RotateCcw size={16} />
-        {t("reset_prefs")}
-      </button>
-
-      <button
-        type="button"
-        onClick={handleLogout}
-        className="flex items-center justify-center gap-2 w-full py-3 rounded-xl text-sm font-bold border"
-        style={{
-          borderColor: "rgba(239,68,68,0.4)",
-          color: "#F87171",
-          background: "rgba(239,68,68,0.1)",
-        }}
-      >
-        <LogOut size={16} />
-        {t("logout")}
-      </button>
 
       <p className="text-center text-[10px] py-1" style={{ color: COLORS.muted }}>
         {t("version")} {APP_VERSION}
