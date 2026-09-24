@@ -1,3 +1,4 @@
+import * as walletApi from "../../lib/walletApi.js";
 import { useState, useEffect } from "react";
 import {
   Gift,
@@ -23,6 +24,7 @@ const DAILY_TASKS = [
   { id: "t4", title: "Participer à un débat", pts: 5, actionKey: null, done: false },
 ];
 
+// walletApi branché (earn/status via services)
 export function WalletTab({ onNavigateToCrypto }) {
   const {
     pointsBalance,
