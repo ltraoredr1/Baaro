@@ -1,3 +1,4 @@
+import { AnimatedTab } from "../components/ui/AnimatedTab.jsx";
 import { useEffect, useState, Suspense } from "react";
 import { useApp } from "../contexts/AppContext.jsx";
 import { Header } from "../components/Header.jsx";
