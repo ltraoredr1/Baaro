@@ -47,12 +47,7 @@ export function LocalShopDirectory({ onSelectShop }) {
       ) : (
         <div className="grid gap-3 sm:grid-cols-2">
           {shops.map((shop) => (
-            <button key={shop.id} onClick={() => onSelectShop(shop)} className="flex flex-col rounded-xl border p-4 text-left transition-all hover:border-amber-400/50 active:scale-[0.98]" style={{ background: COLORS.surface, borderColor: COLORS.border }}>
-              {shop.logo_url ? <img src={shop.logo_url} alt={shop.name} className="w-full h-32 rounded-lg object-cover mb-3 bg-gray-800" /> : <div className="w-full h-32 rounded-lg flex items-center justify-center mb-3" style={{ background: COLORS.surface2 }}><Store size={32} style={{ color: COLORS.muted }} /></div>}
-              <h3 className="font-bold text-sm mb-1 truncate" style={{ color: COLORS.ivory }}>{shop.name}</h3>
-              {shop.category && <p className="text-xs mb-1" style={{ color: COLORS.muted }}>{shop.category}</p>}
-              {(shop.city || shop.country) && <div className="flex items-center gap-1 text-xs" style={{ color: COLORS.muted }}><MapPin size={12} /><span>{[shop.city, shop.country].filter(Boolean).join(", ")}</span></div>}
-            </button>
+            <ShopCard key={shop.id} shop={shop} onSelect={onSelectShop} />
           ))}
         </div>
       )}

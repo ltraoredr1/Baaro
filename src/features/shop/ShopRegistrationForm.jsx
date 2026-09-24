@@ -36,6 +36,9 @@ export default function ShopRegistrationForm({ onRegistered }) {
   const [category, setCategory] = useState("");
   const [city, setCity] = useState("");
   const [description, setDescription] = useState("");
+  const [logoUrl, setLogoUrl] = useState("");
+  const [ownerId, setOwnerId] = useState(null);
+  // logo via ImageUpload
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [eligibleForTrial, setEligibleForTrial] = useState(false);
@@ -45,6 +48,7 @@ export default function ShopRegistrationForm({ onRegistered }) {
     async function loadUserAndTrial() {
       setCheckingTrial(true);
       const { data: { user } } = await supabase.auth.getUser();
+      if (user) setOwnerId(user.id);
       if (!user) {
         setEligibleForTrial(false);
         setCheckingTrial(false);
@@ -127,7 +131,7 @@ export default function ShopRegistrationForm({ onRegistered }) {
 
         const { data: shop, error: shopError } = await supabase
           .from("shops")
-          .insert({
+          .insert({ logo_url: logoUrl || null,
             owner_id: user.id,
             name: name.trim(),
             description: description.trim() || null,
@@ -227,7 +231,20 @@ export default function ShopRegistrationForm({ onRegistered }) {
 
   return (
     <form onSubmit={handleSubmit} className="max-w-md mx-auto space-y-4 p-4">
-      <h2 className="text-lg font-semibold" style={{ color: COLORS.ivory }}>Créer ma boutique</h2>
+      <h2 className="text-lg font-semibold" style={{ color: COLORS.ivory }}>
+        Créer ma boutique
+      </h2>
+      <div className="mb-4">
+        <p className="text-xs mb-2 font-bold" style={{ color: COLORS.muted }}>Logo boutique</p>
+        <ImageUpload
+          userId={ownerId}
+          folder="shops"
+          value={logoUrl}
+          onChange={setLogoUrl}
+          label="Logo"
+          compact
+        />
+      </div>
 
       {eligibleForTrial ? (
         <div className="rounded-xl p-3 text-sm border" style={{ background: "rgba(45, 191, 166, 0.1)", borderColor: COLORS.borderTeal, color: COLORS.teal }}>
