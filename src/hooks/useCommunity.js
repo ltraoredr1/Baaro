@@ -1,5 +1,9 @@
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { supabase } from "../supabaseClient.js";
+
+const PAGE_SIZE = 50;
+const MSG_COLUMNS = "id, channel_id, sender_id, text, created_at";
+const PROFILE_COLUMNS = "id, display_name, handle, avatar_url";
 
 /** auth.users.id (UUID) */
 function isValidAuthUserId(value) {
@@ -9,15 +13,26 @@ function isValidAuthUserId(value) {
   );
 }
 
+/** Fusionne deux listes de messages (sans doublon, triée du plus ancien au plus récent) */
+function mergeMessages(a, b) {
+  const map = new Map();
+  for (const m of a) map.set(m.id, m);
+  for (const m of b) map.set(m.id, { ...map.get(m.id), ...m });
+  return [...map.values()].sort(
+    (x, y) => new Date(x.created_at) - new Date(y.created_at)
+  );
+}
+
 export function useCurrentUser() {
   const [id, setId] = useState(null);
   const [loadingUser, setLoadingUser] = useState(true);
 
   useEffect(() => {
     let mounted = true;
-    supabase.auth.getUser().then(({ data }) => {
+    // getSession lit la session locale (pas d'appel réseau, contrairement à getUser)
+    supabase.auth.getSession().then(({ data }) => {
       if (mounted) {
-        setId(data?.user?.id || null);
+        setId(data?.session?.user?.id || null);
         setLoadingUser(false);
       }
     });
@@ -39,8 +54,8 @@ export function useCurrentUser() {
 }
 
 /**
- * Communauté : groupes, canaux, création.
- * Schéma souple : is_public OU is_private, category optionnelle.
+ * Communauté : groupes, canaux, membres, modération.
+ * Les écritures sensibles passent par les RPC Supabase (migration v4).
  */
 export function useCommunity(externalId) {
   const { id: authId } = useCurrentUser();
@@ -51,89 +66,58 @@ export function useCommunity(externalId) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  const loadAll = useCallback(async () => {
-    if (!isValidAuthUserId(id)) {
-      setGroups([]);
-      setFriends([]);
-      setAllUsers([]);
-      setLoading(false);
-      return;
-    }
-    setLoading(true);
-    setError(null);
-    try {
-      // 1) Groupes (requête large, colonnes optionnelles)
-      let groupsData = null;
-      let gError = null;
-
-      const full = await supabase
-        .from("groups")
-        .select(
-          `
-          id, name, description, avatar_url, owner_id, created_at,
-          is_public, is_private, category,
-          channels (id, group_id, name, type, description, topic, created_at),
-          group_members (group_id, user_id, role, joined_at)
-        `
-        )
-        .order("created_at", { ascending: false })
-        .limit(40);
-
-      if (full.error) {
-        // Fallback minimal (colonnes de base uniquement)
-        const minimal = await supabase
+  // silent = true : recharge sans afficher le spinner (après une action)
+  const loadAll = useCallback(
+    async (silent = false) => {
+      if (!isValidAuthUserId(id)) {
+        setGroups([]);
+        setFriends([]);
+        setAllUsers([]);
+        setLoading(false);
+        return;
+      }
+      if (silent !== true) setLoading(true);
+      setError(null);
+      try {
+        const { data, error: gError } = await supabase
           .from("groups")
           .select(
             `
             id, name, description, avatar_url, owner_id, created_at,
-            channels (id, group_id, name, type, description, created_at),
+            is_public, category,
+            channels (id, group_id, name, type, description, topic, created_at),
             group_members (group_id, user_id, role, joined_at)
           `
           )
           .order("created_at", { ascending: false })
           .limit(40);
-        groupsData = minimal.data;
-        gError = minimal.error;
-      } else {
-        groupsData = full.data;
-      }
+        if (gError) throw gError;
 
-      if (gError) throw gError;
+        setGroups(
+          (data || []).map((g) => ({
+            id: g.id,
+            name: g.name,
+            description: g.description,
+            avatar_url: g.avatar_url,
+            owner_id: g.owner_id,
+            created_at: g.created_at,
+            category: g.category || "community",
+            is_public: g.is_public !== false,
+            members: g.group_members || [],
+            channels: g.channels || [],
+          }))
+        );
 
-      const enriched = (groupsData || []).map((g) => {
-        const isPublic =
-          g.is_public === true ||
-          (g.is_private === false) ||
-          (g.is_public == null && g.is_private == null);
-        return {
-          id: g.id,
-          name: g.name,
-          description: g.description,
-          avatar_url: g.avatar_url,
-          owner_id: g.owner_id,
-          created_at: g.created_at,
-          category: g.category || "community",
-          is_public: isPublic,
-          members: g.group_members || [],
-          channels: g.channels || [],
-        };
-      });
-
-      setGroups(enriched);
-
-      // 2) Amis / users (non bloquant)
-      try {
-        const [{ data: friendIds }, { data: users }] = await Promise.all([
-          supabase.rpc("get_user_friends", { user_id: id }).catch(() => ({
-            data: null,
-          })),
-          supabase
-            .from("profiles")
-            .select("id, display_name, handle, avatar_url, flag")
-            .limit(30),
-        ]);
-        if (friendIds?.length) {
-          const ids = friendIds
+        // Amis / utilisateurs (non bloquant)
+        try {
+          const [friendsRes, usersRes] = await Promise.all([
+            supabase.rpc("get_user_friends", { user_id: id }),
+            supabase
+              .from("profiles")
+              .select("id, display_name, handle, avatar_url, flag")
+              .limit(30),
+          ]);
+          const ids = (friendsRes.data || [])
             .map((f) => f.friend_id || f.id)
             .filter(Boolean);
           if (ids.length) {
@@ -142,163 +126,76 @@ export function useCommunity(externalId) {
               .select("id, display_name, handle, avatar_url, flag")
               .in("id", ids);
             setFriends(profiles || []);
+          } else {
+            setFriends([]);
           }
+          setAllUsers(usersRes.data || []);
+        } catch {
+          /* non critique */
         }
-        setAllUsers(users || []);
-      } catch {
-        /* non critique */
+      } catch (e) {
+        console.error("[community] loadAll", e);
+        setError(e.message || "Erreur chargement communauté");
+        setGroups([]);
+      } finally {
+        setLoading(false);
       }
-    } catch (e) {
-      console.error("[community] loadAll", e);
-      setError(e.message || "Erreur chargement communauté");
-      setGroups([]);
-    } finally {
-      setLoading(false);
-    }
-  }, [id]);
+    },
+    [id]
+  );
 
   useEffect(() => {
     loadAll();
   }, [loadAll]);
 
-  /**
-   * Créer un groupe + membership owner + canal #général
-   */
+  /** Groupe + membre owner + canal #general (atomique côté serveur) */
   const createGroup = useCallback(
     async ({ name, description, is_public = true, category = "community" }) => {
       if (!isValidAuthUserId(id)) throw new Error("Non connecté");
-      const trimmed = (name || "").trim();
-      if (trimmed.length < 2) throw new Error("Nom du groupe trop court (min 2)");
-
-      // Payload compatible is_public / is_private
-      const base = {
-        name: trimmed.slice(0, 80),
-        description: (description || "").trim().slice(0, 500) || null,
-        owner_id: id,
-      };
-
-      let group = null;
-      let error = null;
-
-      // Essai avec is_public + category
-      const try1 = await supabase
-        .from("groups")
-        .insert({
-          ...base,
-          is_public: !!is_public,
-          category: category || "community",
-        })
-        .select()
-        .single();
-
-      if (try1.error) {
-        // Essai is_private inverse
-        const try2 = await supabase
-          .from("groups")
-          .insert({
-            ...base,
-            is_private: !is_public,
-          })
-          .select()
-          .single();
-        if (try2.error) {
-          // Essai minimal
-          const try3 = await supabase
-            .from("groups")
-            .insert(base)
-            .select()
-            .single();
-          group = try3.data;
-          error = try3.error;
-        } else {
-          group = try2.data;
-        }
-      } else {
-        group = try1.data;
-      }
-
-      if (error) throw error;
-      if (!group?.id) throw new Error("Groupe non créé");
-
-      // Membre owner
-      const { error: memErr } = await supabase.from("group_members").upsert(
-        {
-          group_id: group.id,
-          user_id: id,
-          role: "owner",
-        },
-        { onConflict: "group_id,user_id" }
-      );
-      if (memErr) {
-        // ignore duplicate
-        console.warn("[community] member", memErr.message);
-      }
-
-      // Canal #général
-      const { error: chErr } = await supabase.from("channels").insert({
-        group_id: group.id,
-        name: "general",
-        type: "text",
-        description: "Canal principal",
+      const { data, error: err } = await supabase.rpc("create_community_group", {
+        p_name: name,
+        p_description: description || null,
+        p_is_public: !!is_public,
+        p_category: category || "community",
       });
-      if (chErr) console.warn("[community] channel default", chErr.message);
-
-      await loadAll();
-      return group;
-    },
-    [id, loadAll]
-  );
-
-  const createChannel = useCallback(
-    async (groupId, payload = {}) => {
-      if (!isValidAuthUserId(id)) throw new Error("Non connecté");
-      if (!groupId) throw new Error("Groupe requis");
-      const raw = (payload.name || "").trim();
-      if (raw.length < 1) throw new Error("Nom du canal requis");
-      const name = raw
-        .toLowerCase()
-        .replace(/\s+/g, "-")
-        .replace(/[^a-z0-9-_]/g, "")
-        .slice(0, 40);
-      if (!name) throw new Error("Nom de canal invalide");
-
-      const row = {
-        group_id: groupId,
-        name,
-        type: payload.type === "voice" ? "voice" : "text",
-        description: (payload.description || "").trim().slice(0, 200) || null,
-      };
-
-      let data = null;
-      let error = null;
-      const withTopic = await supabase
-        .from("channels")
-        .insert({ ...row, topic: payload.topic || null })
-        .select()
-        .single();
-      if (withTopic.error) {
-        const basic = await supabase.from("channels").insert(row).select().single();
-        data = basic.data;
-        error = basic.error;
-      } else {
-        data = withTopic.data;
-      }
-      if (error) throw error;
-      await loadAll();
+      if (err) throw err;
+      await loadAll(true);
       return data;
     },
     [id, loadAll]
   );
 
-  const joinGroup = useCallback(
-    async (groupId) => {
-      if (!isValidAuthUserId(id) || !groupId) throw new Error("Non connecté");
-      const { error } = await supabase.from("group_members").upsert(
-        { group_id: groupId, user_id: id, role: "member" },
-        { onConflict: "group_id,user_id" }
+  /** Le nom est nettoyé côté serveur */
+  const createChannel = useCallback(
+    async (groupId, payload = {}) => {
+      if (!isValidAuthUserId(id)) throw new Error("Non connecté");
+      if (!groupId) throw new Error("Groupe requis");
+      const { data, error: err } = await supabase.rpc(
+        "create_community_channel",
+        {
+          p_group_id: groupId,
+          p_name: payload.name || "",
+          p_type: payload.type === "voice" ? "voice" : "text",
+          p_description: payload.description || null,
+        }
       );
-      if (error) throw error;
-      await loadAll();
+      if (err) throw err;
+      await loadAll(true);
+      return data;
+    },
+    [id, loadAll]
+  );
+
+  /** code = code d'invitation (obligatoire pour un groupe privé) */
+  const joinGroup = useCallback(
+    async (groupId, code = null) => {
+      if (!isValidAuthUserId(id) || !groupId) throw new Error("Non connecté");
+      const { error: err } = await supabase.rpc("join_community_group", {
+        p_group: groupId,
+        p_code: code,
+      });
+      if (err) throw err;
+      await loadAll(true);
     },
     [id, loadAll]
   );
@@ -306,27 +203,40 @@ export function useCommunity(externalId) {
   const leaveGroup = useCallback(
     async (groupId) => {
       if (!isValidAuthUserId(id) || !groupId) throw new Error("Non connecté");
-      const { error } = await supabase
+      const { error: err } = await supabase
         .from("group_members")
         .delete()
         .eq("group_id", groupId)
         .eq("user_id", id);
-      if (error) throw error;
-      await loadAll();
+      if (err) throw err;
+      await loadAll(true);
     },
     [id, loadAll]
   );
 
   const banMember = useCallback(
-    async (groupId, targetId) => {
+    async (groupId, targetId, reason = null) => {
       if (!groupId || !isValidAuthUserId(targetId)) return;
-      const { error } = await supabase
-        .from("group_members")
-        .delete()
-        .eq("group_id", groupId)
-        .eq("user_id", targetId);
-      if (error) throw error;
-      await loadAll();
+      const { error: err } = await supabase.rpc("ban_community_member", {
+        p_group: groupId,
+        p_user: targetId,
+        p_reason: reason,
+      });
+      if (err) throw err;
+      await loadAll(true);
+    },
+    [loadAll]
+  );
+
+  const setMemberRole = useCallback(
+    async (groupId, targetId, role) => {
+      const { error: err } = await supabase.rpc("set_member_role", {
+        p_group: groupId,
+        p_user: targetId,
+        p_role: role,
+      });
+      if (err) throw err;
+      await loadAll(true);
     },
     [loadAll]
   );
@@ -357,53 +267,56 @@ export function useCommunity(externalId) {
     joinGroup,
     leaveGroup,
     banMember,
+    setMemberRole,
     loadUsers,
   };
 }
 
 export function useChannelMessages(channelId) {
   const { id } = useCurrentUser();
-  const [messages, setMessages] = useState([]);
+  const [rows, setRows] = useState([]);
+  const [profilesById, setProfilesById] = useState({});
+  const profilesRef = useRef({});
   const [loading, setLoading] = useState(false);
-  const channelRef = useRef(channelId);
-  useEffect(() => {
-    channelRef.current = channelId;
-  }, [channelId]);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
 
-  useEffect(() => {
-    if (!channelId) {
-      setMessages([]);
+  // Cache des profils (channel_messages.sender_id pointe vers auth.users,
+  // donc pas de jointure directe avec profiles)
+  const ensureProfiles = useCallback(async (list) => {
+    const missing = [...new Set(list.map((m) => m.sender_id))].filter(
+      (uid) => uid && !(uid in profilesRef.current)
+    );
+    if (!missing.length) return;
+    missing.forEach((uid) => {
+      profilesRef.current[uid] = null;
+    });
+    const { data, error } = await supabase
+      .from("profiles")
+      .select(PROFILE_COLUMNS)
+      .in("id", missing);
+    if (error) {
+      missing.forEach((uid) => delete profilesRef.current[uid]);
       return;
     }
-    setLoading(true);
+    (data || []).forEach((p) => {
+      profilesRef.current[p.id] = p;
+    });
+    setProfilesById({ ...profilesRef.current });
+  }, []);
+
+  useEffect(() => {
+    setRows([]);
+    setHasMore(false);
+    if (!channelId) {
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
+    setLoading(true);
 
-    const load = async () => {
-      const withProfiles = await supabase
-        .from("channel_messages")
-        .select(
-          "id, channel_id, sender_id, text, created_at, profiles:profiles!sender_id(id, display_name, handle, avatar_url)"
-        )
-        .eq("channel_id", channelId)
-        .order("created_at", { ascending: true })
-        .limit(80);
-
-      if (withProfiles.error) {
-        const basic = await supabase
-          .from("channel_messages")
-          .select("id, channel_id, sender_id, text, created_at")
-          .eq("channel_id", channelId)
-          .order("created_at", { ascending: true })
-          .limit(80);
-        if (!cancelled) setMessages(basic.data || []);
-      } else if (!cancelled) {
-        setMessages(withProfiles.data || []);
-      }
-      if (!cancelled) setLoading(false);
-    };
-    load();
-
-    const channel = supabase
+    // On s'abonne d'abord, puis on charge : aucun message perdu entre les deux
+    const realtime = supabase
       .channel(`channel-msgs-${channelId}`)
       .on(
         "postgres_changes",
@@ -414,20 +327,63 @@ export function useChannelMessages(channelId) {
           filter: `channel_id=eq.${channelId}`,
         },
         (payload) => {
-          if (channelRef.current !== channelId) return;
-          setMessages((prev) => {
-            if (prev.some((m) => m.id === payload.new.id)) return prev;
-            return [...prev, payload.new];
-          });
+          if (cancelled) return;
+          ensureProfiles([payload.new]);
+          setRows((prev) => mergeMessages(prev, [payload.new]));
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "DELETE", schema: "public", table: "channel_messages" },
+        (payload) => {
+          const gone = payload.old?.id;
+          if (gone) setRows((prev) => prev.filter((m) => m.id !== gone));
         }
       )
       .subscribe();
 
+    (async () => {
+      const { data, error } = await supabase
+        .from("channel_messages")
+        .select(MSG_COLUMNS)
+        .eq("channel_id", channelId)
+        .order("created_at", { ascending: false })
+        .limit(PAGE_SIZE);
+      if (cancelled) return;
+      if (!error) {
+        const list = data || [];
+        setHasMore(list.length === PAGE_SIZE);
+        setRows((prev) => mergeMessages(prev, list));
+        ensureProfiles(list);
+      }
+      setLoading(false);
+    })();
+
     return () => {
       cancelled = true;
-      supabase.removeChannel(channel);
+      supabase.removeChannel(realtime);
     };
-  }, [channelId]);
+  }, [channelId, ensureProfiles]);
+
+  /** Charge les 50 messages précédents (pagination par curseur) */
+  const loadOlder = useCallback(async () => {
+    if (!channelId || !hasMore || loadingOlder || rows.length === 0) return;
+    setLoadingOlder(true);
+    const { data, error } = await supabase
+      .from("channel_messages")
+      .select(MSG_COLUMNS)
+      .eq("channel_id", channelId)
+      .lt("created_at", rows[0].created_at)
+      .order("created_at", { ascending: false })
+      .limit(PAGE_SIZE);
+    if (!error) {
+      const list = data || [];
+      setHasMore(list.length === PAGE_SIZE);
+      setRows((prev) => mergeMessages(prev, list));
+      ensureProfiles(list);
+    }
+    setLoadingOlder(false);
+  }, [channelId, hasMore, loadingOlder, rows, ensureProfiles]);
 
   const sendMessage = useCallback(
     async (text) => {
@@ -436,15 +392,64 @@ export function useChannelMessages(channelId) {
       }
       const body = (text || "").trim();
       if (!body) return;
-      const { error } = await supabase.from("channel_messages").insert({
-        channel_id: channelId,
-        sender_id: id,
-        text: body.slice(0, 2000),
-      });
+      const { data, error } = await supabase
+        .from("channel_messages")
+        .insert({
+          channel_id: channelId,
+          sender_id: id,
+          text: body.slice(0, 2000),
+        })
+        .select(MSG_COLUMNS)
+        .single();
       if (error) throw error;
+      // Affichage immédiat ; le doublon realtime est ignoré (même id)
+      if (data) {
+        ensureProfiles([data]);
+        setRows((prev) => mergeMessages(prev, [data]));
+      }
     },
-    [id, channelId]
+    [id, channelId, ensureProfiles]
   );
 
-  return { messages, loading, sendMessage, id };
+  /** Auteur ou modérateur (la base refuse les autres cas) */
+  const deleteMessage = useCallback(async (messageId) => {
+    const { data, error } = await supabase
+      .from("channel_messages")
+      .delete()
+      .eq("id", messageId)
+      .select("id");
+    if (error) throw error;
+    if (!data?.length) throw new Error("Suppression refusée");
+    setRows((prev) => prev.filter((m) => m.id !== messageId));
+  }, []);
+
+  const reportMessage = useCallback(async (messageId, reason = null) => {
+    const { error } = await supabase.rpc("report_community_message", {
+      p_message: messageId,
+      p_reason: reason,
+    });
+    if (error) throw error;
+  }, []);
+
+  // Même forme qu'avant : chaque message porte son profil dans m.profiles
+  const messages = useMemo(
+    () =>
+      rows.map((m) => ({
+        ...m,
+        profiles: profilesById[m.sender_id] || null,
+      })),
+    [rows, profilesById]
+  );
+
+  return {
+    messages,
+    loading,
+    loadingOlder,
+    hasMore,
+    loadOlder,
+    sendMessage,
+    deleteMessage,
+    reportMessage,
+    id,
+  };
 }
