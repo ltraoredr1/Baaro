@@ -17,7 +17,7 @@ import {
   captureRefFromUrl,
   getPendingRef,
 } from "../../lib/referralApi.js";
-import PhoneAuth from "./PhoneAuth.jsx"; // ✅ Importation corrigée (même dossier)
+import PhoneAuth from "./PhoneAuth.jsx";
 
 export default function AuthScreen() {
   const [mode, setMode] = useState("choice"); // "choice", "guest", "email", "phone"
@@ -38,6 +38,12 @@ export default function AuthScreen() {
     captureRefFromUrl();
     setPendingRef(getPendingRef());
   }, []);
+
+  // Fonction appelée lorsque l'authentification téléphone réussit
+  const handlePhoneAuthSuccess = (user) => {
+    setSuccess("Connexion réussie ! Bienvenue sur BAARO.");
+    // Tu peux ici déclencher une redirection ou laisser ton écouteur global Supabase (sur_auth_state_change) s'en charger
+  };
 
   /**
    * Connexion anonyme / invité.
@@ -154,7 +160,6 @@ export default function AuthScreen() {
         return;
       }
 
-      /* INSCRIPTION : Authentification utilisant uniquement la clé unique `id` */
       const { data, error: authError } = await supabase.auth.signUp({
         email: cleanEmail,
         password,
@@ -162,7 +167,6 @@ export default function AuthScreen() {
 
       if (authError) throw authError;
 
-      // Identifiant unique = auth.users.id
       const id = data?.user?.id;
 
       if (data?.session && id) {
@@ -285,6 +289,18 @@ export default function AuthScreen() {
           </div>
         )}
 
+        {/* Messages de succès ou d'erreur généraux */}
+        {success && (
+          <div className="mb-4 text-center text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-3">
+            {success}
+          </div>
+        )}
+        {error && (
+          <div className="mb-4 text-center text-xs text-rose-400 bg-rose-500/10 border border-rose-500/20 rounded-xl p-3">
+            {error}
+          </div>
+        )}
+
         {/* =====================================================
             VUE 1 : CHOIX PRINCIPAL DES MÉTHODES
         ====================================================== */}
@@ -399,18 +415,6 @@ export default function AuthScreen() {
               />
             </div>
 
-            {/* Notifications */}
-            {success && (
-              <div className="text-center text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-3">
-                {success}
-              </div>
-            )}
-            {error && (
-              <div className="text-center text-xs text-rose-400 bg-rose-500/10 border border-rose-500/20 rounded-xl p-3">
-                {error}
-              </div>
-            )}
-
             <button
               type="button"
               onClick={handleAnonymous}
@@ -436,7 +440,8 @@ export default function AuthScreen() {
         ====================================================== */}
         {mode === "phone" && (
           <div className="flex flex-col gap-4">
-            <PhoneAuth />
+            {/* Transmission de la prop onAuthSuccess */}
+            <PhoneAuth onAuthSuccess={handlePhoneAuthSuccess} />
 
             <button
               type="button"
@@ -487,18 +492,6 @@ export default function AuthScreen() {
                 className="w-full px-4 py-3 rounded-xl border border-slate-800 bg-slate-950/60 text-slate-100 placeholder-slate-500 outline-none focus:border-amber-500/50 transition-colors text-sm"
               />
             </div>
-
-            {/* Notifications */}
-            {success && (
-              <div className="text-center text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-3">
-                {success}
-              </div>
-            )}
-            {error && (
-              <div className="text-center text-xs text-rose-400 bg-rose-500/10 border border-rose-500/20 rounded-xl p-3">
-                {error}
-              </div>
-            )}
 
             <button
               type="submit"
