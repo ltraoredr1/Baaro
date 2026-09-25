@@ -403,6 +403,7 @@ export function MainShell() {
             <Suspense fallback={<TabFallback />}>
               {Tab ? (
                 <Tab
+                  key={activeTab}
                   {...(tabProps[activeTab] || {})}
                 />
               ) : null}
@@ -429,8 +430,9 @@ export function MainShell() {
             <ErrorBoundary>
               <Suspense fallback={<TabFallback />}>
                 {Tab ? (
-                  <Tab
-                    {...(tabProps[activeTab] || {})}
+                <Tab
+                  key={activeTab}
+                  {...(tabProps[activeTab] || {})}
                   />
                 ) : null}
               </Suspense>
