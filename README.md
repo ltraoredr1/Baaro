@@ -1,9 +1,11 @@
 # BAARO
 
 Réseau social mondial avec portefeuille de points, crypto interne (**BARO Coin**),
-messagerie, marketplace, lives, abonnements et assistant IA intégré.
+messagerie, **communauté (groupes & canaux style Telegram)**, marketplace, lives,
+abonnements, amis et assistant IA intégré.
 
-Données (points, transactions, avoirs crypto, social) stockées dans Postgres via Supabase.  
+Données (points, transactions, avoirs crypto, social, communauté) stockées dans
+Postgres via Supabase.  
 Compte anonyme créé automatiquement pour chaque visiteur (auth e-mail / téléphone possible ensuite).
 
 **Site principal** : [baaro-xi.vercel.app](https://baaro-xi.vercel.app)  
@@ -19,7 +21,7 @@ Compte anonyme créé automatiquement pour chaque visiteur (auth e-mail / télé
 | Backend data | Supabase (Postgres, Auth, Realtime, Storage, RLS) |
 | API | Vercel Serverless (`api/` — 7/12 fichiers) |
 | Live | Daily.co + WebRTC |
-| Mobile | Capacitor (Android / iOS) |
+| Mobile | Capacitor (Android / iOS) — push natif inclus |
 | IA | Proxy multi-fournisseurs (`/api/live` — gateway v2) |
 
 ---
@@ -40,8 +42,8 @@ auth.users.id
 |-------|--------|
 | **Une seule identité technique** | `auth.users.id` (UUID Supabase Auth) |
 | **Handle / email / téléphone** | Attributs d’affichage ou de contact, **jamais** clés relationnelles |
-| **FK partout** | `follower_id`, `followed_id`, `sender_id`, `author_id`, `actor_id`, etc. pointent vers `auth.users.id` |
-| **Objets métier** | `posts.id`, `follows.id`, `messages.id`… identifient le contenu / la relation, pas l’utilisateur |
+| **FK partout** | `follower_id`, `followed_id`, `sender_id`, `author_id`, `owner_id`, etc. → `auth.users.id` |
+| **Objets métier** | `posts.id`, `follows`, `groups.id`, `channels.id`… identifient le contenu / la relation, pas l’utilisateur |
 
 ### Helpers côté code
 
@@ -56,28 +58,86 @@ auth.users.id
 - Conversion possible vers compte permanent (email ou téléphone) **sans changer l’ID**
 - Flags locaux : `baaro_guest_ok` (session) + `baaro_is_guest`
 
-### Système d’abonnement & amis
+---
 
-- Table `follows` : `follower_id`, `followed_id`, `status`, `is_friend`
-- Fonctions SQL : `get_user_friends()`, `toggle_follow()`
-- Trigger `on_follow_created` pour les notifications
-- RLS activées
+## Abonnements & amis
+
+| Élément | Détail |
+|---------|--------|
+| Table | `follows` : `follower_id`, `followed_id`, **`status`**, **`is_friend`** |
+| Abonnement | `toggle_follow()` / follow simple |
+| Demande d’ami | `status = 'pending'`, `is_friend = true` → UI `FriendRequestButton` |
+| Amis acceptés | `status = 'accepted'`, `is_friend = true` |
+| RPC | `get_user_friends()`, `toggle_follow()` |
+| RLS | Lecture / écriture limitées aux participants de la relation |
+
+---
+
+## Communauté (style Telegram)
+
+| Concept | Table / RPC |
+|---------|-------------|
+| Groupe | `groups` (`is_public`, `owner_id`, `category`) |
+| Canal | `channels` — types : `text`, `voice`, **`announce`** |
+| Membres | `group_members` (`role` : owner / admin / moderator / member) |
+| Messages | `channel_messages` (+ rate-limit) |
+| Invitations | `group_invites` (code, max_uses, expires_at) |
+| Bans / signalements | `group_bans`, `community_reports` |
+
+### RPC principales
+
+| Fonction | Rôle |
+|----------|------|
+| `create_community_group` | Groupe + owner + canal `#general` |
+| `create_community_channel` | Canal (owner/admin uniquement) |
+| `join_community_group` | Join public **ou** via code invite |
+| `create_group_invite` / `list_group_invites` / `revoke_group_invite` | Gestion des codes |
+| `peek_group_invite` | Aperçu avant rejoindre |
+| `ban_community_member` / `set_member_role` | Modération |
+| `report_community_message` | Signalement |
+
+### Règles produit
+
+- **Membres** écrivent dans les canaux `text` / `voice`
+- Canal **`announce`** : lecture pour tous, écriture owner / admin / modo
+- **Créer un canal** / **générer une invite** : owner & admin
+- Deep-link : `/?invite=CODE`
+
+### Fichiers client
+
+- `src/hooks/useCommunity.js` — groupes, canaux, invites, messages realtime
+- `src/components/CommunityTab.jsx` — UI Groupes / Découvrir / Amis / Contacts
+- `src/components/community/ChannelItem.jsx`
 
 ---
 
 ## Fonctionnalités principales
 
 - Fil social : posts, réactions, sondages, favoris, partages, score de feed
-- Vidéos & Stories
+- Vidéos & Stories (lazy load + pause hors viewport pour limiter la conso)
 - Messagerie (chiffrement E2E côté client) + appels
+- **Communauté** : groupes, canaux, invitations, modération
+- Amis & contacts (demande d’ami, sync répertoire, recherche téléphone / e-mail)
 - Lives (rôles, cadeaux, multi-host)
 - Portefeuille points + conversion BARO (écritures **uniquement** via `/api/wallet`)
 - Marketplace / boutiques / commandes (prix recalculés serveur)
 - Annuaire Entreprises & services
 - Assistant IA (multi-modèles)
-- Notifications realtime (via `/api/social`)
+- Notifications realtime (`/api/social`) + **push Web & Capacitor natif**
 - Mode hors-ligne Nearby (Android natif uniquement)
 - Protection anti-fraude : Turnstile, limite appareils, plafonds gains, âge min. cashout
+
+---
+
+## Notifications push
+
+| Plateforme | Module |
+|------------|--------|
+| Web | Service Worker + VAPID (`VITE_VAPID_PUBLIC_KEY`) |
+| Android / iOS | `@capacitor/push-notifications` (enregistrement sans crash si permission refusée) |
+
+Fichier : `src/lib/pushNotifications.js`  
+Tokens stockés dans `push_tokens` (upsert par user + token).
 
 ---
 
@@ -128,6 +188,13 @@ Ouvre [http://localhost:5173](http://localhost:5173).
 Appliquer les fichiers de `supabase/migrations/` **dans l’ordre numérique** sur un projet de staging d’abord.  
 Les scripts legacy (`legacy/`) ne doivent plus être rejoués sur une base déjà migrée.
 
+Migrations utiles pour la communauté / amis :
+
+- Schéma communauté + RLS + RPC groupes / canaux / bans
+- Invitations (`group_invites`) + `join_community_group` (code ou public)
+- Canaux type `announce` + `can_post_in_channel`
+- `follows.status` / `follows.is_friend` + policies
+
 ### Garde-fou avant prod
 
 ```bash
@@ -145,6 +212,7 @@ Variables obligatoires (exemples dans `.env.example` / `.env.production.example`
 - `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`
 - `SUPABASE_SERVICE_ROLE_KEY` (**jamais** préfixée `VITE_`)
 - `ALLOWED_ORIGINS`, `PUBLIC_APP_URL`
+- `VITE_VAPID_PUBLIC_KEY` (notifications web)
 - Clés IA / paiement / Daily selon les modules activés
 
 Rewrites legacy (dans `vercel.json`) :
@@ -166,16 +234,24 @@ Rewrites legacy (dans `vercel.json`) :
 ## Structure utile
 
 ```
-api/                 # Serverless 7/12
-  _lib/ai/           # Router IA
-  _shared.js         # getAdminClient, requireUser, rateLimitAsync, applyCors
-src/app/             # Coque principale (MainShell, tabs lazy)
-src/features/        # Feed, messages, wallet, lives, shop, auth, profile…
-src/components/      # UI partagée
-src/hooks/ src/lib/  # Données, crypto E2E, identité, rate-limit client…
-supabase/migrations/ # Schéma + RLS (source de vérité)
-scripts/             # check:production, audit:security…
-docs/                # Audits, checklist prod, roadmaps
+api/                      # Serverless 7/12
+  _lib/ai/                # Router IA
+  _shared.js              # getAdminClient, requireUser, rateLimitAsync, applyCors
+src/app/                  # Coque principale (MainShell, tabs lazy)
+src/features/             # Feed, messages, wallet, lives, shop, auth, profile…
+  friends/                # FriendRequestButton, FriendsTab
+  contacts/               # ContactsTab
+src/components/           # UI partagée
+  CommunityTab.jsx        # Groupes / Découvrir / Amis / Contacts
+  community/              # ChannelItem, UnreadBadge…
+  LazyMedia.jsx           # Images + vidéos lazy (conso)
+src/hooks/
+  useCommunity.js         # Groupes, canaux, invites, messages
+src/lib/
+  pushNotifications.js    # Web + Capacitor
+supabase/migrations/      # Schéma + RLS (source de vérité)
+scripts/                  # check:production, audit:security…
+docs/                     # Audits, checklist prod, roadmaps
 ```
 
 ---
@@ -187,7 +263,9 @@ docs/                # Audits, checklist prod, roadmaps
 3. **Identité** : toujours `auth.users.id` comme FK — jamais email / handle / téléphone.
 4. **API** : pas de nouveau fichier dans `api/` au-delà de 12 sans revue (actuellement 7/12).
 5. **SECURITY DEFINER** : fixer `search_path` et tester avec 2 comptes distincts.
-6. Fonctionnalités non branchées (ex. cashout Stripe) restent en 503 / message clair.
+6. **Communauté** : join / create canal / invites uniquement via RPC ; respect des rôles (announce = admin).
+7. **Amis** : demandes via `status` + `is_friend` ; ne pas confondre avec un simple follow.
+8. Fonctionnalités non branchées (ex. cashout Stripe) restent en 503 / message clair.
 
 ---
 
