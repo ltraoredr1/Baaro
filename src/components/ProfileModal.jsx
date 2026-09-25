@@ -11,6 +11,8 @@ import {
 
 import { useProfile, useProfileStats } from "../hooks/useProfile.js";
 import ProfileContactLinksView from "./ProfileContactLinksView.jsx";
+import ProfileContactsLinks from "./ProfileContactsLinks.jsx";
+import ProfilePhotosEditor from "./ProfilePhotosEditor.jsx";
 import FollowButton from "../features/friends/FollowButton.jsx";
 import { useToast } from "./ToastContext.jsx";
 import { COLORS } from "../theme.js";
@@ -287,6 +289,27 @@ export function ProfileModal({
               <div className="mt-5">
                 <ProfileContactLinksView contacts={contacts} links={links} socials={socials} />
               </div>
+
+              {isOwnProfile && (
+                <div className="mt-5 space-y-4">
+                  <div className="rounded-2xl border p-4" style={{ borderColor: COLORS.border, background: COLORS.surface }}>
+                    <p className="text-xs font-bold uppercase tracking-widest mb-3" style={{ color: COLORS.gold }}>
+                      Photos de profil
+                    </p>
+                    <ProfilePhotosEditor
+                      userId={currentUserId}
+                      profile={profile}
+                      onUpdated={() => reload?.()}
+                    />
+                  </div>
+                  <div className="rounded-2xl border p-4" style={{ borderColor: COLORS.border, background: COLORS.surface }}>
+                    <p className="text-xs font-bold uppercase tracking-widest mb-3" style={{ color: COLORS.gold }}>
+                      Contacts & réseaux
+                    </p>
+                    <ProfileContactsLinks userId={currentUserId} />
+                  </div>
+                </div>
+              )}
 
               {!profile?.bio && !profile?.location && contacts.phones.length === 0 && contacts.emails.length === 0 && links.length === 0 && socials.length === 0 && (
                 <div className="mt-5 rounded-2xl border p-5 text-center" style={{ borderColor: COLORS.border, background: COLORS.surface }}>
