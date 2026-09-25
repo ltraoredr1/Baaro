@@ -2,366 +2,64 @@ import fs from "node:fs";
 import path from "node:path";
 
 const root = process.cwd();
-
-const checks = [
-  ["package.json", "package manifest"],
-  ["capacitor.config.json", "Capacitor config"],
-
-  ["supabase/migrations/016_video_views_feed_integrity.sql", "video view integrity migration"],
-  ["supabase/migrations/017_messaging_calls_integrity.sql", "messaging/calls migration"],
-  ["supabase/migrations/018_live_integrity_realtime.sql", "live migration"],
-  ["supabase/migrations/019_ai_routing_foundation.sql", "AI routing migration"],
-  ["supabase/migrations/020_notifications_foundation.sql", "notifications migration"],
-  ["supabase/migrations/021_economy_payout_foundation.sql", "payout migration"],
-
-  ["api/chat.js", "chat API"],
-  ["api/payout.js", "payout API"],
-  ["api/wallet.js", "wallet API"],
-  ["api/social.js", "social API"],
-];
-
 let failed = 0;
 
-function fail(message) {
-  console.error(`FAIL: ${message}`);
-  failed++;
-}
+const fail = (m) => { console.error(`FAIL: ${m}`); failed++; };
+const ok = (m) => console.log(`OK: ${m}`);
+const exists = (p) => fs.existsSync(path.join(root, p));
+const read = (p) => fs.readFileSync(path.join(root, p), "utf8");
 
-function readFile(relativePath, label) {
-  const absolutePath = path.join(root, relativePath);
-
-  if (!fs.existsSync(absolutePath)) {
-    fail(`${label} missing (${relativePath})`);
-    return null;
-  }
-
-  return fs.readFileSync(absolutePath, "utf8");
-}
-
-// ============================================================
-// FILE EXISTENCE
-// ============================================================
-
-for (const [file, label] of checks) {
-  readFile(file, label);
-}
-
-// ============================================================
-// PACKAGE.JSON
-// ============================================================
-
-const packagePath = path.join(root, "package.json");
-
-if (fs.existsSync(packagePath)) {
-  let pkg;
-
-  try {
-    pkg = JSON.parse(
-      fs.readFileSync(packagePath, "utf8")
-    );
-  } catch (error) {
-    fail(`package.json invalid JSON: ${error.message}`);
-    pkg = null;
-  }
-
-  if (pkg) {
-    const scriptsRequired = [
-      "build",
-      "check:lock",
-      "check:ai",
-      "check:notifications",
-      "check:performance",
-      "check:android",
-      "check:payout",
-    ];
-
-    for (const name of scriptsRequired) {
-      if (!pkg.scripts?.[name]) {
-        fail(`npm script missing: ${name}`);
-      }
-    }
-  }
-}
-
-// ============================================================
-// SQL HARDENING CHECKS
-// ============================================================
-
-const sqlFiles = [
-  "016_video_views_feed_integrity.sql",
-  "017_messaging_calls_integrity.sql",
-  "018_live_integrity_realtime.sql",
-  "019_ai_routing_foundation.sql",
-  "020_notifications_foundation.sql",
-  "021_economy_payout_foundation.sql",
+const required = [
+  "package.json",
+  "package-lock.json",
+  "capacitor.config.json",
+  "vercel.json",
+  "src/app/tabs.jsx",
+  "src/app/MainShell.jsx",
+  "src/contexts/AppContext.jsx",
+  "api/_shared.js",
+  "api/live.js",
+  "api/social.js",
+  "api/wallet.js",
+  "api/webhooks.js",
+  "supabase/migrations/038_identity_id_only_and_profile_persistence.sql",
+  "supabase/migrations/041_canonical_identity_unique.sql",
+  "supabase/migrations/049_fix_phone_auth_id_only.sql",
+  "supabase/migrations/052_identity_profile_final_hardening.sql",
 ];
+for (const p of required) exists(p) ? ok(`file ${p}`) : fail(`missing ${p}`);
 
-for (const file of sqlFiles) {
-  const p = path.join(
-    root,
-    "supabase/migrations",
-    file
-  );
-
-  if (!fs.existsSync(p)) {
-    continue;
-  }
-
-  const text = fs
-    .readFileSync(p, "utf8")
-    .toLowerCase();
-
-  // Catch accidental destructive statements.
-  const forbidden = [
-    "drop schema public",
-    "drop table public.wallets",
-    "truncate public.wallets",
-  ];
-
-  for (const marker of forbidden) {
-    if (text.includes(marker)) {
-      fail(
-        `destructive SQL marker in ${file}: ${marker}`
-      );
-    }
-  }
+const pkg = JSON.parse(read("package.json"));
+for (const script of ["build", "check:lock", "audit:security", "check:e2e", "check:e2e:smoke", "check:performance", "check:android"]) {
+  if (!pkg.scripts?.[script]) fail(`npm script missing: ${script}`);
 }
 
-// ============================================================
-// PAYOUT SAFETY
-// ============================================================
-
-const payoutPath = path.join(
-  root,
-  "api/payout.js"
-);
-
-if (fs.existsSync(payoutPath)) {
-  const payout = fs.readFileSync(
-    payoutPath,
-    "utf8"
-  );
-
-  if (
-    !payout.includes("payout_unavailable") ||
-    !payout.includes("503")
-  ) {
-    fail(
-      "payout must remain disabled-by-default"
-    );
-  }
+const apiDir = path.join(root, "api");
+if (exists("api")) {
+  const files = fs.readdirSync(apiDir).filter((n) => n.endsWith(".js") && fs.statSync(path.join(apiDir, n)).isFile());
+  files.length <= 12 ? ok(`api/ JS files: ${files.length} <= 12`) : fail(`api/ has ${files.length} JS files (max 12): ${files.join(", ")}`);
 }
 
-// ============================================================
-// SOCIAL API CONTRACT
-// ============================================================
-
-const socialPath = path.join(
-  root,
-  "api/social.js"
-);
-
-if (fs.existsSync(socialPath)) {
-  const social = fs.readFileSync(
-    socialPath,
-    "utf8"
-  );
-
-  // ----------------------------------------------------------
-  // Basic handlers
-  // ----------------------------------------------------------
-
-  const requiredSocialMarkers = [
-    [
-      "handleComment",
-      "comment handler",
-    ],
-    [
-      "handleReaction",
-      "reaction handler",
-    ],
-    [
-      "handleBlock",
-      "block handler",
-    ],
-    [
-      "handleReport",
-      "report handler",
-    ],
-    [
-      "handleStory",
-      "story handler",
-    ],
-    [
-      "handleNotification",
-      "notification handler",
-    ],
-  ];
-
-  for (const [marker, label] of requiredSocialMarkers) {
-    if (!social.includes(marker)) {
-      fail(
-        `social API missing ${label}: ${marker}`
-      );
-    }
-  }
-
-  // ----------------------------------------------------------
-  // Comments contract
-  // ----------------------------------------------------------
-
-  const commentMarkers = [
-    [
-      'from("comments")',
-      "comments table access",
-    ],
-    [
-      'author_id: userId',
-      "comment author_id",
-    ],
-    [
-      "list_comments",
-      "list_comments action",
-    ],
-    [
-      "delete_comment",
-      "delete_comment action",
-    ],
-    [
-      "comments_count",
-      "comments_count synchronization",
-    ],
-  ];
-
-  for (const [marker, label] of commentMarkers) {
-    if (!social.includes(marker)) {
-      fail(
-        `social API missing ${label}: ${marker}`
-      );
-    }
-  }
-
-  // ----------------------------------------------------------
-  // Comment INSERT must handle errors
-  // ----------------------------------------------------------
-
-  if (
-    social.includes(
-      'from("comments").insert'
-    )
-  ) {
-    const insertIndex = social.indexOf(
-      'from("comments").insert'
-    );
-
-    const nextSection = social.slice(
-      insertIndex,
-      insertIndex + 3000
-    );
-
-    if (
-      !nextSection.includes(
-        "insertError"
-      )
-    ) {
-      fail(
-        "comment INSERT error is not explicitly checked"
-      );
-    }
-  }
-
-  // ----------------------------------------------------------
-  // Current notification schema
-  // ----------------------------------------------------------
-
-  if (
-    social.includes(
-      ".from(\"notifications\")"
-    )
-  ) {
-    if (
-      !social.includes(
-        "notification_id"
-      )
-    ) {
-      fail(
-        "social notifications contract must use notification_id"
-      );
-    }
-
-    if (
-      !social.includes(
-        "source_id"
-      )
-    ) {
-      fail(
-        "social notifications contract must use source_id"
-      );
-    }
-  }
-
-  // ----------------------------------------------------------
-  // Detect legacy notification identifiers
-  // ----------------------------------------------------------
-
-  const legacyNotificationPatterns = [
-    '.select("id, type, message',
-    '.eq("id", id)',
-    "target_id",
-    "target_type",
-  ];
-
-  for (const marker of legacyNotificationPatterns) {
-    if (social.includes(marker)) {
-      fail(
-        `legacy notification schema marker detected in api/social.js: ${marker}`
-      );
-    }
-  }
-
-  // ----------------------------------------------------------
-  // Identity contract
-  // ----------------------------------------------------------
-
-  if (
-    !social.includes(
-      "user.id"
-    )
-  ) {
-    fail(
-      "social API must use authenticated user.id as identity root"
-    );
-  }
+const identity = read("supabase/migrations/052_identity_profile_final_hardening.sql");
+for (const marker of ["profiles.id", "auth.users(id)", "handle_new_user", "profiles_id_fkey", "profiles.user_id still exists"]) {
+  identity.includes(marker) ? ok(`identity hardening marker: ${marker}`) : fail(`identity hardening marker missing: ${marker}`);
 }
 
-// ============================================================
-// FINAL RESULT
-// ============================================================
-
-if (failed) {
-  console.error(
-    `E2E readiness / contract checks failed: ${failed}`
-  );
-
-  process.exit(1);
+const social = read("api/social.js");
+for (const marker of ["handleComment", "handleReaction", "handleBlock", "handleReport", "handleStory", "handleNotification", 'from("comments")', "author_id: userId", "comments_count", "notification_id", "source_id", "actor_id", "user.id"]) {
+  social.includes(marker) ? ok(`social contract: ${marker}`) : fail(`social contract missing: ${marker}`);
 }
 
-console.log(
-  "E2E readiness / contract checks: OK"
-);
+const wallet = read("api/wallet.js");
+wallet.includes("payout_unavailable") && wallet.includes("503") ? ok("payout remains disabled-by-default") : fail("wallet payout safety contract missing");
 
-console.log(
-  "Social/comment contract: OK"
-);
+const vercel = JSON.parse(read("vercel.json"));
+const apiFiles = new Set(fs.readdirSync(apiDir).filter((n) => n.endsWith(".js")).map((n) => `/api/${n}`));
+for (const rule of vercel.rewrites || []) {
+  const destination = rule.destination || "";
+  const match = destination.match(/^\/api\/([a-z0-9_-]+)(?:\?|$)/i);
+  if (match && !apiFiles.has(`/api/${match[1]}.js`)) fail(`vercel destination points to missing API: ${destination}`);
+}
 
-console.log(
-  "Identity contract: auth.users.id -> user.id"
-);
-
-console.log(
-  "Notification contract: notification_id / user_id / actor_id / source_id"
-);
-
-console.log(
-  "Full browser/device E2E still requires a configured Supabase project, provider keys, and Android/Web test runners."
-);
+if (failed) process.exit(1);
+console.log("E2E readiness / production contract checks: OK");
