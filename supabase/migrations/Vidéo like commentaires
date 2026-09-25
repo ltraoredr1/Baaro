@@ -1,0 +1,187 @@
+-- ============================================================
+-- BAARO — Correction globale du module vidéo
+-- Fichier : 052_video_module_global_fix.sql
+-- Date : 26 septembre 2026
+-- 
+-- Objectif :
+--   1. Supprimer le trigger bloquant qui empêchait les compteurs de se mettre à jour
+--   2. Corriger la fonction de comptage des vues (support des invités/anonymes)
+--   3. Créer des triggers propres pour likes et commentaires
+--   4. Recalculer les compteurs existants
+--   5. S'assurer que les politiques RLS sont correctes
+-- ============================================================
+
+-- ============================================================
+-- ÉTAPE 1 : NETTOYAGE DES TRIGGERS BLOQUANTS
+-- ============================================================
+
+-- Suppression du trigger qui bloquait toutes les mises à jour de la table videos
+DROP TRIGGER IF EXISTS trg_protect_video_counters ON public.videos;
+DROP FUNCTION IF EXISTS public.protect_video_counters();
+
+-- Suppression des anciens triggers en doublon (nettoyage)
+DROP TRIGGER IF EXISTS trg_video_comments_count ON public.video_comments;
+DROP TRIGGER IF EXISTS trg_video_likes_count ON public.video_likes;
+DROP TRIGGER IF EXISTS trg_baaro_video_comment_count ON public.video_comments;
+DROP TRIGGER IF EXISTS trg_baaro_video_like_count ON public.video_likes;
+
+-- Suppression des anciennes fonctions obsolètes
+DROP FUNCTION IF EXISTS public.update_video_comments_count_trigger();
+DROP FUNCTION IF EXISTS public.update_video_likes_count_trigger();
+DROP FUNCTION IF EXISTS public.baaro_video_comment_count();
+DROP FUNCTION IF EXISTS public.baaro_video_like_count();
+
+
+-- ============================================================
+-- ÉTAPE 2 : CORRECTION DE LA FONCTION DE VUES (SUPPORT INVITÉS)
+-- ============================================================
+
+-- Suppression forcée de l'ancienne fonction pour éviter l'erreur 42P13
+DROP FUNCTION IF EXISTS public.register_video_view(uuid);
+
+CREATE OR REPLACE FUNCTION public.register_video_view(p_video_id uuid)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  -- Si l'utilisateur est anonyme (guest), on utilise un UUID générique pour éviter le crash
+  uid uuid := coalesce(auth.uid(), '00000000-0000-0000-0000-000000000000'::uuid);
+  inserted boolean := false;
+  new_views integer := 0;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM public.videos WHERE id = p_video_id) THEN
+    RAISE EXCEPTION 'VIDEO_NOT_FOUND';
+  END IF;
+
+  -- Insertion idempotente : une seule vue comptée par jour par utilisateur (ou UUID générique)
+  INSERT INTO public.video_views(video_id, viewer_id, view_date)
+  VALUES (p_video_id, uid, current_date)
+  ON CONFLICT DO NOTHING;
+
+  inserted := FOUND;
+  
+  IF inserted THEN
+    UPDATE public.videos
+      SET views = coalesce(views, 0) + 1
+      WHERE id = p_video_id
+      RETURNING views INTO new_views;
+  ELSE
+    SELECT coalesce(views, 0) INTO new_views FROM public.videos WHERE id = p_video_id;
+  END IF;
+
+  RETURN jsonb_build_object('counted', inserted, 'views', new_views);
+END;
+$$;
+
+-- Autoriser les utilisateurs authentifiés ET anonymes (anon) à appeler cette fonction
+REVOKE ALL ON FUNCTION public.register_video_view(uuid) FROM public;
+GRANT EXECUTE ON FUNCTION public.register_video_view(uuid) TO authenticated, anon;
+
+
+-- ============================================================
+-- ÉTAPE 3 : TRIGGER POUR LES COMMENTAIRES
+-- ============================================================
+
+CREATE OR REPLACE FUNCTION public.update_video_comments_count()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    UPDATE public.videos 
+    SET comments_count = COALESCE(comments_count, 0) + 1
+    WHERE id = NEW.video_id;
+  ELSIF TG_OP = 'DELETE' THEN
+    UPDATE public.videos 
+    SET comments_count = GREATEST(COALESCE(comments_count, 0) - 1, 0)
+    WHERE id = OLD.video_id;
+  END IF;
+  RETURN NULL;
+END;
+$$;
+
+CREATE TRIGGER trg_video_comments_count
+AFTER INSERT OR DELETE ON public.video_comments
+FOR EACH ROW EXECUTE FUNCTION public.update_video_comments_count();
+
+
+-- ============================================================
+-- ÉTAPE 4 : TRIGGER POUR LES LIKES
+-- ============================================================
+
+CREATE OR REPLACE FUNCTION public.update_video_likes_count()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    UPDATE public.videos 
+    SET likes = COALESCE(likes, 0) + 1
+    WHERE id = NEW.video_id;
+  ELSIF TG_OP = 'DELETE' THEN
+    UPDATE public.videos 
+    SET likes = GREATEST(COALESCE(likes, 0) - 1, 0)
+    WHERE id = OLD.video_id;
+  END IF;
+  RETURN NULL;
+END;
+$$;
+
+CREATE TRIGGER trg_video_likes_count
+AFTER INSERT OR DELETE ON public.video_likes
+FOR EACH ROW EXECUTE FUNCTION public.update_likes_count();
+
+
+-- ============================================================
+-- ÉTAPE 5 : POLITIQUES RLS POUR VIDEOS
+-- ============================================================
+
+-- Permettre aux utilisateurs authentifiés de mettre à jour leurs propres vidéos
+DROP POLICY IF EXISTS "videos_update_own" ON public.videos;
+CREATE POLICY "videos_update_own" ON public.videos
+FOR UPDATE TO authenticated
+USING (auth.uid() = author_id)
+WITH CHECK (auth.uid() = author_id);
+
+-- Permettre au service_role de tout mettre à jour (pour les triggers et l'API)
+DROP POLICY IF EXISTS "videos_update_service" ON public.videos;
+CREATE POLICY "videos_update_service" ON public.videos
+FOR UPDATE TO service_role
+USING (true)
+WITH CHECK (true);
+
+
+-- ============================================================
+-- ÉTAPE 6 : RECALCUL DES COMPTEURS EXISTANTS
+-- ============================================================
+
+-- Recalculer les vrais compteurs pour toutes les vidéos depuis les données existantes
+UPDATE public.videos v
+SET 
+  likes = COALESCE(subquery.likes_count, 0),
+  comments_count = COALESCE(subquery.comments_count, 0)
+FROM (
+  SELECT 
+    v.id as video_id,
+    (SELECT COUNT(*) FROM public.video_likes vl WHERE vl.video_id = v.id) as likes_count,
+    (SELECT COUNT(*) FROM public.video_comments vc WHERE vc.video_id = v.id) as comments_count
+  FROM public.videos v
+) subquery
+WHERE v.id = subquery.video_id;
+
+
+-- ============================================================
+-- ÉTAPE 7 : VÉRIFICATION FINALE
+-- ============================================================
+
+-- Afficher un résumé des compteurs après correction
+SELECT 
+  id,
+  LEFT(title, 30) as title,
+  COALESCE(views, 0) as views,
+  COALESCE(likes, 0) as likes,
+  COALESCE(comments_count, 0) as comments_count
+FROM public.videos
+ORDER BY created_at DESC
+LIMIT 10;
