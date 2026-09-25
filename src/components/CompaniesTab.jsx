@@ -1,6 +1,5 @@
 /**
- * Compat : ancien nom CompaniesTab = communauté.
- * L’onglet "companies" charge désormais EnterprisesTab.
- * Tout import de CompaniesTab pointe vers CommunityTab.
+ * Compat : ancien nom CompaniesTab.
+ * L'onglet "companies" charge EnterprisesTab (annuaire entreprises).
  */
-export { default } from "./CommunityTab.jsx";
+export { default } from "./EnterprisesTab.jsx";
