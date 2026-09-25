@@ -501,10 +501,14 @@ export default function CommunityTab({ onOpenProfile }) {
   const voiceChannels =
     selectedGroup?.channels?.filter((c) => c.type === "voice") || [];
 
+  /* Hauteur utile : viewport − safe-area − header app (~3.5rem) − barre nav principale (~5.5rem) */
+  const shellHeight =
+    "calc(100dvh - env(safe-area-inset-top, 0px) - 3.5rem - 5.75rem - env(safe-area-inset-bottom, 0px))";
+
   return (
     <div
-      className="flex flex-col h-[calc(100dvh-7.5rem)] max-w-5xl mx-auto w-full relative min-h-0"
-      style={{ color: C.ivory }}
+      className="flex flex-col max-w-5xl mx-auto w-full relative min-h-0 overflow-hidden"
+      style={{ color: C.ivory, height: shellHeight, maxHeight: shellHeight }}
     >
       {toast && (
         <div
@@ -569,19 +573,19 @@ export default function CommunityTab({ onOpenProfile }) {
       </div>
 
       {activeTab === "friends" && (
-        <div className="flex-1 overflow-y-auto p-3 min-h-0">
+        <div className="flex-1 overflow-y-auto p-3 min-h-0 overscroll-contain pb-2">
           <FriendsTab id={id} onOpenProfile={onOpenProfile} />
         </div>
       )}
       {activeTab === "contacts" && (
-        <div className="flex-1 overflow-y-auto p-3 min-h-0">
+        <div className="flex-1 overflow-y-auto p-3 min-h-0 overscroll-contain pb-2">
           <ContactsTab onOpenProfile={onOpenProfile} />
         </div>
       )}
 
       {/* Découvrir + invitations */}
       {activeTab === "discover" && (
-        <div className="flex-1 overflow-y-auto p-3 space-y-4 min-h-0">
+        <div className="flex-1 overflow-y-auto p-3 space-y-4 min-h-0 overscroll-contain pb-2">
           <div
             className="p-4 rounded-2xl border space-y-2"
             style={{ background: C.surface2, borderColor: C.border }}
@@ -1002,7 +1006,7 @@ export default function CommunityTab({ onOpenProfile }) {
                       </span>
                     )}
                   </div>
-                  <div className="flex-1 overflow-y-auto p-3 space-y-2 min-h-0">
+                  <div className="flex-1 overflow-y-auto p-3 space-y-2 min-h-0 overscroll-contain">
                     {msgLoading && messages.length === 0 && (
                       <div className="flex justify-center py-8">
                         <Loader2
@@ -1059,7 +1063,10 @@ export default function CommunityTab({ onOpenProfile }) {
                       <form
                         onSubmit={handleSend}
                         className="p-3 border-t flex gap-2 shrink-0"
-                        style={{ borderColor: C.border }}
+                        style={{
+                          borderColor: C.border,
+                          background: C.surface || C.bg,
+                        }}
                       >
                         <input
                           value={msgText}
@@ -1111,43 +1118,47 @@ export default function CommunityTab({ onOpenProfile }) {
           </div>
         )}
 
-      {/* Bottom nav mobile */}
-      <div
-        className="md:hidden flex justify-around border-t py-1 shrink-0"
-        style={{ borderColor: C.border }}
-      >
-        {[
-          { id: "groups", icon: Home, label: "Groupes" },
-          { id: "discover", icon: Compass, label: "Découvrir" },
-          { id: "friends", icon: Users, label: "Amis" },
-          { id: "contacts", icon: Phone, label: "Contacts" },
-        ].map((tab) => {
-          const Icon = tab.icon;
-          const active =
-            activeTab === tab.id ||
-            (tab.id === "groups" &&
-              (mobileView === "channels" || mobileView === "chat"));
-          return (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => {
-                setActiveTab(tab.id);
-                setMobileView(tab.id === "groups" ? "groups" : tab.id);
-              }}
-              className="flex flex-col items-center py-2 px-3"
-            >
-              <Icon size={18} style={{ color: active ? C.gold : C.muted }} />
-              <span
-                className="text-[10px] font-bold"
-                style={{ color: active ? C.gold : C.muted }}
+      {/* Sous-onglets communauté (mobile) — masqués en chat pour laisser place au clavier / messages */}
+      {mobileView !== "chat" && (
+        <div
+          className="md:hidden flex justify-around border-t py-1.5 shrink-0"
+          style={{
+            borderColor: C.border,
+            background: C.surface || C.bg,
+          }}
+        >
+          {[
+            { id: "groups", icon: Home, label: "Groupes" },
+            { id: "discover", icon: Compass, label: "Découvrir" },
+            { id: "friends", icon: Users, label: "Amis" },
+            { id: "contacts", icon: Phone, label: "Contacts" },
+          ].map((tab) => {
+            const Icon = tab.icon;
+            const active =
+              activeTab === tab.id ||
+              (tab.id === "groups" && mobileView === "channels");
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => {
+                  setActiveTab(tab.id);
+                  setMobileView(tab.id === "groups" ? "groups" : tab.id);
+                }}
+                className="flex flex-col items-center py-1.5 px-3 min-w-[4rem]"
               >
-                {tab.label}
-              </span>
-            </button>
-          );
-        })}
-      </div>
+                <Icon size={18} style={{ color: active ? C.gold : C.muted }} />
+                <span
+                  className="text-[10px] font-bold"
+                  style={{ color: active ? C.gold : C.muted }}
+                >
+                  {tab.label}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {/* Modal créer groupe */}
       {showCreateGroup && (
