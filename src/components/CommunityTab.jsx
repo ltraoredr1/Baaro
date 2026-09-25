@@ -15,6 +15,10 @@ import {
   X,
   Lock,
   Globe,
+  Link2,
+  Megaphone,
+  Copy,
+  Trash2,
 } from "lucide-react";
 import {
   useCommunity,
@@ -46,6 +50,151 @@ const CATEGORIES = [
   { id: "divertissement", label: "Fun", emoji: "🎮" },
 ];
 
+function GroupInvitesPanel({
+  groupId,
+  createInvite,
+  listInvites,
+  revokeInvite,
+  C,
+}) {
+  const [invites, setInvites] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [maxUses, setMaxUses] = useState(0);
+  const [hours, setHours] = useState("");
+  const [lastCode, setLastCode] = useState("");
+  const [err, setErr] = useState("");
+
+  const reload = useCallback(async () => {
+    if (!groupId) return;
+    setLoading(true);
+    try {
+      setInvites(await listInvites(groupId));
+    } catch (e) {
+      setErr(e.message || "Erreur");
+    } finally {
+      setLoading(false);
+    }
+  }, [groupId, listInvites]);
+
+  useEffect(() => {
+    reload();
+  }, [reload]);
+
+  const handleCreate = async () => {
+    setErr("");
+    try {
+      const row = await createInvite(groupId, {
+        maxUses: Number(maxUses) || 0,
+        expiresHours: hours === "" ? null : Number(hours),
+      });
+      setLastCode(row?.code || "");
+      await reload();
+    } catch (e) {
+      setErr(e.message || "Création impossible");
+    }
+  };
+
+  const shareLink = lastCode
+    ? `${typeof window !== "undefined" ? window.location.origin : ""}/?invite=${lastCode}`
+    : "";
+
+  return (
+    <div
+      className="p-3 space-y-3 rounded-xl border mt-2"
+      style={{ borderColor: C.border, background: C.surface2 }}
+    >
+      <p className="text-xs font-bold flex items-center gap-1.5" style={{ color: C.gold }}>
+        <Link2 size={14} /> Invitations
+      </p>
+
+      <div className="flex flex-wrap gap-2 items-end">
+        <label className="text-[10px]" style={{ color: C.muted }}>
+          Max uses (0 = ∞)
+          <input
+            type="number"
+            min={0}
+            value={maxUses}
+            onChange={(e) => setMaxUses(e.target.value)}
+            className="block w-20 mt-1 px-2 py-1 rounded-lg border text-sm outline-none"
+            style={{ background: C.surface, borderColor: C.border, color: C.ivory }}
+          />
+        </label>
+        <label className="text-[10px]" style={{ color: C.muted }}>
+          Expire (h)
+          <input
+            type="number"
+            min={1}
+            value={hours}
+            onChange={(e) => setHours(e.target.value)}
+            placeholder="∞"
+            className="block w-20 mt-1 px-2 py-1 rounded-lg border text-sm outline-none"
+            style={{ background: C.surface, borderColor: C.border, color: C.ivory }}
+          />
+        </label>
+        <button
+          type="button"
+          onClick={handleCreate}
+          className="px-3 py-2 rounded-xl text-xs font-bold"
+          style={{ background: C.gold, color: "#000" }}
+        >
+          Générer
+        </button>
+      </div>
+
+      {lastCode && (
+        <div className="text-sm space-y-1">
+          <p>
+            Code : <b style={{ color: C.gold }}>{lastCode}</b>
+          </p>
+          <button
+            type="button"
+            className="text-xs underline flex items-center gap-1"
+            style={{ color: C.teal }}
+            onClick={() => navigator.clipboard?.writeText(shareLink || lastCode)}
+          >
+            <Copy size={12} /> Copier le lien
+          </button>
+        </div>
+      )}
+
+      {err && <p className="text-xs text-red-400">{err}</p>}
+
+      <ul className="space-y-1.5 max-h-36 overflow-y-auto">
+        {loading && (
+          <li className="text-xs" style={{ color: C.muted }}>
+            …
+          </li>
+        )}
+        {invites.map((inv) => (
+          <li
+            key={inv.id}
+            className="flex items-center justify-between gap-2 text-xs px-2 py-1.5 rounded-lg"
+            style={{ background: C.surface }}
+          >
+            <span>
+              <b>{inv.code}</b> · {inv.uses}/{inv.max_uses || "∞"}
+              {inv.expires_at
+                ? ` · ${new Date(inv.expires_at).toLocaleDateString()}`
+                : ""}
+            </span>
+            <button
+              type="button"
+              className="text-red-400 p-1"
+              title="Révoquer"
+              onClick={async () => {
+                await revokeInvite(inv.id);
+                reload();
+              }}
+            >
+              <Trash2 size={12} />
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 export default function CommunityTab({ onOpenProfile }) {
   const C = { ...FALLBACK, ...(THEME_COLORS || {}) };
   const { id, loadingUser } = useCurrentUser() || {};
@@ -58,6 +207,14 @@ export default function CommunityTab({ onOpenProfile }) {
     joinGroup,
     leaveGroup,
     loadAll,
+    myRole,
+    isMember,
+    isAdmin,
+    canPostInChannel,
+    createInvite,
+    listInvites,
+    revokeInvite,
+    peekInvite,
   } = useCommunity(id) || {};
 
   const [selectedGroup, setSelectedGroup] = useState(null);
@@ -69,9 +226,9 @@ export default function CommunityTab({ onOpenProfile }) {
   const [msgText, setMsgText] = useState("");
   const [sending, setSending] = useState(false);
 
-  // Modals création
   const [showCreateGroup, setShowCreateGroup] = useState(false);
   const [showCreateChannel, setShowCreateChannel] = useState(false);
+  const [showInvites, setShowInvites] = useState(false);
   const [gName, setGName] = useState("");
   const [gDesc, setGDesc] = useState("");
   const [gPublic, setGPublic] = useState(true);
@@ -83,11 +240,14 @@ export default function CommunityTab({ onOpenProfile }) {
   const [formError, setFormError] = useState("");
   const [toast, setToast] = useState("");
 
+  const [inviteCode, setInviteCode] = useState("");
+  const [peek, setPeek] = useState(null);
+  const [peekLoading, setPeekLoading] = useState(false);
+
   const messagesEndRef = useRef(null);
-  const { messages = [], sendMessage } =
+  const { messages = [], sendMessage, loading: msgLoading } =
     useChannelMessages(selectedChannel?.id) || {};
 
-  // Sync selected group when list reloads
   useEffect(() => {
     if (!groups.length) {
       setSelectedGroup(null);
@@ -109,12 +269,6 @@ export default function CommunityTab({ onOpenProfile }) {
             );
         }
       }
-    } else {
-      const g = groups[0];
-      setSelectedGroup(g);
-      setSelectedChannel(
-        g.channels?.find((c) => c.type !== "voice") || g.channels?.[0] || null
-      );
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [groups]);
@@ -122,6 +276,19 @@ export default function CommunityTab({ onOpenProfile }) {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages.length]);
+
+  // Deep-link ?invite=
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const inv = params.get("invite");
+      if (inv) {
+        setInviteCode(inv);
+        setActiveTab("discover");
+        setMobileView("discover");
+      }
+    } catch {}
+  }, []);
 
   const showToast = (msg) => {
     setToast(msg);
@@ -141,16 +308,23 @@ export default function CommunityTab({ onOpenProfile }) {
     });
   }, [groups, groupSearch, selectedCategory]);
 
-  const isMember = useCallback(
-    (group) => {
-      if (!id || !group) return false;
-      if (group.owner_id === id) return true;
-      return (group.members || []).some((m) => m.user_id === id);
-    },
-    [id]
+  const myGroups = useMemo(
+    () => groups.filter((g) => isMember?.(g)),
+    [groups, isMember]
   );
 
-  const isOwner = selectedGroup?.owner_id === id;
+  const discoverGroups = useMemo(
+    () =>
+      groups.filter((g) => g.is_public && !isMember?.(g)),
+    [groups, isMember]
+  );
+
+  const role = selectedGroup ? myRole?.(selectedGroup) : null;
+  const member = selectedGroup ? isMember?.(selectedGroup) : false;
+  const admin = selectedGroup ? isAdmin?.(selectedGroup) : false;
+  const canPost = selectedGroup && selectedChannel
+    ? canPostInChannel?.(selectedGroup, selectedChannel)
+    : false;
 
   const handleSelectGroup = (group) => {
     setSelectedGroup(group);
@@ -160,6 +334,7 @@ export default function CommunityTab({ onOpenProfile }) {
         null
     );
     setMobileView("channels");
+    setShowInvites(false);
   };
 
   const handleSelectChannel = (channel) => {
@@ -188,11 +363,9 @@ export default function CommunityTab({ onOpenProfile }) {
       setGPublic(true);
       setGCategory("community");
       showToast("Groupe créé");
-      if (group) {
-        // rechargé via loadAll ; sélection après tick
-        setTimeout(() => {
-          loadAll?.();
-        }, 100);
+      setTimeout(() => loadAll?.(true), 100);
+      if (group?.id) {
+        // après reload, sélection manuelle possible
       }
     } catch (err) {
       setFormError(err.message || "Création impossible");
@@ -207,8 +380,8 @@ export default function CommunityTab({ onOpenProfile }) {
       setFormError("Sélectionne un groupe");
       return;
     }
-    if (!isOwner && !isMember(selectedGroup)) {
-      setFormError("Tu dois être membre du groupe");
+    if (!admin) {
+      setFormError("Seuls les admins peuvent créer un canal");
       return;
     }
     setCreating(true);
@@ -231,11 +404,17 @@ export default function CommunityTab({ onOpenProfile }) {
     }
   };
 
-  const handleJoin = async () => {
-    if (!selectedGroup?.id) return;
+  const handleJoin = async (group = selectedGroup, code = null) => {
     try {
-      await joinGroup(selectedGroup.id);
-      showToast("Tu as rejoint le groupe");
+      const res = await joinGroup(group?.id || null, code);
+      showToast(
+        res?.already_member ? "Déjà membre" : "Tu as rejoint le groupe"
+      );
+      if (res?.group_id) {
+        const g = groups.find((x) => x.id === res.group_id);
+        if (g) handleSelectGroup(g);
+        else setTimeout(() => loadAll?.(true), 200);
+      }
     } catch (err) {
       showToast(err.message || "Impossible de rejoindre");
     }
@@ -247,6 +426,9 @@ export default function CommunityTab({ onOpenProfile }) {
     try {
       await leaveGroup(selectedGroup.id);
       showToast("Groupe quitté");
+      setSelectedGroup(null);
+      setSelectedChannel(null);
+      setMobileView("groups");
     } catch (err) {
       showToast(err.message || "Erreur");
     }
@@ -254,7 +436,7 @@ export default function CommunityTab({ onOpenProfile }) {
 
   const handleSend = async (e) => {
     e?.preventDefault?.();
-    if (!msgText.trim() || sending) return;
+    if (!msgText.trim() || sending || !canPost) return;
     setSending(true);
     try {
       await sendMessage(msgText);
@@ -263,6 +445,38 @@ export default function CommunityTab({ onOpenProfile }) {
       showToast(err.message || "Envoi impossible");
     } finally {
       setSending(false);
+    }
+  };
+
+  const handlePeekInvite = async () => {
+    if (!inviteCode.trim()) return;
+    setPeekLoading(true);
+    setPeek(null);
+    try {
+      const info = await peekInvite(inviteCode.trim());
+      setPeek(info);
+    } catch (e) {
+      setPeek({ ok: false, error: e.message });
+    } finally {
+      setPeekLoading(false);
+    }
+  };
+
+  const handleJoinByCode = async () => {
+    try {
+      const res = await joinGroup(null, inviteCode.trim());
+      showToast(res?.already_member ? "Déjà membre" : "Groupe rejoint");
+      setInviteCode("");
+      setPeek(null);
+      setActiveTab("groups");
+      setMobileView("groups");
+      try {
+        const url = new URL(window.location.href);
+        url.searchParams.delete("invite");
+        window.history.replaceState({}, "", url.pathname + url.search);
+      } catch {}
+    } catch (e) {
+      showToast(e.message || "Invitation invalide");
     }
   };
 
@@ -289,29 +503,43 @@ export default function CommunityTab({ onOpenProfile }) {
 
   return (
     <div
-      className="flex flex-col h-[calc(100vh-8rem)] max-w-5xl mx-auto w-full relative"
+      className="flex flex-col h-[calc(100dvh-7.5rem)] max-w-5xl mx-auto w-full relative min-h-0"
       style={{ color: C.ivory }}
     >
       {toast && (
         <div
           className="absolute top-2 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-xl text-sm font-bold shadow-lg"
-          style={{ background: C.surface, border: `1px solid ${C.gold}`, color: C.gold }}
+          style={{
+            background: C.surface,
+            border: `1px solid ${C.gold}`,
+            color: C.gold,
+          }}
         >
           {toast}
         </div>
       )}
 
       {error && (
-        <div className="mx-3 mt-2 p-3 rounded-xl text-sm" style={{ background: "rgba(239,68,68,0.12)", color: "#f87171" }}>
+        <div
+          className="mx-3 mt-2 p-3 rounded-xl text-sm"
+          style={{ background: "rgba(239,68,68,0.12)", color: "#f87171" }}
+        >
           {error}
-          <button type="button" className="ml-2 underline" onClick={() => loadAll?.()}>
+          <button
+            type="button"
+            className="ml-2 underline"
+            onClick={() => loadAll?.()}
+          >
             Réessayer
           </button>
         </div>
       )}
 
-      {/* ===== Onglets desktop ===== */}
-      <div className="hidden md:flex gap-2 p-3 border-b" style={{ borderColor: C.border }}>
+      {/* Onglets desktop */}
+      <div
+        className="hidden md:flex gap-2 p-3 border-b shrink-0"
+        style={{ borderColor: C.border }}
+      >
         {[
           { id: "groups", label: "Groupes", icon: Home },
           { id: "discover", label: "Découvrir", icon: Compass },
@@ -340,68 +568,132 @@ export default function CommunityTab({ onOpenProfile }) {
         })}
       </div>
 
-      {/* ===== FRIENDS / CONTACTS ===== */}
       {activeTab === "friends" && (
-        <div className="flex-1 overflow-y-auto p-3">
+        <div className="flex-1 overflow-y-auto p-3 min-h-0">
           <FriendsTab id={id} onOpenProfile={onOpenProfile} />
         </div>
       )}
       {activeTab === "contacts" && (
-        <div className="flex-1 overflow-y-auto p-3">
-          <ContactsTab />
+        <div className="flex-1 overflow-y-auto p-3 min-h-0">
+          <ContactsTab onOpenProfile={onOpenProfile} />
         </div>
       )}
 
-      {/* ===== DISCOVER ===== */}
+      {/* Découvrir + invitations */}
       {activeTab === "discover" && (
-        <div className="flex-1 overflow-y-auto p-3 space-y-3">
+        <div className="flex-1 overflow-y-auto p-3 space-y-4 min-h-0">
+          <div
+            className="p-4 rounded-2xl border space-y-2"
+            style={{ background: C.surface2, borderColor: C.border }}
+          >
+            <p className="text-xs font-bold" style={{ color: C.gold }}>
+              Rejoindre avec un code
+            </p>
+            <div className="flex gap-2">
+              <input
+                value={inviteCode}
+                onChange={(e) => setInviteCode(e.target.value.toUpperCase())}
+                placeholder="Ex: BA7K2M9X"
+                className="flex-1 px-3 py-2 rounded-xl border text-sm outline-none font-mono"
+                style={{
+                  background: C.surface,
+                  borderColor: C.border,
+                  color: C.ivory,
+                }}
+              />
+              <button
+                type="button"
+                onClick={handlePeekInvite}
+                disabled={peekLoading || !inviteCode.trim()}
+                className="px-3 py-2 rounded-xl text-xs font-bold disabled:opacity-40"
+                style={{ background: C.surface, color: C.gold, border: `1px solid ${C.border}` }}
+              >
+                {peekLoading ? "…" : "Voir"}
+              </button>
+              <button
+                type="button"
+                onClick={handleJoinByCode}
+                disabled={!inviteCode.trim()}
+                className="px-3 py-2 rounded-xl text-xs font-bold disabled:opacity-40"
+                style={{ background: C.teal, color: "#000" }}
+              >
+                Rejoindre
+              </button>
+            </div>
+            {peek?.ok && (
+              <div className="text-sm pt-1">
+                <b>{peek.name}</b>
+                <span className="text-xs ml-2" style={{ color: C.muted }}>
+                  {peek.member_count} membres
+                </span>
+                {peek.description && (
+                  <p className="text-xs mt-1" style={{ color: C.muted }}>
+                    {peek.description}
+                  </p>
+                )}
+              </div>
+            )}
+            {peek && !peek.ok && (
+              <p className="text-xs text-red-400">
+                Invitation invalide ou expirée
+              </p>
+            )}
+          </div>
+
           <h2 className="font-bold text-lg" style={{ color: C.gold }}>
-            Découvrir des groupes
+            Groupes publics
           </h2>
-          {filteredGroups.map((g) => (
-            <button
+          {discoverGroups.length === 0 && (
+            <p className="text-sm" style={{ color: C.muted }}>
+              Aucun nouveau groupe public pour le moment.
+            </p>
+          )}
+          {discoverGroups.map((g) => (
+            <div
               key={g.id}
-              type="button"
-              onClick={() => {
-                handleSelectGroup(g);
-                setActiveTab("groups");
-              }}
-              className="w-full text-left p-4 rounded-2xl border"
+              className="w-full text-left p-4 rounded-2xl border flex flex-col gap-2"
               style={{ background: C.surface2, borderColor: C.border }}
             >
               <div className="flex items-center justify-between gap-2">
                 <b>{g.name}</b>
-                {g.is_public ? (
-                  <Globe size={14} style={{ color: C.teal }} />
-                ) : (
-                  <Lock size={14} style={{ color: C.muted }} />
-                )}
+                <Globe size={14} style={{ color: C.teal }} />
               </div>
-              <p className="text-xs mt-1" style={{ color: C.muted }}>
-                {g.description || "Sans description"} · {g.members?.length || 0} membres ·{" "}
-                {g.channels?.length || 0} canaux
+              <p className="text-xs" style={{ color: C.muted }}>
+                {g.description || "Sans description"} ·{" "}
+                {g.members?.length || 0} membres · {g.channels?.length || 0}{" "}
+                canaux
               </p>
-            </button>
+              <button
+                type="button"
+                onClick={() => handleJoin(g)}
+                className="self-start px-4 py-1.5 rounded-xl text-xs font-bold"
+                style={{ background: C.teal, color: "#000" }}
+              >
+                Rejoindre
+              </button>
+            </div>
           ))}
         </div>
       )}
 
-      {/* ===== GROUPES + CANAUX + CHAT ===== */}
-      {(activeTab === "groups" || mobileView === "chat" || mobileView === "channels") &&
+      {/* Groupes + canaux + chat */}
+      {(activeTab === "groups" ||
+        mobileView === "chat" ||
+        mobileView === "channels") &&
         activeTab !== "friends" &&
         activeTab !== "contacts" &&
         activeTab !== "discover" && (
           <div className="flex-1 flex min-h-0">
             {/* Liste groupes */}
             <div
-              className={`w-full md:w-72 border-r flex flex-col ${
+              className={`w-full md:w-72 border-r flex flex-col min-h-0 ${
                 mobileView === "groups" || mobileView === "channels"
                   ? ""
                   : "hidden md:flex"
               } ${mobileView === "chat" ? "hidden md:flex" : ""}`}
               style={{ borderColor: C.border }}
             >
-              <div className="p-3 space-y-2">
+              <div className="p-3 space-y-2 shrink-0">
                 <div className="flex items-center gap-2">
                   <div className="flex-1 relative">
                     <Search
@@ -430,7 +722,6 @@ export default function CommunityTab({ onOpenProfile }) {
                     className="p-2 rounded-xl"
                     style={{ background: C.gold, color: "#000" }}
                     title="Créer un groupe"
-                    aria-label="Créer un groupe"
                   >
                     <Plus size={18} />
                   </button>
@@ -457,9 +748,12 @@ export default function CommunityTab({ onOpenProfile }) {
                 </div>
               </div>
 
-              <div className="flex-1 overflow-y-auto px-2 pb-2 space-y-1">
+              <div className="flex-1 overflow-y-auto px-2 pb-2 space-y-1 min-h-0">
                 {filteredGroups.length === 0 ? (
-                  <div className="p-4 text-center text-sm" style={{ color: C.muted }}>
+                  <div
+                    className="p-4 text-center text-sm"
+                    style={{ color: C.muted }}
+                  >
                     <p>Aucun groupe</p>
                     <button
                       type="button"
@@ -473,6 +767,7 @@ export default function CommunityTab({ onOpenProfile }) {
                 ) : (
                   filteredGroups.map((g) => {
                     const active = selectedGroup?.id === g.id;
+                    const mine = isMember?.(g);
                     return (
                       <button
                         key={g.id}
@@ -488,9 +783,33 @@ export default function CommunityTab({ onOpenProfile }) {
                             : "3px solid transparent",
                         }}
                       >
-                        <div className="font-bold text-sm truncate">{g.name}</div>
-                        <div className="text-[10px]" style={{ color: C.muted }}>
-                          {g.channels?.length || 0} canaux · {g.members?.length || 0} membres
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-bold text-sm truncate">
+                            {g.name}
+                          </span>
+                          {g.is_public ? (
+                            <Globe size={11} style={{ color: C.teal }} />
+                          ) : (
+                            <Lock size={11} style={{ color: C.muted }} />
+                          )}
+                          {mine && (
+                            <span
+                              className="text-[9px] px-1 rounded"
+                              style={{
+                                background: "rgba(45,191,166,0.2)",
+                                color: C.teal,
+                              }}
+                            >
+                              membre
+                            </span>
+                          )}
+                        </div>
+                        <div
+                          className="text-[10px]"
+                          style={{ color: C.muted }}
+                        >
+                          {g.channels?.length || 0} canaux ·{" "}
+                          {g.members?.length || 0} membres
                         </div>
                       </button>
                     );
@@ -501,7 +820,7 @@ export default function CommunityTab({ onOpenProfile }) {
 
             {/* Canaux */}
             <div
-              className={`w-full md:w-56 border-r flex flex-col ${
+              className={`w-full md:w-56 border-r flex flex-col min-h-0 ${
                 mobileView === "channels" ? "" : "hidden md:flex"
               } ${mobileView === "chat" ? "hidden md:flex" : ""} ${
                 mobileView === "groups" ? "hidden md:flex" : ""
@@ -510,61 +829,99 @@ export default function CommunityTab({ onOpenProfile }) {
             >
               {selectedGroup ? (
                 <>
-                  <div className="p-3 border-b" style={{ borderColor: C.border }}>
+                  <div
+                    className="p-3 border-b shrink-0"
+                    style={{ borderColor: C.border }}
+                  >
                     <div className="flex items-center gap-2 md:hidden mb-2">
-                      <button type="button" onClick={() => setMobileView("groups")}>
-                        <ArrowLeft size={18} />
-                      </button>
-                      <span className="font-bold text-sm truncate">{selectedGroup.name}</span>
-                    </div>
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs font-bold" style={{ color: C.gold }}>
-                        CANAUX
-                      </span>
-                      {(isOwner || isMember(selectedGroup)) && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setFormError("");
-                            setShowCreateChannel(true);
-                          }}
-                          className="p-1 rounded-lg"
-                          style={{ color: C.gold }}
-                          title="Nouveau canal"
-                        >
-                          <Plus size={16} />
-                        </button>
-                      )}
-                    </div>
-                    <p className="text-[10px] mt-1 truncate" style={{ color: C.muted }}>
-                      {selectedGroup.description || "—"}
-                    </p>
-                    {!isMember(selectedGroup) && (
                       <button
                         type="button"
-                        onClick={handleJoin}
+                        onClick={() => setMobileView("groups")}
+                      >
+                        <ArrowLeft size={18} />
+                      </button>
+                      <span className="font-bold text-sm truncate">
+                        {selectedGroup.name}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-2">
+                      <span
+                        className="text-xs font-bold"
+                        style={{ color: C.gold }}
+                      >
+                        CANAUX
+                      </span>
+                      {admin && (
+                        <div className="flex gap-1">
+                          <button
+                            type="button"
+                            onClick={() => setShowInvites((v) => !v)}
+                            className="p-1 rounded-lg"
+                            style={{ color: C.teal }}
+                            title="Invitations"
+                          >
+                            <Link2 size={16} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setFormError("");
+                              setShowCreateChannel(true);
+                            }}
+                            className="p-1 rounded-lg"
+                            style={{ color: C.gold }}
+                            title="Nouveau canal"
+                          >
+                            <Plus size={16} />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                    <p
+                      className="text-[10px] mt-1 truncate"
+                      style={{ color: C.muted }}
+                    >
+                      {selectedGroup.description || "—"}
+                    </p>
+                    {!member && (
+                      <button
+                        type="button"
+                        onClick={() => handleJoin(selectedGroup)}
                         className="mt-2 w-full py-1.5 rounded-lg text-xs font-bold"
                         style={{ background: C.teal, color: "#000" }}
                       >
                         Rejoindre
                       </button>
                     )}
-                    {isMember(selectedGroup) && !isOwner && (
+                    {member && role !== "owner" && (
                       <button
                         type="button"
                         onClick={handleLeave}
                         className="mt-2 w-full py-1.5 rounded-lg text-xs"
-                        style={{ color: C.muted, border: `1px solid ${C.border}` }}
+                        style={{
+                          color: C.muted,
+                          border: `1px solid ${C.border}`,
+                        }}
                       >
                         Quitter
                       </button>
                     )}
+                    {admin && showInvites && (
+                      <GroupInvitesPanel
+                        groupId={selectedGroup.id}
+                        createInvite={createInvite}
+                        listInvites={listInvites}
+                        revokeInvite={revokeInvite}
+                        C={C}
+                      />
+                    )}
                   </div>
-                  <div className="flex-1 overflow-y-auto p-2 space-y-1">
-                    {textChannels.length === 0 && voiceChannels.length === 0 ? (
+                  <div className="flex-1 overflow-y-auto p-2 space-y-1 min-h-0">
+                    {textChannels.length === 0 &&
+                    voiceChannels.length === 0 ? (
                       <p className="text-xs p-2" style={{ color: C.muted }}>
                         Aucun canal.{" "}
-                        {(isOwner || isMember(selectedGroup)) && (
+                        {admin && (
                           <button
                             type="button"
                             className="underline"
@@ -606,14 +963,14 @@ export default function CommunityTab({ onOpenProfile }) {
 
             {/* Chat */}
             <div
-              className={`flex-1 flex flex-col min-w-0 ${
+              className={`flex-1 flex flex-col min-w-0 min-h-0 ${
                 mobileView === "chat" ? "" : "hidden md:flex"
               }`}
             >
               {selectedChannel ? (
                 <>
                   <div
-                    className="flex items-center gap-2 p-3 border-b"
+                    className="flex items-center gap-2 p-3 border-b shrink-0"
                     style={{ borderColor: C.border }}
                   >
                     <button
@@ -625,14 +982,41 @@ export default function CommunityTab({ onOpenProfile }) {
                     </button>
                     {selectedChannel.type === "voice" ? (
                       <Volume2 size={16} style={{ color: C.teal }} />
+                    ) : selectedChannel.type === "announce" ? (
+                      <Megaphone size={16} style={{ color: C.gold }} />
                     ) : (
                       <Hash size={16} style={{ color: C.gold }} />
                     )}
-                    <span className="font-bold text-sm">{selectedChannel.name}</span>
+                    <span className="font-bold text-sm">
+                      {selectedChannel.name}
+                    </span>
+                    {selectedChannel.type === "announce" && (
+                      <span
+                        className="text-[9px] px-1.5 py-0.5 rounded font-bold"
+                        style={{
+                          background: "rgba(217,174,82,0.2)",
+                          color: C.gold,
+                        }}
+                      >
+                        Annonces
+                      </span>
+                    )}
                   </div>
-                  <div className="flex-1 overflow-y-auto p-3 space-y-2">
-                    {messages.length === 0 && (
-                      <p className="text-center text-sm py-8" style={{ color: C.muted }}>
+                  <div className="flex-1 overflow-y-auto p-3 space-y-2 min-h-0">
+                    {msgLoading && messages.length === 0 && (
+                      <div className="flex justify-center py-8">
+                        <Loader2
+                          className="animate-spin"
+                          size={20}
+                          style={{ color: C.muted }}
+                        />
+                      </div>
+                    )}
+                    {messages.length === 0 && !msgLoading && (
+                      <p
+                        className="text-center text-sm py-8"
+                        style={{ color: C.muted }}
+                      >
                         Aucun message. Dis bonjour 👋
                       </p>
                     )}
@@ -645,7 +1029,9 @@ export default function CommunityTab({ onOpenProfile }) {
                       return (
                         <div
                           key={m.id}
-                          className={`flex ${mine ? "justify-end" : "justify-start"}`}
+                          className={`flex ${
+                            mine ? "justify-end" : "justify-start"
+                          }`}
                         >
                           <div
                             className="max-w-[80%] px-3 py-2 rounded-2xl text-sm"
@@ -659,38 +1045,59 @@ export default function CommunityTab({ onOpenProfile }) {
                                 {name}
                               </p>
                             )}
-                            <p className="break-words whitespace-pre-wrap">{m.text}</p>
+                            <p className="break-words whitespace-pre-wrap">
+                              {m.text}
+                            </p>
                           </div>
                         </div>
                       );
                     })}
                     <div ref={messagesEndRef} />
                   </div>
-                  <form
-                    onSubmit={handleSend}
-                    className="p-3 border-t flex gap-2"
-                    style={{ borderColor: C.border }}
-                  >
-                    <input
-                      value={msgText}
-                      onChange={(e) => setMsgText(e.target.value)}
-                      placeholder="Écrire un message…"
-                      className="flex-1 px-3 py-2.5 rounded-xl border text-sm outline-none"
-                      style={{
-                        background: C.surface2,
-                        borderColor: C.border,
-                        color: C.ivory,
-                      }}
-                    />
-                    <button
-                      type="submit"
-                      disabled={!msgText.trim() || sending}
-                      className="p-2.5 rounded-xl disabled:opacity-40"
-                      style={{ background: C.gold, color: "#000" }}
+                  {member ? (
+                    canPost ? (
+                      <form
+                        onSubmit={handleSend}
+                        className="p-3 border-t flex gap-2 shrink-0"
+                        style={{ borderColor: C.border }}
+                      >
+                        <input
+                          value={msgText}
+                          onChange={(e) => setMsgText(e.target.value)}
+                          placeholder="Écrire un message…"
+                          className="flex-1 px-3 py-2.5 rounded-xl border text-sm outline-none"
+                          style={{
+                            background: C.surface2,
+                            borderColor: C.border,
+                            color: C.ivory,
+                          }}
+                        />
+                        <button
+                          type="submit"
+                          disabled={!msgText.trim() || sending}
+                          className="p-2.5 rounded-xl disabled:opacity-40"
+                          style={{ background: C.gold, color: "#000" }}
+                        >
+                          <Send size={18} />
+                        </button>
+                      </form>
+                    ) : (
+                      <div
+                        className="p-3 border-t text-center text-xs shrink-0"
+                        style={{ borderColor: C.border, color: C.muted }}
+                      >
+                        Seuls les admins peuvent publier dans ce canal
+                        d&apos;annonces
+                      </div>
+                    )
+                  ) : (
+                    <div
+                      className="p-3 border-t text-center text-xs shrink-0"
+                      style={{ borderColor: C.border, color: C.muted }}
                     >
-                      <Send size={18} />
-                    </button>
-                  </form>
+                      Rejoins le groupe pour discuter
+                    </div>
+                  )}
                 </>
               ) : (
                 <div
@@ -706,7 +1113,7 @@ export default function CommunityTab({ onOpenProfile }) {
 
       {/* Bottom nav mobile */}
       <div
-        className="md:hidden flex justify-around border-t py-1"
+        className="md:hidden flex justify-around border-t py-1 shrink-0"
         style={{ borderColor: C.border }}
       >
         {[
@@ -742,7 +1149,7 @@ export default function CommunityTab({ onOpenProfile }) {
         })}
       </div>
 
-      {/* ===== Modal Créer groupe ===== */}
+      {/* Modal créer groupe */}
       {showCreateGroup && (
         <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 p-4">
           <form
@@ -755,50 +1162,59 @@ export default function CommunityTab({ onOpenProfile }) {
                 Nouveau groupe
               </h3>
               <button type="button" onClick={() => setShowCreateGroup(false)}>
-                <X size={20} style={{ color: C.muted }} />
+                <X size={18} />
               </button>
             </div>
-            {formError && (
-              <p className="text-sm text-red-400">{formError}</p>
-            )}
+            {formError && <p className="text-sm text-red-400">{formError}</p>}
             <input
               required
               value={gName}
               onChange={(e) => setGName(e.target.value)}
-              placeholder="Nom du groupe *"
+              placeholder="Nom du groupe"
               maxLength={80}
               className="w-full px-3 py-2.5 rounded-xl border text-sm outline-none"
-              style={{ background: C.surface2, borderColor: C.border, color: C.ivory }}
+              style={{
+                background: C.surface2,
+                borderColor: C.border,
+                color: C.ivory,
+              }}
             />
             <textarea
               value={gDesc}
               onChange={(e) => setGDesc(e.target.value)}
               placeholder="Description (optionnel)"
               rows={2}
-              maxLength={500}
               className="w-full px-3 py-2.5 rounded-xl border text-sm outline-none resize-none"
-              style={{ background: C.surface2, borderColor: C.border, color: C.ivory }}
+              style={{
+                background: C.surface2,
+                borderColor: C.border,
+                color: C.ivory,
+              }}
             />
-            <select
-              value={gCategory}
-              onChange={(e) => setGCategory(e.target.value)}
-              className="w-full px-3 py-2.5 rounded-xl border text-sm outline-none"
-              style={{ background: C.surface2, borderColor: C.border, color: C.ivory }}
-            >
-              {CATEGORIES.filter((c) => c.id !== "all").map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.emoji} {c.label}
-                </option>
-              ))}
-            </select>
             <label className="flex items-center gap-2 text-sm cursor-pointer">
               <input
                 type="checkbox"
                 checked={gPublic}
                 onChange={(e) => setGPublic(e.target.checked)}
               />
-              <span style={{ color: C.muted }}>Groupe public (visible dans Découvrir)</span>
+              Groupe public
             </label>
+            <select
+              value={gCategory}
+              onChange={(e) => setGCategory(e.target.value)}
+              className="w-full px-3 py-2.5 rounded-xl border text-sm outline-none"
+              style={{
+                background: C.surface2,
+                borderColor: C.border,
+                color: C.ivory,
+              }}
+            >
+              {CATEGORIES.filter((c) => c.id !== "all").map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.label}
+                </option>
+              ))}
+            </select>
             <button
               type="submit"
               disabled={creating || !gName.trim()}
@@ -811,7 +1227,7 @@ export default function CommunityTab({ onOpenProfile }) {
         </div>
       )}
 
-      {/* ===== Modal Créer canal ===== */}
+      {/* Modal créer canal */}
       {showCreateChannel && (
         <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 p-4">
           <form
@@ -823,55 +1239,64 @@ export default function CommunityTab({ onOpenProfile }) {
               <h3 className="font-bold" style={{ color: C.gold }}>
                 Nouveau canal
               </h3>
-              <button type="button" onClick={() => setShowCreateChannel(false)}>
-                <X size={20} style={{ color: C.muted }} />
+              <button
+                type="button"
+                onClick={() => setShowCreateChannel(false)}
+              >
+                <X size={18} />
               </button>
             </div>
             <p className="text-xs" style={{ color: C.muted }}>
               Groupe : {selectedGroup?.name}
             </p>
-            {formError && (
-              <p className="text-sm text-red-400">{formError}</p>
-            )}
+            {formError && <p className="text-sm text-red-400">{formError}</p>}
             <input
               required
               value={cName}
               onChange={(e) => setCName(e.target.value)}
-              placeholder="Nom du canal (ex: annonces)"
+              placeholder="Nom (ex: annonces)"
               maxLength={40}
               className="w-full px-3 py-2.5 rounded-xl border text-sm outline-none"
-              style={{ background: C.surface2, borderColor: C.border, color: C.ivory }}
+              style={{
+                background: C.surface2,
+                borderColor: C.border,
+                color: C.ivory,
+              }}
             />
             <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => setCType("text")}
-                className="flex-1 py-2 rounded-xl text-sm font-bold border"
-                style={{
-                  borderColor: cType === "text" ? C.gold : C.border,
-                  color: cType === "text" ? C.gold : C.muted,
-                }}
-              >
-                <Hash size={14} className="inline mr-1" /> Texte
-              </button>
-              <button
-                type="button"
-                onClick={() => setCType("voice")}
-                className="flex-1 py-2 rounded-xl text-sm font-bold border"
-                style={{
-                  borderColor: cType === "voice" ? C.teal : C.border,
-                  color: cType === "voice" ? C.teal : C.muted,
-                }}
-              >
-                <Volume2 size={14} className="inline mr-1" /> Vocal
-              </button>
+              {[
+                { id: "text", label: "Discussion", icon: Hash },
+                { id: "announce", label: "Annonces", icon: Megaphone },
+                { id: "voice", label: "Vocal", icon: Volume2 },
+              ].map((t) => {
+                const Icon = t.icon;
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => setCType(t.id)}
+                    className="flex-1 py-2 rounded-xl text-xs font-bold border flex flex-col items-center gap-1"
+                    style={{
+                      borderColor: cType === t.id ? C.gold : C.border,
+                      color: cType === t.id ? C.gold : C.muted,
+                    }}
+                  >
+                    <Icon size={14} />
+                    {t.label}
+                  </button>
+                );
+              })}
             </div>
             <input
               value={cDesc}
               onChange={(e) => setCDesc(e.target.value)}
               placeholder="Description (optionnel)"
               className="w-full px-3 py-2.5 rounded-xl border text-sm outline-none"
-              style={{ background: C.surface2, borderColor: C.border, color: C.ivory }}
+              style={{
+                background: C.surface2,
+                borderColor: C.border,
+                color: C.ivory,
+              }}
             />
             <button
               type="submit"
