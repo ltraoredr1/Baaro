@@ -20,32 +20,34 @@ function normalizePhone(value) {
   return normalized.startsWith('+') ? normalized : '+' + normalized;
 }
 
+// Transforme un numéro de téléphone en e-mail technique pour Supabase
+function phoneToEmail(phone) {
+  const cleanPhone = phone.replace(/[^\d]/g, '');
+  return `phone_${cleanPhone}@baaro.app`;
+}
+
 function buildFallbackHandle(userId) {
   const cleanId = String(userId).replace(/-/g, '').slice(0, 12);
   return `@user_${cleanId}`;
 }
 
 export default function PhoneAuth({ onAuthSuccess }) {
+  // Étapes : 'phone', 'login_password', 'register_password', 'otp_verify'
   const [step, setStep] = useState('phone');
   const [phone, setPhone] = useState('');
+  const [password, setPassword] = useState('');
   const [defaultCountry] = useState(guessDefaultCountry);
   const [otp, setOtp] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [resendCooldown, setResendCooldown] = useState(0);
   const [timeLeft, setTimeLeft] = useState(300);
-
-  // true si on est en train de LIER ce numéro à une session anonyme
-  // existante, plutôt que de créer/connecter un compte séparé.
-  // Déterminé au moment de l'envoi du code, réutilisé à la vérification
-  // pour que les deux étapes restent cohérentes.
-  const [isLinkingAnonymous, setIsLinkingAnonymous] = useState(false);
+  const [isRecovery, setIsRecovery] = useState(false);
 
   const timerRef = useRef(null);
   const expiryTimerRef = useRef(null);
   const otpInputRef = useRef(null);
 
-  // Nettoyage des timers
   useEffect(() => {
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
@@ -53,30 +55,12 @@ export default function PhoneAuth({ onAuthSuccess }) {
     };
   }, []);
 
-  // Auto-focus et WebOTP
+  // Auto-focus sur l'input OTP
   useEffect(() => {
-    if (step === 'otp') {
+    if (step === 'otp_verify') {
       setTimeout(() => {
         if (otpInputRef.current) otpInputRef.current.focus();
       }, 100);
-
-      if ('credentials' in navigator && 'OTPCredential' in window) {
-        const abortController = new AbortController();
-        navigator.credentials
-          .get({ otp: { transport: ['sms'] }, signal: abortController.signal })
-          .then((credential) => {
-            if (credential && credential.code) {
-              const code = credential.code.replace(/\D/g, '').slice(0, 6);
-              setOtp(code);
-              setTimeout(() => {
-                const form = document.getElementById('otp-form');
-                if (form) form.requestSubmit();
-              }, 500);
-            }
-          })
-          .catch((err) => console.log('WebOTP non disponible:', err));
-        return () => abortController.abort();
-      }
     }
   }, [step]);
 
@@ -112,11 +96,9 @@ export default function PhoneAuth({ onAuthSuccess }) {
   }
 
   async function ensureProfile(user) {
-    // profiles.id = auth.users.id (UUID) uniquement
     if (!user || !user.id) return;
     const userId = user.id;
-    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId)) return;
-    const normalizedPhone = normalizePhone(user.phone || phone);
+    const normalizedPhone = normalizePhone(phone);
 
     try {
       const { data: existingProfile } = await supabase
@@ -126,8 +108,6 @@ export default function PhoneAuth({ onAuthSuccess }) {
         .maybeSingle();
 
       if (existingProfile) {
-        // Ne touche jamais bio / avatar_url : on ne fait que compléter
-        // les champs manquants, jamais écraser ce qui existe déjà.
         const updates = {};
         if (!existingProfile.phone && normalizedPhone) updates.phone = normalizedPhone;
         if (!existingProfile.display_name) updates.display_name = normalizedPhone || 'Membre BAARO';
@@ -151,11 +131,11 @@ export default function PhoneAuth({ onAuthSuccess }) {
       });
     } catch (err) {
       console.error('Erreur mise à jour profil:', err);
-      // On ne bloque pas la connexion si la mise à jour du profil échoue
     }
   }
 
-  async function sendOtp(event) {
+  // ÉTAPE 1 : Vérifier si le numéro existe déjà en base
+  async function handleCheckPhone(event) {
     if (event) event.preventDefault();
     setError('');
 
@@ -167,34 +147,87 @@ export default function PhoneAuth({ onAuthSuccess }) {
 
     setLoading(true);
     try {
-      // Si une session anonyme est active, on LIE ce numéro à ce compte
-      // (updateUser + vérif type "phone_change") au lieu de créer/connecter
-      // un compte séparé (signInWithOtp + vérif type "sms") : même id,
-      // donc même ligne `profiles`, donc bio/avatar_url préservés.
-      const { data: sessionData } = await supabase.auth.getSession();
-      const anonymous = Boolean(sessionData?.session?.user?.is_anonymous);
-      setIsLinkingAnonymous(anonymous);
-
-      const { error: otpError } = anonymous
-        ? await supabase.auth.updateUser({ phone: normalizedPhone })
-        : await supabase.auth.signInWithOtp({ phone: normalizedPhone });
-
-      if (otpError) throw otpError;
+      // On vérifie si un profil existe déjà avec ce numéro
+      const { data: existingProfile } = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('phone', normalizedPhone)
+        .maybeSingle();
 
       setPhone(normalizedPhone);
-      setStep('otp');
-      setOtp('');
-      startCooldown();
-      startExpiryTimer();
+
+      if (existingProfile) {
+        // Compte existant -> Demander directement le mot de passe (Pas de SMS)
+        setStep('login_password');
+      } else {
+        // Nouveau compte -> Demander à créer un mot de passe avant l'envoi du SMS d'inscription
+        setStep('register_password');
+      }
     } catch (err) {
-      console.error('Erreur envoi OTP:', err);
-      setError(err.message || "Impossible d'envoyer le code.");
+      console.error('Erreur vérification:', err);
+      setError("Une erreur est survenue.");
     } finally {
       setLoading(false);
     }
   }
 
-  async function verifyOtp(event) {
+  // ÉTAPE 2A : Connexion directe avec le mot de passe (Utilisateur existant)
+  async function handleLoginWithPassword(event) {
+    if (event) event.preventDefault();
+    setError('');
+    setLoading(true);
+
+    try {
+      const emailTech = phoneToEmail(phone);
+      const { data, error: loginError } = await supabase.auth.signInWithPassword({
+        email: emailTech,
+        password: password,
+      });
+
+      if (loginError) throw loginError;
+
+      if (!data || !data.user) throw new Error('Utilisateur introuvable.');
+
+      await ensureProfile(data.user);
+      if (onAuthSuccess) onAuthSuccess(data.user);
+    } catch (err) {
+      console.error('Erreur connexion:', err);
+      setError('Mot de passe incorrect ou compte introuvable.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // ÉTAPE 2B : Lancer l'inscription (Envoi du code SMS unique de vérification)
+  async function handleStartRegistration(event) {
+    if (event) event.preventDefault();
+    if (!password || password.length < 6) {
+      setError('Le mot de passe doit contenir au moins 6 caractères.');
+      return;
+    }
+
+    setError('');
+    setLoading(true);
+
+    try {
+      const { error: otpError } = await supabase.auth.signInWithOtp({ phone });
+      if (otpError) throw otpError;
+
+      setIsRecovery(false);
+      setStep('otp_verify');
+      setOtp('');
+      startCooldown();
+      startExpiryTimer();
+    } catch (err) {
+      console.error('Erreur SMS:', err);
+      setError(err.message || "Impossible d'envoyer le code SMS.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // ÉTAPE 3 : Vérification de l'OTP (Inscription finale ou Récupération)
+  async function verifyOtpAndProceed(event) {
     if (event) event.preventDefault();
     setError('');
 
@@ -204,34 +237,58 @@ export default function PhoneAuth({ onAuthSuccess }) {
       return;
     }
 
-    const normalizedPhone = normalizePhone(phone);
     setLoading(true);
-
     try {
       const { data, error: verifyError } = await supabase.auth.verifyOtp({
-        phone: normalizedPhone,
+        phone: phone,
         token: normalizedOtp,
-        type: isLinkingAnonymous ? 'phone_change' : 'sms',
+        type: 'sms',
       });
 
-      if (verifyError) {
-        if (verifyError.message.includes('expired') || verifyError.message.includes('invalid')) {
-          setError('Code expiré ou invalide. Cliquez sur "Renvoyer le code".');
-        } else {
-          throw verifyError;
-        }
-        return;
-      }
+      if (verifyError) throw verifyError;
+      if (!data || !data.user) throw new Error('Validation échouée.');
 
-      if (!data || !data.user || !data.user.id) {
-        throw new Error('Identifiant introuvable.');
+      const emailTech = phoneToEmail(phone);
+
+      if (isRecovery) {
+        // En mode récupération : mise à jour du mot de passe
+        const { error: updateError } = await supabase.auth.updateUser({ password: password });
+        if (updateError) throw updateError;
+      } else {
+        // En mode inscription : association de l'e-mail technique et du mot de passe
+        const { error: updateError } = await supabase.auth.updateUser({
+          email: emailTech,
+          password: password,
+        });
+        if (updateError) throw updateError;
       }
 
       await ensureProfile(data.user);
       if (onAuthSuccess) onAuthSuccess(data.user);
     } catch (err) {
       console.error('Erreur vérification OTP:', err);
-      setError(err.message || 'Code incorrect.');
+      setError(err.message || 'Code incorrect ou expiré.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // Mot de passe oublié : déclencher un SMS de réinitialisation
+  async function handleForgotPassword() {
+    setError('');
+    setLoading(true);
+    try {
+      const { error: otpError } = await supabase.auth.signInWithOtp({ phone });
+      if (otpError) throw otpError;
+
+      setIsRecovery(true);
+      setStep('otp_verify');
+      setOtp('');
+      setPassword('');
+      startCooldown();
+      startExpiryTimer();
+    } catch (err) {
+      setError("Impossible d'envoyer le code de récupération.");
     } finally {
       setLoading(false);
     }
@@ -239,53 +296,22 @@ export default function PhoneAuth({ onAuthSuccess }) {
 
   async function resendOtp() {
     if (resendCooldown > 0 || loading) return;
-    await sendOtp();
-  }
-
-  function changePhone() {
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
-    if (expiryTimerRef.current) {
-      clearInterval(expiryTimerRef.current);
-      expiryTimerRef.current = null;
-    }
-    setResendCooldown(0);
-    setTimeLeft(300);
-    setOtp('');
-    setError('');
-    setStep('phone');
-  }
-
-  function handleOtpChange(event) {
-    const value = event.target.value.replace(/\D/g, '').slice(0, 6);
-    setOtp(value);
-  }
-
-  async function handlePasteCode() {
     try {
-      const text = await navigator.clipboard.readText();
-      const code = text.replace(/\D/g, '').slice(0, 6);
-      if (code.length === 6) {
-        setOtp(code);
-        setTimeout(() => {
-          const form = document.getElementById('otp-form');
-          if (form) form.requestSubmit();
-        }, 300);
-      } else {
-        setError('Code invalide (6 chiffres requis).');
-      }
+      const { error: otpError } = await supabase.auth.signInWithOtp({ phone });
+      if (otpError) throw otpError;
+      startCooldown();
+      startExpiryTimer();
+      setError('Nouveau code envoyé.');
     } catch (err) {
-      setError('Impossible de coller. Saisissez manuellement.');
+      setError("Impossible de renvoyer le code.");
     }
   }
 
-  // --- RENDU JSX ---
   return (
     <div className="w-full max-w-sm mx-auto space-y-4">
+      {/* 1. SAISIE DU NUMÉRO */}
       {step === 'phone' && (
-        <form onSubmit={sendOtp} className="space-y-4">
+        <form onSubmit={handleCheckPhone} className="space-y-4">
           <div>
             <label className="block text-xs font-semibold mb-1 text-slate-400">
               Numéro de téléphone
@@ -296,6 +322,7 @@ export default function PhoneAuth({ onAuthSuccess }) {
               value={phone}
               onChange={setPhone}
               placeholder="Entre ton numéro"
+              autoComplete="username"
               className="w-full border border-slate-700 rounded-xl px-3 py-2.5 text-xs outline-none bg-slate-950/60 text-slate-100"
             />
           </div>
@@ -307,49 +334,126 @@ export default function PhoneAuth({ onAuthSuccess }) {
             disabled={loading}
             className="w-full py-3 rounded-xl font-bold text-xs shadow-lg transition disabled:opacity-50 bg-amber-500 text-slate-950 hover:bg-amber-400"
           >
-            {loading ? 'Envoi en cours...' : 'Recevoir le code'}
+            {loading ? 'Vérification...' : 'Continuer'}
           </button>
         </form>
       )}
 
-      {step === 'otp' && (
-        <form id="otp-form" onSubmit={verifyOtp} className="space-y-4">
+      {/* 2A. CONNEXION AVEC MOT DE PASSE (Compte existant) */}
+      {step === 'login_password' && (
+        <form onSubmit={handleLoginWithPassword} className="space-y-4">
+          <div>
+            <p className="text-xs text-slate-400 mb-2">
+              Connexion pour : <span className="text-slate-200 font-semibold">{phone}</span>
+            </p>
+            <label className="block text-xs font-semibold mb-1 text-slate-400">
+              Mot de passe
+            </label>
+            <input
+              type="password"
+              placeholder="Ton mot de passe"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete="current-password"
+              className="w-full border border-slate-700 rounded-xl px-3 py-2.5 text-xs outline-none bg-slate-950/60 text-slate-100"
+              required
+            />
+          </div>
+
+          {error && <p className="text-rose-400 text-xs">{error}</p>}
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full py-3 rounded-xl font-bold text-xs shadow-lg transition disabled:opacity-50 bg-teal-500 text-slate-950 hover:bg-teal-400"
+          >
+            {loading ? 'Connexion...' : 'Se connecter'}
+          </button>
+
+          <div className="flex justify-between text-xs pt-1">
+            <button
+              type="button"
+              onClick={() => { setStep('phone'); setPassword(''); }}
+              className="text-slate-400 hover:text-slate-200 hover:underline"
+            >
+              Changer de numéro
+            </button>
+            <button
+              type="button"
+              onClick={handleForgotPassword}
+              className="text-amber-500 hover:underline"
+            >
+              Mot de passe oublié ?
+            </button>
+          </div>
+        </form>
+      )}
+
+      {/* 2B. CRÉATION DU MOT DE PASSE (Nouvelle inscription) */}
+      {step === 'register_password' && (
+        <form onSubmit={handleStartRegistration} className="space-y-4">
+          <div>
+            <p className="text-xs text-slate-400 mb-2">
+              Première inscription pour : <span className="text-slate-200 font-semibold">{phone}</span>
+            </p>
+            <label className="block text-xs font-semibold mb-1 text-slate-400">
+              Crée un mot de passe
+            </label>
+            <input
+              type="password"
+              placeholder="Minimum 6 caractères"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete="new-password"
+              className="w-full border border-slate-700 rounded-xl px-3 py-2.5 text-xs outline-none bg-slate-950/60 text-slate-100"
+              required
+            />
+          </div>
+
+          {error && <p className="text-rose-400 text-xs">{error}</p>}
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full py-3 rounded-xl font-bold text-xs shadow-lg transition disabled:opacity-50 bg-amber-500 text-slate-950 hover:bg-amber-400"
+          >
+            {loading ? 'Envoi du code...' : "S'inscrire (Recevoir le code SMS)"}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setStep('phone')}
+            className="w-full text-center text-xs text-slate-400 hover:underline"
+          >
+            Changer de numéro
+          </button>
+        </form>
+      )}
+
+      {/* 3. VÉRIFICATION SMS (Uniquement à l'inscription ou récupération) */}
+      {step === 'otp_verify' && (
+        <form onSubmit={verifyOtpAndProceed} className="space-y-4">
           <div>
             <label className="block text-xs font-semibold mb-1 text-slate-400">
-              Code reçu par SMS ({phone})
+              {isRecovery ? 'Code de réinitialisation' : "Code de confirmation"} reçu par SMS ({phone})
             </label>
 
             <div className={`mb-3 text-center text-sm font-semibold ${timeLeft < 60 ? 'text-rose-400' : 'text-emerald-400'}`}>
               ⏱️ {Math.floor(timeLeft / 60)}:{String(timeLeft % 60).padStart(2, '0')}
             </div>
 
-            <div className="relative">
-              <input
-                ref={otpInputRef}
-                type="text"
-                id="otp"
-                name="otp"
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                maxLength={6}
-                placeholder="123456"
-                value={otp}
-                onChange={handleOtpChange}
-                className="w-full border border-slate-700 rounded-xl px-3 py-2.5 tracking-widest text-center text-sm outline-none font-mono bg-slate-950/60 text-slate-100 pr-20"
-                required
-              />
-              <button
-                type="button"
-                onClick={handlePasteCode}
-                className="absolute right-2 top-1/2 -translate-y-1/2 px-3 py-1.5 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition border border-slate-700"
-              >
-                Coller
-              </button>
-            </div>
-
-            <p className="text-xs text-slate-500 text-center mt-2">
-              Code à 6 chiffres envoyé au {phone}
-            </p>
+            <input
+              ref={otpInputRef}
+              type="text"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              maxLength={6}
+              placeholder="123456"
+              value={otp}
+              onChange={(e) => setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
+              className="w-full border border-slate-700 rounded-xl px-3 py-2.5 tracking-widest text-center text-sm outline-none font-mono bg-slate-950/60 text-slate-100"
+              required
+            />
           </div>
 
           {error && <p className="text-rose-400 text-xs">{error}</p>}
@@ -359,12 +463,16 @@ export default function PhoneAuth({ onAuthSuccess }) {
             disabled={loading || otp.length !== 6}
             className="w-full py-3 rounded-xl font-bold text-xs shadow-lg transition disabled:opacity-50 bg-teal-500 text-slate-950 hover:bg-teal-400"
           >
-            {loading ? 'Vérification...' : 'Valider le code'}
+            {loading ? 'Validation...' : 'Valider et finaliser'}
           </button>
 
           <div className="flex justify-between text-xs pt-1">
-            <button type="button" onClick={changePhone} className="text-slate-400 hover:text-slate-200 hover:underline">
-              Changer de numéro
+            <button
+              type="button"
+              onClick={() => setStep('phone')}
+              className="text-slate-400 hover:text-slate-200 hover:underline"
+            >
+              Annuler
             </button>
             <button
               type="button"
