@@ -81,9 +81,9 @@ export function AppProvider({ children }) {
     try {
       let { data, error } = await supabase.from("profiles").select("*").eq("id", userId).maybeSingle();
       if (error) throw error;
+
       if (!data) {
-        // profiles.id = auth.users.id uniquement (jamais un autre champ)
-        const short = String(userId).replace(/-/g, "").slice(0, 10);
+        const short = String(userId).replace(/-/g, "").slice(0, 12);
         const fallback = {
           id: userId,
           display_name: "Membre BAARO",
@@ -92,22 +92,30 @@ export function AppProvider({ children }) {
           bio: "",
           updated_at: new Date().toISOString(),
         };
+
         const created = await supabase
           .from("profiles")
           .upsert(fallback, { onConflict: "id" })
           .select("*")
-          .single();
-        if (created.error) {
-          // fallback insert si upsert échoue (race rare)
-          const inserted = await supabase
-            .from("profiles")
-            .insert(fallback)
-            .select("*")
-            .single();
-          if (!inserted.error) data = inserted.data;
-          else console.error("[BAARO] Création profil échouée:", created.error || inserted.error);
-        } else {
+          .maybeSingle();
+
+        if (!created.error && created.data) {
           data = created.data;
+        } else {
+          // Le trigger auth peut encore être en train de créer la ligne.
+          // Relire avant de conclure à une absence de profil.
+          const reread = await supabase
+            .from("profiles")
+            .select("*")
+            .eq("id", userId)
+            .maybeSingle();
+
+          if (reread.error) throw reread.error;
+          data = reread.data || null;
+
+          if (!data && created.error) {
+            console.error("[BAARO] Création profil échouée:", created.error);
+          }
         }
       }
       if (data) {
@@ -301,11 +309,41 @@ export function AppProvider({ children }) {
 
   const updateProfile = useCallback(async (updates) => {
     if (!id) return { ok: false, error: "Non authentifié" };
-    const { data, error } = await supabase.from("profiles").update(updates).eq("id", id).select("*").single();
-    if (error) return { ok: false, error };
-    setProfile(data);
-    setUserProfile((previous) => ({...previous,...data }));
-    return { ok: true, profile: data };
+
+    const payload = {
+      ...updates,
+      id,
+      updated_at: new Date().toISOString(),
+    };
+
+    const saved = await supabase
+      .from("profiles")
+      .upsert(payload, { onConflict: "id" })
+      .select("*")
+      .single();
+
+    if (saved.error) {
+      // Une ligne peut avoir été créée par le trigger entre deux lectures.
+      // Une seconde tentative rend la sauvegarde idempotente.
+      const retry = await supabase
+        .from("profiles")
+        .upsert(payload, { onConflict: "id" })
+        .select("*")
+        .single();
+
+      if (retry.error) {
+        console.error("[BAARO] Persistance profil échouée:", saved.error, retry.error);
+        return { ok: false, error: retry.error };
+      }
+
+      setProfile(retry.data);
+      setUserProfile((previous) => ({ ...previous, ...retry.data }));
+      return { ok: true, profile: retry.data };
+    }
+
+    setProfile(saved.data);
+    setUserProfile((previous) => ({ ...previous, ...saved.data }));
+    return { ok: true, profile: saved.data };
   }, [id]);
 
   const value = {
