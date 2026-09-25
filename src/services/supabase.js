@@ -1,11 +1,8 @@
 /**
- * Point d'entrée officiel pour les services Supabase de BAARO.
- *
- * L'implémentation historique reste dans :
- * ../supabaseClient.js
- *
- * afin de conserver la compatibilité avec les imports
- * existants pendant la migration progressive.
+ * Compat : ancien chemin src/services/supabase.js
+ * Source de vérité : src/supabaseClient.js
  */
-
-export * from "../supabaseClient.js";
+export {
+  supabase,
+  getCurrentUserId,
+} from "../supabaseClient.js";
