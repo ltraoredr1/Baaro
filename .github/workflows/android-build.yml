@@ -16,10 +16,10 @@ jobs:
     - uses: actions/setup-node@v4
       with:
         node-version: '22'
-        cache: 'npm'
+        # cache: 'npm' retiré pour éviter l'erreur de fichier de verrouillage manquant
 
     - name: Install deps
-      run: npm ci
+      run: npm install  # Remplacé npm ci par npm install car aucun lockfile n'est présent
 
     - name: Build Web (Vite)
       run: npm run build
