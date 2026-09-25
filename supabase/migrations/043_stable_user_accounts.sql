@@ -1,5 +1,6 @@
 -- BAARO — comptes utilisateurs stables et profils persistants
--- À appliquer après 027. Aucun nouvel endpoint API.
+-- Migration historique rendue compatible avec l'identité canonique introduite par 038.
+-- Aucun nouvel endpoint API.
 
 alter table public.profiles
   add column if not exists updated_at timestamptz not null default now();
@@ -22,21 +23,39 @@ declare
   v_name text;
   v_handle text;
   v_flag text;
-  v_email_prefix text;
+  v_bio text;
 begin
-  v_email_prefix := split_part(coalesce(new.email, 'membre'), '@', 1);
-  v_name := nullif(left(coalesce(new.raw_user_meta_data->>'display_name', v_email_prefix, 'Membre BAARO'), 60), '');
-  v_handle := nullif(left(coalesce(new.raw_user_meta_data->>'handle', '@user_' || left(new.id::text, 8)), 31), '');
-  if left(v_handle, 1) <> '@' then v_handle := '@' || v_handle; end if;
-  v_flag := coalesce(nullif(new.raw_user_meta_data->>'flag', ''), '🌍');
+  v_name := nullif(left(coalesce(
+    new.raw_user_meta_data->>'display_name',
+    split_part(coalesce(new.email, 'membre'), '@', 1),
+    'Membre BAARO'
+  ), 60), '');
 
-  insert into public.profiles (user_id, display_name, handle, flag, bio, updated_at)
-  values (new.id, v_name, v_handle, v_flag, coalesce(new.raw_user_meta_data->>'bio', ''), now())
-  on conflict (user_id) do update set
-    display_name = coalesce(nullif(excluded.display_name, ''), public.profiles.display_name),
-    handle = coalesce(nullif(excluded.handle, ''), public.profiles.handle),
-    flag = coalesce(nullif(excluded.flag, ''), public.profiles.flag),
-    updated_at = now();
+  v_handle := nullif(left(coalesce(
+    new.raw_user_meta_data->>'handle',
+    '@user_' || left(replace(new.id::text, '-', ''), 12)
+  ), 40), '');
+
+  if left(v_handle, 1) <> '@' then
+    v_handle := '@' || v_handle;
+  end if;
+
+  v_flag := coalesce(nullif(new.raw_user_meta_data->>'flag', ''), '🌍');
+  v_bio := left(coalesce(new.raw_user_meta_data->>'bio', ''), 1000);
+
+  begin
+    insert into public.profiles (id, display_name, handle, flag, bio, updated_at)
+    values (new.id, v_name, v_handle, v_flag, v_bio, now())
+    on conflict (id) do nothing;
+  exception when unique_violation then
+    insert into public.profiles (id, display_name, handle, flag, bio, updated_at)
+    values (
+      new.id, v_name,
+      '@user_' || left(replace(new.id::text, '-', ''), 12),
+      v_flag, v_bio, now()
+    )
+    on conflict (id) do nothing;
+  end;
 
   return new;
 end;
