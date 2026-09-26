@@ -13,7 +13,6 @@ function isValidAuthUserId(value) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 }
 
-
 const REACTIONS = [
   { id: "like", label: "👍", title: "J’aime" },
   { id: "love", label: "❤️", title: "J’adore" },
@@ -65,7 +64,7 @@ export function PollCard({ postId, userId }) {
             .from("poll_votes")
             .select("option_id")
             .eq("poll_id", pollRow.id)
-            .eq("id", userId)
+            .eq("user_id", userId) // ✅ CORRIGÉ : Le diagnostic SQL a confirmé que c'est "user_id"
             .maybeSingle()
         : Promise.resolve({ data: null }),
     ]);
@@ -415,14 +414,6 @@ export function SocialPostEnhancements({ post, userId }) {
         bookmarkResult,
         followResult,
       ] = await Promise.all([
-        /*
-         * SOURCE UNIQUE DES LIKES
-         *
-         * post_likes.post_id -> posts.id
-         * post_likes.user_id -> auth.users.id
-         *
-         * PK = (post_id, user_id)
-         */
         supabase
           .from("post_likes")
           .select("user_id")
@@ -441,7 +432,7 @@ export function SocialPostEnhancements({ post, userId }) {
               .from("post_bookmarks")
               .select("post_id")
               .eq("post_id", post.id)
-              .eq("id", userId)
+              .eq("id", userId) // ✅ CONSERVÉ : Votre schéma utilise "id" ici
               .maybeSingle()
           : Promise.resolve({
               data: null,
@@ -461,48 +452,17 @@ export function SocialPostEnhancements({ post, userId }) {
             }),
       ]);
 
-      if (likesResult.error) {
-        console.error(
-          "[BAARO] Erreur chargement post_likes:",
-          likesResult.error
-        );
-      }
-
-      if (sharesResult.error) {
-        console.error(
-          "[BAARO] Erreur chargement partages:",
-          sharesResult.error
-        );
-      }
-
-      if (bookmarkResult.error) {
-        console.error(
-          "[BAARO] Erreur chargement favori:",
-          bookmarkResult.error
-        );
-      }
-
-      if (followResult.error) {
-        console.error(
-          "[BAARO] Erreur chargement abonnement:",
-          followResult.error
-        );
-      }
+      if (likesResult.error) console.error("[BAARO] Erreur chargement post_likes:", likesResult.error);
+      if (sharesResult.error) console.error("[BAARO] Erreur chargement partages:", sharesResult.error);
+      if (bookmarkResult.error) console.error("[BAARO] Erreur chargement favori:", bookmarkResult.error);
+      if (followResult.error) console.error("[BAARO] Erreur chargement abonnement:", followResult.error);
 
       const likeRows = likesResult.data || [];
 
-      /*
-       * Le compteur vient directement de post_likes.
-       */
       setReactionCount(likeRows.length);
 
-      /*
-       * Un utilisateur est liké si sa ligne existe
-       * dans post_likes.
-       */
       setReaction(
-        userId &&
-          likeRows.some((row) => row.user_id === userId)
+        userId && likeRows.some((row) => row.user_id === userId)
           ? "like"
           : null
       );
@@ -511,10 +471,7 @@ export function SocialPostEnhancements({ post, userId }) {
       setShareCount(sharesResult.count || 0);
       setFollowing(!!followResult.data);
     } catch (error) {
-      console.error(
-        "[BAARO] Erreur chargement interactions:",
-        error
-      );
+      console.error("[BAARO] Erreur chargement interactions:", error);
     }
   }, [post?.id, post?.author_id, userId]);
 
@@ -522,9 +479,6 @@ export function SocialPostEnhancements({ post, userId }) {
     load();
   }, [load]);
 
-  /*
-   * REALTIME LIKES
-   */
   useEffect(() => {
     if (!post?.id) return;
 
@@ -554,9 +508,6 @@ export function SocialPostEnhancements({ post, userId }) {
     [reaction]
   );
 
-  /*
-   * LIKE
-   */
   const chooseReaction = async (value) => {
     if (!isValidAuthUserId(userId)) {
       showToast("Connectez-vous pour réagir", "info");
@@ -573,9 +524,6 @@ export function SocialPostEnhancements({ post, userId }) {
     }, 300);
 
     try {
-      /*
-       * Un clic sur le like déjà actif = suppression.
-       */
       if (reaction === "like" && value === "like") {
         const { error } = await supabase
           .from("post_likes")
@@ -586,22 +534,13 @@ export function SocialPostEnhancements({ post, userId }) {
         if (error) throw error;
 
         setReaction(null);
-        setReactionCount((count) =>
-          Math.max(0, count - 1)
-        );
+        setReactionCount((count) => Math.max(0, count - 1));
 
         await load();
         setPicker(false);
         return;
       }
 
-      /*
-       * Toutes les réactions disponibles utilisent ici
-       * la source canonique post_likes.
-       *
-       * La table ne stocke qu'un LIKE, pas un type
-       * de réaction.
-       */
       const { error } = await supabase
         .from("post_likes")
         .upsert(
@@ -626,31 +565,17 @@ export function SocialPostEnhancements({ post, userId }) {
 
       setPicker(false);
     } catch (error) {
-      console.error(
-        "[BAARO] Erreur enregistrement like:",
-        error
-      );
+      console.error("[BAARO] Erreur enregistrement like:", error);
 
-      showToast(
-        "Impossible d’enregistrer la réaction",
-        "error"
-      );
+      showToast("Impossible d’enregistrer la réaction", "error");
     } finally {
       setBusy(false);
     }
   };
 
-  /*
-   * BOOKMARK
-   *
-   * Conservé volontairement avec le schéma existant.
-   */
   const bookmark = async () => {
     if (!isValidAuthUserId(userId)) {
-      showToast(
-        "Connectez-vous pour enregistrer",
-        "info"
-      );
+      showToast("Connectez-vous pour enregistrer", "info");
       return;
     }
 
@@ -664,7 +589,7 @@ export function SocialPostEnhancements({ post, userId }) {
           .from("post_bookmarks")
           .delete()
           .eq("post_id", post.id)
-          .eq("id", userId);
+          .eq("id", userId); // ✅ CONSERVÉ : Votre schéma utilise "id" ici
 
         if (error) throw error;
 
@@ -675,10 +600,10 @@ export function SocialPostEnhancements({ post, userId }) {
           .upsert(
             {
               post_id: post.id,
-              id: userId,
+              id: userId, // ✅ CONSERVÉ : Votre schéma utilise "id" ici
             },
             {
-              onConflict: "post_id,id",
+              onConflict: "post_id,id", // ✅ CONSERVÉ
             }
           );
 
@@ -687,23 +612,14 @@ export function SocialPostEnhancements({ post, userId }) {
         setSaved(true);
       }
     } catch (error) {
-      console.error(
-        "[BAARO] Erreur favori:",
-        error
-      );
+      console.error("[BAARO] Erreur favori:", error);
 
-      showToast(
-        "Impossible de modifier le favori",
-        "error"
-      );
+      showToast("Impossible de modifier le favori", "error");
     } finally {
       setBusy(false);
     }
   };
 
-  /*
-   * SHARE
-   */
   const share = async () => {
     if (!post?.id || busy) return;
 
@@ -711,26 +627,18 @@ export function SocialPostEnhancements({ post, userId }) {
 
     try {
       const url = `${window.location.origin}/?post=${post.id}`;
-
       let channelName = "copy";
 
       if (navigator?.share) {
         try {
           await navigator.share({
             title: "BAARO",
-            text:
-              post?.text?.slice(0, 120) ||
-              post?.content?.slice(0, 120) ||
-              "Publication BAARO",
+            text: post?.text?.slice(0, 120) || post?.content?.slice(0, 120) || "Publication BAARO",
             url,
           });
-
           channelName = "native";
         } catch (error) {
-          if (error?.name === "AbortError") {
-            return;
-          }
-
+          if (error?.name === "AbortError") return;
           throw error;
         }
       } else if (navigator?.clipboard) {
@@ -743,7 +651,7 @@ export function SocialPostEnhancements({ post, userId }) {
           .from("post_shares")
           .insert({
             post_id: post.id,
-            id: userId,
+            id: userId, // ✅ CONSERVÉ : Votre schéma utilise "id" ici
             channel: channelName,
           });
 
@@ -752,73 +660,40 @@ export function SocialPostEnhancements({ post, userId }) {
 
       setShareCount((count) => count + 1);
     } catch (error) {
-      console.error(
-        "[BAARO] Erreur partage:",
-        error
-      );
-
-      showToast(
-        "Partage non enregistré",
-        "error"
-      );
+      console.error("[BAARO] Erreur partage:", error);
+      showToast("Partage non enregistré", "error");
     } finally {
       setBusy(false);
     }
   };
 
-  /*
-   * FOLLOW
-   *
-   * Utilise la fonction RPC existante afin de préserver
-   * le système follows/friends déjà validé.
-   */
   const follow = async () => {
     if (!isValidAuthUserId(userId)) {
-      showToast(
-        "Connectez-vous pour suivre",
-        "info"
-      );
+      showToast("Connectez-vous pour suivre", "info");
       return;
     }
 
-    if (
-      !post?.author_id ||
-      userId === post.author_id ||
-      busy
-    ) {
+    if (!post?.author_id || userId === post.author_id || busy) {
       return;
     }
 
     setBusy(true);
 
     try {
-      const { data, error } = await supabase.rpc(
-        "toggle_follow",
-        {
-          p_target: post.author_id,
-        }
-      );
+      const { data, error } = await supabase.rpc("toggle_follow", {
+        p_target: post.author_id,
+      });
 
       if (error) throw error;
 
       setFollowing(!!data);
 
       if (data) {
-        showToast(
-          "Vous suivez maintenant ce compte",
-          "success"
-        );
+        showToast("Vous suivez maintenant ce compte", "success");
       }
     } catch (error) {
-      console.error(
-        "[BAARO] Erreur abonnement:",
-        error
-      );
-
-      showToast(
-        "Impossible de modifier l’abonnement",
-        "error"
-      );
+      console.error("[BAARO] Erreur abonnement:", error);
+      showToast("Impossible de modifier l’abonnement", "error");
     } finally {
       setBusy(false);
     }
@@ -826,62 +701,37 @@ export function SocialPostEnhancements({ post, userId }) {
 
   return (
     <div className="flex flex-wrap items-center gap-2">
-      {post?.author_id &&
-        post.author_id !== userId && (
-          <button
-            type="button"
-            onClick={follow}
-            disabled={busy}
-            className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[11px] font-bold border transition-all active:scale-95"
-            style={{
-              borderColor: following
-                ? COLORS.borderTeal
-                : COLORS.border,
-              color: following
-                ? COLORS.teal
-                : COLORS.muted,
-            }}
-          >
-            {following ? (
-              <Check size={13} />
-            ) : (
-              <UserPlus size={13} />
-            )}
-
-            {following ? "Abonné" : "Suivre"}
-          </button>
-        )}
+      {post?.author_id && post.author_id !== userId && (
+        <button
+          type="button"
+          onClick={follow}
+          disabled={busy}
+          className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[11px] font-bold border transition-all active:scale-95"
+          style={{
+            borderColor: following ? COLORS.borderTeal : COLORS.border,
+            color: following ? COLORS.teal : COLORS.muted,
+          }}
+        >
+          {following ? <Check size={13} /> : <UserPlus size={13} />}
+          {following ? "Abonné" : "Suivre"}
+        </button>
+      )}
 
       <div className="relative">
         <button
           type="button"
-          onClick={() =>
-            setPicker((value) => !value)
-          }
+          onClick={() => setPicker((value) => !value)}
           disabled={busy}
           className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs border transition-all duration-200 active:scale-95"
           style={{
             borderColor: COLORS.border,
-            color: current
-              ? COLORS.ivory
-              : COLORS.muted,
+            color: current ? COLORS.ivory : COLORS.muted,
           }}
         >
-          <span
-            className={`inline-block transition-transform duration-300 ${
-              pop ? "scale-150" : "scale-100"
-            }`}
-          >
+          <span className={`inline-block transition-transform duration-300 ${pop ? "scale-150" : "scale-100"}`}>
             {current?.label || "👍"}
           </span>
-
-          <span
-            className={`transition-all duration-300 ${
-              pop
-                ? "scale-110 font-bold"
-                : "scale-100"
-            }`}
-          >
+          <span className={`transition-all duration-300 ${pop ? "scale-110 font-bold" : "scale-100"}`}>
             {reactionCount || "J’aime"}
           </span>
         </button>
@@ -899,9 +749,7 @@ export function SocialPostEnhancements({ post, userId }) {
                 key={item.id}
                 type="button"
                 title={item.title}
-                onClick={() =>
-                  chooseReaction(item.id)
-                }
+                onClick={() => chooseReaction(item.id)}
                 disabled={busy}
                 className="rounded-lg p-1.5 text-lg transition-transform duration-200 hover:scale-125 hover:bg-white/10 active:scale-90 disabled:opacity-50"
               >
@@ -927,15 +775,10 @@ export function SocialPostEnhancements({ post, userId }) {
         disabled={busy}
         className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs transition-all active:scale-95 disabled:opacity-50"
         style={{
-          color: saved
-            ? COLORS.gold
-            : COLORS.muted,
+          color: saved ? COLORS.gold : COLORS.muted,
         }}
       >
-        <Bookmark
-          size={15}
-          fill={saved ? "currentColor" : "none"}
-        />
+        <Bookmark size={15} fill={saved ? "currentColor" : "none"} />
         {saved ? "Enregistré" : "Enregistrer"}
       </button>
 
@@ -957,10 +800,7 @@ export function SocialPostEnhancements({ post, userId }) {
    SOCIAL SUGGESTIONS
    ========================================================= */
 
-export function SocialSuggestions({
-  userId,
-  onOpenProfile,
-}) {
+export function SocialSuggestions({ userId, onOpenProfile }) {
   const { showToast } = useToast();
 
   const [items, setItems] = useState([]);
@@ -970,9 +810,7 @@ export function SocialSuggestions({
     if (!isValidAuthUserId(userId)) return;
 
     supabase
-      .rpc("get_social_suggestions", {
-        p_limit: 6,
-      })
+      .rpc("get_social_suggestions", { p_limit: 6 })
       .then(({ data }) => {
         setItems(data || []);
       });
@@ -980,44 +818,24 @@ export function SocialSuggestions({
 
   const follow = async (item) => {
     const target = item?.id;
-
     if (!target) return;
 
     setBusyId(target);
 
     try {
-      const { data, error } =
-        await supabase.rpc(
-          "toggle_follow",
-          {
-            p_target: target,
-          }
-        );
+      const { data, error } = await supabase.rpc("toggle_follow", {
+        p_target: target,
+      });
 
       if (error) throw error;
 
       if (data) {
-        setItems((prev) =>
-          prev.filter(
-            (x) => x.id !== target
-          )
-        );
-
-        showToast(
-          "Abonnement ajouté",
-          "success"
-        );
+        setItems((prev) => prev.filter((x) => x.id !== target));
+        showToast("Abonnement ajouté", "success");
       }
     } catch (error) {
-      console.error(
-        "[BAARO] Erreur suggestion follow:",
-        error
-      );
-
-      showToast(
-        "Impossible de suivre ce compte",
-        "error"
-      );
+      console.error("[BAARO] Erreur suggestion follow:", error);
+      showToast("Impossible de suivre ce compte", "error");
     } finally {
       setBusyId(null);
     }
@@ -1026,20 +844,10 @@ export function SocialSuggestions({
   if (!items.length) return null;
 
   return (
-    <section
-      className="glass-card rounded-2xl p-4 border"
-      style={{ borderColor: COLORS.border }}
-    >
+    <section className="glass-card rounded-2xl p-4 border" style={{ borderColor: COLORS.border }}>
       <div className="flex items-center gap-2 mb-3">
-        <Zap
-          size={16}
-          style={{ color: COLORS.gold }}
-        />
-
-        <h3
-          className="font-bold text-sm"
-          style={{ color: COLORS.ivory }}
-        >
+        <Zap size={16} style={{ color: COLORS.gold }} />
+        <h3 className="font-bold text-sm" style={{ color: COLORS.ivory }}>
           Comptes à découvrir
         </h3>
       </div>
@@ -1049,59 +857,26 @@ export function SocialSuggestions({
           <div
             key={item.id}
             className="min-w-[160px] rounded-xl border p-3 transition-all hover:border-amber-400/50"
-            style={{
-              borderColor: COLORS.border,
-              background: COLORS.surface,
-            }}
+            style={{ borderColor: COLORS.border, background: COLORS.surface }}
           >
             <button
               type="button"
-              onClick={() =>
-                onOpenProfile?.(item.id)
-              }
+              onClick={() => onOpenProfile?.(item.id)}
               className="flex items-center gap-2 text-left w-full"
             >
-              <div
-                className="w-9 h-9 rounded-full overflow-hidden border flex items-center justify-center"
-                style={{
-                  borderColor:
-                    COLORS.borderGold,
-                }}
-              >
+              <div className="w-9 h-9 rounded-full overflow-hidden border flex items-center justify-center" style={{ borderColor: COLORS.borderGold }}>
                 {item.avatar_url ? (
-                  <img
-                    src={item.avatar_url}
-                    alt=""
-                    className="w-full h-full object-cover"
-                  />
+                  <img src={item.avatar_url} alt="" className="w-full h-full object-cover" />
                 ) : (
-                  <span
-                    style={{
-                      color: COLORS.gold,
-                    }}
-                  >
-                    {item.full_name?.charAt(0) ||
-                      "?"}
-                  </span>
+                  <span style={{ color: COLORS.gold }}>{item.full_name?.charAt(0) || "?"}</span>
                 )}
               </div>
 
               <div className="min-w-0">
-                <p
-                  className="font-semibold text-xs truncate"
-                  style={{
-                    color: COLORS.ivory,
-                  }}
-                >
+                <p className="font-semibold text-xs truncate" style={{ color: COLORS.ivory }}>
                   {item.full_name || "Membre"}
                 </p>
-
-                <p
-                  className="text-[10px] truncate"
-                  style={{
-                    color: COLORS.muted,
-                  }}
-                >
+                <p className="text-[10px] truncate" style={{ color: COLORS.muted }}>
                   {item.handle || ""}
                 </p>
               </div>
@@ -1112,14 +887,9 @@ export function SocialSuggestions({
               onClick={() => follow(item)}
               disabled={busyId === item.id}
               className="mt-2 w-full rounded-lg py-1.5 text-[11px] font-bold transition-all active:scale-95 disabled:opacity-50"
-              style={{
-                background: COLORS.gold,
-                color: COLORS.bg,
-              }}
+              style={{ background: COLORS.gold, color: COLORS.bg }}
             >
-              {busyId === item.id
-                ? "…"
-                : "Suivre"}
+              {busyId === item.id ? "…" : "Suivre"}
             </button>
           </div>
         ))}
