@@ -15,7 +15,8 @@ const canSend = (() => {
 
 function apiUrl(path) {
   const base = (API_BASE || "").replace(/\/$/, "");
-  return `\( {base} \){path.startsWith("/") ? path : `/${path}`}`;
+  const p = path.startsWith("/") ? path : "/" + path;
+  return base + p;
 }
 
 export function useDebates(userId) {
@@ -58,14 +59,14 @@ export function useDebates(userId) {
     loadRooms();
     if (!userId) return;
     const ch = supabase
-      .channel(`debate-rooms:${userId}`)
+      .channel("debate-rooms:" + userId)
       .on(
         "postgres_changes",
         {
           event: "*",
           schema: "public",
           table: "debate_participants",
-          filter: `user_id=eq.${userId}`,
+          filter: "user_id=eq." + userId,
         },
         loadRooms
       )
@@ -77,7 +78,6 @@ export function useDebates(userId) {
     async ({ title, topic, mode, maxParticipants, aiEnabled }) => {
       if (!userId) return { ok: false, reason: "Non authentifié" };
       try {
-        // Toujours minuscules (aligné CreateDebateModal + join)
         const code = Math.random().toString(36).substring(2, 8).toLowerCase();
         const { data: room, error: e1 } = await supabase
           .from("debate_rooms")
@@ -113,7 +113,7 @@ export function useDebates(userId) {
 
   const joinByCode = useCallback(
     async (code) => {
-      const c = code?.trim().toLowerCase();
+      const c = (code || "").trim().toLowerCase();
       if (!c) return { ok: false, reason: "Code requis" };
       try {
         const { data: room, error } = await supabase
@@ -184,6 +184,7 @@ export function useRoomChat(roomId, userId) {
   const [aiThinking, setAiThinking] = useState(false);
   const [inputText, setInputText] = useState("");
   const messagesRef = useRef([]);
+
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
@@ -202,14 +203,14 @@ export function useRoomChat(roomId, userId) {
       setLoading(false);
     })();
     const ch = supabase
-      .channel(`debate-messages:${roomId}`)
+      .channel("debate-messages:" + roomId)
       .on(
         "postgres_changes",
         {
           event: "INSERT",
           schema: "public",
           table: "debate_messages",
-          filter: `room_id=eq.${roomId}`,
+          filter: "room_id=eq." + roomId,
         },
         (p) =>
           setMessages((prev) =>
@@ -225,7 +226,7 @@ export function useRoomChat(roomId, userId) {
       const content = (text ?? inputText).trim().slice(0, 1000);
       if (!content || !roomId || !userId || !canSend()) return;
       setInputText("");
-      const tmpId = `tmp_${Date.now()}`;
+      const tmpId = "tmp_" + Date.now();
       setMessages((p) => [
         ...p,
         {
@@ -255,10 +256,15 @@ export function useRoomChat(roomId, userId) {
       try {
         const recent = messagesRef.current
           .slice(-16)
-          .map(
-            (m) =>
-              `${m.sender_type === "ai" ? "IA" : m.sender_id === userId ? "Moi" : "Autre"}: ${m.text}`
-          )
+          .map(function (m) {
+            var who =
+              m.sender_type === "ai"
+                ? "IA"
+                : m.sender_id === userId
+                  ? "Moi"
+                  : "Autre";
+            return who + ": " + m.text;
+          })
           .join("\n");
         const {
           data: { session },
@@ -267,18 +273,24 @@ export function useRoomChat(roomId, userId) {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${session?.access_token || ""}`,
+            Authorization: "Bearer " + (session?.access_token || ""),
           },
           body: JSON.stringify({
-            system: `IA neutre BAARO débat ${topic || ""}. 4-8 phrases max.`,
+            system: "IA neutre BAARO débat " + (topic || "") + ". 4-8 phrases max.",
             messages: [{ role: "user", content: recent || "Débat commence." }],
             max_tokens: 600,
           }),
         });
-        const data = await res.json().catch(() => ({}));
-        const reply =
+        const data = await res.json().catch(function () {
+          return {};
+        });
+        var reply =
           data.reply ||
-          data.content?.find?.((b) => b.type === "text")?.text ||
+          (data.content &&
+            data.content.find &&
+            data.content.find(function (b) {
+              return b.type === "text";
+            })?.text) ||
           "Pas de réponse.";
         await supabase.from("debate_messages").insert({
           room_id: roomId,
@@ -303,9 +315,6 @@ export function useRoomChat(roomId, userId) {
   };
 }
 
-/**
- * Live Daily — token via /api/create-room { action: "token" }
- */
 export function useDebateLive(room, userId, isHost) {
   const callRef = useRef(null);
   const [camOn, setCamOn] = useState(room?.mode !== "audio");
@@ -315,29 +324,29 @@ export function useDebateLive(room, userId, isHost) {
   const [joining, setJoining] = useState(false);
 
   const joinLive = useCallback(
-    async (containerEl) => {
+    async function () {
       if (!room?.id || !userId || joining) return;
       setJoining(true);
       setError(null);
       try {
         try {
-          const s = await navigator.mediaDevices.getUserMedia({
+          var s = await navigator.mediaDevices.getUserMedia({
             video: room.mode !== "audio",
             audio: true,
           });
-          s.getTracks().forEach((t) => t.stop());
+          s.getTracks().forEach(function (t) {
+            t.stop();
+          });
         } catch (_) {}
 
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
+        var sessionRes = await supabase.auth.getSession();
+        var session = sessionRes.data?.session;
 
-        // ✅ URL correcte (rewrite vercel → api/live.js)
-        const res = await fetch(apiUrl("/api/create-room"), {
+        var res = await fetch(apiUrl("/api/create-room"), {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${session?.access_token || ""}`,
+            Authorization: "Bearer " + (session?.access_token || ""),
           },
           body: JSON.stringify({
             action: "token",
@@ -348,15 +357,18 @@ export function useDebateLive(room, userId, isHost) {
           }),
         });
 
-        const data = await res.json().catch(() => ({}));
+        var data = await res.json().catch(function () {
+          return {};
+        });
         if (!res.ok || !data.token) {
           throw new Error(data.error || "Impossible d'obtenir le token Daily");
         }
 
-        const roomUrl =
+        var domain = import.meta.env.VITE_DAILY_DOMAIN || "baaro";
+        var roomUrl =
           data.url ||
           (data.roomName
-            ? `https://\( {import.meta.env.VITE_DAILY_DOMAIN || "baaro"}.daily.co/ \){data.roomName}`
+            ? "https://" + domain + ".daily.co/" + data.roomName
             : null);
         if (!roomUrl) throw new Error("URL Daily manquante");
 
@@ -368,7 +380,7 @@ export function useDebateLive(room, userId, isHost) {
           callRef.current = null;
         }
 
-        const call = DailyIframe.createCallObject({
+        var call = DailyIframe.createCallObject({
           audioSource: true,
           videoSource: room.mode !== "audio",
           subscribeToTracksAutomatically: true,
@@ -379,11 +391,6 @@ export function useDebateLive(room, userId, isHost) {
         await call.join({ url: roomUrl, token: data.token });
         await call.setLocalAudio(micOn);
         await call.setLocalVideo(room.mode !== "audio" ? camOn : false);
-
-        // Optionnel : attacher dans un conteneur si fourni (iframe legacy)
-        if (containerEl && typeof call.setTheme === "function") {
-          /* call object mode — UI gérée par DebateRoom */
-        }
 
         setJoined(true);
       } catch (e) {
@@ -396,38 +403,39 @@ export function useDebateLive(room, userId, isHost) {
     [room, userId, isHost, camOn, micOn, joining]
   );
 
-  const toggleCam = useCallback(() => {
-    setCamOn((p) => {
-      callRef.current?.setLocalVideo(!p);
+  const toggleCam = useCallback(function () {
+    setCamOn(function (p) {
+      if (callRef.current) callRef.current.setLocalVideo(!p);
       return !p;
     });
   }, []);
 
-  const toggleMic = useCallback(() => {
-    setMicOn((p) => {
-      callRef.current?.setLocalAudio(!p);
+  const toggleMic = useCallback(function () {
+    setMicOn(function (p) {
+      if (callRef.current) callRef.current.setLocalAudio(!p);
       return !p;
     });
   }, []);
 
-  const leaveLive = useCallback(async () => {
+  const leaveLive = useCallback(async function () {
     try {
-      await callRef.current?.leave();
-      await callRef.current?.destroy();
+      if (callRef.current) {
+        await callRef.current.leave();
+        await callRef.current.destroy();
+      }
     } finally {
       callRef.current = null;
       setJoined(false);
     }
   }, []);
 
-  useEffect(
-    () => () => {
+  useEffect(function () {
+    return function () {
       try {
-        callRef.current?.destroy();
+        if (callRef.current) callRef.current.destroy();
       } catch (_) {}
-    },
-    []
-  );
+    };
+  }, []);
 
   return {
     joinLive,
