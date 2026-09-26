@@ -1,19 +1,49 @@
 import { useState } from "react";
-import { X, Mic, Video, MessageSquare, Sparkles, Zap, Paperclip, Layers } from "lucide-react";
+import {
+  X,
+  Mic,
+  Video,
+  MessageSquare,
+  Sparkles,
+  Zap,
+  Paperclip,
+  Layers,
+} from "lucide-react";
 import { COLORS } from "../theme.js";
 import { supabase } from "../supabaseClient.js";
 import { API_BASE } from "../config.js";
 
-const TOPIC_SUGGESTIONS = ["Tech & IA", "Afrique", "Économie", "Culture", "Sport", "Société"];
+const TOPIC_SUGGESTIONS = [
+  "Tech & IA",
+  "Afrique",
+  "Économie",
+  "Culture",
+  "Sport",
+  "Société",
+];
+
 const MODES = [
-  { id: "hybrid", icon: Layers, label: "Tout", hint: "Texte · Voix · Vidéo · Fichiers" },
+  {
+    id: "hybrid",
+    icon: Layers,
+    label: "Tout",
+    hint: "Texte · Voix · Vidéo · Fichiers",
+  },
   { id: "video", icon: Video, label: "Vidéo", hint: "Caméra + chat" },
   { id: "audio", icon: Mic, label: "Audio", hint: "Voix + chat" },
   { id: "text", icon: MessageSquare, label: "Texte", hint: "Chat + fichiers" },
 ];
 
 function randomCode(n = 6) {
-  return Math.random().toString(36).substring(2, 2 + n).toUpperCase();
+  return Math.random()
+    .toString(36)
+    .substring(2, 2 + n)
+    .toLowerCase();
+}
+
+function apiUrl(path) {
+  const base = (API_BASE || "").replace(/\/$/, "");
+  return `\( {base} \){path.startsWith("/") ? path : `/${path}`}`;
 }
 
 export function CreateDebateModal({ isOpen, onClose, onSuccess }) {
@@ -43,11 +73,13 @@ export function CreateDebateModal({ isOpen, onClose, onSuccess }) {
       } = await supabase.auth.getSession();
       const userId = session?.user?.id;
       if (!userId) {
-        throw new Error("Tu dois être connecté pour créer un live. Reconnecte-toi.");
+        throw new Error(
+          "Tu dois être connecté pour créer un live. Reconnecte-toi."
+        );
       }
 
       const finalMode = mode === "hybrid" ? "video" : mode;
-      const inviteCode = randomCode(6).toLowerCase();
+      const inviteCode = randomCode(6);
       const finalTopic =
         mode === "hybrid" ? `${topicVal} · ⚡ Tout-en-un` : topicVal;
 
@@ -86,9 +118,10 @@ export function CreateDebateModal({ isOpen, onClose, onSuccess }) {
       if (partErr) console.warn("participant warn:", partErr.message);
 
       // 3. Room Daily (optionnel — ne bloque pas si échec)
-      if (finalMode !== "text" && API_BASE) {
+      // API_BASE vide sur le web → "/api/create-room" (même domaine)
+      if (finalMode !== "text") {
         try {
-          const res = await fetch(`${API_BASE}/api/create-room`, {
+          const res = await fetch(apiUrl("/api/create-room"), {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
@@ -111,6 +144,11 @@ export function CreateDebateModal({ isOpen, onClose, onSuccess }) {
               .update({ daily_room_name: name })
               .eq("id", room.id);
             room.daily_room_name = name;
+          } else if (!res.ok) {
+            console.warn(
+              "Daily create-room:",
+              dailyData.error || res.statusText
+            );
           }
         } catch (dailyErr) {
           console.warn(
@@ -160,6 +198,7 @@ export function CreateDebateModal({ isOpen, onClose, onSuccess }) {
             <Zap size={20} style={{ color: COLORS.gold }} /> Nouveau live
           </h2>
           <button
+            type="button"
             onClick={onClose}
             className="p-2 rounded-full"
             style={{ color: COLORS.muted }}
@@ -225,7 +264,8 @@ export function CreateDebateModal({ isOpen, onClose, onSuccess }) {
                 onClick={() => setTopic(t)}
                 className="text-[10px] px-2.5 py-1 rounded-full border font-medium"
                 style={{
-                  background: topic === t ? `${COLORS.teal}22` : COLORS.surface2,
+                  background:
+                    topic === t ? `${COLORS.teal}22` : COLORS.surface2,
                   borderColor: topic === t ? COLORS.teal : COLORS.border,
                   color: topic === t ? COLORS.teal : COLORS.muted,
                 }}
@@ -261,7 +301,9 @@ export function CreateDebateModal({ isOpen, onClose, onSuccess }) {
                 >
                   <Icon size={20} />
                   <span className="text-xs font-bold">{m.label}</span>
-                  <span className="text-[9px] opacity-70 text-center">{m.hint}</span>
+                  <span className="text-[9px] opacity-70 text-center">
+                    {m.hint}
+                  </span>
                 </button>
               );
             })}
@@ -293,3 +335,5 @@ export function CreateDebateModal({ isOpen, onClose, onSuccess }) {
     </div>
   );
 }
+
+export default CreateDebateModal;
