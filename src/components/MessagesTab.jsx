@@ -4,7 +4,7 @@ import { ArrowLeft, Send, MessageCircle, Plus, X, Search, Paperclip, Mic, Phone,
 import { COLORS as THEME_COLORS } from "../theme.js";
 import { supabase } from "../supabaseClient.js";
 import { uploadChatFile, uploadVoiceBlob, mimeToMessageType, formatDuration, getBestAudioMime } from "../lib/chatMedia.js";
-import { createCallRoom, createCallRecord } from "../lib/chatCalls.js";
+import { createCallRoom, getCallToken, createCallRecord } from "../lib/chatCalls.js"; // ✅ IMPORT MIS À JOUR
 import { ChatCallModal } from "./ChatCallModal.jsx";
 
 /** auth.users.id (UUID) uniquement */
@@ -13,7 +13,6 @@ function isValidAuthUserId(value) {
   if (value.startsWith("@") || (value.includes("@") && value.includes("."))) return false;
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 }
-
 
 const FALLBACK = {
   bg: "#0B1220",
@@ -32,7 +31,6 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
   const [id, setId] = useState(propId || null);
   const [conversations, setConversations] = useState([]);
   const [activeChat, setActiveChat] = useState(null);
-  // Branche useMessaging (messages temps réel / envoi)
   const messaging = useMessaging(activeChat?.id, id, activeChat?.otherUserId);
   const [messages, setMessages] = useState([]);
   const [newMessage, setNewMessage] = useState("");
@@ -212,19 +210,56 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
     if (mediaRecorderRef.current && recording) mediaRecorderRef.current.stop();
   };
 
+  // ✅ FONCTION startCall CORRIGÉE ET COMPLÈTE
   const startCall = async (type) => {
     if (!activeChat || !id) return;
     try {
-      const res = await createCallRoom({ userName: activeChat.otherUserName });
+      // 1. Créer la room
+      const roomRes = await createCallRoom({ 
+        userName: activeChat.otherUserName, 
+        mode: type 
+      });
+      
+      const roomName = roomRes.roomName || roomRes.daily_room_name;
+      
+      // 2. Obtenir le token (C'était l'étape manquante !)
+      const tokenRes = await getCallToken({ 
+        roomName: roomName, 
+        userName: "Moi", 
+        isOwner: true 
+      });
+
+      // 3. Enregistrer en BDD (non-bloquant)
       let rec = null;
       try {
-        rec = await createCallRecord({ conversationId: activeChat.id, callerId: id, calleeId: activeChat.otherUserId, type: type, dailyRoomName: res.roomName });
-      } catch {
+        rec = await createCallRecord({ 
+          conversationId: activeChat.id, 
+          callerId: id, 
+          calleeId: activeChat.otherUserId, 
+          type: type, 
+          dailyRoomName: roomName 
+        });
+      } catch (err) {
+        console.warn("Échec de l'enregistrement de l'appel en BDD, mais on continue:", err);
         rec = { id: null };
       }
-      setCallState({ mode: "outgoing", callType: type, callRecord: rec, roomUrl: res.url || res.roomUrl, token: res.token, otherUser: { name: activeChat.otherUserName, avatar: activeChat.otherUserAvatar, flag: activeChat.otherUserFlag } });
+      
+      // 4. Lancer l'interface d'appel avec le token valide
+      setCallState({ 
+        mode: "outgoing", 
+        callType: type, 
+        callRecord: rec, 
+        roomUrl: roomRes.url, 
+        token: tokenRes.token, // ✅ Le token est maintenant bien défini
+        otherUser: { 
+          name: activeChat.otherUserName, 
+          avatar: activeChat.otherUserAvatar, 
+          flag: activeChat.otherUserFlag 
+        } 
+      });
     } catch (e) {
-      alert(e.message);
+      console.error("🔴 ERREUR DÉTAILLÉE DE L'APPEL :", e);
+      alert(e.message || "Impossible de démarrer l'appel");
     }
   };
 
