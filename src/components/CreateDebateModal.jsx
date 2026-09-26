@@ -34,7 +34,8 @@ const MODES = [
   { id: "text", icon: MessageSquare, label: "Texte", hint: "Chat + fichiers" },
 ];
 
-function randomCode(n = 6) {
+function randomCode(n) {
+  n = n || 6;
   return Math.random()
     .toString(36)
     .substring(2, 2 + n)
@@ -43,7 +44,8 @@ function randomCode(n = 6) {
 
 function apiUrl(path) {
   const base = (API_BASE || "").replace(/\/$/, "");
-  return `\( {base} \){path.startsWith("/") ? path : `/${path}`}`;
+  const p = path.startsWith("/") ? path : "/" + path;
+  return base + p;
 }
 
 export function CreateDebateModal({ isOpen, onClose, onSuccess }) {
@@ -55,8 +57,8 @@ export function CreateDebateModal({ isOpen, onClose, onSuccess }) {
 
   if (!isOpen) return null;
 
-  const handleCreate = async (e) => {
-    e?.preventDefault?.();
+  const handleCreate = async function (e) {
+    if (e && e.preventDefault) e.preventDefault();
     const titleVal = title.trim();
     const topicVal = topic.trim();
     if (!titleVal || !topicVal) {
@@ -68,9 +70,8 @@ export function CreateDebateModal({ isOpen, onClose, onSuccess }) {
     setError(null);
 
     try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
+      const sessionRes = await supabase.auth.getSession();
+      const session = sessionRes.data?.session;
       const userId = session?.user?.id;
       if (!userId) {
         throw new Error(
@@ -81,10 +82,9 @@ export function CreateDebateModal({ isOpen, onClose, onSuccess }) {
       const finalMode = mode === "hybrid" ? "video" : mode;
       const inviteCode = randomCode(6);
       const finalTopic =
-        mode === "hybrid" ? `${topicVal} · ⚡ Tout-en-un` : topicVal;
+        mode === "hybrid" ? topicVal + " · ⚡ Tout-en-un" : topicVal;
 
-      // 1. Création directe en base (ne dépend pas de /api)
-      const { data: room, error: roomErr } = await supabase
+      const roomRes = await supabase
         .from("debate_rooms")
         .insert({
           title: titleVal,
@@ -97,6 +97,9 @@ export function CreateDebateModal({ isOpen, onClose, onSuccess }) {
         })
         .select("*")
         .single();
+
+      const room = roomRes.data;
+      const roomErr = roomRes.error;
 
       if (roomErr) {
         const msg = roomErr.message || "";
@@ -111,21 +114,20 @@ export function CreateDebateModal({ isOpen, onClose, onSuccess }) {
         throw new Error(msg || "Impossible de créer la salle.");
       }
 
-      // 2. Participant host
-      const { error: partErr } = await supabase
-        .from("debate_participants")
-        .insert({ room_id: room.id, user_id: userId, role: "host" });
-      if (partErr) console.warn("participant warn:", partErr.message);
+      const partRes = await supabase.from("debate_participants").insert({
+        room_id: room.id,
+        user_id: userId,
+        role: "host",
+      });
+      if (partRes.error) console.warn("participant warn:", partRes.error.message);
 
-      // 3. Room Daily (optionnel — ne bloque pas si échec)
-      // API_BASE vide sur le web → "/api/create-room" (même domaine)
       if (finalMode !== "text") {
         try {
           const res = await fetch(apiUrl("/api/create-room"), {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
-              Authorization: `Bearer ${session.access_token}`,
+              Authorization: "Bearer " + session.access_token,
             },
             body: JSON.stringify({
               action: "create-room",
@@ -133,11 +135,13 @@ export function CreateDebateModal({ isOpen, onClose, onSuccess }) {
               title: titleVal,
               topic: finalTopic,
               mode: finalMode,
-              inviteCode,
+              inviteCode: inviteCode,
             }),
           });
-          const dailyData = await res.json().catch(() => ({}));
-          if (dailyData?.roomName || dailyData?.daily_room_name) {
+          const dailyData = await res.json().catch(function () {
+            return {};
+          });
+          if (dailyData.roomName || dailyData.daily_room_name) {
             const name = dailyData.roomName || dailyData.daily_room_name;
             await supabase
               .from("debate_rooms")
@@ -153,19 +157,19 @@ export function CreateDebateModal({ isOpen, onClose, onSuccess }) {
         } catch (dailyErr) {
           console.warn(
             "Daily API non dispo, salle chat créée quand même:",
-            dailyErr?.message
+            dailyErr && dailyErr.message
           );
         }
       }
 
-      onSuccess?.(room);
-      onClose?.();
+      if (onSuccess) onSuccess(room);
+      if (onClose) onClose();
       setTitle("");
       setTopic("");
       setMode("hybrid");
     } catch (err) {
       console.error(err);
-      const raw = err?.message || String(err);
+      const raw = (err && err.message) || String(err);
       if (/Failed to fetch|NetworkError|Load failed/i.test(raw)) {
         setError(
           "Connexion impossible. Vérifie ta connexion internet et réessaie."
@@ -186,7 +190,9 @@ export function CreateDebateModal({ isOpen, onClose, onSuccess }) {
       onClick={onClose}
     >
       <div
-        onClick={(e) => e.stopPropagation()}
+        onClick={function (e) {
+          e.stopPropagation();
+        }}
         className="w-full sm:max-w-md rounded-t-3xl sm:rounded-3xl p-6 border shadow-2xl flex flex-col gap-5 max-h-[92vh] overflow-y-auto"
         style={{ background: COLORS.surface, borderColor: COLORS.borderGold }}
       >
@@ -223,7 +229,9 @@ export function CreateDebateModal({ isOpen, onClose, onSuccess }) {
           <input
             type="text"
             value={title}
-            onChange={(e) => setTitle(e.target.value)}
+            onChange={function (e) {
+              setTitle(e.target.value);
+            }}
             placeholder="Ex : L'avenir de l'IA en Afrique"
             maxLength={80}
             autoFocus
@@ -246,7 +254,9 @@ export function CreateDebateModal({ isOpen, onClose, onSuccess }) {
           <input
             type="text"
             value={topic}
-            onChange={(e) => setTopic(e.target.value)}
+            onChange={function (e) {
+              setTopic(e.target.value);
+            }}
             placeholder="Ex : #Tech"
             maxLength={40}
             className="w-full px-4 py-3 rounded-xl border text-sm outline-none mb-2"
@@ -257,22 +267,26 @@ export function CreateDebateModal({ isOpen, onClose, onSuccess }) {
             }}
           />
           <div className="flex flex-wrap gap-1.5">
-            {TOPIC_SUGGESTIONS.map((t) => (
-              <button
-                key={t}
-                type="button"
-                onClick={() => setTopic(t)}
-                className="text-[10px] px-2.5 py-1 rounded-full border font-medium"
-                style={{
-                  background:
-                    topic === t ? `${COLORS.teal}22` : COLORS.surface2,
-                  borderColor: topic === t ? COLORS.teal : COLORS.border,
-                  color: topic === t ? COLORS.teal : COLORS.muted,
-                }}
-              >
-                {t}
-              </button>
-            ))}
+            {TOPIC_SUGGESTIONS.map(function (t) {
+              return (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={function () {
+                    setTopic(t);
+                  }}
+                  className="text-[10px] px-2.5 py-1 rounded-full border font-medium"
+                  style={{
+                    background:
+                      topic === t ? COLORS.teal + "22" : COLORS.surface2,
+                    borderColor: topic === t ? COLORS.teal : COLORS.border,
+                    color: topic === t ? COLORS.teal : COLORS.muted,
+                  }}
+                >
+                  {t}
+                </button>
+              );
+            })}
           </div>
         </div>
 
@@ -284,17 +298,19 @@ export function CreateDebateModal({ isOpen, onClose, onSuccess }) {
             Format
           </label>
           <div className="grid grid-cols-2 gap-2">
-            {MODES.map((m) => {
-              const Icon = m.icon;
-              const active = mode === m.id;
+            {MODES.map(function (m) {
+              var Icon = m.icon;
+              var active = mode === m.id;
               return (
                 <button
                   key={m.id}
                   type="button"
-                  onClick={() => setMode(m.id)}
+                  onClick={function () {
+                    setMode(m.id);
+                  }}
                   className="flex flex-col items-center gap-1 py-3 px-2 rounded-xl border"
                   style={{
-                    background: active ? `${COLORS.gold}18` : COLORS.surface2,
+                    background: active ? COLORS.gold + "18" : COLORS.surface2,
                     borderColor: active ? COLORS.gold : COLORS.border,
                     color: active ? COLORS.gold : COLORS.muted,
                   }}
