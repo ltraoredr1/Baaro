@@ -1,5 +1,5 @@
 // src/lib/chatCalls.js
-// Appels vocaux / vidéo 1-1 via Daily.co (api/chat-call.js déjà présent)
+// Appels vocaux / vidéo 1-1 via Daily.co
 
 import DailyIframe from "@daily-co/daily-js";
 import { supabase } from "../supabaseClient.js";
@@ -13,49 +13,78 @@ async function authHeaders() {
 }
 
 async function callApi(body) {
-  const base = (typeof import.meta !== "undefined" && import.meta.env?.VITE_API_BASE_URL) || "";
-  const res = await fetch(`${base}/api/chat-call`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(await authHeaders()),
-    },
-    body: JSON.stringify(body),
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    throw new Error(
-      data.error ||
-        (res.status === 503
-          ? "Appels non configurés (DAILY_API_KEY manquante sur Vercel)"
-          : `Erreur serveur appel (${res.status})`)
-    );
+  // 1. Détection robuste de l'URL (fonctionne en local, Vercel et Capacitor Mobile)
+  let base = "";
+  if (typeof import.meta !== "undefined" && import.meta.env?.VITE_API_BASE_URL) {
+    base = import.meta.env.VITE_API_BASE_URL;
+  } else if (typeof window !== "undefined") {
+    base = window.location.origin;
   }
-  return data;
+
+  // On utilise /api/create-room car c'est celui configuré dans votre vercel.json
+  const endpoint = base.endsWith('/') ? `${base}api/create-room` : `${base}/api/create-room`;
+  
+  try {
+    const res = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(await authHeaders()),
+      },
+      body: JSON.stringify(body),
+    });
+
+    const contentType = res.headers.get("content-type");
+    let data;
+    if (contentType && contentType.includes("application/json")) {
+      data = await res.json();
+    } else {
+      const text = await res.text();
+      throw new Error(`Réponse non-JSON du serveur (${res.status}): ${text.substring(0, 150)}`);
+    }
+
+    if (!res.ok) {
+      throw new Error(data.error || `Erreur serveur appel (${res.status})`);
+    }
+    return data;
+  } catch (error) {
+    console.error("🔴 ERREUR RÉSEAU APPEL (chatCalls.js):", error);
+    if (error.message.includes("Failed to fetch") || error.message.includes("NetworkError")) {
+      throw new Error(`Impossible de contacter le serveur (${endpoint}). Vérifiez votre connexion et les variables d'environnement Vercel.`);
+    }
+    throw error;
+  }
 }
 
 /**
- * Créer une room Daily privée (max 2 participants) + token caller
+ * 1. Créer la room Daily (Correspond à handleCreateRoom dans api/live.js)
  */
-export async function createCallRoom({ userName }) {
-  return callApi({ action: "create", userName: userName || "BAARO" });
-}
-
-/**
- * Obtenir un token pour rejoindre une room existante
- */
-export async function joinCallRoom({ roomName, callId, userName }) {
-  return callApi({
-    action: "join",
-    roomName,
-    callId,
-    userName: userName || "BAARO",
+export async function createCallRoom({ userName, mode = "video" }) {
+  const inviteCode = `call-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+  
+  return callApi({ 
+    action: "create-room", // ✅ CORRESPOND À api/live.js
+    mode: mode,
+    inviteCode: inviteCode,
+    userName: userName || "BAARO" 
   });
 }
 
 /**
- * Démarrer l'appel (côté caller)
- * @param {{ roomUrl: string, token: string, video?: boolean }}
+ * 2. Obtenir le token pour la room (Correspond à handleToken dans api/live.js)
+ */
+export async function getCallToken({ roomName, userName, isOwner = true }) {
+  return callApi({
+    action: "token", // ✅ DÉCLENCHE handleToken dans api/live.js
+    liveId: roomName,
+    roomName: roomName,
+    userName: userName || "BAARO",
+    isOwner: isOwner
+  });
+}
+
+/**
+ * 3. Démarrer l'appel côté UI
  */
 export async function startCall({ roomUrl, token, video = false }) {
   if (callObject) {
@@ -77,16 +106,16 @@ export async function startCall({ roomUrl, token, video = false }) {
     callObject.setSubscribeToTracksAutomatically(true);
   } catch (_) {}
 
+  // Le token est OBLIGATOIRE ici pour que Daily.co accepte la connexion
   await callObject.join({ url: roomUrl, token });
   await callObject.setLocalAudio(true);
-  await callObject.setLocalVideo(!!video);
+  if (video) {
+    await callObject.setLocalVideo(true);
+  }
 
   return callObject;
 }
 
-/**
- * Rejoindre un appel (côté callee)
- */
 export async function joinCall({ roomUrl, token, video = false }) {
   return startCall({ roomUrl, token, video });
 }
@@ -103,14 +132,7 @@ export function enableCamera(enabled) {
 
 export function subscribeCallEvents(handlers = {}) {
   if (!callObject) return;
-  const {
-    onParticipantJoined,
-    onParticipantLeft,
-    onTrackStarted,
-    onTrackStopped,
-    onError,
-    onLeft,
-  } = handlers;
+  const { onParticipantJoined, onParticipantLeft, onTrackStarted, onTrackStopped, onError, onLeft } = handlers;
 
   if (onParticipantJoined) callObject.on("participant-joined", onParticipantJoined);
   if (onParticipantLeft) callObject.on("participant-left", onParticipantLeft);
@@ -131,24 +153,13 @@ export async function leaveCall() {
   callObject = null;
 }
 
-export function getCallObject() {
-  return callObject;
-}
-
-export function getParticipants() {
-  return callObject?.participants() || {};
-}
+export function getCallObject() { return callObject; }
+export function getParticipants() { return callObject?.participants() || {}; }
 
 /**
- * Créer l'enregistrement d'appel dans Supabase
+ * 4. Enregistrement BDD
  */
-export async function createCallRecord({
-  conversationId,
-  callerId,
-  calleeId,
-  type,
-  dailyRoomName,
-}) {
+export async function createCallRecord({ conversationId, callerId, calleeId, type, dailyRoomName }) {
   const { data, error } = await supabase
     .from("calls")
     .insert({
@@ -161,11 +172,16 @@ export async function createCallRecord({
     })
     .select()
     .single();
-  if (error) throw error;
+    
+  if (error) {
+    console.error("Erreur création enregistrement appel:", error);
+    return { id: null }; 
+  }
   return data;
 }
 
 export async function updateCallStatus(callId, updates) {
+  if (!callId) return null;
   const { data, error } = await supabase
     .from("calls")
     .update(updates)
