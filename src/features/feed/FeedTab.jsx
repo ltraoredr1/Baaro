@@ -346,14 +346,38 @@ export function FeedTab({ userId, id: idProp, onOpenProfile, onRewardPoints }) {
     return () => observer.disconnect();
   }, [loadMorePosts]);
 
+  const realtimeReloadTimerRef = useRef(null);
+
   useEffect(() => {
+    const scheduleReload = () => {
+      if (realtimeReloadTimerRef.current) {
+        clearTimeout(realtimeReloadTimerRef.current);
+      }
+      realtimeReloadTimerRef.current = setTimeout(() => {
+        realtimeReloadTimerRef.current = null;
+        loadPosts();
+      }, 1200);
+    };
+
     const channel = supabase
       .channel("posts_feed")
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "posts" }, () => loadPosts())
-      .on("postgres_changes", { event: "DELETE", schema: "public", table: "posts" }, () => loadPosts())
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "posts" },
+        scheduleReload
+      )
+      .on(
+        "postgres_changes",
+        { event: "DELETE", schema: "public", table: "posts" },
+        scheduleReload
+      )
       .subscribe();
 
     return () => {
+      if (realtimeReloadTimerRef.current) {
+        clearTimeout(realtimeReloadTimerRef.current);
+        realtimeReloadTimerRef.current = null;
+      }
       supabase.removeChannel(channel);
     };
   }, [loadPosts]);
