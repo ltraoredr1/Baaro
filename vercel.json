@@ -1,5 +1,6 @@
 {
   "rewrites": [
+    { "source": "/api/live/token", "destination": "/api/live" },
     { "source": "/api/live-roles", "destination": "/api/live" },
     { "source": "/api/create-room", "destination": "/api/live" },
     { "source": "/api/ai", "destination": "/api/live" },
