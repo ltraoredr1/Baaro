@@ -14,7 +14,7 @@ export default function CartDrawer({ isOpen, onClose, id }) {
   const loadCart = async () => {
     setLoading(true);
     try {
-      const { data, error } = await supabase.from("cart").select(`id, quantity, shop_products (id, name, price, compare_at_price, currency, stock, images, image_url, is_available)`).eq("id", id);
+      const { data, error } = await supabase.from("cart").select(`id, quantity, shop_products (id, name, price, compare_at_price, currency, stock, images, image_url, is_available)`).eq("user_id", id);
       if (error) throw error;
       const validItems = (data || []).filter(item => item.shop_products && item.shop_products.is_available && item.shop_products.stock > 0);
       setCartItems(validItems);

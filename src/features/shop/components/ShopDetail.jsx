@@ -35,8 +35,28 @@ export default function ShopDetail({ shopId, id, onBack }) {
     if (!id) { showToast("Connectez-vous pour ajouter au panier", "info"); return; }
     if (product.stock === 0) { showToast("Ce produit est en rupture de stock", "error"); return; }
     try {
-      const { error } = await supabase.rpc('add_to_cart', { p_user_id: id, p_item_id: product.id, p_quantity: 1 });
-      if (error) throw error;
+      const { data: existing, error: findError } = await supabase
+        .from("cart")
+        .select("id, quantity")
+        .eq("user_id", id)
+        .eq("item_id", product.id)
+        .maybeSingle();
+      if (findError) throw findError;
+
+      if (existing?.id) {
+        const nextQuantity = Math.min(100, Number(existing.quantity || 0) + 1);
+        const { error: updateError } = await supabase
+          .from("cart")
+          .update({ quantity: nextQuantity })
+          .eq("id", existing.id)
+          .eq("user_id", id);
+        if (updateError) throw updateError;
+      } else {
+        const { error: insertError } = await supabase
+          .from("cart")
+          .insert({ user_id: id, item_id: product.id, quantity: 1 });
+        if (insertError) throw insertError;
+      }
       setCart((items) => {
         const old = items.find((x) => x.productId === product.id);
         if (old) return items.map((x) => x.productId === product.id ? { ...x, quantity: x.quantity + 1 } : x);
@@ -55,8 +75,21 @@ export default function ShopDetail({ shopId, id, onBack }) {
     if (!item) return;
     const newQty = item.quantity + delta;
     try {
-      if (newQty <= 0) await supabase.from('cart').delete().eq('item_id', productId).eq('id', id);
-      else await supabase.from('cart').update({ quantity: newQty }).eq('item_id', productId).eq('id', id);
+      if (newQty <= 0) {
+        const { error } = await supabase
+          .from("cart")
+          .delete()
+          .eq("item_id", productId)
+          .eq("user_id", id);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase
+          .from("cart")
+          .update({ quantity: newQty })
+          .eq("item_id", productId)
+          .eq("user_id", id);
+        if (error) throw error;
+      }
       setCart((items) => items.map((x) => x.productId === productId ? { ...x, quantity: newQty } : x).filter((x) => x.quantity > 0));
     } catch (e) {
       console.error("Erreur mise à jour panier:", e);
