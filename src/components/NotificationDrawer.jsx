@@ -51,9 +51,9 @@ export function NotificationDrawer({ userId, isOpen, onClose }) {
     load();
   }, [isOpen, userId, load]);
 
-  // Realtime - toujours actif pour badge, mais cleanup propre
+  // Realtime uniquement quand le panneau est ouvert pour éviter une connexion permanente.
   useEffect(() => {
-    if (!isValidAuthUserId(userId)) return;
+    if (!isOpen || !isValidAuthUserId(userId)) return;
     const channel = supabase
      .channel(`notif-drawer-${userId}`)
      .on("postgres_changes", { event: "INSERT", schema: "public", table: "notifications", filter: `user_id=eq.${userId}` },
@@ -80,7 +80,7 @@ export function NotificationDrawer({ userId, isOpen, onClose }) {
       });
 
     return () => { supabase.removeChannel(channel); };
-  }, [userId, load]);
+  }, [isOpen, userId, load]);
 
   // Lock scroll + Escape
   useEffect(() => {
