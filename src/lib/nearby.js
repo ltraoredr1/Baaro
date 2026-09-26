@@ -1,20 +1,23 @@
 import { Capacitor } from "@capacitor/core";
-import { NearbyChat } from "@baaro/nearby-chat";
 
 const SERVICE_NAME = "com.baaro.app.p2p";
 
 let isInitialized = false;
 const connectedEndpoints = new Set();
 
+/**
+ * Récupère le plugin sans import npm statique
+ * (évite l’erreur Rollup sur le web / CI)
+ */
 function getPlugin() {
   try {
-    // Plugin local enregistré sous le nom NearbyChat
-    if (NearbyChat && typeof NearbyChat.start === "function") {
-      return NearbyChat;
-    }
-    // Fallback ancien nom (si un autre plugin est installé)
     // @ts-ignore
-    return Capacitor.Plugins?.NearbyConnections || Capacitor.Plugins?.NearbyChat || null;
+    const plugins = Capacitor.Plugins || {};
+    return (
+      plugins.NearbyChat ||
+      plugins.NearbyConnections ||
+      null
+    );
   } catch {
     return null;
   }
@@ -35,7 +38,9 @@ export function getNearbyDebug() {
     hasPlugin: !!plugin,
     isInitialized,
     connectedCount: connectedEndpoints.size,
-    pluginName: plugin ? "NearbyChat" : null,
+    pluginName: plugin
+      ? (Capacitor.Plugins?.NearbyChat ? "NearbyChat" : "NearbyConnections")
+      : null,
   };
 }
 
@@ -73,11 +78,11 @@ async function ensureInitialized(displayName = "BAARO User") {
   if (isInitialized) return;
   const plugin = getPlugin();
   if (!plugin) {
-    throw new Error("Plugin Nearby non installé. Fais : npm install && npx cap sync android");
+    throw new Error(
+      "Plugin Nearby non installé. Ajoute le plugin local puis : npx cap sync android"
+    );
   }
 
-  // Ton plugin local utilise start({ displayName })
-  // On initialise via start si pas de méthode initialize
   if (typeof plugin.initialize === "function") {
     await plugin.initialize({
       serviceName: SERVICE_NAME,
@@ -92,7 +97,7 @@ export async function startNearby(displayName = "BAARO User") {
   if (!isNearbyAvailable()) {
     throw new Error(
       Capacitor.isNativePlatform()
-        ? "Plugin Nearby non disponible. Lance : npm install && npx cap sync android puis rebuild l’APK."
+        ? "Plugin Nearby non disponible. Fais npx cap sync android puis rebuild l’APK."
         : "Mode hors-ligne disponible uniquement dans l’application Android native."
     );
   }
@@ -102,13 +107,13 @@ export async function startNearby(displayName = "BAARO User") {
 
   const plugin = getPlugin();
 
-  // API de ton plugin local (native-plugins/nearby)
+  // API plugin local NearbyChat
   if (typeof plugin.start === "function") {
     await plugin.start({ displayName });
     return;
   }
 
-  // Fallback API style NearbyConnections (si autre plugin)
+  // API style NearbyConnections
   if (typeof plugin.startAdvertising === "function") {
     await plugin.startAdvertising({ name: displayName });
     if (typeof plugin.startDiscovery === "function") {
@@ -141,7 +146,6 @@ export async function sendNearbyMessage(text, endpointId = null) {
   const payload = typeof text === "string" ? text : JSON.stringify(text);
 
   if (typeof plugin.send === "function") {
-    // API plugin local
     await plugin.send({ text: payload, endpointId: endpointId || undefined });
     return;
   }
@@ -191,39 +195,39 @@ export function onNearbyEvent(_eventName, callback) {
 
   const handles = [];
 
-  // API plugin local (événement unique "nearbyEvent")
-  const h1 = plugin.addListener("nearbyEvent", (event) => {
-    if (!event) return;
+  // Événement unique du plugin local
+  try {
+    const h = plugin.addListener("nearbyEvent", (event) => {
+      if (!event) return;
+      if (event.type === "DEVICE_FOUND") {
+        callback({
+          type: "DEVICE_FOUND",
+          endpointId: event.endpointId,
+          deviceName: event.deviceName || event.endpointName,
+        });
+      } else if (event.type === "DEVICE_CONNECTED") {
+        connectedEndpoints.add(event.endpointId);
+        callback({ type: "DEVICE_CONNECTED", endpointId: event.endpointId });
+      } else if (event.type === "DEVICE_LOST") {
+        connectedEndpoints.delete(event.endpointId);
+        callback({ type: "DEVICE_LOST", endpointId: event.endpointId });
+      } else if (event.type === "MESSAGE_RECEIVED") {
+        callback({
+          type: "MESSAGE_RECEIVED",
+          endpointId: event.endpointId,
+          text: event.text,
+          senderName: event.senderName || "Proche",
+        });
+      } else if (event.type === "CONNECTION_REQUESTED") {
+        acceptNearbyConnection(event.endpointId);
+      } else if (event.type === "ERROR") {
+        callback({ type: "ERROR", message: event.message });
+      }
+    });
+    handles.push(h);
+  } catch (_) {}
 
-    if (event.type === "DEVICE_FOUND") {
-      callback({
-        type: "DEVICE_FOUND",
-        endpointId: event.endpointId,
-        deviceName: event.deviceName || event.endpointName,
-      });
-    } else if (event.type === "DEVICE_CONNECTED") {
-      connectedEndpoints.add(event.endpointId);
-      callback({ type: "DEVICE_CONNECTED", endpointId: event.endpointId });
-    } else if (event.type === "DEVICE_LOST") {
-      connectedEndpoints.delete(event.endpointId);
-      callback({ type: "DEVICE_LOST", endpointId: event.endpointId });
-    } else if (event.type === "MESSAGE_RECEIVED") {
-      callback({
-        type: "MESSAGE_RECEIVED",
-        endpointId: event.endpointId,
-        text: event.text,
-        senderName: event.senderName || "Proche",
-      });
-    } else if (event.type === "CONNECTION_REQUESTED") {
-      // Auto-accept (comportement actuel)
-      acceptNearbyConnection(event.endpointId);
-    } else if (event.type === "ERROR") {
-      callback({ type: "ERROR", message: event.message });
-    }
-  });
-  handles.push(h1);
-
-  // Fallback anciens noms d’événements (si autre plugin)
+  // Fallback anciens noms d’événements
   try {
     handles.push(
       plugin.addListener("onEndpointFound", (data) => {
@@ -252,9 +256,7 @@ export function onNearbyEvent(_eventName, callback) {
         });
       })
     );
-  } catch (_) {
-    // ignore si les listeners n’existent pas
-  }
+  } catch (_) {}
 
   return {
     remove: () => {
