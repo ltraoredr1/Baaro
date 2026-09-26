@@ -64,7 +64,7 @@ export function PollCard({ postId, userId }) {
             .from("poll_votes")
             .select("option_id")
             .eq("poll_id", pollRow.id)
-            .eq("user_id", userId) // ✅ CORRIGÉ : Le diagnostic SQL a confirmé que c'est "user_id"
+            .eq("user_id", userId)
             .maybeSingle()
         : Promise.resolve({ data: null }),
     ]);
@@ -109,6 +109,7 @@ export function PollCard({ postId, userId }) {
     0
   );
 
+  // ✅ VERSION CORRIGÉE AVEC LOG D'ERREUR DÉTAILLÉ
   const vote = async (optionId) => {
     if (!isValidAuthUserId(userId)) {
       return showToast("Connectez-vous pour voter", "info");
@@ -124,15 +125,19 @@ export function PollCard({ postId, userId }) {
         p_option_id: optionId,
       });
 
-      if (error) throw error;
+      if (error) {
+        console.error("🔴 ERREUR DÉTAILLÉE DU VOTE :", error);
+        throw error;
+      }
 
       setMyVote(optionId);
       await load();
+      showToast("Vote enregistré !", "success");
     } catch (error) {
       showToast(
         error?.message === "SOCIAL_RATE_LIMIT"
           ? "Trop d'actions, réessayez."
-          : "Vote impossible",
+          : `Vote impossible : ${error.message}`,
         "error"
       );
     } finally {
@@ -432,7 +437,7 @@ export function SocialPostEnhancements({ post, userId }) {
               .from("post_bookmarks")
               .select("post_id")
               .eq("post_id", post.id)
-              .eq("id", userId) // ✅ CONSERVÉ : Votre schéma utilise "id" ici
+              .eq("id", userId)
               .maybeSingle()
           : Promise.resolve({
               data: null,
@@ -589,7 +594,7 @@ export function SocialPostEnhancements({ post, userId }) {
           .from("post_bookmarks")
           .delete()
           .eq("post_id", post.id)
-          .eq("id", userId); // ✅ CONSERVÉ : Votre schéma utilise "id" ici
+          .eq("id", userId);
 
         if (error) throw error;
 
@@ -600,10 +605,10 @@ export function SocialPostEnhancements({ post, userId }) {
           .upsert(
             {
               post_id: post.id,
-              id: userId, // ✅ CONSERVÉ : Votre schéma utilise "id" ici
+              id: userId,
             },
             {
-              onConflict: "post_id,id", // ✅ CONSERVÉ
+              onConflict: "post_id,id",
             }
           );
 
@@ -651,7 +656,7 @@ export function SocialPostEnhancements({ post, userId }) {
           .from("post_shares")
           .insert({
             post_id: post.id,
-            id: userId, // ✅ CONSERVÉ : Votre schéma utilise "id" ici
+            id: userId,
             channel: channelName,
           });
 
