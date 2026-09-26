@@ -1,4 +1,5 @@
 import { NotificationPrefsPanel } from "./NotificationPrefsPanel.jsx";
+import NotificationSoundSettings from "../../components/NotificationSoundSettings.jsx";
 import { getNotificationPreferences, saveNotificationPreferences } from "../../lib/notificationPreferences.js";
 // src/features/settings/index.tsx
 // Réglages BAARO — différenciation marchés émergents + profil + compte + recherche
@@ -32,6 +33,7 @@ import {
   Copy,
   Smartphone,
   Trash2,
+  Volume2,
 } from "lucide-react";
 import { COLORS } from "../../theme.js";
 import { setAppLanguage, SUPPORTED_LANGUAGES } from "../../../i18n.js";
@@ -215,14 +217,14 @@ const STRINGS: Record<string, Record<string, string>> = {
     copy_done: "✅ Copié dans le presse-papiers",
     mfa_section: "Double authentification (2FA)",
     mfa_desc:
-      "Statut TOTP / SMS côté Supabase Auth. L’activation complète se fait dans le flux de sécurité du compte.",
+      "Statut TOTP / SMS côté Supabase Auth. L'activation complète se fait dans le flux de sécurité du compte.",
     mfa_enabled: "2FA activée",
     mfa_disabled: "2FA non activée",
     mfa_factors: "facteur(s) vérifié(s)",
     mfa_loading: "Vérification…",
     mfa_guest: "Connectez un compte stable pour gérer la 2FA.",
     lang_partial_hint:
-      "Les langues locales orientent le contenu ; l’interface reste FR/EN/AR/BM pour l’instant.",
+      "Les langues locales orientent le contenu ; l'interface reste FR/EN/AR/BM pour l'instant.",
     sessions_section: "Sessions actives",
     sessions_desc: "Appareil actuel et déconnexion globale (tous les appareils).",
     session_current: "Session actuelle",
@@ -248,6 +250,10 @@ const STRINGS: Record<string, Record<string, string>> = {
     guest: "Invité",
     vs_competitors: "Conçu pour l'Afrique & les marchés émergents",
     version: "Version",
+    notifications_section: "Notifications",
+    notifications_desc: "Contrôlez les alertes, les sons et les préférences push.",
+    sound_settings: "Son des notifications",
+    sound_settings_desc: "Volume, activation et test des sons de notification.",
   },
   en: {
     title: "Settings",
@@ -383,6 +389,10 @@ const STRINGS: Record<string, Record<string, string>> = {
     guest: "Guest",
     vs_competitors: "Built for Africa & emerging markets",
     version: "Version",
+    notifications_section: "Notifications",
+    notifications_desc: "Control alerts, sounds, and push preferences.",
+    sound_settings: "Notification sounds",
+    sound_settings_desc: "Volume, enable, and test notification sounds.",
   },
   ar: {
     title: "الإعدادات",
@@ -510,6 +520,10 @@ const STRINGS: Record<string, Record<string, string>> = {
     guest: "زائر",
     vs_competitors: "مُصمَّم لأفريقيا والأسواق الناشئة",
     version: "الإصدار",
+    notifications_section: "الإشعارات",
+    notifications_desc: "التحكم في التنبيهات والأصوات وتفضيلات الدفع.",
+    sound_settings: "أصوات الإشعارات",
+    sound_settings_desc: "مستوى الصوت والتفعيل واختبار الأصوات.",
   },
   bm: {
     title: "Sɛbɛnniw",
@@ -636,6 +650,10 @@ const STRINGS: Record<string, Record<string, string>> = {
     guest: "Dunan",
     vs_competitors: "A dilannen Afrika ye",
     version: "Version",
+    notifications_section: "Kibaru ci",
+    notifications_desc: "Kibaru ci, kan ani push sago.",
+    sound_settings: "Kibaru ci kan",
+    sound_settings_desc: "Kan bonye, sigi, ani kan lajɛ.",
   },
 };
 
@@ -992,6 +1010,7 @@ export default function SettingsTab({
     mfa: false,
     sessions: false,
     danger: false,
+    notifications: true,
   });
 
   const lang = uiLang(settings.lang);
@@ -1033,9 +1052,6 @@ export default function SettingsTab({
           is_anonymous: data.user.is_anonymous === true,
         });
 
-        // Profil public/identité : l'e-mail (ou le téléphone) du compte
-        // reste celui de Supabase Auth et n'est jamais copié dans la
-        // table publique profiles.
         const { data: profile } = await supabase
           .from("profiles")
           .select("id, display_name, handle, flag, bio, avatar_url, cover_url, country, registered_country, country_changed_at, country_change_available_at, first_name, last_name, birth_date, location, is_verified, created_at")
@@ -1061,7 +1077,6 @@ export default function SettingsTab({
         if (!cancelled && res?.data) {
           setSettings((s) => ({ ...s, ...res.data }));
         }
-        // Session courante
         try {
           const { data: sess } = await supabase.auth.getSession();
           if (!cancelled && sess?.session) {
@@ -1080,7 +1095,6 @@ export default function SettingsTab({
           /* ignore */
         }
 
-        // 2FA status (affichage uniquement)
         if (!data.user.is_anonymous) {
           setMfaLoading(true);
           try {
@@ -1189,8 +1203,6 @@ export default function SettingsTab({
         updated_at: new Date().toISOString(),
       };
 
-      // UPSERT est volontaire : certains anciens comptes n'ont pas encore
-      // de ligne dans public.profiles. Un simple UPDATE ne crée rien.
       let { error } = await supabase
         .from("profiles")
         .upsert(profilePayload, { onConflict: "id" })
@@ -1451,10 +1463,8 @@ export default function SettingsTab({
     setAccountBusy(true);
     setMessage("");
     try {
-      // Tentative RPC métier si présente (Supabase)
       const { error: rpcError } = await supabase.rpc("delete_own_account");
       if (rpcError) {
-        // Fallback API Vercel éventuelle
         try {
           const {
             data: { session },
@@ -1550,7 +1560,16 @@ export default function SettingsTab({
         "session_device"
       ),
       danger: match("delete_account", "delete_account_desc"),
-      push: match("title") || !q,
+      notifications: match(
+        "notifications_section",
+        "sound_settings",
+        "push_enabled",
+        "messages",
+        "social",
+        "live",
+        "wallet",
+        "marketing"
+      ),
     }),
     [match, isAnonymous, q]
   );
@@ -1567,7 +1586,7 @@ export default function SettingsTab({
           <FileText size={22} style={{ color: COLORS.teal }} />
           {t("privacy_policy")}
         </h2>
-        <p className="text-sm leading-relaxed" style={{ color: COLORS.mutedLight }}>
+        <p className="text-sm leading-relaxed" style={{ color: COLORS.muted }}>
           {t("privacy_body")}
         </p>
         <button
@@ -1819,13 +1838,6 @@ export default function SettingsTab({
                 />
               </div>
 
-              {/*
-                Compte via téléphone (SMS) : pas d'e-mail Supabase Auth.
-                On affiche le champ pertinent selon la méthode
-                d'authentification réelle du compte, plutôt que de
-                toujours supposer un e-mail (ce qui laissait ce champ
-                vide et trompeur pour les comptes SMS).
-              */}
               <div className="rounded-xl border p-3" style={{ borderColor: COLORS.border }}>
                 <label className="text-xs font-semibold block mb-1" style={{ color: COLORS.muted }}>
                   {user?.email ? t("account_email") : t("account_phone")}
@@ -1862,7 +1874,7 @@ export default function SettingsTab({
                   {COUNTRIES.map((c) => <option key={c.code} value={c.code}>{c.flag} {c.label}</option>)}
                 </select>
                 <p className="text-[11px] mt-1" style={{ color: COLORS.muted }}>
-                  {userProfile?.registered_country ? `${t("registered_country")} : ${userProfile.registered_country}. ` : ""}
+                  {userProfile?.registeredCountry ? `${t("registered_country")} : ${userProfile.registeredCountry}. ` : ""}
                   {userProfile?.country_change_available_at && new Date(userProfile.country_change_available_at).getTime() > Date.now()
                     ? `${t("country_change_wait")} ${new Date(userProfile.country_change_available_at).toLocaleDateString()}`
                     : t("country_change_ready")}
@@ -2015,6 +2027,28 @@ export default function SettingsTab({
               </button>
             </div>
           )}
+        </CollapsibleSection>
+      )}
+
+      {/* 🔔 NOTIFICATIONS (Push + Son + Préférences) */}
+      {visible.notifications && (
+        <CollapsibleSection
+          id="notifications"
+          icon={Volume2}
+          title={t("notifications_section")}
+          desc={t("notifications_desc")}
+          accent={COLORS.gold}
+          open={openSections.notifications}
+          onToggle={() => toggleSection("notifications")}
+        >
+          {/* Push Settings */}
+          <PushSettings />
+          
+          {/* Sound Settings */}
+          <NotificationSoundSettings C={COLORS} />
+          
+          {/* Notification Preferences */}
+          <NotificationPrefsPanel />
         </CollapsibleSection>
       )}
 
@@ -2439,8 +2473,6 @@ export default function SettingsTab({
           />
         </CollapsibleSection>
       )}
-
-      {visible.push && (<><PushSettings /><div className="mt-4"><NotificationPrefsPanel /></div></>)}
 
       {/* Sessions */}
       {visible.sessions && (
