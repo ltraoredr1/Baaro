@@ -1,6 +1,7 @@
 // src/features/settings/NotificationSoundSettings.jsx
 import { Volume2, VolumeX, Bell, Play } from "lucide-react";
-import { useNotificationSound } from "../../hooks/useNotificationSound.js";
+// ⚠️ CORRECTION ICI : 3 niveaux de remontée (../../../) au lieu de 2
+import { useNotificationSound } from "../../../hooks/useNotificationSound.js";
 
 export default function NotificationSoundSettings({ C }) {
   const { enabled, muted, volume, loading, setEnabled, setMuted, setVolume, playTest } = 
