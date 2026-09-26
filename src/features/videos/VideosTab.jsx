@@ -189,13 +189,40 @@ export function VideosTab({ onRewardPoints, onExit }) {
     return () => { active = false; };
   }, []);
 
+  const realtimeReloadTimerRef = useRef(null);
+
   useEffect(() => {
+    const scheduleReload = () => {
+      if (realtimeReloadTimerRef.current) {
+        clearTimeout(realtimeReloadTimerRef.current);
+      }
+      realtimeReloadTimerRef.current = setTimeout(() => {
+        realtimeReloadTimerRef.current = null;
+        loadVideos();
+      }, 1500);
+    };
+
     const channel = supabase
       .channel("baaro-videos-v2")
-      .on("postgres_changes", { event: "*", schema: "public", table: "videos" }, () => loadVideos())
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "videos" },
+        scheduleReload
+      )
+      .on(
+        "postgres_changes",
+        { event: "DELETE", schema: "public", table: "videos" },
+        scheduleReload
+      )
       .subscribe();
 
-    return () => { supabase.removeChannel(channel); };
+    return () => {
+      if (realtimeReloadTimerRef.current) {
+        clearTimeout(realtimeReloadTimerRef.current);
+        realtimeReloadTimerRef.current = null;
+      }
+      supabase.removeChannel(channel);
+    };
   }, [loadVideos]);
 
   useEffect(() => {
