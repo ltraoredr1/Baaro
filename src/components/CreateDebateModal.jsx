@@ -16,10 +16,10 @@ import { API_BASE } from "../config.js";
 const TOPIC_SUGGESTIONS = [
   "Tech & IA",
   "Afrique",
-  "Économie",
+  "Economie",
   "Culture",
   "Sport",
-  "Société",
+  "Societe",
 ];
 
 const MODES = [
@@ -27,15 +27,15 @@ const MODES = [
     id: "hybrid",
     icon: Layers,
     label: "Tout",
-    hint: "Texte · Voix · Vidéo · Fichiers",
+    hint: "Texte - Voix - Video - Fichiers",
   },
-  { id: "video", icon: Video, label: "Vidéo", hint: "Caméra + chat" },
+  { id: "video", icon: Video, label: "Video", hint: "Camera + chat" },
   { id: "audio", icon: Mic, label: "Audio", hint: "Voix + chat" },
   { id: "text", icon: MessageSquare, label: "Texte", hint: "Chat + fichiers" },
 ];
 
 function randomCode(n) {
-  n = n || 6;
+  if (!n) n = 6;
   return Math.random()
     .toString(36)
     .substring(2, 2 + n)
@@ -43,26 +43,44 @@ function randomCode(n) {
 }
 
 function apiUrl(path) {
-  const base = (API_BASE || "").replace(/\/$/, "");
-  const p = path.startsWith("/") ? path : "/" + path;
+  var base = (API_BASE || "").replace(/\/$/, "");
+  var p = path.startsWith("/") ? path : "/" + path;
   return base + p;
 }
 
-export function CreateDebateModal({ isOpen, onClose, onSuccess }) {
-  const [title, setTitle] = useState("");
-  const [topic, setTopic] = useState("");
-  const [mode, setMode] = useState("hybrid");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
+export function CreateDebateModal(props) {
+  var isOpen = props.isOpen;
+  var onClose = props.onClose;
+  var onSuccess = props.onSuccess;
+
+  var titleState = useState("");
+  var title = titleState[0];
+  var setTitle = titleState[1];
+
+  var topicState = useState("");
+  var topic = topicState[0];
+  var setTopic = topicState[1];
+
+  var modeState = useState("hybrid");
+  var mode = modeState[0];
+  var setMode = modeState[1];
+
+  var loadingState = useState(false);
+  var loading = loadingState[0];
+  var setLoading = loadingState[1];
+
+  var errorState = useState(null);
+  var error = errorState[0];
+  var setError = errorState[1];
 
   if (!isOpen) return null;
 
-  const handleCreate = async function (e) {
+  async function handleCreate(e) {
     if (e && e.preventDefault) e.preventDefault();
-    const titleVal = title.trim();
-    const topicVal = topic.trim();
+    var titleVal = title.trim();
+    var topicVal = topic.trim();
     if (!titleVal || !topicVal) {
-      setError("Titre et thème requis.");
+      setError("Titre et theme requis.");
       return;
     }
 
@@ -70,21 +88,21 @@ export function CreateDebateModal({ isOpen, onClose, onSuccess }) {
     setError(null);
 
     try {
-      const sessionRes = await supabase.auth.getSession();
-      const session = sessionRes.data?.session;
-      const userId = session?.user?.id;
+      var sessionRes = await supabase.auth.getSession();
+      var session = sessionRes.data && sessionRes.data.session;
+      var userId = session && session.user && session.user.id;
       if (!userId) {
         throw new Error(
-          "Tu dois être connecté pour créer un live. Reconnecte-toi."
+          "Tu dois etre connecte pour creer un live. Reconnecte-toi."
         );
       }
 
-      const finalMode = mode === "hybrid" ? "video" : mode;
-      const inviteCode = randomCode(6);
-      const finalTopic =
-        mode === "hybrid" ? topicVal + " · ⚡ Tout-en-un" : topicVal;
+      var finalMode = mode === "hybrid" ? "video" : mode;
+      var inviteCode = randomCode(6);
+      var finalTopic =
+        mode === "hybrid" ? topicVal + " - Tout-en-un" : topicVal;
 
-      const roomRes = await supabase
+      var roomRes = await supabase
         .from("debate_rooms")
         .insert({
           title: titleVal,
@@ -98,32 +116,36 @@ export function CreateDebateModal({ isOpen, onClose, onSuccess }) {
         .select("*")
         .single();
 
-      const room = roomRes.data;
-      const roomErr = roomRes.error;
+      var room = roomRes.data;
+      var roomErr = roomRes.error;
 
       if (roomErr) {
-        const msg = roomErr.message || "";
+        var msg = roomErr.message || "";
         if (/fetch|network|Failed to fetch/i.test(msg)) {
           throw new Error(
-            "Connexion impossible au serveur. Vérifie ton réseau ou réessaie."
+            "Connexion impossible au serveur. Verifie ton reseau ou reessaie."
           );
         }
         if (/permission|policy|RLS/i.test(msg)) {
-          throw new Error("Permission refusée. Reconnecte-toi puis réessaie.");
+          throw new Error(
+            "Permission refusee. Reconnecte-toi puis reessaie."
+          );
         }
-        throw new Error(msg || "Impossible de créer la salle.");
+        throw new Error(msg || "Impossible de creer la salle.");
       }
 
-      const partRes = await supabase.from("debate_participants").insert({
+      var partRes = await supabase.from("debate_participants").insert({
         room_id: room.id,
         user_id: userId,
         role: "host",
       });
-      if (partRes.error) console.warn("participant warn:", partRes.error.message);
+      if (partRes.error) {
+        console.warn("participant warn:", partRes.error.message);
+      }
 
       if (finalMode !== "text") {
         try {
-          const res = await fetch(apiUrl("/api/create-room"), {
+          var res = await fetch(apiUrl("/api/create-room"), {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
@@ -131,18 +153,18 @@ export function CreateDebateModal({ isOpen, onClose, onSuccess }) {
             },
             body: JSON.stringify({
               action: "create-room",
-              userName: "Hôte",
+              userName: "Hote",
               title: titleVal,
               topic: finalTopic,
               mode: finalMode,
               inviteCode: inviteCode,
             }),
           });
-          const dailyData = await res.json().catch(function () {
+          var dailyData = await res.json().catch(function () {
             return {};
           });
           if (dailyData.roomName || dailyData.daily_room_name) {
-            const name = dailyData.roomName || dailyData.daily_room_name;
+            var name = dailyData.roomName || dailyData.daily_room_name;
             await supabase
               .from("debate_rooms")
               .update({ daily_room_name: name })
@@ -156,7 +178,7 @@ export function CreateDebateModal({ isOpen, onClose, onSuccess }) {
           }
         } catch (dailyErr) {
           console.warn(
-            "Daily API non dispo, salle chat créée quand même:",
+            "Daily API non dispo, salle chat creee quand meme:",
             dailyErr && dailyErr.message
           );
         }
@@ -169,10 +191,10 @@ export function CreateDebateModal({ isOpen, onClose, onSuccess }) {
       setMode("hybrid");
     } catch (err) {
       console.error(err);
-      const raw = (err && err.message) || String(err);
+      var raw = (err && err.message) || String(err);
       if (/Failed to fetch|NetworkError|Load failed/i.test(raw)) {
         setError(
-          "Connexion impossible. Vérifie ta connexion internet et réessaie."
+          "Connexion impossible. Verifie ta connexion internet et reessaie."
         );
       } else {
         setError(raw);
@@ -180,9 +202,9 @@ export function CreateDebateModal({ isOpen, onClose, onSuccess }) {
     } finally {
       setLoading(false);
     }
-  };
+  }
 
-  const canSubmit = title.trim() && topic.trim() && !loading;
+  var canSubmit = title.trim() && topic.trim() && !loading;
 
   return (
     <div
@@ -190,8 +212,8 @@ export function CreateDebateModal({ isOpen, onClose, onSuccess }) {
       onClick={onClose}
     >
       <div
-        onClick={function (e) {
-          e.stopPropagation();
+        onClick={function (ev) {
+          ev.stopPropagation();
         }}
         className="w-full sm:max-w-md rounded-t-3xl sm:rounded-3xl p-6 border shadow-2xl flex flex-col gap-5 max-h-[92vh] overflow-y-auto"
         style={{ background: COLORS.surface, borderColor: COLORS.borderGold }}
@@ -213,11 +235,11 @@ export function CreateDebateModal({ isOpen, onClose, onSuccess }) {
           </button>
         </div>
 
-        {error && (
+        {error ? (
           <div className="p-3 rounded-xl text-xs border border-red-500/40 bg-red-500/10 text-red-300">
             {error}
           </div>
-        )}
+        ) : null}
 
         <div>
           <label
@@ -229,10 +251,10 @@ export function CreateDebateModal({ isOpen, onClose, onSuccess }) {
           <input
             type="text"
             value={title}
-            onChange={function (e) {
-              setTitle(e.target.value);
+            onChange={function (ev) {
+              setTitle(ev.target.value);
             }}
-            placeholder="Ex : L'avenir de l'IA en Afrique"
+            placeholder="Ex : Avenir de l IA en Afrique"
             maxLength={80}
             autoFocus
             className="w-full px-4 py-3 rounded-xl border text-sm outline-none"
@@ -249,15 +271,15 @@ export function CreateDebateModal({ isOpen, onClose, onSuccess }) {
             className="text-[11px] font-bold uppercase tracking-wider mb-1.5 block"
             style={{ color: COLORS.muted }}
           >
-            Thème
+            Theme
           </label>
           <input
             type="text"
             value={topic}
-            onChange={function (e) {
-              setTopic(e.target.value);
+            onChange={function (ev) {
+              setTopic(ev.target.value);
             }}
-            placeholder="Ex : #Tech"
+            placeholder="Ex : Tech"
             maxLength={40}
             className="w-full px-4 py-3 rounded-xl border text-sm outline-none mb-2"
             style={{
@@ -340,7 +362,7 @@ export function CreateDebateModal({ isOpen, onClose, onSuccess }) {
           style={{ background: COLORS.gold, color: COLORS.bg }}
         >
           {loading ? (
-            <span className="animate-pulse">Création…</span>
+            <span className="animate-pulse">Creation...</span>
           ) : (
             <>
               <Sparkles size={16} /> Lancer le live
