@@ -1,0 +1,1058 @@
+-- ============================================================
+-- BAARO — SCHÉMA COMPLET UNIFIÉ v1.0
+-- Script idempotent — peut être relancé sans risque
+-- Généré le : 2026-01-20
+-- ============================================================
+
+BEGIN;
+
+-- ============================================================
+-- SECTION 1 : COMMUNAUTÉ (GROUPES, CANAUX, MEMBRES)
+-- ============================================================
+
+-- 1.1 Colonnes de visibilité
+alter table public.groups add column if not exists is_public boolean default true;
+alter table public.groups add column if not exists is_private boolean default false;
+alter table public.groups add column if not exists category text default 'community';
+
+-- Synchronisation is_public/is_private
+update public.groups
+set is_public = coalesce(is_public, true) and not coalesce(is_private, false);
+update public.groups set is_private = not is_public;
+
+-- Trigger guard pour groups
+create or replace function public.groups_guard()
+returns trigger language plpgsql as $$
+begin
+  if tg_op = 'INSERT' then
+    new.is_public := coalesce(new.is_public, true) and not coalesce(new.is_private, false);
+  else
+    if new.owner_id is distinct from old.owner_id and auth.uid() is not null then
+      raise exception 'Changement de propriétaire interdit';
+    end if;
+    if new.is_public is not distinct from old.is_public
+       and new.is_private is distinct from old.is_private then
+      new.is_public := not new.is_private;
+    end if;
+  end if;
+  new.is_private := not coalesce(new.is_public, true);
+  return new;
+end $$;
+
+drop trigger if exists trg_groups_guard on public.groups;
+create trigger trg_groups_guard
+before insert or update on public.groups
+for each row execute function public.groups_guard();
+
+-- 1.2 Tables de modération
+create table if not exists public.group_bans (
+  group_id uuid references public.groups(id) on delete cascade,
+  user_id uuid references auth.users(id) on delete cascade,
+  banned_by uuid references auth.users(id),
+  reason text,
+  created_at timestamptz default now(),
+  primary key (group_id, user_id)
+);
+
+create table if not exists public.community_reports (
+  id uuid primary key default gen_random_uuid(),
+  group_id uuid references public.groups(id) on delete cascade,
+  message_id uuid references public.channel_messages(id) on delete cascade,
+  reporter_id uuid references auth.users(id) on delete cascade not null,
+  reason text,
+  status text not null default 'open',
+  created_at timestamptz default now(),
+  unique (message_id, reporter_id)
+);
+
+-- 1.3 Fonctions d'aide
+create or replace function public.group_role(p_group uuid)
+returns text language sql stable security definer set search_path = public as $$
+  select case when g.owner_id = auth.uid() then 'owner' else gm.role end
+  from public.groups g
+  left join public.group_members gm
+    on gm.group_id = g.id and gm.user_id = auth.uid()
+  where g.id = p_group;
+$$;
+
+create or replace function public.role_rank(p_role text)
+returns int language sql immutable as $$
+  select case p_role
+    when 'owner' then 3 when 'admin' then 2
+    when 'moderator' then 1 when 'member' then 0 else -1 end;
+$$;
+
+create or replace function public.can_see_group(p_group uuid)
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (
+    select 1 from public.groups g
+    where g.id = p_group and coalesce(g.is_public, true)
+  ) or public.group_role(p_group) is not null;
+$$;
+
+create or replace function public.channel_group(p_channel uuid)
+returns uuid language sql stable security definer set search_path = public as $$
+  select group_id from public.channels where id = p_channel;
+$$;
+
+create or replace function public.is_banned(p_group uuid, p_user uuid)
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (
+    select 1 from public.group_bans
+    where group_id = p_group and user_id = p_user
+  );
+$$;
+
+create or replace function public.can_post_in_channel(p_channel uuid)
+returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (
+    select 1
+    from public.channels c
+    where c.id = p_channel
+      and public.group_role(c.group_id) is not null
+      and not public.is_banned(c.group_id, auth.uid())
+      and (
+        c.type in ('text', 'voice')
+        or public.group_role(c.group_id) in ('owner', 'admin', 'moderator')
+      )
+  );
+$$;
+
+-- 1.4 Contraintes et index
+alter table public.channel_messages
+  drop constraint if exists channel_messages_text_len;
+alter table public.channel_messages
+  add constraint channel_messages_text_len
+  check (char_length(text) between 1 and 2000) not valid;
+
+create index if not exists idx_msgs_channel_created
+  on public.channel_messages (channel_id, created_at desc);
+create index if not exists idx_msgs_sender_created
+  on public.channel_messages (sender_id, created_at desc);
+
+do $$ begin
+  create unique index if not exists uq_channels_group_name
+    on public.channels (group_id, name);
+exception when unique_violation then
+  raise notice 'Doublons de canaux : nettoie puis relance';
+end $$;
+
+-- 1.5 Anti-spam trigger
+create or replace function public.messages_rate_limit()
+returns trigger language plpgsql as $$
+begin
+  if (select count(*) from public.channel_messages
+      where sender_id = new.sender_id
+        and created_at > now() - interval '10 seconds') >= 10 then
+    raise exception 'Trop de messages, ralentis';
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists trg_messages_rate on public.channel_messages;
+create trigger trg_messages_rate
+before insert on public.channel_messages
+for each row execute function public.messages_rate_limit();
+
+-- 1.6 RLS activation
+alter table public.groups enable row level security;
+alter table public.group_members enable row level security;
+alter table public.channels enable row level security;
+alter table public.channel_messages enable row level security;
+alter table public.group_invites enable row level security;
+alter table public.group_bans enable row level security;
+alter table public.community_reports enable row level security;
+
+-- 1.7 Policies
+do $$
+declare r record;
+begin
+  for r in
+    select policyname, tablename from pg_policies
+    where schemaname = 'public'
+      and tablename in ('groups','group_members','channels','channel_messages',
+                        'group_invites','group_bans','community_reports')
+  loop
+    execute format('drop policy if exists %I on public.%I', r.policyname, r.tablename);
+  end loop;
+end $$;
+
+-- GROUPES
+create policy groups_select on public.groups for select to authenticated
+  using (public.can_see_group(id));
+create policy groups_insert on public.groups for insert to authenticated
+  with check (owner_id = auth.uid());
+create policy groups_update on public.groups for update to authenticated
+  using (public.group_role(id) in ('owner','admin'))
+  with check (public.group_role(id) in ('owner','admin'));
+create policy groups_delete on public.groups for delete to authenticated
+  using (owner_id = auth.uid());
+
+-- MEMBRES
+create policy members_select on public.group_members for select to authenticated
+  using (public.can_see_group(group_id));
+create policy members_join on public.group_members for insert to authenticated
+  with check (
+    user_id = auth.uid()
+    and role = 'member'
+    and not public.is_banned(group_id, user_id)
+    and exists (
+      select 1 from public.groups g
+      where g.id = group_id and coalesce(g.is_public, true)
+    )
+  );
+create policy members_leave on public.group_members for delete to authenticated
+  using (user_id = auth.uid() and role is distinct from 'owner');
+
+-- CANAUX
+create policy channels_select on public.channels for select to authenticated
+  using (public.can_see_group(group_id));
+create policy channels_insert on public.channels for insert to authenticated
+  with check (public.group_role(group_id) in ('owner','admin'));
+create policy channels_update on public.channels for update to authenticated
+  using (public.group_role(group_id) in ('owner','admin'))
+  with check (public.group_role(group_id) in ('owner','admin'));
+create policy channels_delete on public.channels for delete to authenticated
+  using (public.group_role(group_id) in ('owner','admin'));
+
+-- MESSAGES
+create policy messages_select on public.channel_messages for select to authenticated
+  using (public.can_see_group(public.channel_group(channel_id)));
+create policy messages_insert on public.channel_messages for insert to authenticated
+  with check (
+    sender_id = auth.uid()
+    and public.can_post_in_channel(channel_id)
+  );
+create policy messages_update on public.channel_messages for update to authenticated
+  using (sender_id = auth.uid())
+  with check (
+    sender_id = auth.uid()
+    and public.can_post_in_channel(channel_id)
+  );
+create policy messages_delete on public.channel_messages for delete to authenticated
+  using (
+    sender_id = auth.uid()
+    or public.group_role(public.channel_group(channel_id))
+       in ('owner','admin','moderator')
+  );
+
+-- INVITATIONS
+create policy invites_select on public.group_invites for select to authenticated
+  using (public.group_role(group_id) in ('owner','admin'));
+create policy invites_insert on public.group_invites for insert to authenticated
+  with check (created_by = auth.uid()
+              and public.group_role(group_id) in ('owner','admin'));
+create policy invites_delete on public.group_invites for delete to authenticated
+  using (public.group_role(group_id) in ('owner','admin'));
+
+-- BANS et SIGNALEMENTS
+create policy bans_select on public.group_bans for select to authenticated
+  using (public.group_role(group_id) in ('owner','admin','moderator'));
+create policy reports_select on public.community_reports for select to authenticated
+  using (public.group_role(group_id) in ('owner','admin','moderator'));
+create policy reports_update on public.community_reports for update to authenticated
+  using (public.group_role(group_id) in ('owner','admin','moderator'))
+  with check (public.group_role(group_id) in ('owner','admin','moderator'));
+
+-- 1.8 Fonctions RPC communauté
+create or replace function public.create_community_group(
+  p_name text,
+  p_description text default null,
+  p_is_public boolean default true,
+  p_category text default 'community'
+)
+returns public.groups
+language plpgsql security definer set search_path = public as $$
+declare
+  v_uid uuid := auth.uid();
+  v_group public.groups;
+begin
+  if v_uid is null then raise exception 'Non authentifié'; end if;
+  if p_name is null or length(trim(p_name)) < 2 then
+    raise exception 'Nom du groupe trop court';
+  end if;
+
+  insert into public.groups (name, description, owner_id, is_public, category)
+  values (
+    left(trim(p_name), 80),
+    nullif(left(trim(coalesce(p_description, '')), 500), ''),
+    v_uid,
+    coalesce(p_is_public, true),
+    coalesce(nullif(trim(p_category), ''), 'community')
+  )
+  returning * into v_group;
+
+  insert into public.group_members (group_id, user_id, role)
+  values (v_group.id, v_uid, 'owner')
+  on conflict (group_id, user_id) do update set role = 'owner';
+
+  insert into public.channels (group_id, name, type, description)
+  values (v_group.id, 'general', 'text', 'Canal principal');
+
+  return v_group;
+end $$;
+
+create or replace function public.create_community_channel(
+  p_group_id uuid,
+  p_name text,
+  p_type text default 'text',
+  p_description text default null
+)
+returns public.channels
+language plpgsql security definer set search_path = public as $$
+declare
+  v_name text;
+  v_type text;
+  v_channel public.channels;
+  v_role text := public.group_role(p_group_id);
+begin
+  if auth.uid() is null then
+    raise exception 'Non authentifié';
+  end if;
+
+  if coalesce(v_role, '') not in ('owner', 'admin') then
+    raise exception 'Seuls les admins peuvent créer un canal';
+  end if;
+
+  v_type := case
+    when p_type in ('voice', 'announce') then p_type
+    else 'text'
+  end;
+
+  v_name := lower(regexp_replace(trim(coalesce(p_name, '')), '\s+', '-', 'g'));
+  v_name := regexp_replace(
+    v_name,
+    '[<>"''`&/\\?#%@:;,.!$^*()+=\[\]{}|~]',
+    '',
+    'g'
+  );
+  v_name := left(v_name, 40);
+
+  if length(v_name) < 1 then
+    raise exception 'Nom de canal invalide';
+  end if;
+
+  insert into public.channels (group_id, name, type, description)
+  values (
+    p_group_id,
+    v_name,
+    v_type,
+    nullif(left(trim(coalesce(p_description, '')), 200), '')
+  )
+  returning * into v_channel;
+
+  return v_channel;
+end;
+$$;
+
+create or replace function public.join_community_group(
+  p_group uuid default null,
+  p_code text default null
+)
+returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  v_uid uuid := auth.uid();
+  v_group_id uuid;
+  v_public boolean;
+  v_inv public.group_invites;
+begin
+  if v_uid is null then
+    raise exception 'Non authentifié';
+  end if;
+
+  -- Mode 1: code d'invitation
+  if p_code is not null and length(trim(p_code)) > 0 then
+    select * into v_inv
+    from public.group_invites
+    where upper(code) = upper(trim(p_code))
+      and (expires_at is null or expires_at > now())
+      and (coalesce(max_uses, 0) = 0 or coalesce(uses, 0) < max_uses)
+    for update;
+
+    if not found then
+      raise exception 'Invitation invalide ou expirée';
+    end if;
+
+    v_group_id := v_inv.group_id;
+
+    if public.is_banned(v_group_id, v_uid) then
+      raise exception 'Accès refusé';
+    end if;
+
+    if public.group_role(v_group_id) is not null then
+      return jsonb_build_object(
+        'ok', true,
+        'group_id', v_group_id,
+        'already_member', true
+      );
+    end if;
+
+    update public.group_invites
+    set uses = coalesce(uses, 0) + 1
+    where id = v_inv.id;
+
+    insert into public.group_members (group_id, user_id, role)
+    values (v_group_id, v_uid, 'member')
+    on conflict do nothing;
+
+    return jsonb_build_object(
+      'ok', true,
+      'group_id', v_group_id,
+      'via', 'invite'
+    );
+  end if;
+
+  -- Mode 2: groupe public
+  if p_group is null then
+    raise exception 'Groupe ou code requis';
+  end if;
+
+  v_group_id := p_group;
+
+  if public.is_banned(v_group_id, v_uid) then
+    raise exception 'Accès refusé';
+  end if;
+
+  if public.group_role(v_group_id) is not null then
+    return jsonb_build_object(
+      'ok', true,
+      'group_id', v_group_id,
+      'already_member', true
+    );
+  end if;
+
+  select coalesce(is_public, true) into v_public
+  from public.groups
+  where id = v_group_id;
+
+  if not found then
+    raise exception 'Groupe introuvable';
+  end if;
+
+  if not v_public then
+    raise exception 'Groupe privé : code d''invitation requis';
+  end if;
+
+  insert into public.group_members (group_id, user_id, role)
+  values (v_group_id, v_uid, 'member')
+  on conflict do nothing;
+
+  return jsonb_build_object(
+    'ok', true,
+    'group_id', v_group_id,
+    'via', 'public'
+  );
+end;
+$$;
+
+create or replace function public.ban_community_member(
+  p_group uuid,
+  p_user uuid,
+  p_reason text default null
+)
+returns void
+language plpgsql security definer set search_path = public as $$
+declare
+  v_actor text := public.group_role(p_group);
+  v_target text;
+begin
+  if auth.uid() is null then raise exception 'Non authentifié'; end if;
+  if p_user = auth.uid() then raise exception 'Action impossible sur soi-même'; end if;
+
+  select case when g.owner_id = p_user then 'owner' else gm.role end
+  into v_target
+  from public.groups g
+  left join public.group_members gm
+    on gm.group_id = g.id and gm.user_id = p_user
+  where g.id = p_group;
+
+  if public.role_rank(v_actor) < 1
+     or public.role_rank(v_actor) <= public.role_rank(v_target) then
+    raise exception 'Droits insuffisants';
+  end if;
+
+  insert into public.group_bans (group_id, user_id, banned_by, reason)
+  values (p_group, p_user, auth.uid(), left(p_reason, 300))
+  on conflict do nothing;
+
+  delete from public.group_members
+  where group_id = p_group and user_id = p_user;
+end $$;
+
+create or replace function public.unban_community_member(
+  p_group uuid,
+  p_user uuid
+)
+returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  if public.role_rank(public.group_role(p_group)) < 1 then
+    raise exception 'Droits insuffisants';
+  end if;
+  delete from public.group_bans where group_id = p_group and user_id = p_user;
+end $$;
+
+create or replace function public.set_member_role(
+  p_group uuid,
+  p_user uuid,
+  p_role text
+)
+returns void
+language plpgsql security definer set search_path = public as $$
+declare
+  v_actor text := public.group_role(p_group);
+  v_target text;
+begin
+  if coalesce(p_role, '') not in ('admin','moderator','member') then
+    raise exception 'Rôle invalide';
+  end if;
+
+  select role into v_target from public.group_members
+  where group_id = p_group and user_id = p_user;
+  if v_target is null then raise exception 'Membre introuvable'; end if;
+  if v_target = 'owner' then raise exception 'Le propriétaire ne peut pas changer'; end if;
+
+  if v_actor = 'owner' then
+    null;
+  elsif v_actor = 'admin' and p_role <> 'admin' and v_target <> 'admin' then
+    null;
+  else
+    raise exception 'Droits insuffisants';
+  end if;
+
+  update public.group_members set role = p_role
+  where group_id = p_group and user_id = p_user;
+end $$;
+
+create or replace function public.report_community_message(
+  p_message uuid,
+  p_reason text default null
+)
+returns void
+language plpgsql security definer set search_path = public as $$
+declare
+  v_group uuid;
+begin
+  select c.group_id into v_group
+  from public.channel_messages m
+  join public.channels c on c.id = m.channel_id
+  where m.id = p_message;
+
+  if v_group is null or not public.can_see_group(v_group) then
+    raise exception 'Message introuvable ou accès refusé';
+  end if;
+
+  insert into public.community_reports (group_id, message_id, reporter_id, reason)
+  values (v_group, p_message, auth.uid(), left(coalesce(p_reason, ''), 300))
+  on conflict (message_id, reporter_id) do nothing;
+end $$;
+
+-- 1.9 Invitations
+alter table public.channels drop constraint if exists channels_type_check;
+alter table public.channels
+  add constraint channels_type_check
+  check (type in ('text', 'voice', 'announce'));
+
+create table if not exists public.group_invites (
+  id uuid primary key default gen_random_uuid(),
+  group_id uuid not null references public.groups(id) on delete cascade,
+  code text not null,
+  created_by uuid not null references auth.users(id) on delete cascade,
+  max_uses int default 0,
+  uses int not null default 0,
+  expires_at timestamptz,
+  created_at timestamptz not null default now(),
+  unique (group_id, code)
+);
+
+create index if not exists idx_group_invites_code
+  on public.group_invites (upper(code));
+
+create or replace function public.create_group_invite(
+  p_group uuid,
+  p_max_uses int default 0,
+  p_expires_hours int default null
+)
+returns public.group_invites
+language plpgsql security definer set search_path = public as $$
+declare
+  v_uid uuid := auth.uid();
+  v_code text;
+  v_row public.group_invites;
+begin
+  if v_uid is null then
+    raise exception 'Non authentifié';
+  end if;
+
+  if public.group_role(p_group) not in ('owner', 'admin') then
+    raise exception 'Seuls les admins peuvent créer une invitation';
+  end if;
+
+  v_code := upper(substr(replace(gen_random_uuid()::text, '-', ''), 1, 8));
+
+  insert into public.group_invites (
+    group_id, code, created_by, max_uses, expires_at
+  )
+  values (
+    p_group,
+    v_code,
+    v_uid,
+    greatest(coalesce(p_max_uses, 0), 0),
+    case
+      when p_expires_hours is null or p_expires_hours <= 0 then null
+      else now() + (p_expires_hours || ' hours')::interval
+    end
+  )
+  returning * into v_row;
+
+  return v_row;
+end;
+$$;
+
+create or replace function public.list_group_invites(p_group uuid)
+returns setof public.group_invites
+language plpgsql security definer set search_path = public as $$
+begin
+  if public.group_role(p_group) not in ('owner', 'admin') then
+    raise exception 'Droits insuffisants';
+  end if;
+
+  return query
+  select *
+  from public.group_invites
+  where group_id = p_group
+  order by created_at desc;
+end;
+$$;
+
+create or replace function public.revoke_group_invite(p_invite_id uuid)
+returns void
+language plpgsql security definer set search_path = public as $$
+declare
+  v_group uuid;
+begin
+  select group_id into v_group
+  from public.group_invites
+  where id = p_invite_id;
+
+  if v_group is null then
+    raise exception 'Invitation introuvable';
+  end if;
+
+  if public.group_role(v_group) not in ('owner', 'admin') then
+    raise exception 'Droits insuffisants';
+  end if;
+
+  delete from public.group_invites where id = p_invite_id;
+end;
+$$;
+
+create or replace function public.peek_group_invite(p_code text)
+returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  v_inv public.group_invites;
+  v_g public.groups;
+  v_count int;
+begin
+  select * into v_inv
+  from public.group_invites
+  where upper(code) = upper(trim(p_code))
+    and (expires_at is null or expires_at > now())
+    and (coalesce(max_uses, 0) = 0 or coalesce(uses, 0) < max_uses);
+
+  if not found then
+    return jsonb_build_object('ok', false, 'error', 'invalid');
+  end if;
+
+  select * into v_g from public.groups where id = v_inv.group_id;
+
+  if not found then
+    return jsonb_build_object('ok', false, 'error', 'group_gone');
+  end if;
+
+  select count(*)::int into v_count
+  from public.group_members
+  where group_id = v_g.id;
+
+  return jsonb_build_object(
+    'ok', true,
+    'group_id', v_g.id,
+    'name', v_g.name,
+    'description', v_g.description,
+    'is_public', coalesce(v_g.is_public, true),
+    'member_count', v_count,
+    'code', v_inv.code
+  );
+end;
+$$;
+
+-- ============================================================
+-- SECTION 2 : NOTIFICATIONS
+-- ============================================================
+
+-- 2.1 Table notifications
+CREATE TABLE IF NOT EXISTS public.notifications (
+  notification_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL,
+  actor_id UUID NULL,
+  type TEXT NULL DEFAULT 'general',
+  message TEXT NOT NULL DEFAULT '',
+  source_id UUID NULL,
+  read BOOLEAN NOT NULL DEFAULT false,
+  read_at TIMESTAMPTZ NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Normalisation des anciennes colonnes
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'notifications' AND column_name = 'id'
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'notifications' AND column_name = 'notification_id'
+  ) THEN
+    ALTER TABLE public.notifications RENAME COLUMN id TO notification_id;
+  END IF;
+END $$;
+
+ALTER TABLE public.notifications ADD COLUMN IF NOT EXISTS notification_id UUID;
+ALTER TABLE public.notifications ADD COLUMN IF NOT EXISTS user_id UUID;
+ALTER TABLE public.notifications ADD COLUMN IF NOT EXISTS actor_id UUID;
+ALTER TABLE public.notifications ADD COLUMN IF NOT EXISTS type TEXT;
+ALTER TABLE public.notifications ADD COLUMN IF NOT EXISTS message TEXT;
+ALTER TABLE public.notifications ADD COLUMN IF NOT EXISTS source_id UUID;
+ALTER TABLE public.notifications ADD COLUMN IF NOT EXISTS read BOOLEAN;
+ALTER TABLE public.notifications ADD COLUMN IF NOT EXISTS read_at TIMESTAMPTZ;
+ALTER TABLE public.notifications ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ;
+ALTER TABLE public.notifications ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ;
+
+-- Valeurs par défaut
+ALTER TABLE public.notifications ALTER COLUMN notification_id SET DEFAULT gen_random_uuid();
+ALTER TABLE public.notifications ALTER COLUMN type SET DEFAULT 'general';
+ALTER TABLE public.notifications ALTER COLUMN message SET DEFAULT '';
+ALTER TABLE public.notifications ALTER COLUMN read SET DEFAULT false;
+ALTER TABLE public.notifications ALTER COLUMN created_at SET DEFAULT now();
+ALTER TABLE public.notifications ALTER COLUMN updated_at SET DEFAULT now();
+
+-- Nettoyage des NULL
+UPDATE public.notifications SET notification_id = gen_random_uuid() WHERE notification_id IS NULL;
+UPDATE public.notifications SET type = 'general' WHERE type IS NULL;
+UPDATE public.notifications SET message = '' WHERE message IS NULL;
+UPDATE public.notifications SET read = false WHERE read IS NULL;
+UPDATE public.notifications SET created_at = now() WHERE created_at IS NULL;
+UPDATE public.notifications SET updated_at = now() WHERE updated_at IS NULL;
+
+-- Contraintes NOT NULL
+ALTER TABLE public.notifications ALTER COLUMN notification_id SET NOT NULL;
+ALTER TABLE public.notifications ALTER COLUMN user_id SET NOT NULL;
+ALTER TABLE public.notifications ALTER COLUMN message SET NOT NULL;
+ALTER TABLE public.notifications ALTER COLUMN read SET NOT NULL;
+ALTER TABLE public.notifications ALTER COLUMN created_at SET NOT NULL;
+ALTER TABLE public.notifications ALTER COLUMN updated_at SET NOT NULL;
+
+-- FK vers auth.users
+ALTER TABLE public.notifications DROP CONSTRAINT IF EXISTS notifications_user_id_fkey;
+ALTER TABLE public.notifications DROP CONSTRAINT IF EXISTS notifications_actor_id_fkey;
+
+ALTER TABLE public.notifications
+  ADD CONSTRAINT notifications_user_id_fkey
+  FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+ALTER TABLE public.notifications
+  ADD CONSTRAINT notifications_actor_id_fkey
+  FOREIGN KEY (actor_id) REFERENCES auth.users(id) ON DELETE SET NULL;
+
+-- Clé primaire
+DO $$
+DECLARE pk_name TEXT;
+BEGIN
+  SELECT conname INTO pk_name
+  FROM pg_constraint
+  WHERE conrelid = 'public.notifications'::regclass AND contype = 'p'
+  LIMIT 1;
+
+  IF pk_name IS NOT NULL AND pk_name <> 'notifications_pkey' THEN
+    EXECUTE format('ALTER TABLE public.notifications DROP CONSTRAINT %I', pk_name);
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'public.notifications'::regclass AND contype = 'p'
+  ) THEN
+    ALTER TABLE public.notifications ADD CONSTRAINT notifications_pkey PRIMARY KEY (notification_id);
+  END IF;
+END $$;
+
+-- Index
+CREATE INDEX IF NOT EXISTS idx_notifications_user_created ON public.notifications(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notifications_user_read ON public.notifications(user_id, read);
+CREATE INDEX IF NOT EXISTS idx_notifications_actor ON public.notifications(actor_id);
+CREATE INDEX IF NOT EXISTS idx_notifications_user_unread ON public.notifications(user_id) WHERE read = false;
+CREATE INDEX IF NOT EXISTS idx_notifications_type ON public.notifications(type) WHERE type IS NOT NULL;
+
+-- RLS
+ALTER TABLE public.notifications ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "notifications_read" ON public.notifications;
+DROP POLICY IF EXISTS "notifications_insert" ON public.notifications;
+DROP POLICY IF EXISTS "notifications_select_own" ON public.notifications;
+DROP POLICY IF EXISTS "notifications_update_own" ON public.notifications;
+DROP POLICY IF EXISTS "notifications_delete_own" ON public.notifications;
+DROP POLICY IF EXISTS "notif_own" ON public.notifications;
+DROP POLICY IF EXISTS "notifications_insert_system" ON public.notifications;
+DROP POLICY IF EXISTS "notifications_insert_authenticated" ON public.notifications;
+
+CREATE POLICY "notifications_select_own" ON public.notifications FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY "notifications_update_own" ON public.notifications FOR UPDATE USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
+CREATE POLICY "notifications_delete_own" ON public.notifications FOR DELETE USING (auth.uid() = user_id);
+CREATE POLICY "notifications_insert_system" ON public.notifications FOR INSERT TO service_role WITH CHECK (true);
+CREATE POLICY "notifications_insert_authenticated" ON public.notifications FOR INSERT TO authenticated WITH CHECK (auth.uid() = actor_id);
+
+-- Trigger updated_at
+create or replace function public.update_notifications_updated_at()
+returns trigger language plpgsql as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$;
+
+drop trigger if exists update_notifications_updated_at_trigger on public.notifications;
+create trigger update_notifications_updated_at_trigger
+before update on public.notifications
+for each row execute function public.update_notifications_updated_at();
+
+-- Vue compteur non-lus
+DROP VIEW IF EXISTS public.notification_unread_counts;
+CREATE VIEW public.notification_unread_counts AS
+SELECT user_id, COUNT(*)::BIGINT AS unread_count
+FROM public.notifications
+WHERE read = false
+GROUP BY user_id;
+
+-- Trigger follow notification
+CREATE OR REPLACE FUNCTION public.create_follow_notification()
+RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    INSERT INTO public.notifications (user_id, actor_id, type, message, source_id)
+    VALUES (NEW.followed_id, NEW.follower_id, 'follow', 'a commencé à vous suivre', NEW.follower_id);
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS on_follow_created ON public.follows;
+CREATE TRIGGER on_follow_created
+AFTER INSERT ON public.follows
+FOR EACH ROW EXECUTE FUNCTION public.create_follow_notification();
+
+-- Realtime
+ALTER TABLE public.notifications REPLICA IDENTITY FULL;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_publication_tables
+    WHERE pubname = 'supabase_realtime' AND schemaname = 'public' AND tablename = 'notifications'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.notifications;
+  END IF;
+END $$;
+
+-- 2.2 Préférences de notification
+create table if not exists public.notification_preferences (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  push_enabled boolean not null default true,
+  messages boolean not null default true,
+  social boolean not null default true,
+  live boolean not null default true,
+  wallet boolean not null default true,
+  marketing boolean not null default false,
+  updated_at timestamptz not null default now()
+);
+
+alter table public.notification_preferences enable row level security;
+drop policy if exists notification_preferences_own on public.notification_preferences;
+create policy notification_preferences_own on public.notification_preferences
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+-- ============================================================
+-- SECTION 3 : PUSH TOKENS
+-- ============================================================
+
+create table if not exists public.push_tokens (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid references auth.users(id) on delete cascade not null,
+  token text not null,
+  platform text not null check (platform in ('web', 'ios', 'android')),
+  user_agent text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (user_id, token)
+);
+
+alter table public.push_tokens enable row level security;
+
+drop policy if exists push_tokens_insert on public.push_tokens;
+drop policy if exists push_tokens_delete on public.push_tokens;
+drop policy if exists push_tokens_select on public.push_tokens;
+
+create policy push_tokens_insert on public.push_tokens
+  for insert to authenticated with check (user_id = auth.uid());
+create policy push_tokens_delete on public.push_tokens
+  for delete to authenticated using (user_id = auth.uid());
+create policy push_tokens_select on public.push_tokens
+  for select to authenticated using (user_id = auth.uid());
+
+create index if not exists idx_push_tokens_platform on public.push_tokens(platform);
+create index if not exists idx_push_tokens_updated on public.push_tokens(updated_at desc);
+create index if not exists idx_push_tokens_user on public.push_tokens(user_id);
+
+-- Fonction upsert_push_token
+create or replace function public.upsert_push_token(
+  p_user_id uuid,
+  p_token text,
+  p_platform text,
+  p_user_agent text default null
+)
+returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  if auth.uid() is null or auth.uid() <> p_user_id then
+    raise exception 'Non autorisé';
+  end if;
+
+  delete from public.push_tokens
+  where user_id = p_user_id and platform = p_platform and token <> p_token;
+
+  insert into public.push_tokens (user_id, token, platform, user_agent, updated_at)
+  values (p_user_id, p_token, p_platform, p_user_agent, now())
+  on conflict (user_id, token)
+  do update set user_agent = excluded.user_agent, updated_at = now();
+end;
+$$;
+
+revoke all on function public.upsert_push_token(uuid, text, text, text) from public, anon;
+grant execute on function public.upsert_push_token(uuid, text, text, text) to authenticated;
+
+-- Fonction prune_stale_push_tokens
+create or replace function public.prune_stale_push_tokens(max_age interval default interval '180 days')
+returns integer
+language plpgsql security definer set search_path = public as $$
+declare deleted_count integer;
+begin
+  delete from public.push_tokens where updated_at < now() - max_age;
+  get diagnostics deleted_count = row_count;
+  return deleted_count;
+end;
+$$;
+
+revoke all on function public.prune_stale_push_tokens(interval) from public, anon, authenticated;
+grant execute on function public.prune_stale_push_tokens(interval) to service_role;
+
+-- ============================================================
+-- SECTION 4 : FOLLOWS ET PROFILES (RLS)
+-- ============================================================
+
+alter table public.follows enable row level security;
+alter table public.profiles enable row level security;
+
+-- Policies follows
+drop policy if exists follows_select_own on public.follows;
+create policy follows_select_own on public.follows
+  for select to authenticated
+  using (follower_id = auth.uid() or followed_id = auth.uid());
+
+drop policy if exists follows_insert_own on public.follows;
+create policy follows_insert_own on public.follows
+  for insert to authenticated
+  with check (follower_id = auth.uid());
+
+drop policy if exists follows_update_own on public.follows;
+create policy follows_update_own on public.follows
+  for update to authenticated
+  using (follower_id = auth.uid() or followed_id = auth.uid())
+  with check (follower_id = auth.uid() or followed_id = auth.uid());
+
+drop policy if exists follows_delete_own on public.follows;
+create policy follows_delete_own on public.follows
+  for delete to authenticated
+  using (follower_id = auth.uid() or followed_id = auth.uid());
+
+-- Policies profiles
+drop policy if exists profiles_select_all on public.profiles;
+create policy profiles_select_all on public.profiles
+  for select to authenticated using (true);
+
+drop policy if exists profiles_insert_own on public.profiles;
+create policy profiles_insert_own on public.profiles
+  for insert to authenticated with check (id = auth.uid());
+
+drop policy if exists profiles_update_own on public.profiles;
+create policy profiles_update_own on public.profiles
+  for update to authenticated
+  using (id = auth.uid()) with check (id = auth.uid());
+
+drop policy if exists profiles_delete_own on public.profiles;
+create policy profiles_delete_own on public.profiles
+  for delete to authenticated using (id = auth.uid());
+
+-- ============================================================
+-- SECTION 5 : DROITS D'EXÉCUTION
+-- ============================================================
+
+do $$
+declare f record;
+begin
+  for f in
+    select p.oid::regprocedure as sig
+    from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public'
+      and p.proname in (
+        'group_role','can_see_group','channel_group','is_banned','can_post_in_channel',
+        'create_community_group','create_community_channel','join_community_group',
+        'ban_community_member','unban_community_member','set_member_role','report_community_message',
+        'create_group_invite','list_group_invites','revoke_group_invite','peek_group_invite',
+        'upsert_push_token'
+      )
+  loop
+    execute format('revoke all on function %s from public, anon', f.sig);
+    execute format('grant execute on function %s to authenticated', f.sig);
+  end loop;
+end $$;
+
+-- ============================================================
+-- SECTION 6 : NETTOYAGE DES DONNÉES ORPHELINES
+-- ============================================================
+
+delete from public.notifications where user_id not in (select id from auth.users);
+delete from public.push_tokens where user_id not in (select id from auth.users);
+delete from public.group_members where user_id not in (select id from auth.users);
+delete from public.group_bans where user_id not in (select id from auth.users);
+
+COMMIT;
+
+-- ============================================================
+-- VÉRIFICATION FINALE
+-- ============================================================
+select
+  t.tablename as table_name,
+  (select count(*) from pg_policies p where p.tablename = t.tablename and p.schemaname = 'public') as rls_policies,
+  case when t.rowsecurity then '✅ OUI' else '❌ NON' end as rls_active
+from pg_tables t
+where t.schemaname = 'public'
+  and t.tablename in (
+    'groups','group_members','channels','channel_messages',
+    'group_invites','group_bans','community_reports',
+    'notifications','notification_preferences','push_tokens',
+    'follows','profiles'
+  )
+order by t.tablename;
