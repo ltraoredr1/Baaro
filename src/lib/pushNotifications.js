@@ -1,6 +1,6 @@
 /**
  * BAARO — Notifications push (Web Push + Capacitor natif)
- * Ne plante jamais : tous les chemins sont protégés.
+ * Version corrigée : fuites mémoire, RPC upsert_push_token, timeout augmenté
  */
 
 import { supabase } from "../supabaseClient";
@@ -53,9 +53,12 @@ export function getPermissionState() {
 
 async function enableNativePush() {
   try {
-    const { PushNotifications } = await import(
-      "@capacitor/push-notifications"
-    );
+    const { PushNotifications } = await import("@capacitor/push-notifications");
+
+    // ✅ Nettoyer AVANT d'ajouter les nouveaux listeners
+    try {
+      await PushNotifications.removeAllListeners();
+    } catch {}
 
     let perm = await PushNotifications.checkPermissions();
     if (perm.receive === "prompt" || perm.receive === "prompt-with-rationale") {
@@ -74,18 +77,23 @@ async function enableNativePush() {
 
     return new Promise((resolve) => {
       const timeout = setTimeout(() => {
+        cleanup();
         resolve({
           ok: true,
           permission: "granted",
           note: "Enregistrement lancé (token async)",
         });
-      }, 8000);
+      }, 12000); // ✅ Augmenté à 12s pour les appareils lents
 
-      const onReg = async (token) => {
+      const cleanup = async () => {
         clearTimeout(timeout);
         try {
           await PushNotifications.removeAllListeners();
         } catch {}
+      };
+
+      const onReg = async (token) => {
+        cleanup();
 
         const {
           data: { user },
@@ -102,19 +110,16 @@ async function enableNativePush() {
           platform = Capacitor.getPlatform?.() === "ios" ? "ios" : "android";
         } catch {}
 
-        const { error } = await supabase.from("push_tokens").upsert(
-          {
-            user_id: user.id,
-            token: token.value,
-            platform,
-            user_agent: navigator.userAgent?.slice(0, 200) || null,
-            updated_at: new Date().toISOString(),
-          },
-          { onConflict: "user_id,token" }
-        );
+        // ✅ Utiliser la RPC pour gérer le changement de token
+        const { error } = await supabase.rpc("upsert_push_token", {
+          p_user_id: user.id,
+          p_token: token.value,
+          p_platform: platform,
+          p_user_agent: navigator.userAgent?.slice(0, 200) || null,
+        });
 
         if (error) {
-          console.error("push_tokens native upsert:", error);
+          console.error("upsert_push_token native:", error);
           resolve({ ok: false, error: error.message });
           return;
         }
@@ -123,7 +128,7 @@ async function enableNativePush() {
       };
 
       const onErr = (err) => {
-        clearTimeout(timeout);
+        cleanup();
         console.error("Push register error:", err);
         resolve({
           ok: false,
@@ -194,19 +199,16 @@ export async function enablePushNotifications() {
       return { ok: false, error: "Non authentifié" };
     }
 
-    const { error } = await supabase.from("push_tokens").upsert(
-      {
-        user_id: user.id,
-        token: tokenJson,
-        platform: "web",
-        user_agent: navigator.userAgent?.slice(0, 200) || null,
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: "user_id,token" }
-    );
+    // ✅ Utiliser la RPC pour gérer le changement de token
+    const { error } = await supabase.rpc("upsert_push_token", {
+      p_user_id: user.id,
+      p_token: tokenJson,
+      p_platform: "web",
+      p_user_agent: navigator.userAgent?.slice(0, 200) || null,
+    });
 
     if (error) {
-      console.error("push_tokens upsert:", error);
+      console.error("upsert_push_token web:", error);
       return { ok: false, error: error.message };
     }
 
@@ -221,9 +223,7 @@ export async function disablePushNotifications() {
   try {
     if (await isNativePlatform()) {
       try {
-        const { PushNotifications } = await import(
-          "@capacitor/push-notifications"
-        );
+        const { PushNotifications } = await import("@capacitor/push-notifications");
         await PushNotifications.removeAllListeners();
         const {
           data: { user },
@@ -267,19 +267,21 @@ export async function disablePushNotifications() {
 }
 
 export async function pruneCurrentUserPushTokens() {
-  if (!(await isNativePlatform()) && !isPushSupported()) {
-    return { ok: true };
-  }
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { ok: false, error: "Non authentifié" };
-
+  // ✅ Pour le natif, on ne prune pas (le token est géré par le système)
   if (await isNativePlatform()) {
     return { ok: true };
   }
 
+  if (!isPushSupported()) {
+    return { ok: true };
+  }
+
   try {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) return { ok: false, error: "Non authentifié" };
+
     const reg = await navigator.serviceWorker.ready;
     const current = await reg.pushManager.getSubscription();
     if (!current) return { ok: true };
