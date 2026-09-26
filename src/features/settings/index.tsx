@@ -1,5 +1,5 @@
 import { NotificationPrefsPanel } from "./NotificationPrefsPanel.jsx";
-import NotificationSoundSettings from "../../components/NotificationSoundSettings.jsx";
+import NotificationSoundSettings from "./NotificationSoundSettings.jsx";
 import { getNotificationPreferences, saveNotificationPreferences } from "../../lib/notificationPreferences.js";
 // src/features/settings/index.tsx
 // Réglages BAARO — différenciation marchés émergents + profil + compte + recherche
@@ -1874,7 +1874,7 @@ export default function SettingsTab({
                   {COUNTRIES.map((c) => <option key={c.code} value={c.code}>{c.flag} {c.label}</option>)}
                 </select>
                 <p className="text-[11px] mt-1" style={{ color: COLORS.muted }}>
-                  {userProfile?.registeredCountry ? `${t("registered_country")} : ${userProfile.registeredCountry}. ` : ""}
+                  {userProfile?.registered_country ? `${t("registered_country")} : ${userProfile.registered_country}. ` : ""}
                   {userProfile?.country_change_available_at && new Date(userProfile.country_change_available_at).getTime() > Date.now()
                     ? `${t("country_change_wait")} ${new Date(userProfile.country_change_available_at).toLocaleDateString()}`
                     : t("country_change_ready")}
@@ -2041,13 +2041,8 @@ export default function SettingsTab({
           open={openSections.notifications}
           onToggle={() => toggleSection("notifications")}
         >
-          {/* Push Settings */}
           <PushSettings />
-          
-          {/* Sound Settings */}
           <NotificationSoundSettings C={COLORS} />
-          
-          {/* Notification Preferences */}
           <NotificationPrefsPanel />
         </CollapsibleSection>
       )}
