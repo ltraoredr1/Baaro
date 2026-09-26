@@ -1,15 +1,15 @@
 // src/lib/webrtc.js
-// - join / create Daily
-// - co-hôte avec consentement (request / respond)
-// - pause / resume room
-// - audio distant correctement attaché
-// - helpers enableMic / enableCamera robustes
-
 import DailyIframe from "@daily-co/daily-js";
 import { supabase } from "../supabaseClient.js";
+import { API_BASE } from "../config.js";
 
 let callObject = null;
 let myRole = "viewer";
+
+function apiUrl(path) {
+  const base = (API_BASE || "").replace(/\/$/, "");
+  return `\( {base} \){path.startsWith("/") ? path : `/${path}`}`;
+}
 
 async function authHeaders() {
   const { data } = await supabase.auth.getSession();
@@ -18,28 +18,30 @@ async function authHeaders() {
 }
 
 async function callApi(body) {
-  const res = await fetch("/api/create-room", {
+  const res = await fetch(apiUrl("/api/create-room"), {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...(await authHeaders()) },
+    headers: {
+      "Content-Type": "application/json",
+      ...(await authHeaders()),
+    },
     body: JSON.stringify(body),
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    throw new Error(data.error || "Erreur serveur");
-  }
+  if (!res.ok) throw new Error(data.error || "Erreur serveur");
   return data;
 }
 
 async function callRolesApi(body) {
-  const res = await fetch("/api/live-roles", {
+  const res = await fetch(apiUrl("/api/live-roles"), {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...(await authHeaders()) },
+    headers: {
+      "Content-Type": "application/json",
+      ...(await authHeaders()),
+    },
     body: JSON.stringify(body),
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    throw new Error(data.error || "Erreur serveur");
-  }
+  if (!res.ok) throw new Error(data.error || "Erreur serveur");
   return data;
 }
 
@@ -49,6 +51,7 @@ export async function createRoomOnServer({
   title,
   topic,
   mode,
+  inviteCode,
 }) {
   return callApi({
     action: "create-room",
@@ -57,6 +60,23 @@ export async function createRoomOnServer({
     title,
     topic,
     mode,
+    inviteCode,
+  });
+}
+
+/** Token Daily pour une salle déjà en BDD */
+export async function getLiveToken({
+  liveId,
+  roomName,
+  userName,
+  isOwner = false,
+}) {
+  return callApi({
+    action: "token",
+    liveId: liveId || roomName,
+    roomName,
+    userName: userName || "Participant",
+    isOwner,
   });
 }
 
@@ -66,15 +86,29 @@ export async function startLive({
   title,
   topic,
   mode,
+  inviteCode,
 }) {
-  const { roomUrl, roomName, roomId, token, hlsEnabled, inviteCode } =
-    await createRoomOnServer({ userName, enableHLS, title, topic, mode });
+  const created = await createRoomOnServer({
+    userName,
+    enableHLS,
+    title,
+    topic,
+    mode,
+    inviteCode,
+  });
+
+  const roomName = created.roomName || created.daily_room_name;
+  const tokenData = await getLiveToken({
+    liveId: inviteCode || roomName,
+    roomName,
+    userName,
+    isOwner: true,
+  });
 
   myRole = "host";
-
   callObject = DailyIframe.createCallObject({
     audioSource: true,
-    videoSource: false,
+    videoSource: mode !== "audio",
     subscribeToTracksAutomatically: true,
     dailyConfig: { avoidEval: true },
   });
@@ -82,43 +116,35 @@ export async function startLive({
     callObject.setSubscribeToTracksAutomatically(true);
   } catch (_) {}
 
-  await callObject.join({ url: roomUrl, token });
+  const roomUrl = tokenData.url || created.url;
+  await callObject.join({ url: roomUrl, token: tokenData.token });
 
-  return { roomName, roomId, callObject, hlsEnabled, inviteCode };
-}
-
-export async function startHLSBroadcast() {
-  if (!callObject) throw new Error("Aucun live actif");
-  return callObject.startLiveStreaming({ layout: { preset: "default" } });
-}
-
-export async function stopHLSBroadcast() {
-  if (!callObject) return;
-  return callObject.stopLiveStreaming();
-}
-
-export async function resolveInviteCode(inviteCode) {
-  const { roomId, roomName, status } = await callApi({
-    action: "resolve-code",
+  return {
+    roomName: tokenData.roomName || roomName,
+    roomId: created.roomId,
+    callObject,
+    hlsEnabled: !!enableHLS,
     inviteCode,
-  });
-  return { roomId, roomName, status };
+    roomUrl,
+  };
 }
 
 export async function joinLive({
   roomId,
   roomName,
+  inviteCode,
   userName,
   audioOnly = true,
+  isHost = false,
 }) {
-  const { roomUrl, token, role, status } = await callApi({
-    action: "join-room",
-    roomId,
+  const tokenData = await getLiveToken({
+    liveId: inviteCode || roomId || roomName,
     roomName,
     userName,
+    isOwner: isHost,
   });
 
-  myRole = role;
+  myRole = isHost ? "host" : "viewer";
 
   callObject = DailyIframe.createCallObject({
     audioSource: true,
@@ -126,54 +152,51 @@ export async function joinLive({
     subscribeToTracksAutomatically: true,
     dailyConfig: { avoidEval: true },
   });
-
   try {
     callObject.setSubscribeToTracksAutomatically(true);
   } catch (_) {}
 
-  await callObject.join({ url: roomUrl, token });
+  await callObject.join({ url: tokenData.url, token: tokenData.token });
 
-  const canSend = role === "host" || role === "co_host";
   try {
-    await callObject.setLocalAudio(!!canSend);
-    if (!audioOnly) {
-      await callObject.setLocalVideo(!!canSend);
-    }
+    await callObject.setLocalAudio(true);
+    if (!audioOnly) await callObject.setLocalVideo(true);
   } catch (e) {
     console.warn("setLocalAudio/Video:", e);
   }
 
-  return { callObject, role, roomId, roomUrl, status };
+  return {
+    callObject,
+    role: myRole,
+    roomId,
+    roomUrl: tokenData.url,
+    roomName: tokenData.roomName,
+  };
 }
 
-export async function joinLiveByCode({
-  inviteCode,
-  userName,
-  audioOnly = true,
-}) {
-  const { roomId, roomName } = await resolveInviteCode(inviteCode);
-  return joinLive({ roomId, roomName, userName, audioOnly });
+export async function joinLiveByCode({ inviteCode, userName, audioOnly = true }) {
+  return joinLive({
+    inviteCode,
+    userName,
+    audioOnly,
+  });
 }
 
 export function getMyRole() {
   return myRole;
 }
-
 export function upgradeLocalRole(newRole) {
   myRole = newRole;
 }
-
 export function enableMic(enabled) {
   if (!callObject) return Promise.resolve();
   return callObject.setLocalAudio(!!enabled);
 }
-
 export function enableCamera(enabled) {
   if (!callObject) return Promise.resolve();
   return callObject.setLocalVideo(!!enabled);
 }
 
-/** Attache une piste audio distante à un élément <audio> caché */
 export function attachRemoteAudio(sessionId, track) {
   if (!track || track.kind !== "audio") return null;
   let audio = document.getElementById(`baaro-audio-${sessionId}`);
@@ -189,7 +212,7 @@ export function attachRemoteAudio(sessionId, track) {
   try {
     audio.srcObject = new MediaStream([track]);
     const p = audio.play();
-    if (p && typeof p.catch === "function") p.catch(() => {});
+    if (p?.catch) p.catch(() => {});
   } catch (e) {
     console.warn("attachRemoteAudio", e);
   }
@@ -215,27 +238,24 @@ export function detachAllRemoteAudio() {
   });
 }
 
-export function subscribeToEvents({
-  onParticipantJoined,
-  onParticipantLeft,
-  onParticipantUpdated,
-  onTrackStarted,
-  onTrackStopped,
-  onError,
-  onActiveSpeakerChange,
-}) {
+export function subscribeToEvents(handlers = {}) {
   if (!callObject) return;
-
-  if (onParticipantJoined)
-    callObject.on("participant-joined", onParticipantJoined);
+  const {
+    onParticipantJoined,
+    onParticipantLeft,
+    onParticipantUpdated,
+    onTrackStarted,
+    onTrackStopped,
+    onError,
+    onActiveSpeakerChange,
+  } = handlers;
+  if (onParticipantJoined) callObject.on("participant-joined", onParticipantJoined);
   if (onParticipantLeft) callObject.on("participant-left", onParticipantLeft);
-  if (onParticipantUpdated)
-    callObject.on("participant-updated", onParticipantUpdated);
+  if (onParticipantUpdated) callObject.on("participant-updated", onParticipantUpdated);
   if (onTrackStarted) callObject.on("track-started", onTrackStarted);
   if (onTrackStopped) callObject.on("track-stopped", onTrackStopped);
   if (onError) callObject.on("error", onError);
-  if (onActiveSpeakerChange)
-    callObject.on("active-speaker-change", onActiveSpeakerChange);
+  if (onActiveSpeakerChange) callObject.on("active-speaker-change", onActiveSpeakerChange);
 }
 
 export function findParticipantSessionId(targetUserId) {
@@ -244,20 +264,10 @@ export function findParticipantSessionId(targetUserId) {
   return match?.session_id || null;
 }
 
-export async function setParticipantRole({
-  roomId,
-  targetUserId,
-  newRole,
-  dailyRoomName,
-}) {
+export async function setParticipantRole({ roomId, targetUserId, newRole, dailyRoomName }) {
   if (newRole === "co_host") {
-    return callRolesApi({
-      action: "request",
-      roomId,
-      targetUserId,
-    });
+    return callRolesApi({ action: "request", roomId, targetUserId });
   }
-
   const targetSessionId = findParticipantSessionId(targetUserId);
   return callRolesApi({
     action: "set-role",
@@ -270,11 +280,7 @@ export async function setParticipantRole({
 }
 
 export async function requestCoHost(roomId, targetUserId) {
-  return callRolesApi({
-    action: "request",
-    roomId,
-    targetUserId,
-  });
+  return callRolesApi({ action: "request", roomId, targetUserId });
 }
 
 export async function respondCoHostRequest({
@@ -308,12 +314,10 @@ export async function demoteToViewer(roomId, targetUserId, dailyRoomName) {
   });
 }
 
-/** Met le débat en pause (hôte). */
 export async function pauseRoom(roomId) {
   return callApi({ action: "pause-room", roomId });
 }
 
-/** Reprend le débat (hôte). */
 export async function resumeRoom(roomId) {
   return callApi({ action: "resume-room", roomId });
 }
@@ -330,7 +334,6 @@ export async function leaveLive({ roomName, isHost = false } = {}) {
     callObject = null;
   }
   myRole = "viewer";
-
   if (isHost && roomName) {
     await callApi({ action: "delete-room", roomName }).catch(() => {});
   }
@@ -339,7 +342,6 @@ export async function leaveLive({ roomName, isHost = false } = {}) {
 export function getCallObject() {
   return callObject;
 }
-
 export function getParticipants() {
   return callObject?.participants() || {};
 }
