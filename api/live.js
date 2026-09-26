@@ -17,9 +17,9 @@ import {
   logInfo,
   logWarn,
 } from "./_shared.js";
-import { chooseProvider, normalizeCountry, providerConfig } from "./ai/router.js";
-import { callOpenAICompatible } from "./ai/openai-compatible.js";
-import { isOpen, recordFailure, recordSuccess } from "./ai/circuit.js";
+import { chooseProvider, normalizeCountry, providerConfig } from "./_lib/ai/router.js";
+import { callOpenAICompatible } from "./_lib/ai/openai-compatible.js";
+import { isOpen, recordFailure, recordSuccess } from "./_lib/ai/circuit.js";
 
 // ============== DAILY CONFIG ==============
 const DAILY_API = "https://api.daily.co/v1";
@@ -41,7 +41,7 @@ function domain() {
 function roomUrl(roomName) {
   const d = domain();
   if (!d) return null;
-  return `https://${d}.daily.co/${roomName}`;
+  return `https://\( {d}.daily.co/ \){roomName}`;
 }
 function sanitizeRoomName(raw) {
   const s = String(raw || "").toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "").slice(0, 40);
@@ -63,7 +63,7 @@ async function createDailyRoom(roomName, { maxParticipants = 50, expHours = 12 }
   });
   const data = await res.json().catch(() => ({}));
   if (res.status === 400 && /already exists/i.test(data?.info || data?.error || "")) {
-    const get = await fetch(`${DAILY_API}/rooms/${encodeURIComponent(roomName)}`, { headers: dailyHeaders() });
+    const get = await fetch(`\( {DAILY_API}/rooms/ \){encodeURIComponent(roomName)}`, { headers: dailyHeaders() });
     const existing = await get.json().catch(() => ({}));
     if (!get.ok) throw Object.assign(new Error(existing.error || "Room Daily introuvable"), { status: get.status });
     return existing;
@@ -176,7 +176,7 @@ async function handleAiDebateLegacy(req, res, admin, user) {
   if (room.ai_enabled === false) return res.status(400).json({ error: "L'IA est désactivée" });
   const { data: recent } = await admin.from("debate_messages").select("text, sender_type, created_at").eq("room_id", roomId).order("created_at", { ascending: false }).limit(12);
   const history = (recent || []).reverse().map(m => `${m.sender_type === "ai" ? "IA" : m.sender_type === "system" ? "Système" : "Participant"}: ${m.text}`).join("\n");
-  const systemPrompt = `Tu es l'assistant IA du débat live BAARO intitulé « ${room.title || "Débat"} ».\nSujet : ${room.topic || "non précisé"}.\nTu aides TOUS les participants. Réponds en français, clair et concis (2 à 5 phrases).\n\nExtraits récents :\n${history || "(aucun)"}`;
+  const systemPrompt = `Tu es l'assistant IA du débat live BAARO intitulé « ${room.title || "Débat"} ».\nSujet : \( {room.topic || "non précisé"}.\nTu aides TOUS les participants. Réponds en français, clair et concis (2 à 5 phrases).\n\nExtraits récents :\n \){history || "(aucun)"}`;
   const response = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST", headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
     body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 600, system: systemPrompt, messages: [{ role: "user", content: q }] }),
@@ -247,7 +247,7 @@ async function handleToken(req, res, user, admin) {
   const body = req.body || {};
   const liveId = String(body.liveId || body.roomName || body.inviteCode || "").trim();
   if (!liveId) return res.status(400).json({ error: "liveId requis" });
-  const { data: room } = await admin.from("debate_rooms").select("id, host_id, daily_room_name, invite_code, status, mode").or(`invite_code.eq.${liveId},id.eq.${liveId},daily_room_name.eq.${liveId}`).maybeSingle();
+  const { data: room } = await admin.from("debate_rooms").select("id, host_id, daily_room_name, invite_code, status, mode").or(`invite_code.eq.\( {liveId},id.eq. \){liveId},daily_room_name.eq.${liveId}`).maybeSingle();
   if (!room || room.status === "ended") return res.status(404).json({ error: "Live introuvable ou terminé" });
   const isHost = room.host_id === user.id;
   if (!isHost) {
