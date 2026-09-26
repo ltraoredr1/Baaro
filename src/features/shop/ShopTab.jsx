@@ -23,13 +23,21 @@ export default function ShopTab({ id }) {
     setLoadingShop(true); setError(null);
     (async () => {
       try {
-        const { data, error: fetchError } = await supabase.from("shops").select("id, name, currency, is_active, country, city").eq("owner_id", id).order("created_at", { ascending: false }).limit(1).maybeSingle();
+        const { data, error: fetchError } = await supabase
+          .from("shops")
+          .select("id, name, currency, is_active, country, city")
+          .eq("owner_id", id)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
         if (fetchError) throw fetchError;
         if (!cancelled) setMyShop(data || null);
       } catch (err) {
         console.error("Erreur chargement boutique:", err);
         if (!cancelled) setError(err.message);
-      } finally { if (!cancelled) setLoadingShop(false); }
+      } finally {
+        if (!cancelled) setLoadingShop(false);
+      }
     })();
     return () => { cancelled = true; };
   }, [id]);
@@ -48,7 +56,18 @@ export default function ShopTab({ id }) {
   const handleDirectoryClick = useCallback(() => { setMode("directory"); setSelectedShopId(null); }, []);
   const handleDetailBack = useCallback(() => { setSelectedShopId(null); setMode("directory"); }, []);
   const handleShopSelect = useCallback((shop) => { setSelectedShopId(shop.id); setMode("detail"); }, []);
-  const handleRegistrationComplete = useCallback(() => { setMode("manage"); }, []);
+
+  // Après création, on conserve immédiatement la boutique retournée par Supabase.
+  // Avant cette correction, myShop restait null jusqu'au prochain rechargement,
+  // donc « Mes produits » n'apparaissait pas pour une nouvelle boutique.
+  const handleRegistrationComplete = useCallback((shop) => {
+    if (shop?.id) {
+      setMyShop(shop);
+      setMode("manage");
+    } else {
+      setMode("directory");
+    }
+  }, []);
 
   const renderContent = useMemo(() => {
     if (loadingShop) return <div className="flex items-center justify-center py-12"><Loader2 className="animate-spin" size={32} style={{ color: COLORS.gold }} /><p className="ml-3 text-sm" style={{ color: COLORS.muted }}>Chargement...</p></div>;
