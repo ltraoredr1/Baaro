@@ -13,17 +13,12 @@ async function authHeaders() {
 }
 
 async function callApi(body) {
-  // 1. Détection robuste de l'URL (fonctionne en local, Vercel et Capacitor Mobile)
-  let base = "";
-  if (typeof import.meta !== "undefined" && import.meta.env?.VITE_API_BASE_URL) {
-    base = import.meta.env.VITE_API_BASE_URL;
-  } else if (typeof window !== "undefined") {
-    base = window.location.origin;
-  }
-
-  // On utilise /api/create-room car c'est celui configuré dans votre vercel.json
-  const endpoint = base.endsWith('/') ? `${base}api/create-room` : `${base}/api/create-room`;
+  // ✅ FORCER l'URL vers baaro-xi (URL principale de production)
+  const base = "https://baaro-xi.vercel.app";
+  const endpoint = `${base}/api/create-room`;
   
+  console.log("📞 Appel API vers :", endpoint);
+
   try {
     const res = await fetch(endpoint, {
       method: "POST",
@@ -50,7 +45,7 @@ async function callApi(body) {
   } catch (error) {
     console.error("🔴 ERREUR RÉSEAU APPEL (chatCalls.js):", error);
     if (error.message.includes("Failed to fetch") || error.message.includes("NetworkError")) {
-      throw new Error(`Impossible de contacter le serveur (${endpoint}). Vérifiez votre connexion et les variables d'environnement Vercel.`);
+      throw new Error(`Impossible de contacter le serveur (${endpoint}). Vérifiez votre connexion.`);
     }
     throw error;
   }
