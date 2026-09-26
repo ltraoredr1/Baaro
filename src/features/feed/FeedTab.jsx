@@ -567,33 +567,49 @@ export function FeedTab({ userId, id: idProp, onOpenProfile, onRewardPoints }) {
   };
 
   // ============================================================
-  // CORRECTION : GESTION DES COMMENTAIRES DIRECTE VIA SUPABASE
+  // CORRECTION : GESTION DES COMMENTAIRES BLINDÉE
   // ============================================================
 
   const loadComments = async (postId) => {
     if (!postId) return;
     try {
+      // 1. Récupération simple sans jointure complexe pour éviter les erreurs
       const { data, error } = await supabase
         .from("comments")
-        .select(`
-          id, text, author_id, created_at,
-          profiles:author_id (display_name, handle, flag, avatar_url)
-        `)
+        .select("id, text, author_id, created_at")
         .eq("post_id", postId)
         .order("created_at", { ascending: true });
 
       if (error) throw error;
 
-      const rows = (data || []).map((c) => ({
-        id: c.id,
-        text: c.text,
-        author: c.profiles?.display_name || c.profiles?.handle || "Membre",
-        author_id: c.author_id,
-        created_at: c.created_at,
-      }));
+      // 2. Récupération des profils séparément
+      const authorIds = [...new Set(data.map(c => c.author_id).filter(Boolean))];
+      let profilesMap = {};
+      
+      if (authorIds.length > 0) {
+        const { data: profiles } = await supabase
+          .from("profiles")
+          .select("id, display_name, handle, flag, avatar_url")
+          .in("id", authorIds);
+        
+        (profiles || []).forEach(p => { profilesMap[p.id] = p; });
+      }
+
+      // 3. Assemblage des données
+      const rows = data.map((c) => {
+        const profile = profilesMap[c.author_id] || {};
+        return {
+          id: c.id,
+          text: c.text,
+          author: profile.display_name || profile.handle || "Membre",
+          author_id: c.author_id,
+          created_at: c.created_at,
+        };
+      });
 
       setCommentsMap((prev) => ({ ...prev, [postId]: rows }));
     } catch (e) {
+      console.error("Erreur chargement commentaires:", e);
       handleDbError(e, showToast, "Impossible de charger les commentaires");
     }
   };
@@ -612,16 +628,23 @@ export function FeedTab({ userId, id: idProp, onOpenProfile, onRewardPoints }) {
     }
 
     try {
-      // 1. Insertion directe dans Supabase (le trigger SQL mettra à jour le compteur automatiquement)
+      // Ajout de target_type: 'post' pour respecter strictement votre schéma de base de données
       const { data: comment, error: insertError } = await supabase
         .from("comments")
-        .insert({ post_id: postId, author_id: meId, text })
-        .select("id, post_id, text, author_id, created_at")
+        .insert({ 
+          post_id: postId, 
+          author_id: meId, 
+          text: text,
+          target_type: 'post' 
+        })
+        .select("id, text, author_id, created_at")
         .single();
 
-      if (insertError || !comment) throw new Error(insertError?.message || "Échec de l'insertion");
+      if (insertError || !comment) {
+        console.error("Détail erreur insert:", insertError);
+        throw new Error(insertError?.message || "Échec de l'insertion");
+      }
 
-      // 2. Mise à jour immédiate de l'interface (ressenti instantané)
       const newCmt = {
         id: comment.id,
         author: "Vous",
@@ -639,7 +662,8 @@ export function FeedTab({ userId, id: idProp, onOpenProfile, onRewardPoints }) {
       onRewardPoints?.("comment", "Commentaire ajouté", comment.id);
       showPointsReward?.(1, "Commentaire ajouté");
     } catch (error) {
-      handleDbError(error, showToast, "Impossible de commenter");
+      console.error("Erreur commentaire:", error);
+      handleDbError(error, showToast, "Impossible de commenter : " + error.message);
     }
   };
 
@@ -648,12 +672,11 @@ export function FeedTab({ userId, id: idProp, onOpenProfile, onRewardPoints }) {
     if (!window.confirm("Supprimer ce commentaire ?")) return;
 
     try {
-      // Suppression directe via Supabase (le trigger SQL mettra à jour le compteur)
       const { error } = await supabase
         .from("comments")
         .delete()
         .eq("id", commentId)
-        .eq("author_id", meId); // Sécurité : on ne supprime que ses propres commentaires
+        .eq("author_id", meId);
 
       if (error) throw error;
 
