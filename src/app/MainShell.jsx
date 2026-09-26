@@ -22,7 +22,6 @@ const THEME_BG_MAP = {
 };
 
 const WELCOME_TOAST_KEY = "baaro:welcome_toast_shown";
-
 const FALLBACK_COLORS = {
   ivory: "#F5F3EF",
 };
@@ -39,7 +38,6 @@ export function MainShell() {
   } = useApp();
 
   const { showToast, showPointsReward } = useToast();
-
   const id = user?.id;
 
   useApplyPendingReferral({ showToast });
@@ -50,8 +48,7 @@ export function MainShell() {
 
   const [lang, setLang] = useState("fr");
   const [currentTheme, setCurrentTheme] = useState("midnight");
-  const [inspectingProfileId, setInspectingProfileId] =
-    useState(null);
+  const [inspectingProfileId, setInspectingProfileId] = useState(null);
   const [notifDrawerOpen, setNotifDrawerOpen] = useState(false);
   const [searchModalOpen, setSearchModalOpen] = useState(false);
   const [forceOnboarding, setForceOnboarding] = useState(false);
@@ -393,4 +390,113 @@ export function MainShell() {
       )}
 
       {/* =====================================================
-          MODE IMMERS
+          MODE IMMERSIF
+          ===================================================== */}
+      {isImmersive ? (
+        <main
+          id="main-content"
+          className="flex-1 relative mobile-nav-spacer"
+          tabIndex={-1}
+        >
+          <ErrorBoundary>
+            <Suspense fallback={<TabFallback />}>
+              {Tab ? (
+                <Tab
+                  key={activeTab}
+                  {...(tabProps[activeTab] || {})}
+                />
+              ) : null}
+            </Suspense>
+          </ErrorBoundary>
+        </main>
+      ) : (
+        /* ===================================================
+           MODE NORMAL
+           =================================================== */
+        <div className="max-w-7xl mx-auto w-full px-3 sm:px-6 pt-4 sm:pt-6 flex-1 grid grid-cols-1 md:grid-cols-4 gap-6">
+          <div className="md:col-span-1">
+            <Navigation
+              activeTab={activeTab}
+              setActiveTab={setActiveTab}
+            />
+          </div>
+
+          <main
+            id="main-content"
+            className="md:col-span-3 mobile-nav-spacer"
+            tabIndex={-1}
+          >
+            <ErrorBoundary>
+              <Suspense fallback={<TabFallback />}>
+                {Tab ? (
+                <Tab
+                  key={activeTab}
+                  {...(tabProps[activeTab] || {})}
+                  />
+                ) : null}
+              </Suspense>
+            </ErrorBoundary>
+          </main>
+        </div>
+      )}
+
+      {/* =====================================================
+          NAVIGATION MOBILE EN MODE IMMERSIF
+          ===================================================== */}
+      {isImmersive && (
+        <div className="md:hidden">
+          <Navigation
+            activeTab={activeTab}
+            setActiveTab={setActiveTab}
+          />
+        </div>
+      )}
+
+      {/* =====================================================
+          PROFILE MODAL
+          ===================================================== */}
+      {inspectingProfileId && (
+        <ProfileModal
+          id={inspectingProfileId}
+          currentId={id}
+          onClose={() =>
+            setInspectingProfileId(null)
+          }
+          onNavigateToMessages={() =>
+            setActiveTab("messages")
+          }
+          onOpenSettings={() => {
+            setInspectingProfileId(null);
+            setActiveTab("settings");
+          }}
+        />
+      )}
+
+      {/* =====================================================
+          NOTIFICATIONS
+          ===================================================== */}
+      <NotificationDrawer
+        isOpen={notifDrawerOpen}
+        onClose={() => setNotifDrawerOpen(false)}
+        id={id}
+      />
+
+      {/* =====================================================
+          GLOBAL SEARCH
+          ===================================================== */}
+      <GlobalSearchModal
+        isOpen={searchModalOpen}
+        onClose={() => setSearchModalOpen(false)}
+        onSelectUser={(pid) =>
+          setInspectingProfileId(pid)
+        }
+        onSelectTab={(tid) =>
+          setActiveTab(tid)
+        }
+        onSelectShop={() =>
+          setActiveTab("shop")
+        }
+      />
+    </div>
+  );
+}
