@@ -375,3 +375,21 @@ grant execute on function public.list_group_invites(uuid) to authenticated;
 grant execute on function public.revoke_group_invite(uuid) to authenticated;
 grant execute on function public.peek_group_invite(text) to authenticated;
 grant execute on function public.join_community_group(uuid, text) to authenticated;
+
+push_subscriptions
+create table if not exists public.push_subscriptions (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid references auth.users(id) on delete cascade not null,
+  token text not null,
+  platform text not null check (platform in ('web', 'ios', 'android')),
+  created_at timestamptz default now(),
+  unique (user_id, token)
+);
+
+alter table public.push_subscriptions enable row level security;
+
+create policy push_sub_insert on public.push_subscriptions
+  for insert to authenticated with check (user_id = auth.uid());
+
+create policy push_sub_delete on public.push_subscriptions
+  for delete to authenticated using (user_id = auth.uid());
