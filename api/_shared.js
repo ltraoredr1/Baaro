@@ -1,10 +1,11 @@
 /**
- * CORS partagé pour les routes /api/*
- *
- * Production : uniquement les origines listées dans ALLOWED_ORIGINS.
- * Dev : localhost autorisé par défaut.
- * Origine interdite en prod → 403 explicite.
+ * CORS partagé, Logging, Rate Limiting, Helpers Stripe & Supabase
+ * Fichier : api/_shared.js
  */
+
+// ✅ TOUS LES IMPORTS DOIVENT ÊTRE TOUT EN HAUT
+import Stripe from 'stripe';
+import { createClient } from "@supabase/supabase-js";
 
 const DEFAULT_ALLOWED = [
   "http://localhost:5173",
@@ -28,10 +29,6 @@ function isProduction() {
   );
 }
 
-/**
- * Applique les headers CORS et gère OPTIONS.
- * @returns {boolean} true si la requête a déjà été répondue (OPTIONS ou 403)
- */
 export function applyCors(req, res) {
   const origin = req.headers.origin || "";
   const allowed = getAllowedOrigins();
@@ -39,14 +36,12 @@ export function applyCors(req, res) {
   if (allowed.includes(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
   } else if (origin && isProduction()) {
-    // Origine non autorisée en production → refus explicite
     res.setHeader("Vary", "Origin");
     res.status(403).json({ error: "Origin not allowed" });
     return true;
   } else if (!origin) {
     // Requêtes serveur / clients natifs sans header Origin
   } else {
-    // Dev : origine inconnue → pas d'Allow-Origin
     res.setHeader("Vary", "Origin");
   }
 
@@ -64,14 +59,6 @@ export function applyCors(req, res) {
   }
   return false;
 }
-
-
-/**
- * Logging structuré pour les API BAARO (Vercel / logs JSON).
- * Sentry retiré des dépendances pour accélérer npm install sur Vercel
- * (évite le timeout require-in-the-middle / OpenTelemetry).
- * Les erreurs restent dans les logs Vercel via console.*.
- */
 
 export function logInfo(context, message, extra = {}) {
   console.log(
@@ -113,23 +100,9 @@ export function logError(context, err, extra = {}) {
   );
 }
 
-/** Compat serverless — no-op sans @sentry/node */
 export async function flushLogs(_timeoutMs = 1500) {
   /* no-op */
 }
-
-
-/**
- * Rate limiter par IP + clé métier.
- * - Si UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN → Redis distribué (prod multi-instance)
- * - Sinon → Map mémoire (dev / single instance)
- *
- * Usage synchrone pour compatibilité handlers existants :
- *   export function rateLimit(...)  → mémoire
- *   export async function rateLimitAsync(...) → Redis si dispo, sinon mémoire
- *
- * Les routes peuvent migrer vers rateLimitAsync progressivement.
- */
 
 const store = new Map();
 
@@ -177,7 +150,6 @@ function memoryLimit(req, { key, max = 20, windowMs = 60_000 }) {
   return { ok: true, remaining: max - bucket.count };
 }
 
-/** Sync — mémoire uniquement (rétrocompat). */
 export function rateLimit(req, opts) {
   return memoryLimit(req, opts);
 }
@@ -188,9 +160,6 @@ function upstashConfigured() {
   );
 }
 
-/**
- * Async — Upstash REST (INCR + EXPIRE) si configuré, sinon mémoire.
- */
 export async function rateLimitAsync(req, { key, max = 20, windowMs = 60_000 }) {
   if (!upstashConfigured()) {
     return memoryLimit(req, { key, max, windowMs });
@@ -203,7 +172,6 @@ export async function rateLimitAsync(req, { key, max = 20, windowMs = 60_000 }) 
   const windowSec = Math.max(1, Math.ceil(windowMs / 1000));
 
   try {
-    // Pipeline: INCR puis EXPIRE si première fois (TTL)
     const incrRes = await fetch(`${url}/incr/${encodeURIComponent(redisKey)}`, {
       headers: { Authorization: `Bearer ${token}` },
     });
@@ -238,12 +206,9 @@ export async function rateLimitAsync(req, { key, max = 20, windowMs = 60_000 }) 
   }
 }
 
-
-/**
- * Helpers Stripe — erreurs normalisées pour BAARO
- * À placer dans api/_stripe.js (préfixe _ = pas un endpoint)
- */
-import Stripe from 'stripe';
+// ==========================================================
+// HELPERS STRIPE
+// ==========================================================
 
 let _stripe = null;
 
@@ -258,9 +223,6 @@ export function getStripe() {
   return _stripe;
 }
 
-/**
- * Mappe une erreur Stripe vers un message utilisateur + code HTTP stable.
- */
 export function mapStripeError(err) {
   const base = {
     ok: false,
@@ -276,79 +238,28 @@ export function mapStripeError(err) {
 
   switch (err?.type) {
     case 'StripeCardError':
-      // Carte refusée / insuffisant / fraud
-      return {
-        ...base,
-        status: 402,
-        message: humanCardMessage(err),
-      };
-
+      return { ...base, status: 402, message: humanCardMessage(err) };
     case 'StripeRateLimitError':
-      return {
-        ...base,
-        status: 429,
-        message: 'Trop de tentatives. Attends quelques secondes puis réessaie.',
-      };
-
+      return { ...base, status: 429, message: 'Trop de tentatives. Attends quelques secondes puis réessaie.' };
     case 'StripeInvalidRequestError':
-      return {
-        ...base,
-        status: 400,
-        message: err.message || 'Requête de paiement invalide.',
-      };
-
+      return { ...base, status: 400, message: err.message || 'Requête de paiement invalide.' };
     case 'StripeAPIError':
-      return {
-        ...base,
-        status: 502,
-        message: 'Service de paiement temporairement indisponible. Réessaie plus tard.',
-      };
-
+      return { ...base, status: 502, message: 'Service de paiement temporairement indisponible. Réessaie plus tard.' };
     case 'StripeConnectionError':
-      return {
-        ...base,
-        status: 503,
-        message: 'Impossible de joindre le service de paiement. Vérifie ta connexion.',
-      };
-
+      return { ...base, status: 503, message: 'Impossible de joindre le service de paiement. Vérifie ta connexion.' };
     case 'StripeAuthenticationError':
-      // Clé API invalide — côté serveur, ne pas exposer le détail
       console.error('[Stripe] Authentication error', err.message);
-      return {
-        ...base,
-        status: 500,
-        message: 'Configuration paiement invalide. Contacte le support.',
-      };
-
+      return { ...base, status: 500, message: 'Configuration paiement invalide. Contacte le support.' };
     case 'StripePermissionError':
-      return {
-        ...base,
-        status: 403,
-        message: 'Paiement non autorisé pour ce compte.',
-      };
-
+      return { ...base, status: 403, message: 'Paiement non autorisé pour ce compte.' };
     case 'StripeIdempotencyError':
-      return {
-        ...base,
-        status: 409,
-        message: 'Cette opération a déjà été traitée. Rafraîchis la page.',
-      };
-
+      return { ...base, status: 409, message: 'Cette opération a déjà été traitée. Rafraîchis la page.' };
     default:
-      // Erreurs réseau Node, timeouts, etc.
       if (err?.code === 'ETIMEDOUT' || err?.code === 'ECONNRESET') {
-        return {
-          ...base,
-          status: 503,
-          message: 'Délai dépassé avec le service de paiement. Réessaie.',
-        };
+        return { ...base, status: 503, message: 'Délai dépassé avec le service de paiement. Réessaie.' };
       }
       console.error('[Stripe] Unhandled error', err);
-      return {
-        ...base,
-        status: 500,
-        message: err?.message || base.message,
-      };
+      return { ...base, status: 500, message: err?.message || base.message };
   }
 }
 
@@ -370,15 +281,10 @@ function humanCardMessage(err) {
     generic_decline: 'Paiement refusé. Essaie une autre carte.',
   };
   if (code && map[code]) return map[code];
-  // Message Stripe déjà en langage naturel (souvent en anglais)
   if (err.message && err.message.length < 120) return err.message;
   return 'Paiement par carte refusé. Vérifie tes informations ou utilise un autre moyen.';
 }
 
-/**
- * Crée une Checkout Session Stripe.
- * amount en unité majeure (ex: 10.50 EUR) → converti en centimes sauf devises zéro-décimale.
- */
 const ZERO_DECIMAL = new Set(['XOF', 'XAF', 'JPY', 'KRW', 'VND']);
 
 export function toStripeAmount(amount, currency) {
@@ -412,9 +318,7 @@ export async function createCheckoutSession({
           price_data: {
             currency: String(currency).toLowerCase(),
             unit_amount: unitAmount,
-            product_data: {
-              name: description || 'Paiement BAARO',
-            },
+            product_data: { name: description || 'Paiement BAARO' },
           },
         },
       ],
@@ -422,10 +326,7 @@ export async function createCheckoutSession({
       cancel_url: cancelUrl,
       client_reference_id: paymentRef,
       customer_email: customerEmail || undefined,
-      metadata: {
-        payment_ref: paymentRef,
-        ...metadata,
-      },
+      metadata: { payment_ref: paymentRef, ...metadata },
     });
 
     return {
@@ -439,10 +340,6 @@ export async function createCheckoutSession({
   }
 }
 
-/**
- * Vérifie la signature du webhook Stripe.
- * rawBody = Buffer ou string brut (pas le JSON parsé).
- */
 export function constructStripeEvent(rawBody, signature) {
   const stripe = getStripe();
   const secret = process.env.STRIPE_WEBHOOK_SECRET;
@@ -450,12 +347,11 @@ export function constructStripeEvent(rawBody, signature) {
   return stripe.webhooks.constructEvent(rawBody, signature, secret);
 }
 
+// ==========================================================
+// HELPERS SUPABASE
+// ==========================================================
 
-import { createClient } from "@supabase/supabase-js";
-
-// Accepte VITE_SUPABASE_URL ou SUPABASE_URL (alignement create-payment legacy)
-const SUPABASE_URL =
-  process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
+const SUPABASE_URL = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
 const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 export function getAdminClient() {
@@ -469,9 +365,6 @@ export function getAdminClient() {
   });
 }
 
-/**
- * JWT Bearer uniquement — jamais de user_id client.
- */
 export async function requireUser(req, admin) {
   const header = req.headers.authorization || "";
   const token = header.startsWith("Bearer ") ? header.slice(7) : null;
