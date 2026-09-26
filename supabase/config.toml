@@ -1,0 +1,77 @@
+# supabase/config.toml - BAARO
+# Docs: https://supabase.com/docs/guides/local-development/cli/config
+
+project_id = "baaro"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "storage", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+shadow_port = 54320
+major_version = 15
+
+[studio]
+enabled = true
+port = 54323
+api_url = "http://localhost:54321"
+
+[inbucket]
+enabled = true
+port = 54324
+smtp_port = 54325
+pop3_port = 54326
+
+[storage]
+enabled = true
+port = 54325
+image_transformation_enabled = true
+imgproxy_enabled = true
+file_size_limit = "50MiB"
+
+[auth]
+enabled = true
+port = 54325
+site_url = "http://localhost:5173"
+additional_redirect_urls = ["https://baaro-xi.vercel.app", "https://baaro-three.vercel.app"]
+jwt_expiry = 3600
+enable_signup = true
+enable_confirmations = false
+enable_manual_linking = true
+# Anonyme activé pour Baaro
+enable_anonymous_sign_ins = true
+external_email_enabled = true
+external_anonymous_users_enabled = true
+
+[auth.email]
+enable_signup = true
+double_confirm_changes = true
+enable_confirmations = false
+
+# --- FUNCTIONS - C'est ici le nettoyage quotidien ---
+[functions.cleanup-guests]
+enabled = true
+verify_jwt = false
+import_map = "./functions/cleanup-guests/import_map.json"
+entrypoint = "./functions/cleanup-guests/index.ts"
+# Chaque jour à 03h00 UTC (03h00 Bamako)
+schedule = "0 3 * * *"
+
+# Si tu as d'autres fonctions Edge plus tard, ajoute les ici :
+# [functions.upload-to-r2]
+# enabled = true
+# verify_jwt = true
+# entrypoint = "./functions/upload-to-r2/index.ts"
+
+[analytics]
+enabled = false
+port = 54327
+vector_port = 54328
+
+# Pour la prod cloud, cette partie est ignorée en local mais garde la pour le deploy
+[functions]
+# Force le deploy avec cron
