@@ -1,13 +1,11 @@
 import { useState, useEffect, useCallback } from "react";
 
-const STORAGE_KEY = "baaro:notification-sound";
+var STORAGE_KEY = "baaro:notification-sound";
 
 function loadPrefs() {
   try {
     var raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) {
-      return { enabled: true, muted: false, volume: 70 };
-    }
+    if (!raw) return { enabled: true, muted: false, volume: 70 };
     var parsed = JSON.parse(raw);
     return {
       enabled: parsed.enabled !== false,
@@ -50,6 +48,7 @@ function playBeep(volumePercent) {
 
 export function useNotificationSound() {
   var initial = loadPrefs();
+
   var enabledState = useState(initial.enabled);
   var enabled = enabledState[0];
   var setEnabledState = enabledState[1];
