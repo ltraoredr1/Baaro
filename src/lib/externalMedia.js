@@ -23,18 +23,15 @@ function safeFolder(folder) {
 
 export async function uploadExternalMedia(
   file,
-  { folder = "posts", userId, maxBytes = 500 * 1024 * 1024 } = {}
+  { folder = "posts", userId, maxBytes = 50 * 1024 * 1024 } = {}
 ) {
   if (!file) throw new Error("Fichier manquant");
   if (!userId) throw new Error("Utilisateur non connecté");
   if (file.size > maxBytes) {
-    throw new Error(
-      `Fichier trop volumineux (max ${Math.round(maxBytes / 1024 / 1024)} Mo)`
-    );
+    throw new Error(`Fichier trop volumineux (max ${Math.round(maxBytes / 1024 / 1024)} Mo)`);
   }
 
   const token = await getAccessToken();
-
   const response = await fetch(apiUrl(), {
     method: "POST",
     headers: {
@@ -42,7 +39,7 @@ export async function uploadExternalMedia(
       Authorization: `Bearer ${token}`,
     },
     body: JSON.stringify({
-      action: "presign",
+      action: "upload",
       folder: safeFolder(folder),
       name: file.name,
       contentType: file.type || "application/octet-stream",
@@ -51,32 +48,24 @@ export async function uploadExternalMedia(
   });
 
   const json = await response.json().catch(() => ({}));
-
-  if (!response.ok || !json.ok || !json.uploadUrl || !json.publicUrl) {
-    throw new Error(
-      json.error || `Préparation média impossible (${response.status})`
-    );
+  if (!response.ok || !json.ok || !json.uploadUrl) {
+    throw new Error(json.error || `Préparation média impossible (${response.status})`);
   }
 
   const upload = await fetch(json.uploadUrl, {
     method: "PUT",
-    headers: {
-      "Content-Type": file.type || "application/octet-stream",
-      "Cache-Control": "public, max-age=31536000, immutable",
-    },
+    headers: { "Content-Type": file.type || "application/octet-stream" },
     body: file,
   });
 
-  if (!upload.ok) {
-    const detail = await upload.text().catch(() => "");
-    throw new Error(
-      `Upload média échoué (${upload.status})${detail ? `: ${detail.slice(0, 160)}` : ""}`
-    );
+  const result = await upload.json().catch(() => ({}));
+  if (!upload.ok || !result.ok || !result.publicUrl) {
+    throw new Error(result.error || `Upload média échoué (${upload.status})`);
   }
 
   return {
-    url: json.publicUrl,
-    path: json.key,
+    url: result.publicUrl,
+    path: result.fileId || result.key || "",
     mime: file.type || "application/octet-stream",
     size: file.size,
     fileName: file.name,
