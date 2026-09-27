@@ -49,6 +49,13 @@ import {
   resolveUniqueHandle,
   isHandleUniqueViolation,
 } from "../../lib/username.js";
+import {
+  loadCloudSettings,
+  saveCloudSettings,
+  applySettingsToDom,
+  saveLocalSettings,
+  syncPrivateProfile,
+} from "../../lib/appSettings.js";
 
 const STORAGE_KEY = "baaro_settings_v23";
 const APP_VERSION = "2.0.0-v23";
@@ -733,16 +740,7 @@ function applyDocumentLang(lang: string) {
 }
 
 function applyA11y(settings: SettingsState) {
-  try {
-    const root = document.documentElement;
-    root.classList.toggle("baaro-large-text", !!settings.large_text);
-    root.classList.toggle("baaro-reduce-motion", !!settings.reduce_motion);
-    root.dataset.baaroDataSaver = settings.data_saver ? "1" : "0";
-    root.dataset.baaroCountry = settings.country || "";
-    root.dataset.baaroCurrency = settings.currency || "";
-  } catch {
-    /* ignore */
-  }
+  applySettingsToDom(settings);
 }
 
 function Toggle({
@@ -1023,11 +1021,7 @@ export default function SettingsTab({
     setOpenSections((s) => ({ ...s, [id]: !s[id] }));
 
   useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
-    } catch {
-      /* ignore */
-    }
+    saveLocalSettings(settings);
     applyDocumentLang(settings.lang);
     applyA11y(settings);
   }, [settings]);
@@ -1069,13 +1063,9 @@ export default function SettingsTab({
           setEditBio(profile.bio || "");
         }
 
-        const res = await supabase
-          .from("user_settings")
-          .select("*")
-          .eq("id", data.user.id)
-          .maybeSingle();
-        if (!cancelled && res?.data) {
-          setSettings((s) => ({ ...s, ...res.data }));
+        const cloud = await loadCloudSettings(data.user.id);
+        if (!cancelled && cloud.ok && cloud.data) {
+          setSettings((s) => ({ ...s, ...cloud.data }));
         }
         try {
           const { data: sess } = await supabase.auth.getSession();
@@ -1124,19 +1114,26 @@ export default function SettingsTab({
   async function save(patch: Partial<SettingsState>) {
     const next = { ...settings, ...patch };
     setSettings(next);
+    saveLocalSettings(next);
+    applyA11y(next);
+
     if (patch.theme && onSelectTheme) onSelectTheme(patch.theme);
-    if (patch.lang && SUPPORTED_LANGUAGES.includes(String(patch.lang).split("-")[0])) {
+    if (
+      patch.lang &&
+      SUPPORTED_LANGUAGES.includes(String(patch.lang).split("-")[0])
+    ) {
       void setAppLanguage(patch.lang);
     }
+
     if (!user?.id) return;
-    try {
-      await supabase.from("user_settings").upsert({
-        user_id: user.id,
-        ...next,
-        updated_at: new Date().toISOString(),
-      });
-    } catch {
-      /* ignore */
+
+    if ("private_profile" in patch) {
+      void syncPrivateProfile(user.id, !!next.private_profile);
+    }
+
+    const res = await saveCloudSettings(user.id, next);
+    if (!res.ok) {
+      console.warn("[settings] cloud save:", res.error);
     }
   }
 
