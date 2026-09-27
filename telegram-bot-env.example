@@ -1,0 +1,62 @@
+# .env.example
+# Copiez ce fichier en ".env" et remplissez vos valeurs
+
+# ============================================================
+# TELEGRAM CONFIG
+# ============================================================
+
+# Token obtenu de @BotFather
+# Format: 123456789:ABCdefGHIjklMNOpqrSTUvwxyz_abcd1234
+TELEGRAM_BOT_TOKEN=your_token_here
+
+# ID du channel privé pour stocker les médias
+# Format: -100123456789 (obtenu via inspection de l'URL)
+TELEGRAM_CHANNEL_ID=-100000000000
+
+# ============================================================
+# SERVER CONFIG
+# ============================================================
+
+# Port où écoute l'API Express
+PORT=3000
+
+# Environnement (development, production)
+NODE_ENV=production
+
+# ============================================================
+# OPTIONAL: Webhook (si déployé sur Vercel)
+# ============================================================
+
+# URL publique du bot (pour webhook)
+# Exemple: https://your-app.vercel.app/api/bot
+# WEBHOOK_URL=
+
+# ============================================================
+# OPTIONAL: Database (si vous gérez la BD)
+# ============================================================
+
+# Exemple Supabase
+# SUPABASE_URL=https://xxxxx.supabase.co
+# SUPABASE_KEY=xxxxx
+
+# ============================================================
+# Récapitulatif comment récupérer les valeurs:
+# ============================================================
+#
+# 1. TELEGRAM_BOT_TOKEN
+#    → Ouvrez Telegram, cherchez @BotFather
+#    → /newbot → remplissez les infos
+#    → BotFather envoie le token
+#
+# 2. TELEGRAM_CHANNEL_ID
+#    → Créez un channel privé "baaro-media-storage"
+#    → Allez sur le channel → URL: https://t.me/c/123456789/1
+#    → Channel ID = -100 + les chiffres = -100123456789
+#    → Ajoutez @baaro_media_bot comme admin
+#
+# 3. PORT
+#    → Port par défaut 3000 (changez si déjà utilisé)
+#
+# 4. NODE_ENV
+#    → "development" pour local (logs détaillés)
+#    → "production" pour serveur (moins de logs)

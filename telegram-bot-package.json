@@ -1,0 +1,37 @@
+{
+  "name": "baaro-telegram-bot",
+  "version": "1.0.0",
+  "description": "Telegram bot for BAARO encrypted media storage",
+  "main": "bot.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node bot.js",
+    "dev": "nodemon bot.js",
+    "test": "node test.js"
+  },
+  "keywords": [
+    "telegram",
+    "bot",
+    "baaro",
+    "media",
+    "storage",
+    "encryption"
+  ],
+  "author": "Traoré",
+  "license": "MIT",
+  "dependencies": {
+    "telegraf": "^4.14.1",
+    "express": "^4.18.2",
+    "dotenv": "^16.3.1",
+    "uuid": "^9.0.0",
+    "node-fetch": "^2.7.0",
+    "cors": "^2.8.5",
+    "morgan": "^1.10.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}
