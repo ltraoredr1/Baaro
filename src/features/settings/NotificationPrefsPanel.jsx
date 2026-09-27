@@ -1,4 +1,3 @@
-
 import { useEffect, useState } from "react";
 import { COLORS } from "../../theme.js";
 import {
@@ -11,7 +10,7 @@ const LABELS = {
   push_enabled: "Notifications push",
   messages: "Messages",
   social: "Social (follows, likes)",
-  live: "Lives & débats",
+  live: "Lives & debats",
   wallet: "Wallet & gains",
   marketing: "Marketing",
 };
@@ -31,7 +30,9 @@ export function NotificationPrefsPanel() {
       }
       if (!cancelled) setLoading(false);
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const toggle = async (key) => {
@@ -41,18 +42,30 @@ export function NotificationPrefsPanel() {
     setMsg("");
     const res = await saveNotificationPreferences(next);
     setSaving(false);
-    setMsg(res.ok ? "Enregistré" : (res.error || "Erreur"));
+    setMsg(res.ok ? "Enregistre" : res.error || "Erreur");
   };
 
   if (loading) {
-    return <p className="text-sm" style={{ color: COLORS.muted }}>Chargement préférences…</p>;
+    return (
+      <p className="text-sm" style={{ color: COLORS.muted }}>
+        Chargement preferences…
+      </p>
+    );
   }
 
   return (
-    <div className="rounded-2xl border p-4 space-y-3" style={{ borderColor: COLORS.border, background: COLORS.surface2 }}>
-      <h3 className="text-sm font-bold" style={{ color: COLORS.gold }}>Préférences de notification</h3>
+    <div
+      className="rounded-2xl border p-4 space-y-3"
+      style={{ borderColor: COLORS.border, background: COLORS.surface2 }}
+    >
+      <h3 className="text-sm font-bold" style={{ color: COLORS.gold }}>
+        Preferences de notification
+      </h3>
       {Object.keys(LABELS).map((key) => (
-        <label key={key} className="flex items-center justify-between gap-3 text-sm cursor-pointer">
+        <label
+          key={key}
+          className="flex items-center justify-between gap-3 text-sm cursor-pointer"
+        >
           <span style={{ color: COLORS.ivory }}>{LABELS[key]}</span>
           <input
             type="checkbox"
@@ -63,7 +76,11 @@ export function NotificationPrefsPanel() {
           />
         </label>
       ))}
-      {msg && <p className="text-xs" style={{ color: COLORS.muted }}>{msg}</p>}
+      {msg ? (
+        <p className="text-xs" style={{ color: COLORS.muted }}>
+          {msg}
+        </p>
+      ) : null}
     </div>
   );
 }
