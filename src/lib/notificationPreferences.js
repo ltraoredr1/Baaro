@@ -9,74 +9,104 @@ export const DEFAULT_NOTIFICATION_PREFERENCES = {
   marketing: false,
 };
 
+var LOCAL_KEY = "baaro:notif_prefs";
+
+function loadLocal() {
+  try {
+    var raw = localStorage.getItem(LOCAL_KEY);
+    if (!raw) return Object.assign({}, DEFAULT_NOTIFICATION_PREFERENCES);
+    return Object.assign({}, DEFAULT_NOTIFICATION_PREFERENCES, JSON.parse(raw));
+  } catch (_) {
+    return Object.assign({}, DEFAULT_NOTIFICATION_PREFERENCES);
+  }
+}
+
+function saveLocal(prefs) {
+  try {
+    localStorage.setItem(LOCAL_KEY, JSON.stringify(prefs));
+  } catch (_) {}
+}
+
 export async function getNotificationPreferences() {
   try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return { ok: false, error: "Non authentifié", data: null };
+    var userRes = await supabase.auth.getUser();
+    var user = userRes.data && userRes.data.user;
+    if (!user) {
+      return { ok: true, data: loadLocal(), local: true };
+    }
 
-    const { data, error } = await supabase
+    var res = await supabase
       .from("notification_preferences")
       .select("*")
       .eq("user_id", user.id)
       .maybeSingle();
 
-    if (error) {
-      console.error("getNotificationPreferences:", error);
-      return { ok: false, error: error.message, data: null };
+    if (res.error) {
+      console.error("getNotificationPreferences:", res.error);
+      return {
+        ok: true,
+        data: loadLocal(),
+        local: true,
+        error: res.error.message,
+      };
     }
 
-    return {
-      ok: true,
-      data: data || { user_id: user.id, ...DEFAULT_NOTIFICATION_PREFERENCES },
-    };
+    var data = res.data
+      ? Object.assign({}, DEFAULT_NOTIFICATION_PREFERENCES, res.data)
+      : Object.assign(
+          { user_id: user.id },
+          DEFAULT_NOTIFICATION_PREFERENCES
+        );
+
+    saveLocal(data);
+    return { ok: true, data: data };
   } catch (e) {
-    console.error("getNotificationPreferences exception:", e);
-    return { ok: false, error: e.message, data: null };
+    return { ok: true, data: loadLocal(), local: true, error: e.message };
   }
 }
 
 export async function saveNotificationPreferences(patch) {
   try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return { ok: false, error: "Non authentifié" };
-
-    // Filtrer uniquement les clés autorisées
-    const safe = {};
-    for (const key of Object.keys(DEFAULT_NOTIFICATION_PREFERENCES)) {
-      if (key in patch) {
-        safe[key] = Boolean(patch[key]);
-      }
+    var safe = {};
+    var keys = Object.keys(DEFAULT_NOTIFICATION_PREFERENCES);
+    for (var i = 0; i < keys.length; i++) {
+      var key = keys[i];
+      if (key in patch) safe[key] = Boolean(patch[key]);
     }
-
-    // Vérifier qu'au moins une clé est présente
     if (Object.keys(safe).length === 0) {
-      return { ok: false, error: "Aucune préférence valide fournie" };
+      return { ok: false, error: "Aucune preference valide" };
     }
 
-    const { error } = await supabase.from("notification_preferences").upsert(
-      { 
-        user_id: user.id, 
-        ...safe, 
-        updated_at: new Date().toISOString() 
+    var merged = Object.assign({}, loadLocal(), safe);
+    saveLocal(merged);
+
+    var userRes = await supabase.auth.getUser();
+    var user = userRes.data && userRes.data.user;
+    if (!user) {
+      return { ok: true, local: true };
+    }
+
+    var res = await supabase.from("notification_preferences").upsert(
+      {
+        user_id: user.id,
+        ...safe,
+        updated_at: new Date().toISOString(),
       },
       { onConflict: "user_id" }
     );
 
-    if (error) {
-      console.error("saveNotificationPreferences:", error);
-      return { ok: false, error: error.message };
+    if (res.error) {
+      console.error("saveNotificationPreferences:", res.error);
+      return { ok: true, local: true, error: res.error.message };
     }
-
     return { ok: true };
   } catch (e) {
-    console.error("saveNotificationPreferences exception:", e);
     return { ok: false, error: e.message };
   }
 }
 
 export function shouldNotify(preferences, category) {
-  if (!preferences?.push_enabled) return false;
-  
+  if (!preferences || !preferences.push_enabled) return false;
   switch (category) {
     case "message":
       return preferences.messages !== false;
