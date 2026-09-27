@@ -1,19 +1,22 @@
-# BAARO Telegram Bot
+# BAARO — Telegram Media Storage
 
-Telegram est le stockage des médias. Aucun média n'est stocké sur Supabase.
+Stockage média Telegram uniquement pour ce correctif.
 
-Variables :
-- TELEGRAM_BOT_TOKEN
-- TELEGRAM_CHANNEL_ID
-- TELEGRAM_API_SECRET
-- NODE_ENV
-- PORT
+Variables du bot:
 
-TELEGRAM_API_SECRET protège /api/upload.
+```env
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_CHANNEL_ID=-1001154448519
+TELEGRAM_API_SECRET=
+PORT=3000
+NODE_ENV=production
+```
 
-Important : ce bot ne chiffre pas les fichiers. Pour du vrai E2E,
-BAARO doit chiffrer le fichier côté client avant /api/upload.
+Côté BAARO:
 
-Le processus utilise bot.launch() et doit tourner sur un environnement
-Node persistant ou être adapté en webhook; ne pas le considérer comme
-une simple fonction Vercel serverless.
+```env
+TELEGRAM_MEDIA_API_URL=https://DOMAINE-DU-BOT
+TELEGRAM_API_SECRET=la_meme_valeur_que_le_bot
+```
+
+Le bot est un processus Node persistant avec `bot.launch()`. Ne pas le traiter comme une simple fonction Vercel serverless sans adaptation webhook.
