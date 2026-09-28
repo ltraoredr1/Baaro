@@ -12,6 +12,7 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { supabase } from "../supabaseClient.js";
+import { uploadExternalMedia } from "../lib/externalMedia.js";
 import { MediaCarousel } from "./MediaCarousel.jsx";
 import { AudioPicker } from "./AudioPicker.jsx";
 
@@ -227,34 +228,19 @@ export function StoryComposer({ onCreated, onClose, currentUserId }) {
         const media = mediaItems[i];
         const progress = 30 + (i / mediaItems.length) * 40; // 30-70%
 
-        // Upload fichier
-        // Chemin stable identité : auth.users.id / uuid.ext (aligné FeedStories)
-        const ext = (media.file.name.split(".").pop() || (media.type === "video" ? "mp4" : "jpg")).toLowerCase();
-        const path = `${authorId}/${crypto.randomUUID()}.${ext}`;
-
-        const { error: uploadError } = await supabase.storage
-          .from("stories")
-          .upload(path, media.file, {
-            cacheControl: "31536000",
-            upsert: false,
-            contentType: media.file.type,
-          });
-
-        if (uploadError) {
-          throw new Error(`Erreur upload ${media.type}: ${uploadError.message}`);
-        }
-
-        // Get public URL
-        const { data: urlData } = supabase.storage
-          .from("stories")
-          .getPublicUrl(path);
+        // Upload externe (Telegram / R2) — plus de Supabase Storage
+        const uploaded = await uploadExternalMedia(media.file, {
+          folder: "stories",
+          userId: authorId,
+          maxBytes: media.type === "video" ? 50 * 1024 * 1024 : 10 * 1024 * 1024,
+        });
 
         // Insérer en DB
         const { error: mediaError } = await supabase.from("story_media").insert({
           story_id: storyData.id,
           position: i,
           media_type: media.type,
-          media_url: urlData.publicUrl,
+          media_url: uploaded.url,
           duration_seconds: media.duration,
           text_overlay: media.textOverlay || null,
           transition_type: media.transitionType,
