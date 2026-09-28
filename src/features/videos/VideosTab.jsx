@@ -4,13 +4,10 @@ import {
   Check,
   ChevronDown,
   Clock3,
-  Copy,
   Expand,
   Heart,
   MessageCircle,
   Music2,
-  Pause,
-  Play,
   Plus,
   Repeat2,
   Send,
@@ -21,9 +18,11 @@ import {
   X,
 } from "lucide-react";
 import { supabase } from "../../supabaseClient.js";
-import { API_BASE } from "../../config.js";
+import { uploadExternalMedia } from "../../lib/externalMedia.js";
 import { COLORS } from "../../theme.js";
 import { useToast } from "../../components/ToastContext.jsx";
+
+const MAX_VIDEO_SIZE = 50 * 1024 * 1024;
 
 const formatCount = (value = 0) => {
   const n = Number(value) || 0;
@@ -74,12 +73,11 @@ export function VideosTab({ onRewardPoints, onExit }) {
   const [likedMap, setLikedMap] = useState({});
   const [progress, setProgress] = useState({});
   const [videoErrors, setVideoErrors] = useState({});
-  
-  // États pour les commentaires
+
   const [showComments, setShowComments] = useState(null);
   const [comments, setComments] = useState({});
   const [newComment, setNewComment] = useState("");
-  
+
   const [shareId, setShareId] = useState(null);
   const [expandedCaption, setExpandedCaption] = useState(null);
 
@@ -93,7 +91,6 @@ export function VideosTab({ onRewardPoints, onExit }) {
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
 
-  // Créateur caméra
   const [cameraOpen, setCameraOpen] = useState(false);
   const [cameraFacing, setCameraFacing] = useState("user");
   const [cameraRecording, setCameraRecording] = useState(false);
@@ -110,6 +107,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
   const observerRef = useRef(null);
   const viewedRef = useRef(new Set());
   const fileInputRef = useRef(null);
+  const realtimeReloadTimerRef = useRef(null);
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => setUser(data?.user || null));
@@ -151,7 +149,6 @@ export function VideosTab({ onRewardPoints, onExit }) {
       setVideos(data || []);
 
       if (user?.id) {
-        // ⚠️ Vérifiez que votre table s'appelle bien "video_likes" (sinon remplacez par "likes")
         const { data: likes } = await supabase
           .from("video_likes")
           .select("video_id")
@@ -177,6 +174,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
 
   useEffect(() => {
     let active = true;
+
     supabase
       .from("sounds")
       .select("*")
@@ -186,16 +184,17 @@ export function VideosTab({ onRewardPoints, onExit }) {
         if (active) setSounds(data || []);
       });
 
-    return () => { active = false; };
+    return () => {
+      active = false;
+    };
   }, []);
-
-  const realtimeReloadTimerRef = useRef(null);
 
   useEffect(() => {
     const scheduleReload = () => {
       if (realtimeReloadTimerRef.current) {
         clearTimeout(realtimeReloadTimerRef.current);
       }
+
       realtimeReloadTimerRef.current = setTimeout(() => {
         realtimeReloadTimerRef.current = null;
         loadVideos();
@@ -233,13 +232,22 @@ export function VideosTab({ onRewardPoints, onExit }) {
 
   const visibleVideos = useMemo(() => {
     const list = [...videos];
+
     if (mode === "trending") {
       return list.sort((a, b) => {
-        const scoreA = Number(a.views || 0) + Number(a.likes || 0) * 4 + Number(a.comments_count || 0) * 6;
-        const scoreB = Number(b.views || 0) + Number(b.likes || 0) * 4 + Number(b.comments_count || 0) * 6;
+        const scoreA =
+          Number(a.views || 0) +
+          Number(a.likes || 0) * 4 +
+          Number(a.comments_count || 0) * 6;
+        const scoreB =
+          Number(b.views || 0) +
+          Number(b.likes || 0) * 4 +
+          Number(b.comments_count || 0) * 6;
+
         return scoreB - scoreA;
       });
     }
+
     return list;
   }, [videos, mode]);
 
@@ -249,7 +257,10 @@ export function VideosTab({ onRewardPoints, onExit }) {
     const observer = new IntersectionObserver(
       (entries) => {
         const visible = entries
-          .filter((entry) => entry.isIntersecting && entry.intersectionRatio >= 0.7)
+          .filter(
+            (entry) =>
+              entry.isIntersecting && entry.intersectionRatio >= 0.7
+          )
           .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
 
         Object.values(videoRefs.current).forEach((el) => {
@@ -265,15 +276,18 @@ export function VideosTab({ onRewardPoints, onExit }) {
 
         setPlayingId(id);
 
-        // Enregistrement de la vue (le backend SQL gère maintenant les utilisateurs anonymes)
         if (id && !viewedRef.current.has(id)) {
           viewedRef.current.add(id);
-          supabase.rpc("register_video_view", { p_video_id: id }).catch((err) => {
-            console.debug("View registration skipped:", err.message);
-          });
+
+          supabase
+            .rpc("register_video_view", { p_video_id: id })
+            .catch((err) => {
+              console.debug("View registration skipped:", err.message);
+            });
         }
 
         video.muted = muted;
+
         video.play().catch(() => {
           video.muted = true;
           setMuted(true);
@@ -284,6 +298,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
     );
 
     observerRef.current = observer;
+
     Object.values(videoRefs.current).forEach((el) => {
       if (el) observer.observe(el);
     });
@@ -307,6 +322,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
   const toggleMute = () => {
     const next = !muted;
     setMuted(next);
+
     Object.values(videoRefs.current).forEach((video) => {
       if (video) video.muted = next;
     });
@@ -315,6 +331,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
   const toggleFullscreen = async (id) => {
     const video = videoRefs.current[id];
     if (!video) return;
+
     try {
       if (document.fullscreenElement) {
         await document.exitFullscreen();
@@ -328,7 +345,10 @@ export function VideosTab({ onRewardPoints, onExit }) {
 
   const handleTimeUpdate = (id, event) => {
     const video = event.currentTarget;
-    const value = video.duration ? video.currentTime / video.duration : 0;
+    const value = video.duration
+      ? video.currentTime / video.duration
+      : 0;
+
     setProgress((prev) => ({ ...prev, [id]: value }));
   };
 
@@ -340,22 +360,42 @@ export function VideosTab({ onRewardPoints, onExit }) {
 
     const wasLiked = !!likedMap[videoId];
 
-    // Mise à jour optimiste
-    setLikedMap((prev) => ({ ...prev, [videoId]: !wasLiked }));
+    setLikedMap((prev) => ({
+      ...prev,
+      [videoId]: !wasLiked,
+    }));
+
     setVideos((prev) =>
       prev.map((video) =>
         video.id === videoId
-          ? { ...video, likes: Math.max(0, Number(video.likes || 0) + (wasLiked ? -1 : 1)) }
+          ? {
+              ...video,
+              likes: Math.max(
+                0,
+                Number(video.likes || 0) + (wasLiked ? -1 : 1)
+              ),
+            }
           : video
       )
     );
 
     try {
       if (wasLiked) {
-        const { error } = await supabase.from("video_likes").delete().eq("video_id", videoId).eq("user_id", user.id);
+        const { error } = await supabase
+          .from("video_likes")
+          .delete()
+          .eq("video_id", videoId)
+          .eq("user_id", user.id);
+
         if (error) throw error;
       } else {
-        const { error } = await supabase.from("video_likes").insert({ video_id: videoId, user_id: user.id });
+        const { error } = await supabase
+          .from("video_likes")
+          .insert({
+            video_id: videoId,
+            user_id: user.id,
+          });
+
         if (error) throw error;
 
         onRewardPoints?.("like_video", "Vidéo aimée", videoId);
@@ -363,34 +403,45 @@ export function VideosTab({ onRewardPoints, onExit }) {
       }
     } catch (error) {
       console.error(error);
-      // Rollback en cas d'erreur
-      setLikedMap((prev) => ({ ...prev, [videoId]: wasLiked }));
+
+      setLikedMap((prev) => ({
+        ...prev,
+        [videoId]: wasLiked,
+      }));
+
       setVideos((prev) =>
         prev.map((video) =>
           video.id === videoId
-            ? { ...video, likes: Math.max(0, Number(video.likes || 0) + (wasLiked ? 1 : -1)) }
+            ? {
+                ...video,
+                likes: Math.max(
+                  0,
+                  Number(video.likes || 0) + (wasLiked ? 1 : -1)
+                ),
+              }
             : video
         )
       );
+
       showToast("Impossible de modifier le like.", "error");
     }
   };
 
-  // ============================================================
-  // CORRECTION : GESTION DES COMMENTAIRES SIMPLIFIÉE ET ROBUSTE
-  // ============================================================
   const openComments = async (videoId) => {
     setShowComments(videoId);
 
-    // ⚠️ Vérifiez que le nom de la table est bien "video_comments" dans votre DB
-    // Si elle s'appelle "comments", remplacez "video_comments" par "comments" ci-dessous
     const { data, error } = await supabase
       .from("video_comments")
       .select(`
-        id, 
-        content, 
-        created_at, 
-        profiles:author_id (display_name, handle, flag, avatar_url)
+        id,
+        content,
+        created_at,
+        profiles:author_id (
+          display_name,
+          handle,
+          flag,
+          avatar_url
+        )
       `)
       .eq("video_id", videoId)
       .order("created_at", { ascending: true });
@@ -412,15 +463,13 @@ export function VideosTab({ onRewardPoints, onExit }) {
       showToast("Connecte-toi pour commenter.", "error");
       return;
     }
-    if (!showComments || !newComment.trim()) {
-      return;
-    }
+
+    if (!showComments || !newComment.trim()) return;
 
     const videoId = showComments;
     const text = newComment.trim();
 
     try {
-      // 1. Insertion directe en base (Le trigger SQL mettra à jour comments_count automatiquement)
       const { data, error } = await supabase
         .from("video_comments")
         .insert({
@@ -429,16 +478,20 @@ export function VideosTab({ onRewardPoints, onExit }) {
           content: text,
         })
         .select(`
-          id, 
-          content, 
-          created_at, 
-          profiles:author_id (display_name, handle, flag, avatar_url)
+          id,
+          content,
+          created_at,
+          profiles:author_id (
+            display_name,
+            handle,
+            flag,
+            avatar_url
+          )
         `)
         .single();
 
       if (error) throw error;
 
-      // 2. Mise à jour optimiste de l'interface (ressenti instantané)
       setComments((prev) => ({
         ...prev,
         [videoId]: [...(prev[videoId] || []), data],
@@ -447,28 +500,35 @@ export function VideosTab({ onRewardPoints, onExit }) {
       setVideos((prev) =>
         prev.map((video) =>
           video.id === videoId
-            ? { ...video, comments_count: (video.comments_count || 0) + 1 }
+            ? {
+                ...video,
+                comments_count: Number(video.comments_count || 0) + 1,
+              }
             : video
         )
       );
 
-      // 3. Nettoyage et récompenses
       setNewComment("");
       onRewardPoints?.("comment_video", "Commentaire", data?.id);
       showPointsReward?.(2, "Commentaire");
-      
     } catch (error) {
       console.error("[Videos][comment] Erreur:", error);
       showToast("Impossible d'envoyer le commentaire.", "error");
     }
   };
-  // ============================================================
 
   const handleShare = async (video) => {
-    const url = `${window.location.origin}?video=${encodeURIComponent(video.id)}`;
+    const url = `${window.location.origin}?video=${encodeURIComponent(
+      video.id
+    )}`;
+
     try {
       if (navigator.share) {
-        await navigator.share({ title: video.title || "Vidéo BAARO", text: "Regarde cette vidéo sur BAARO", url });
+        await navigator.share({
+          title: video.title || "Vidéo BAARO",
+          text: "Regarde cette vidéo sur BAARO",
+          url,
+        });
       } else {
         await navigator.clipboard.writeText(url);
         setShareId(video.id);
@@ -493,7 +553,9 @@ export function VideosTab({ onRewardPoints, onExit }) {
           author_id: user.id,
           video_url: video.video_url,
           title: `🔁 ${video.title || "Vidéo BAARO"}`,
-          description: `Repost de @${video.profiles?.handle || "membre"}`,
+          description: `Repost de @${
+            video.profiles?.handle || "membre"
+          }`,
           duration: video.duration || "00:00",
           views: 0,
           likes: 0,
@@ -522,10 +584,18 @@ export function VideosTab({ onRewardPoints, onExit }) {
     if (!window.confirm("Supprimer cette vidéo ?")) return;
 
     try {
-      const { error } = await supabase.from("videos").delete().eq("id", videoId).eq("author_id", user.id);
+      const { error } = await supabase
+        .from("videos")
+        .delete()
+        .eq("id", videoId)
+        .eq("author_id", user.id);
+
       if (error) throw error;
 
-      setVideos((prev) => prev.filter((video) => video.id !== videoId));
+      setVideos((prev) =>
+        prev.filter((video) => video.id !== videoId)
+      );
+
       delete videoRefs.current[videoId];
       showToast("Vidéo supprimée.", "success");
     } catch (error) {
@@ -539,40 +609,60 @@ export function VideosTab({ onRewardPoints, onExit }) {
       clearInterval(cameraTimerRef.current);
       cameraTimerRef.current = null;
     }
+
     if (mediaRecorderRef.current?.state === "recording") {
-      try { mediaRecorderRef.current.stop(); } catch {}
+      try {
+        mediaRecorderRef.current.stop();
+      } catch {}
     }
+
     mediaRecorderRef.current = null;
+
     if (cameraStreamRef.current) {
       cameraStreamRef.current.getTracks().forEach((track) => track.stop());
       cameraStreamRef.current = null;
     }
+
     if (cameraVideoRef.current) {
       cameraVideoRef.current.srcObject = null;
     }
+
     setCameraRecording(false);
   }, []);
 
   const startCamera = useCallback(async () => {
     setCameraError("");
+
     if (!navigator.mediaDevices?.getUserMedia) {
-      setCameraError("La caméra n'est pas disponible dans ce navigateur. Vérifie HTTPS et les permissions.");
+      setCameraError(
+        "La caméra n'est pas disponible dans ce navigateur. Vérifie HTTPS et les permissions."
+      );
       return;
     }
+
     stopCameraStream();
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: cameraFacing, width: { ideal: 1080 }, height: { ideal: 1920 } },
+        video: {
+          facingMode: cameraFacing,
+          width: { ideal: 1080 },
+          height: { ideal: 1920 },
+        },
         audio: true,
       });
+
       cameraStreamRef.current = stream;
+
       if (cameraVideoRef.current) {
         cameraVideoRef.current.srcObject = stream;
         await cameraVideoRef.current.play().catch(() => {});
       }
+
       setCameraSeconds(0);
     } catch (error) {
       console.error("BAARO camera:", error);
+
       setCameraError(
         error?.name === "NotAllowedError"
           ? "Autorise la caméra et le micro dans le navigateur puis réessaie."
@@ -596,12 +686,17 @@ export function VideosTab({ onRewardPoints, onExit }) {
 
   const toggleCameraFacing = async () => {
     if (cameraRecording) return;
-    setCameraFacing((value) => (value === "user" ? "environment" : "user"));
+
+    setCameraFacing((value) =>
+      value === "user" ? "environment" : "user"
+    );
   };
 
   useEffect(() => {
     if (!cameraOpen || cameraRecording) return;
+
     startCamera();
+
     return () => stopCameraStream();
   }, [cameraOpen, cameraFacing]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -611,22 +706,40 @@ export function VideosTab({ onRewardPoints, onExit }) {
 
   const startCameraRecording = () => {
     const stream = cameraStreamRef.current;
+
     if (!stream) {
       setCameraError("La caméra n'est pas ouverte.");
       return;
     }
-    const candidates = ["video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm", "video/mp4"];
-    const mimeType = candidates.find((type) => window.MediaRecorder?.isTypeSupported?.(type)) || "";
+
+    const candidates = [
+      "video/webm;codecs=vp9,opus",
+      "video/webm;codecs=vp8,opus",
+      "video/webm",
+      "video/mp4",
+    ];
+
+    const mimeType =
+      candidates.find((type) =>
+        window.MediaRecorder?.isTypeSupported?.(type)
+      ) || "";
 
     if (!window.MediaRecorder) {
-      setCameraError("L'enregistrement vidéo n'est pas supporté par ce navigateur.");
+      setCameraError(
+        "L'enregistrement vidéo n'est pas supporté par ce navigateur."
+      );
       return;
     }
 
     cameraChunksRef.current = [];
+
     let recorder;
+
     try {
-      recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+      recorder = new MediaRecorder(
+        stream,
+        mimeType ? { mimeType } : undefined
+      );
     } catch (error) {
       console.error(error);
       setCameraError("Impossible de démarrer l'enregistrement.");
@@ -634,23 +747,41 @@ export function VideosTab({ onRewardPoints, onExit }) {
     }
 
     mediaRecorderRef.current = recorder;
+
     recorder.ondataavailable = (event) => {
-      if (event.data?.size) cameraChunksRef.current.push(event.data);
+      if (event.data?.size) {
+        cameraChunksRef.current.push(event.data);
+      }
     };
+
     recorder.onerror = (event) => {
       console.error("BAARO recorder:", event.error);
-      setCameraError("Une erreur est survenue pendant l'enregistrement.");
+      setCameraError(
+        "Une erreur est survenue pendant l'enregistrement."
+      );
       setCameraRecording(false);
     };
+
     recorder.onstop = () => {
       const type = recorder.mimeType || mimeType || "video/webm";
       const blob = new Blob(cameraChunksRef.current, { type });
+
       if (!blob.size) {
         setCameraError("Aucune vidéo n'a été enregistrée.");
         return;
       }
+
       const ext = type.includes("mp4") ? "mp4" : "webm";
-      const file = new File([blob], `baaro-camera-${Date.now()}.${ext}`, { type, lastModified: Date.now() });
+
+      const file = new File(
+        [blob],
+        `baaro-camera-${Date.now()}.${ext}`,
+        {
+          type,
+          lastModified: Date.now(),
+        }
+      );
+
       handleFileSelected(file);
       setCameraOpen(false);
       setCameraSeconds(0);
@@ -660,6 +791,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
     recorder.start(1000);
     setCameraRecording(true);
     setCameraSeconds(0);
+
     cameraTimerRef.current = setInterval(() => {
       setCameraSeconds((value) => value + 1);
     }, 1000);
@@ -669,15 +801,18 @@ export function VideosTab({ onRewardPoints, onExit }) {
     if (mediaRecorderRef.current?.state === "recording") {
       mediaRecorderRef.current.stop();
     }
+
     if (cameraTimerRef.current) {
       clearInterval(cameraTimerRef.current);
       cameraTimerRef.current = null;
     }
+
     setCameraRecording(false);
   };
 
   const resetUpload = () => {
     if (previewUrl) URL.revokeObjectURL(previewUrl);
+
     setSelectedFile(null);
     setPreviewUrl("");
     setUploadTitle("");
@@ -685,17 +820,30 @@ export function VideosTab({ onRewardPoints, onExit }) {
     setSelectedSound(null);
     setShowSoundPicker(false);
     setUploadProgress(0);
+
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
   };
 
   const handleFileSelected = (file) => {
     if (!file) return;
+
     if (!file.type.startsWith("video/")) {
       showToast("Sélectionne un fichier vidéo.", "error");
       return;
     }
+
+    if (file.size > MAX_VIDEO_SIZE) {
+      showToast("La vidéo est trop lourde. Taille maximale : 50 Mo.", "error");
+      return;
+    }
+
     if (previewUrl) URL.revokeObjectURL(previewUrl);
+
     setSelectedFile(file);
     setPreviewUrl(URL.createObjectURL(file));
+    setUploadProgress(0);
   };
 
   const handleUpload = async () => {
@@ -703,8 +851,14 @@ export function VideosTab({ onRewardPoints, onExit }) {
       showToast("Sélectionne une vidéo.", "error");
       return;
     }
+
     if (!user) {
       showToast("Connecte-toi pour publier.", "error");
+      return;
+    }
+
+    if (selectedFile.size > MAX_VIDEO_SIZE) {
+      showToast("La vidéo est trop lourde. Taille maximale : 50 Mo.", "error");
       return;
     }
 
@@ -712,17 +866,16 @@ export function VideosTab({ onRewardPoints, onExit }) {
     setUploadProgress(10);
 
     try {
-      const ext = (selectedFile.name.split(".").pop() || "mp4").toLowerCase();
-      const path = `${user.id}/${crypto.randomUUID()}.${ext}`;
+      // Stockage média : Telegram uniquement.
+      // Supabase reste utilisé uniquement pour les données de la table "videos".
+      const media = await uploadExternalMedia(selectedFile, {
+        folder: "videos",
+        userId: user.id,
+        maxBytes: MAX_VIDEO_SIZE,
+      });
 
-      const { error: uploadError } = await supabase.storage
-        .from("videos")
-        .upload(path, selectedFile, { cacheControl: "3600", upsert: false });
-
-      if (uploadError) throw uploadError;
       setUploadProgress(65);
 
-      const { data: publicData } = supabase.storage.from("videos").getPublicUrl(path);
       const duration = await readDuration(selectedFile);
       setUploadProgress(80);
 
@@ -730,7 +883,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
         .from("videos")
         .insert({
           author_id: user.id,
-          video_url: publicData.publicUrl,
+          video_url: media.url,
           title: uploadTitle.trim() || "Vidéo BAARO",
           description: uploadDescription.trim(),
           duration,
@@ -746,7 +899,13 @@ export function VideosTab({ onRewardPoints, onExit }) {
       if (dbError) throw dbError;
 
       setUploadProgress(100);
-      onRewardPoints?.("publish_video", "Vidéo publiée", created?.id);
+
+      onRewardPoints?.(
+        "publish_video",
+        "Vidéo publiée",
+        created?.id
+      );
+
       showPointsReward?.(8, "Vidéo publiée");
       showToast("Vidéo publiée !", "success");
 
@@ -755,8 +914,11 @@ export function VideosTab({ onRewardPoints, onExit }) {
       closeCamera();
       loadVideos();
     } catch (error) {
-      console.error(error);
-      showToast(error?.message || "Impossible de publier la vidéo.", "error");
+      console.error("[Videos][upload] Erreur:", error);
+      showToast(
+        error?.message || "Impossible de publier la vidéo.",
+        "error"
+      );
     } finally {
       setUploading(false);
     }
@@ -774,6 +936,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
     return (
       <div className="min-h-[60vh] flex flex-col items-center justify-center gap-4 text-center px-6">
         <p className="text-white/60">{loadError}</p>
+
         <button
           onClick={loadVideos}
           className="rounded-xl px-4 py-2 font-bold"
@@ -801,15 +964,20 @@ export function VideosTab({ onRewardPoints, onExit }) {
             <button
               onClick={() => setMode("forYou")}
               className={`px-4 py-2 rounded-full text-xs font-black ${
-                mode === "forYou" ? "bg-white text-black" : "text-white/70"
+                mode === "forYou"
+                  ? "bg-white text-black"
+                  : "text-white/70"
               }`}
             >
               Pour toi
             </button>
+
             <button
               onClick={() => setMode("trending")}
               className={`px-4 py-2 rounded-full text-xs font-black ${
-                mode === "trending" ? "bg-white text-black" : "text-white/70"
+                mode === "trending"
+                  ? "bg-white text-black"
+                  : "text-white/70"
               }`}
             >
               Tendance
@@ -838,7 +1006,10 @@ export function VideosTab({ onRewardPoints, onExit }) {
               const captionOpen = expandedCaption === video.id;
 
               return (
-                <article key={video.id} className="relative h-screen snap-start bg-black overflow-hidden">
+                <article
+                  key={video.id}
+                  className="relative h-screen snap-start bg-black overflow-hidden"
+                >
                   <video
                     ref={(el) => {
                       if (el) {
@@ -854,9 +1025,16 @@ export function VideosTab({ onRewardPoints, onExit }) {
                     loop
                     muted={muted}
                     className="absolute inset-0 h-full w-full object-cover"
-                    onTimeUpdate={(event) => handleTimeUpdate(video.id, event)}
+                    onTimeUpdate={(event) =>
+                      handleTimeUpdate(video.id, event)
+                    }
                     onClick={() => togglePlay(video.id)}
-                    onError={() => setVideoErrors((prev) => ({ ...prev, [video.id]: true }))}
+                    onError={() =>
+                      setVideoErrors((prev) => ({
+                        ...prev,
+                        [video.id]: true,
+                      }))
+                    }
                   />
 
                   {videoErrors[video.id] && (
@@ -871,34 +1049,58 @@ export function VideosTab({ onRewardPoints, onExit }) {
                     <div className="flex items-center gap-2 mb-2">
                       <div className="h-9 w-9 rounded-full overflow-hidden bg-zinc-800">
                         {video.profiles?.avatar_url ? (
-                          <img src={video.profiles.avatar_url} alt="" className="h-full w-full object-cover" />
+                          <img
+                            src={video.profiles.avatar_url}
+                            alt=""
+                            className="h-full w-full object-cover"
+                          />
                         ) : (
                           <div className="h-full w-full flex items-center justify-center text-xs">
                             {video.profiles?.flag || "🌍"}
                           </div>
                         )}
                       </div>
+
                       <div className="min-w-0">
                         <div className="font-black text-sm truncate">
-                          @{video.profiles?.handle || "membre"} {video.profiles?.flag}
+                          @{video.profiles?.handle || "membre"}{" "}
+                          {video.profiles?.flag}
                         </div>
+
                         <div className="text-[10px] text-white/50 truncate">
                           {video.profiles?.display_name || "Membre BAARO"}
                         </div>
                       </div>
                     </div>
 
-                    <button onClick={() => setExpandedCaption(captionOpen ? null : video.id)} className="text-left">
-                      <p className={`text-sm font-medium leading-snug ${captionOpen ? "" : "line-clamp-2"}`}>
+                    <button
+                      onClick={() =>
+                        setExpandedCaption(
+                          captionOpen ? null : video.id
+                        )
+                      }
+                      className="text-left"
+                    >
+                      <p
+                        className={`text-sm font-medium leading-snug ${
+                          captionOpen ? "" : "line-clamp-2"
+                        }`}
+                      >
                         {caption || "Vidéo BAARO"}
                       </p>
+
                       {caption.length > 90 && (
-                        <span className="text-[10px] text-white/50">{captionOpen ? "Réduire" : "Plus"}</span>
+                        <span className="text-[10px] text-white/50">
+                          {captionOpen ? "Réduire" : "Plus"}
+                        </span>
                       )}
                     </button>
 
                     <div className="mt-2">
-                      <VideoTranslateControls mediaUrl={video.media_url || video.video_url} videoId={video.id} />
+                      <VideoTranslateControls
+                        mediaUrl={video.media_url || video.video_url}
+                        videoId={video.id}
+                      />
                     </div>
 
                     {video.sound_id && (
@@ -910,34 +1112,78 @@ export function VideosTab({ onRewardPoints, onExit }) {
                   </div>
 
                   <div className="absolute right-2 bottom-28 z-30 flex flex-col items-center gap-3">
-                    <button onClick={() => handleLike(video.id)} className="flex flex-col items-center" aria-label="J'aime">
-                      <span className={`h-11 w-11 rounded-full backdrop-blur-md flex items-center justify-center ${liked ? "bg-pink-500/25" : "bg-white/10"}`}>
-                        <Heart size={22} className={liked ? "text-pink-500" : "text-white"} fill={liked ? "currentColor" : "none"} />
+                    <button
+                      onClick={() => handleLike(video.id)}
+                      className="flex flex-col items-center"
+                      aria-label="J'aime"
+                    >
+                      <span
+                        className={`h-11 w-11 rounded-full backdrop-blur-md flex items-center justify-center ${
+                          liked ? "bg-pink-500/25" : "bg-white/10"
+                        }`}
+                      >
+                        <Heart
+                          size={22}
+                          className={
+                            liked ? "text-pink-500" : "text-white"
+                          }
+                          fill={liked ? "currentColor" : "none"}
+                        />
                       </span>
-                      <span className="text-[10px] font-black mt-1">{formatCount(video.likes)}</span>
+
+                      <span className="text-[10px] font-black mt-1">
+                        {formatCount(video.likes)}
+                      </span>
                     </button>
 
-                    <button onClick={() => openComments(video.id)} className="flex flex-col items-center" aria-label="Commentaires">
+                    <button
+                      onClick={() => openComments(video.id)}
+                      className="flex flex-col items-center"
+                      aria-label="Commentaires"
+                    >
                       <span className="h-11 w-11 rounded-full bg-white/10 backdrop-blur-md flex items-center justify-center">
                         <MessageCircle size={21} />
                       </span>
-                      <span className="text-[10px] font-black mt-1">{formatCount(video.comments_count)}</span>
+
+                      <span className="text-[10px] font-black mt-1">
+                        {formatCount(video.comments_count)}
+                      </span>
                     </button>
 
-                    <button onClick={() => handleRepost(video)} className="h-11 w-11 rounded-full bg-white/10 backdrop-blur-md flex items-center justify-center" aria-label="Reposter">
+                    <button
+                      onClick={() => handleRepost(video)}
+                      className="h-11 w-11 rounded-full bg-white/10 backdrop-blur-md flex items-center justify-center"
+                      aria-label="Reposter"
+                    >
                       <Repeat2 size={21} />
                     </button>
 
-                    <button onClick={() => handleShare(video)} className="h-11 w-11 rounded-full bg-white/10 backdrop-blur-md flex items-center justify-center" aria-label="Partager">
-                      {shareId === video.id ? <Check size={21} className="text-green-400" /> : <Share2 size={21} />}
+                    <button
+                      onClick={() => handleShare(video)}
+                      className="h-11 w-11 rounded-full bg-white/10 backdrop-blur-md flex items-center justify-center"
+                      aria-label="Partager"
+                    >
+                      {shareId === video.id ? (
+                        <Check size={21} className="text-green-400" />
+                      ) : (
+                        <Share2 size={21} />
+                      )}
                     </button>
 
-                    <button onClick={() => toggleFullscreen(video.id)} className="h-11 w-11 rounded-full bg-white/10 backdrop-blur-md flex items-center justify-center" aria-label="Plein écran">
+                    <button
+                      onClick={() => toggleFullscreen(video.id)}
+                      className="h-11 w-11 rounded-full bg-white/10 backdrop-blur-md flex items-center justify-center"
+                      aria-label="Plein écran"
+                    >
                       <Expand size={20} />
                     </button>
 
                     {video.author_id === user?.id && (
-                      <button onClick={() => handleDelete(video.id)} className="h-11 w-11 rounded-full bg-red-500/20 backdrop-blur-md flex items-center justify-center" aria-label="Supprimer">
+                      <button
+                        onClick={() => handleDelete(video.id)}
+                        className="h-11 w-11 rounded-full bg-red-500/20 backdrop-blur-md flex items-center justify-center"
+                        aria-label="Supprimer"
+                      >
                         <Trash2 size={19} className="text-red-300" />
                       </button>
                     )}
@@ -946,7 +1192,10 @@ export function VideosTab({ onRewardPoints, onExit }) {
                   <div className="absolute left-3 right-3 bottom-24 z-30 h-1 rounded-full bg-white/20 overflow-hidden pointer-events-none">
                     <div
                       className="h-full transition-[width] duration-100"
-                      style={{ width: `${(progress[video.id] || 0) * 100}%`, background: COLORS.gold }}
+                      style={{
+                        width: `${(progress[video.id] || 0) * 100}%`,
+                        background: COLORS.gold,
+                      }}
                     />
                   </div>
 
@@ -955,10 +1204,19 @@ export function VideosTab({ onRewardPoints, onExit }) {
                       <Clock3 size={12} />
                       {video.duration || "00:00"}
                     </span>
+
                     <div className="flex items-center gap-2">
                       <span>{formatCount(video.views)} vues</span>
-                      <button onClick={toggleMute} className="h-8 w-8 rounded-full bg-black/35 backdrop-blur-md flex items-center justify-center">
-                        {muted ? <VolumeX size={15} /> : <Volume2 size={15} />}
+
+                      <button
+                        onClick={toggleMute}
+                        className="h-8 w-8 rounded-full bg-black/35 backdrop-blur-md flex items-center justify-center"
+                      >
+                        {muted ? (
+                          <VolumeX size={15} />
+                        ) : (
+                          <Volume2 size={15} />
+                        )}
                       </button>
                     </div>
                   </div>
@@ -979,7 +1237,11 @@ export function VideosTab({ onRewardPoints, onExit }) {
                   {(comments[showComments] || []).length} commentaire(s)
                 </p>
               </div>
-              <button onClick={() => setShowComments(null)} className="h-9 w-9 rounded-full bg-white/10 flex items-center justify-center">
+
+              <button
+                onClick={() => setShowComments(null)}
+                className="h-9 w-9 rounded-full bg-white/10 flex items-center justify-center"
+              >
                 <X size={18} />
               </button>
             </div>
@@ -994,16 +1256,25 @@ export function VideosTab({ onRewardPoints, onExit }) {
                   <div key={comment.id} className="flex gap-2">
                     <div className="h-8 w-8 rounded-full bg-zinc-800 overflow-hidden shrink-0">
                       {comment.profiles?.avatar_url ? (
-                        <img src={comment.profiles.avatar_url} alt="" className="h-full w-full object-cover" />
+                        <img
+                          src={comment.profiles.avatar_url}
+                          alt=""
+                          className="h-full w-full object-cover"
+                        />
                       ) : (
                         <div className="h-full w-full flex items-center justify-center text-xs">
                           {comment.profiles?.flag || "🌍"}
                         </div>
                       )}
                     </div>
+
                     <div>
-                      <div className="text-xs font-black">@{comment.profiles?.handle || "membre"}</div>
-                      <p className="text-sm text-white/75">{comment.content}</p>
+                      <div className="text-xs font-black">
+                        @{comment.profiles?.handle || "membre"}
+                      </div>
+                      <p className="text-sm text-white/75">
+                        {comment.content}
+                      </p>
                     </div>
                   </div>
                 ))
@@ -1013,13 +1284,16 @@ export function VideosTab({ onRewardPoints, onExit }) {
             <div className="p-3 border-t border-white/10 flex gap-2">
               <input
                 value={newComment}
-                onChange={(event) => setNewComment(event.target.value)}
+                onChange={(event) =>
+                  setNewComment(event.target.value)
+                }
                 onKeyDown={(event) => {
                   if (event.key === "Enter") sendComment();
                 }}
                 placeholder="Ajouter un commentaire…"
                 className="flex-1 rounded-2xl bg-white/10 px-4 py-3 text-sm outline-none"
               />
+
               <button
                 onClick={sendComment}
                 className="h-12 w-12 rounded-2xl flex items-center justify-center"
@@ -1037,13 +1311,21 @@ export function VideosTab({ onRewardPoints, onExit }) {
           {cameraOpen && (
             <div className="fixed inset-0 z-[120] bg-black flex flex-col">
               <div className="flex items-center justify-between p-4 pt-[max(1rem,env(safe-area-inset-top))]">
-                <button onClick={closeCamera} className="h-10 w-10 rounded-full bg-white/10 flex items-center justify-center" aria-label="Fermer la caméra">
+                <button
+                  onClick={closeCamera}
+                  className="h-10 w-10 rounded-full bg-white/10 flex items-center justify-center"
+                  aria-label="Fermer la caméra"
+                >
                   <X size={20} />
                 </button>
+
                 <div className="text-center">
                   <div className="font-black">Caméra BAARO</div>
-                  <div className="text-xs text-white/50">{formatTime(cameraSeconds)}</div>
+                  <div className="text-xs text-white/50">
+                    {formatTime(cameraSeconds)}
+                  </div>
                 </div>
+
                 <button
                   onClick={toggleCameraFacing}
                   disabled={cameraRecording}
@@ -1062,13 +1344,20 @@ export function VideosTab({ onRewardPoints, onExit }) {
                     muted
                     playsInline
                     className="h-full w-full object-cover"
-                    style={{ transform: cameraFacing === "user" ? "scaleX(-1)" : "none" }}
+                    style={{
+                      transform:
+                        cameraFacing === "user"
+                          ? "scaleX(-1)"
+                          : "none",
+                    }}
                   />
+
                   {cameraError && (
                     <div className="absolute inset-x-4 bottom-4 rounded-2xl bg-black/75 border border-red-400/30 p-4 text-sm text-center">
                       {cameraError}
                     </div>
                   )}
+
                   {cameraRecording && (
                     <div className="absolute top-4 left-4 flex items-center gap-2 rounded-full bg-black/60 px-3 py-2 text-xs font-bold">
                       <span className="h-2.5 w-2.5 rounded-full bg-red-500 animate-pulse" />
@@ -1081,13 +1370,28 @@ export function VideosTab({ onRewardPoints, onExit }) {
               <div className="p-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] flex flex-col items-center gap-3">
                 {!cameraError && (
                   <button
-                    onClick={cameraRecording ? stopCameraRecording : startCameraRecording}
+                    onClick={
+                      cameraRecording
+                        ? stopCameraRecording
+                        : startCameraRecording
+                    }
                     className="h-20 w-20 rounded-full border-4 border-white flex items-center justify-center active:scale-95"
-                    aria-label={cameraRecording ? "Arrêter l'enregistrement" : "Démarrer l'enregistrement"}
+                    aria-label={
+                      cameraRecording
+                        ? "Arrêter l'enregistrement"
+                        : "Démarrer l'enregistrement"
+                    }
                   >
-                    <span className={cameraRecording ? "h-8 w-8 rounded-lg bg-red-500" : "h-16 w-16 rounded-full bg-red-500"} />
+                    <span
+                      className={
+                        cameraRecording
+                          ? "h-8 w-8 rounded-lg bg-red-500"
+                          : "h-16 w-16 rounded-full bg-red-500"
+                      }
+                    />
                   </button>
                 )}
+
                 {cameraError && (
                   <button
                     onClick={startCamera}
@@ -1105,8 +1409,11 @@ export function VideosTab({ onRewardPoints, onExit }) {
             <div className="sticky top-0 z-10 flex items-center justify-between p-4 bg-zinc-950/95 backdrop-blur border-b border-white/10">
               <div>
                 <h3 className="font-black text-lg">Nouvelle vidéo</h3>
-                <p className="text-[10px] text-white/40">Publie ton contenu sur BAARO</p>
+                <p className="text-[10px] text-white/40">
+                  Publie ton contenu sur BAARO
+                </p>
               </div>
+
               <button
                 onClick={() => {
                   if (!uploading) {
@@ -1127,16 +1434,30 @@ export function VideosTab({ onRewardPoints, onExit }) {
                   <button
                     onClick={openCamera}
                     className="w-full aspect-[9/14] max-h-[52dvh] rounded-3xl border border-white/10 bg-white/[0.04] flex flex-col items-center justify-center active:scale-[0.99]"
-                    style={{ boxShadow: `inset 0 0 0 1px ${COLORS.gold}33` }}
+                    style={{
+                      boxShadow: `inset 0 0 0 1px ${COLORS.gold}33`,
+                    }}
                   >
-                    <div className="h-20 w-20 rounded-full flex items-center justify-center mb-4" style={{ background: COLORS.gold, color: "#000" }}>
+                    <div
+                      className="h-20 w-20 rounded-full flex items-center justify-center mb-4"
+                      style={{
+                        background: COLORS.gold,
+                        color: "#000",
+                      }}
+                    >
                       <span className="text-3xl">📹</span>
                     </div>
-                    <p className="font-black text-lg">Filmer avec la caméra</p>
+
+                    <p className="font-black text-lg">
+                      Filmer avec la caméra
+                    </p>
+
                     <p className="text-xs text-white/40 mt-1 px-6 text-center">
-                      Caméra + micro · aucune limite de durée imposée par BAARO
+                      Caméra + micro · aucune limite de durée imposée par
+                      BAARO
                     </p>
                   </button>
+
                   <button
                     onClick={() => fileInputRef.current?.click()}
                     className="w-full rounded-2xl border border-white/10 bg-white/[0.05] px-4 py-3 flex items-center justify-center gap-2 text-sm font-bold"
@@ -1147,7 +1468,13 @@ export function VideosTab({ onRewardPoints, onExit }) {
                 </div>
               ) : (
                 <div className="relative rounded-3xl overflow-hidden bg-black aspect-[9/14] max-h-[52dvh]">
-                  <video src={previewUrl} controls playsInline className="h-full w-full object-contain" />
+                  <video
+                    src={previewUrl}
+                    controls
+                    playsInline
+                    className="h-full w-full object-contain"
+                  />
+
                   <button
                     disabled={uploading}
                     onClick={() => {
@@ -1166,12 +1493,16 @@ export function VideosTab({ onRewardPoints, onExit }) {
                 type="file"
                 accept="video/*"
                 className="hidden"
-                onChange={(event) => handleFileSelected(event.target.files?.[0])}
+                onChange={(event) =>
+                  handleFileSelected(event.target.files?.[0])
+                }
               />
 
               <input
                 value={uploadTitle}
-                onChange={(event) => setUploadTitle(event.target.value)}
+                onChange={(event) =>
+                  setUploadTitle(event.target.value)
+                }
                 placeholder="Titre de la vidéo"
                 maxLength={120}
                 className="w-full rounded-2xl bg-white/10 px-4 py-3 outline-none text-sm"
@@ -1179,7 +1510,9 @@ export function VideosTab({ onRewardPoints, onExit }) {
 
               <textarea
                 value={uploadDescription}
-                onChange={(event) => setUploadDescription(event.target.value)}
+                onChange={(event) =>
+                  setUploadDescription(event.target.value)
+                }
                 placeholder="Description…"
                 rows={3}
                 maxLength={500}
@@ -1187,14 +1520,26 @@ export function VideosTab({ onRewardPoints, onExit }) {
               />
 
               <button
-                onClick={() => setShowSoundPicker((value) => !value)}
+                onClick={() =>
+                  setShowSoundPicker((value) => !value)
+                }
                 className="w-full flex items-center justify-between rounded-2xl bg-white/10 px-4 py-3"
               >
                 <span className="flex items-center gap-2 text-sm">
                   <Music2 size={17} />
-                  {selectedSound?.title || selectedSound?.name || "Ajouter un son"}
+                  {selectedSound?.title ||
+                    selectedSound?.name ||
+                    "Ajouter un son"}
                 </span>
-                <ChevronDown size={17} className={showSoundPicker ? "rotate-180 transition" : "transition"} />
+
+                <ChevronDown
+                  size={17}
+                  className={
+                    showSoundPicker
+                      ? "rotate-180 transition"
+                      : "transition"
+                  }
+                />
               </button>
 
               {showSoundPicker && (
@@ -1208,6 +1553,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
                   >
                     Aucun son
                   </button>
+
                   {sounds.map((sound) => (
                     <button
                       key={sound.id}
@@ -1217,8 +1563,15 @@ export function VideosTab({ onRewardPoints, onExit }) {
                       }}
                       className="w-full px-4 py-3 text-left text-sm border-b border-white/5 last:border-0"
                     >
-                      <div className="font-bold">{sound.title || sound.name || "Son BAARO"}</div>
-                      <div className="text-[10px] text-white/40">{sound.artist || "Audio BAARO"}</div>
+                      <div className="font-bold">
+                        {sound.title ||
+                          sound.name ||
+                          "Son BAARO"}
+                      </div>
+
+                      <div className="text-[10px] text-white/40">
+                        {sound.artist || "Audio BAARO"}
+                      </div>
                     </button>
                   ))}
                 </div>
@@ -1230,10 +1583,14 @@ export function VideosTab({ onRewardPoints, onExit }) {
                     <span>Publication…</span>
                     <span>{uploadProgress}%</span>
                   </div>
+
                   <div className="h-2 rounded-full bg-white/10 overflow-hidden">
                     <div
                       className="h-full transition-all duration-300"
-                      style={{ width: `${uploadProgress}%`, background: COLORS.gold }}
+                      style={{
+                        width: `${uploadProgress}%`,
+                        background: COLORS.gold,
+                      }}
                     />
                   </div>
                 </div>
@@ -1243,9 +1600,14 @@ export function VideosTab({ onRewardPoints, onExit }) {
                 disabled={uploading || !selectedFile}
                 onClick={handleUpload}
                 className="w-full py-3.5 rounded-2xl font-black disabled:opacity-40"
-                style={{ background: COLORS.gold, color: "#000" }}
+                style={{
+                  background: COLORS.gold,
+                  color: "#000",
+                }}
               >
-                {uploading ? "Publication en cours…" : "Publier la vidéo"}
+                {uploading
+                  ? "Publication en cours…"
+                  : "Publier la vidéo"}
               </button>
             </div>
           </div>
