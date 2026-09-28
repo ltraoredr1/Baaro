@@ -1,27 +1,69 @@
+import crypto from "node:crypto";
 import { applyCors, getAdminClient, requireUser, rateLimitAsync } from "./_shared.js";
 
-const TELEGRAM_MEDIA_API_URL = String(process.env.TELEGRAM_MEDIA_API_URL || "").replace(/\/$/, "");
+const TELEGRAM_MEDIA_API_URL = String(
+  process.env.TELEGRAM_MEDIA_API_URL || ""
+).replace(/\/$/, "");
 const TELEGRAM_API_SECRET = process.env.TELEGRAM_API_SECRET || "";
+
 const MAX_SIZE = 50 * 1024 * 1024;
-const ALLOWED_FOLDERS = new Set(["posts", "videos", "stories", "profiles", "shop", "chat"]);
+const ALLOWED_FOLDERS = new Set([
+  "posts",
+  "videos",
+  "stories",
+  "profiles",
+  "shop",
+  "chat",
+]);
 
 function safeFolder(folder) {
-  const value = String(folder || "posts").toLowerCase().replace(/[^a-z0-9_-]/g, "");
+  const value = String(folder || "posts")
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, "");
   return value || "posts";
 }
 
 function safeName(name) {
-  return String(name || "file").replace(/[\\/:*?"<>|\x00-\x1f]/g, "_").slice(0, 180) || "file";
+  return (
+    String(name || "file")
+      .replace(/[\\/:*?"<>|\x00-\x1f]/g, "_")
+      .slice(0, 180) || "file"
+  );
+}
+
+function base64url(value) {
+  return Buffer.from(value).toString("base64url");
+}
+
+function signToken(payload) {
+  const body = base64url(JSON.stringify(payload));
+  const signature = crypto
+    .createHmac("sha256", TELEGRAM_API_SECRET)
+    .update(body)
+    .digest("base64url");
+  return `${body}.${signature}`;
 }
 
 export default async function handler(req, res) {
   if (applyCors(req, res)) return;
-  if (req.method !== "POST") return res.status(405).json({ ok: false, error: "Méthode non autorisée" });
+
+  if (req.method !== "POST") {
+    return res
+      .status(405)
+      .json({ ok: false, error: "Méthode non autorisée" });
+  }
 
   try {
-    const limit = await rateLimitAsync(req, { key: "telegram-media", max: 30, windowMs: 60000 });
+    const limit = await rateLimitAsync(req, {
+      key: "telegram-media",
+      max: 30,
+      windowMs: 60000,
+    });
+
     if (!limit.ok) {
-      Object.entries(limit.headers || {}).forEach(([key, value]) => res.setHeader(key, value));
+      Object.entries(limit.headers || {}).forEach(([key, value]) =>
+        res.setHeader(key, value)
+      );
       return res.status(limit.status).json(limit.body);
     }
 
@@ -31,22 +73,60 @@ export default async function handler(req, res) {
 
     const user = await requireUser(req, getAdminClient());
     const body = req.body || {};
-    if (body.action !== "upload") return res.status(400).json({ ok: false, error: "Action invalide" });
+
+    if (body.action !== "upload") {
+      return res.status(400).json({ ok: false, error: "Action invalide" });
+    }
 
     const size = Number(body.size || 0);
-    const contentType = String(body.contentType || "application/octet-stream").trim();
+    const contentType = String(
+      body.contentType || "application/octet-stream"
+    ).trim();
     const folder = safeFolder(body.folder);
     const name = safeName(body.name);
 
-    if (!ALLOWED_FOLDERS.has(folder)) return res.status(400).json({ ok: false, error: "Dossier média non autorisé" });
-    if (!Number.isFinite(size) || size <= 0 || size > MAX_SIZE) return res.status(413).json({ ok: false, error: "Fichier trop volumineux (max 50 Mo)" });
+    if (!ALLOWED_FOLDERS.has(folder)) {
+      return res
+        .status(400)
+        .json({ ok: false, error: "Dossier média non autorisé" });
+    }
 
-    const params = new URLSearchParams({ filename: name, contentType, folder, userId: user.id });
-    const uploadUrl = `${TELEGRAM_MEDIA_API_URL}/api/upload?${params.toString()}&secret=${encodeURIComponent(TELEGRAM_API_SECRET)}`;
+    if (!Number.isFinite(size) || size <= 0 || size > MAX_SIZE) {
+      return res
+        .status(413)
+        .json({ ok: false, error: "Fichier trop volumineux (max 50 Mo)" });
+    }
 
-    return res.status(200).json({ ok: true, uploadUrl, expiresIn: 300, provider: "telegram" });
+    const exp = Math.floor(Date.now() / 1000) + 5 * 60;
+
+    // Le secret Telegram reste côté serveur.
+    // Le navigateur reçoit uniquement ce jeton temporaire signé.
+    const token = signToken({
+      v: 1,
+      exp,
+      userId: user.id,
+      filename: name,
+      contentType,
+      folder,
+      size,
+    });
+
+    const uploadUrl =
+      `${TELEGRAM_MEDIA_API_URL}/api/upload?token=${encodeURIComponent(token)}`;
+
+    return res.status(200).json({
+      ok: true,
+      uploadUrl,
+      expiresIn: 300,
+      provider: "telegram",
+    });
   } catch (error) {
     console.error("[media] Telegram:", error);
-    return res.status(error?.status || 500).json({ ok: false, error: error?.message || "Préparation média impossible" });
+    return res
+      .status(error?.status || 500)
+      .json({
+        ok: false,
+        error: error?.message || "Préparation média impossible",
+      });
   }
 }
