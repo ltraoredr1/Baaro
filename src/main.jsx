@@ -2,6 +2,7 @@ import "../i18n.js";
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
+import { Provider } from "react-redux";
 import { Capacitor } from "@capacitor/core";
 import { StatusBar, Style } from "@capacitor/status-bar";
 import App from "./app/App.jsx";
@@ -11,6 +12,7 @@ import { ErrorBoundary } from "./components/ErrorBoundary.jsx";
 import { captureRefFromUrl } from "./lib/referralApi.js";
 import { initPerf } from "./lib/initPerf.js";
 import { bootstrapNative } from "./lib/nativeBootstrap.js";
+import { store } from "./store/index.js";
 import "./index.css";
 
 captureRefFromUrl();
@@ -32,16 +34,27 @@ const setupNative = async () => {
 setupNative();
 bootstrapNative().catch(() => {});
 
+/**
+ * Ordre des providers (du plus externe au plus interne) :
+ * 1. Redux          → UI + wallet
+ * 2. AppContext     → auth / session / profil
+ * 3. ToastProvider  → notifications toast
+ *
+ * React Query (si utilisé) se place entre Redux et AppContext
+ * ou dans App.jsx selon ton setup actuel.
+ */
 ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>
     <ErrorBoundary>
-      <BrowserRouter>
-        <AppProvider>
-          <ToastProvider>
-            <App />
-          </ToastProvider>
-        </AppProvider>
-      </BrowserRouter>
+      <Provider store={store}>
+        <BrowserRouter>
+          <AppProvider>
+            <ToastProvider>
+              <App />
+            </ToastProvider>
+          </AppProvider>
+        </BrowserRouter>
+      </Provider>
     </ErrorBoundary>
   </React.StrictMode>
 );
