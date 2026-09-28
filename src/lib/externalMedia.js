@@ -9,6 +9,7 @@ function apiUrl() {
 async function getAccessToken() {
   const { data, error } = await supabase.auth.getSession();
   if (error) throw error;
+
   const token = data?.session?.access_token;
   if (!token) throw new Error("Session expirée. Reconnecte-toi.");
   return token;
@@ -27,11 +28,15 @@ export async function uploadExternalMedia(
 ) {
   if (!file) throw new Error("Fichier manquant");
   if (!userId) throw new Error("Utilisateur non connecté");
+
   if (file.size > maxBytes) {
-    throw new Error(`Fichier trop volumineux (max ${Math.round(maxBytes / 1024 / 1024)} Mo)`);
+    throw new Error(
+      `Fichier trop volumineux (max ${Math.round(maxBytes / 1024 / 1024)} Mo)`
+    );
   }
 
   const token = await getAccessToken();
+
   const response = await fetch(apiUrl(), {
     method: "POST",
     headers: {
@@ -48,24 +53,32 @@ export async function uploadExternalMedia(
   });
 
   const json = await response.json().catch(() => ({}));
+
   if (!response.ok || !json.ok || !json.uploadUrl) {
-    throw new Error(json.error || `Préparation média impossible (${response.status})`);
+    throw new Error(
+      json.error || `Préparation média impossible (${response.status})`
+    );
   }
 
   const upload = await fetch(json.uploadUrl, {
     method: "PUT",
-    headers: { "Content-Type": file.type || "application/octet-stream" },
+    headers: {
+      "Content-Type": file.type || "application/octet-stream",
+    },
     body: file,
   });
 
   const result = await upload.json().catch(() => ({}));
+
   if (!upload.ok || !result.ok || !result.publicUrl) {
-    throw new Error(result.error || `Upload média échoué (${upload.status})`);
+    throw new Error(
+      result.error || `Upload Telegram échoué (${upload.status})`
+    );
   }
 
   return {
     url: result.publicUrl,
-    path: result.fileId || result.key || "",
+    path: result.fileId || "",
     mime: file.type || "application/octet-stream",
     size: file.size,
     fileName: file.name,
