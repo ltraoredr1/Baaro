@@ -22,8 +22,6 @@ import { uploadExternalMedia } from "../../lib/externalMedia.js";
 import { COLORS } from "../../theme.js";
 import { useToast } from "../../components/ToastContext.jsx";
 
-const MAX_VIDEO_SIZE = 50 * 1024 * 1024;
-
 const formatCount = (value = 0) => {
   const n = Number(value) || 0;
   if (n >= 1000000) return `${(n / 1000000).toFixed(1).replace(".0", "")}M`;
@@ -833,12 +831,6 @@ export function VideosTab({ onRewardPoints, onExit }) {
       showToast("Sélectionne un fichier vidéo.", "error");
       return;
     }
-
-    if (file.size > MAX_VIDEO_SIZE) {
-      showToast("La vidéo est trop lourde. Taille maximale : 50 Mo.", "error");
-      return;
-    }
-
     if (previewUrl) URL.revokeObjectURL(previewUrl);
 
     setSelectedFile(file);
@@ -856,12 +848,6 @@ export function VideosTab({ onRewardPoints, onExit }) {
       showToast("Connecte-toi pour publier.", "error");
       return;
     }
-
-    if (selectedFile.size > MAX_VIDEO_SIZE) {
-      showToast("La vidéo est trop lourde. Taille maximale : 50 Mo.", "error");
-      return;
-    }
-
     setUploading(true);
     setUploadProgress(10);
 
@@ -870,9 +856,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
       // Supabase reste utilisé uniquement pour les données de la table "videos".
       const media = await uploadExternalMedia(selectedFile, {
         folder: "videos",
-        userId: user.id,
-        maxBytes: MAX_VIDEO_SIZE,
-      });
+        userId: user.id,      });
 
       setUploadProgress(65);
 
@@ -1453,8 +1437,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
                     </p>
 
                     <p className="text-xs text-white/40 mt-1 px-6 text-center">
-                      Caméra + micro · aucune limite de durée imposée par
-                      BAARO
+                      Caméra + micro · aucune limite vidéo imposée par BAARO
                     </p>
                   </button>
 
