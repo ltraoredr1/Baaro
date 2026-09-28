@@ -5,29 +5,31 @@ import {
   Shield,
   Phone,
   Mail,
-  Send,
   ArrowLeft,
   UserCheck,
-  CheckCircle2,
 } from "lucide-react";
 import { supabase } from "../../supabaseClient.js";
 import { TurnstileWidget } from "../../Turnstile.jsx";
-import { COLORS } from "../../theme.js";
 import {
   captureRefFromUrl,
   getPendingRef,
 } from "../../lib/referralApi.js";
 import PhoneAuth from "./PhoneAuth.jsx";
 
+/**
+ * Écran d'authentification BAARO
+ * Méthodes autorisées uniquement :
+ *  1. Téléphone
+ *  2. Email (+ mot de passe)
+ *  3. Anonyme / Invité
+ */
 export default function AuthScreen() {
-  const [mode, setMode] = useState("choice"); // "choice", "guest", "email", "phone"
+  const [mode, setMode] = useState("choice"); // "choice" | "guest" | "email" | "phone"
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [isLogin, setIsLogin] = useState(true);
 
   const [loading, setLoading] = useState(false);
-  const [oauthLoading, setOauthLoading] = useState(null);
-
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
 
@@ -39,14 +41,12 @@ export default function AuthScreen() {
     setPendingRef(getPendingRef());
   }, []);
 
-  // Fonction appelée lorsque l'authentification téléphone réussit
-  const handlePhoneAuthSuccess = (user) => {
+  const handlePhoneAuthSuccess = () => {
     setSuccess("Connexion réussie ! Bienvenue sur BAARO.");
-    // Tu peux ici déclencher une redirection ou laisser ton écouteur global Supabase (sur_auth_state_change) s'en charger
   };
 
   /**
-   * Connexion anonyme / invité.
+   * Connexion anonyme / invité (is_anonymous = true)
    */
   const handleAnonymous = async () => {
     if (loading) return;
@@ -69,11 +69,7 @@ export default function AuthScreen() {
 
       const { data, error: authError } = await supabase.auth.signInAnonymously(
         useCaptcha
-          ? {
-              options: {
-                captchaToken,
-              },
-            }
+          ? { options: { captchaToken } }
           : undefined
       );
 
@@ -91,15 +87,14 @@ export default function AuthScreen() {
         throw new Error("Impossible d'initialiser la session.");
       }
 
-      // Identifiant unique = auth.users.id
       const id = data?.user?.id;
       if (id) {
         try {
           await supabase.from("profiles").upsert(
             {
               id,
-              display_name: "Membre BAARO",
-              handle: `@user_${String(id).replace(/-/g, "").slice(0, 10)}`,
+              display_name: "Invité BAARO",
+              handle: `@guest_${String(id).replace(/-/g, "").slice(0, 10)}`,
               flag: "🌍",
               updated_at: new Date().toISOString(),
             },
@@ -123,15 +118,13 @@ export default function AuthScreen() {
   };
 
   /**
-   * Connexion / Inscription par Email.
+   * Connexion / Inscription par Email
    */
   const handleEmailSubmit = async (event) => {
     event.preventDefault();
-
     if (loading) return;
 
     const cleanEmail = email.trim();
-
     setError(null);
     setSuccess(null);
 
@@ -139,7 +132,6 @@ export default function AuthScreen() {
       setError("Veuillez indiquer une adresse email valide.");
       return;
     }
-
     if (!password) {
       setError("Veuillez saisir votre mot de passe.");
       return;
@@ -153,22 +145,19 @@ export default function AuthScreen() {
           email: cleanEmail,
           password,
         });
-
         if (authError) throw authError;
-
         setSuccess("Ravi de vous revoir ! Connexion réussie.");
         return;
       }
 
+      // Inscription
       const { data, error: authError } = await supabase.auth.signUp({
         email: cleanEmail,
         password,
       });
-
       if (authError) throw authError;
 
       const id = data?.user?.id;
-
       if (data?.session && id) {
         try {
           await supabase.from("profiles").upsert(
@@ -189,39 +178,15 @@ export default function AuthScreen() {
       }
 
       setSuccess(
-        "Un email de vérification vous a été envoyé. Veuillez consulter votre boîte de réception pour valider votre compte."
+        "Un email de vérification vous a été envoyé. Consultez votre boîte pour valider votre compte."
       );
     } catch (err) {
       console.error("Erreur authentification email :", err);
-      setError(err?.message || "Une erreur s'est produite lors de l'authentification.");
+      setError(
+        err?.message || "Une erreur s'est produite lors de l'authentification."
+      );
     } finally {
       setLoading(false);
-    }
-  };
-
-  /**
-   * Connexion via fournisseurs réseaux sociaux (OAuth).
-   */
-  const handleOAuth = async (provider) => {
-    if (loading || oauthLoading) return;
-
-    setOauthLoading(provider);
-    setError(null);
-    setSuccess(null);
-
-    try {
-      const { error: authError } = await supabase.auth.signInWithOAuth({
-        provider,
-        options: {
-          redirectTo: window.location.origin,
-        },
-      });
-
-      if (authError) throw authError;
-    } catch (err) {
-      console.error(`Erreur OAuth ${provider} :`, err);
-      setError(err?.message || "Erreur lors de la connexion externe.");
-      setOauthLoading(null);
     }
   };
 
@@ -241,20 +206,17 @@ export default function AuthScreen() {
   return (
     <div className="min-h-screen flex items-center justify-center p-4 bg-slate-950 text-slate-100 font-sans selection:bg-amber-500 selection:text-slate-950">
       <div className="w-full max-w-md rounded-3xl p-8 border border-amber-500/30 bg-slate-900/90 backdrop-blur-xl shadow-2xl transition-all">
-        {/* En-tête / Branding */}
+        {/* Branding */}
         <div className="text-center mb-8">
           <div className="w-16 h-16 mx-auto mb-4 rounded-2xl flex items-center justify-center font-extrabold text-3xl shadow-lg bg-gradient-to-tr from-amber-500 to-teal-400 text-slate-950 tracking-wider">
             B
           </div>
-
           <h1 className="text-3xl font-black tracking-tight text-amber-400">
             BAARO
           </h1>
-
           <p className="text-base font-semibold text-slate-200 mt-1">
             Gagne. Échange. Convertis.
           </p>
-
           <p className="text-xs text-slate-400 mt-1">
             La plateforme d'échange interactive et sécurisée.
           </p>
@@ -272,24 +234,21 @@ export default function AuthScreen() {
               className="flex flex-col items-center gap-1.5 p-3 rounded-2xl border border-slate-800 bg-slate-950/40 text-center"
             >
               <Icon size={20} className={color} />
-              <span className="text-[11px] font-medium text-slate-400">
+              <span className="text-[10px] font-medium text-slate-300">
                 {label}
               </span>
             </div>
           ))}
         </div>
 
-        {/* Code de Parrainage */}
+        {/* Referral badge */}
         {pendingRef && (
-          <div className="mb-6 p-3 rounded-xl text-xs text-center border border-teal-500/30 bg-teal-500/10 text-teal-300 flex items-center justify-center gap-2">
-            <CheckCircle2 size={16} />
-            <span>
-              Code parrain appliqué : <strong className="font-mono text-teal-200">{pendingRef}</strong>
-            </span>
+          <div className="mb-4 text-center text-xs text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-xl p-2">
+            Code parrain : <strong>{pendingRef}</strong>
           </div>
         )}
 
-        {/* Messages de succès ou d'erreur généraux */}
+        {/* Messages */}
         {success && (
           <div className="mb-4 text-center text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-3">
             {success}
@@ -301,9 +260,7 @@ export default function AuthScreen() {
           </div>
         )}
 
-        {/* =====================================================
-            VUE 1 : CHOIX PRINCIPAL DES MÉTHODES
-        ====================================================== */}
+        {/* ========== VUE CHOIX ========== */}
         {mode === "choice" && (
           <div className="flex flex-col gap-3">
             <p className="text-xs text-center uppercase tracking-wider font-semibold text-slate-400 mb-2">
@@ -330,45 +287,6 @@ export default function AuthScreen() {
               <span>Continuer avec Email</span>
             </button>
 
-            {/* Facebook */}
-            <button
-              type="button"
-              onClick={() => handleOAuth("facebook")}
-              disabled={!!oauthLoading}
-              className="w-full py-3.5 px-4 rounded-xl font-semibold text-sm flex items-center justify-center gap-3 bg-[#1877F2] hover:bg-[#166fe5] text-white shadow-lg transition-all active:scale-[0.98] disabled:opacity-50"
-            >
-              <span className="font-bold text-lg leading-none">f</span>
-              <span>
-                {oauthLoading === "facebook" ? "Connexion..." : "Continuer avec Facebook"}
-              </span>
-            </button>
-
-            {/* Telegram */}
-            <button
-              type="button"
-              onClick={() => handleOAuth("telegram")}
-              disabled={!!oauthLoading}
-              className="w-full py-3.5 px-4 rounded-xl font-semibold text-sm flex items-center justify-center gap-3 bg-[#229ED9] hover:bg-[#1f92c9] text-white shadow-lg transition-all active:scale-[0.98] disabled:opacity-50"
-            >
-              <Send size={18} />
-              <span>
-                {oauthLoading === "telegram" ? "Connexion..." : "Continuer avec Telegram"}
-              </span>
-            </button>
-
-            {/* X / Twitter */}
-            <button
-              type="button"
-              onClick={() => handleOAuth("twitter")}
-              disabled={!!oauthLoading}
-              className="w-full py-3.5 px-4 rounded-xl font-semibold text-sm flex items-center justify-center gap-3 bg-slate-950 hover:bg-black text-white border border-slate-800 shadow-lg transition-all active:scale-[0.98] disabled:opacity-50"
-            >
-              <span className="font-bold text-base">X</span>
-              <span>
-                {oauthLoading === "twitter" ? "Connexion..." : "Continuer avec X"}
-              </span>
-            </button>
-
             {/* Séparateur */}
             <div className="flex items-center gap-3 my-3">
               <div className="flex-1 h-px bg-slate-800" />
@@ -378,33 +296,28 @@ export default function AuthScreen() {
               <div className="flex-1 h-px bg-slate-800" />
             </div>
 
-            {/* Bouton Accès Invité autonome */}
+            {/* Accès Invité / Anonyme */}
             <button
               type="button"
               onClick={() => switchMode("guest")}
               className="w-full py-3.5 px-4 rounded-xl font-bold text-sm flex items-center justify-center gap-2 border border-amber-500/40 text-amber-400 hover:bg-amber-500/10 transition-all active:scale-[0.98]"
             >
               <UserCheck size={18} />
-              <span>Accès Invité (Découverte)</span>
+              <span>Accès Invité (Anonyme)</span>
             </button>
           </div>
         )}
 
-        {/* =====================================================
-            VUE 2 : MODE INVITÉ
-        ====================================================== */}
+        {/* ========== VUE INVITÉ ========== */}
         {mode === "guest" && (
           <div className="flex flex-col gap-4">
             <div className="text-center">
-              <h2 className="text-lg font-bold text-slate-100">
-                Accès Invité
-              </h2>
+              <h2 className="text-lg font-bold text-slate-100">Accès Invité</h2>
               <p className="text-xs text-slate-400 mt-1">
                 Validez le contrôle de sécurité ci-dessous pour continuer.
               </p>
             </div>
 
-            {/* CAPTCHA Widget */}
             <div className="flex justify-center my-2">
               <TurnstileWidget
                 onVerify={(token) => {
@@ -435,14 +348,10 @@ export default function AuthScreen() {
           </div>
         )}
 
-        {/* =====================================================
-            VUE 3 : MODE TÉLÉPHONE
-        ====================================================== */}
+        {/* ========== VUE TÉLÉPHONE ========== */}
         {mode === "phone" && (
           <div className="flex flex-col gap-4">
-            {/* Transmission de la prop onAuthSuccess */}
             <PhoneAuth onAuthSuccess={handlePhoneAuthSuccess} />
-
             <button
               type="button"
               onClick={() => switchMode("choice")}
@@ -454,14 +363,12 @@ export default function AuthScreen() {
           </div>
         )}
 
-        {/* =====================================================
-            VUE 4 : MODE EMAIL
-        ====================================================== */}
+        {/* ========== VUE EMAIL ========== */}
         {mode === "email" && (
           <form onSubmit={handleEmailSubmit} className="flex flex-col gap-4">
             <div className="text-center">
               <h2 className="text-lg font-bold text-slate-100">
-                {isLogin ? "Connexion" : "Créer un compte"}
+                {isLogin ? "Connexion" : "Inscription"}
               </h2>
               <p className="text-xs text-slate-400 mt-1">
                 {isLogin
@@ -480,7 +387,6 @@ export default function AuthScreen() {
                 autoComplete="email"
                 className="w-full px-4 py-3 rounded-xl border border-slate-800 bg-slate-950/60 text-slate-100 placeholder-slate-500 outline-none focus:border-amber-500/50 transition-colors text-sm"
               />
-
               <input
                 type="password"
                 placeholder="Mot de passe"
@@ -513,7 +419,6 @@ export default function AuthScreen() {
               >
                 {isLogin ? "Créer un compte" : "Déjà inscrit ?"}
               </button>
-
               <button
                 type="button"
                 onClick={() => switchMode("choice")}
