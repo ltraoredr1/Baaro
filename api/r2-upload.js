@@ -16,141 +16,83 @@ import {
   rateLimitAsync,
 } from "./_shared.js";
 
-/* ==========================================================
- * CLOUDFLARE R2
- * ========================================================== */
+const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID || "";
+const R2_BUCKET_NAME = process.env.R2_BUCKET_NAME || "";
+const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID || "";
+const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY || "";
+const R2_PUBLIC_URL = String(process.env.R2_PUBLIC_URL || "").replace(/\/$/, "");
 
-const R2_ACCOUNT_ID =
-  process.env.R2_ACCOUNT_ID || "";
+const MAX_SIZE = 50 * 1024 * 1024;
 
-const R2_BUCKET_NAME =
-  process.env.R2_BUCKET_NAME || "";
+const ALLOWED_FOLDERS = new Set([
+  "posts",
+  "videos",
+  "stories",
+  "profiles",
+  "shop",
+  "chat",
+]);
 
-const R2_ACCESS_KEY_ID =
-  process.env.R2_ACCESS_KEY_ID || "";
+const ALLOWED_TYPES = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/gif",
+  "image/avif",
 
-const R2_SECRET_ACCESS_KEY =
-  process.env.R2_SECRET_ACCESS_KEY || "";
+  "video/mp4",
+  "video/webm",
+  "video/quicktime",
+  "video/ogg",
 
-const R2_PUBLIC_URL =
-  String(
-    process.env.R2_PUBLIC_URL || ""
-  ).replace(/\/$/, "");
+  "audio/mpeg",
+  "audio/mp4",
+  "audio/ogg",
+  "audio/wav",
+  "audio/webm",
 
-/* ==========================================================
- * LIMITES
- * ========================================================== */
+  "application/pdf",
+]);
 
-const MAX_SIZE =
-  50 * 1024 * 1024;
-
-const ALLOWED_FOLDERS =
-  new Set([
-    "posts",
-    "videos",
-    "stories",
-    "profiles",
-    "shop",
-    "chat",
-  ]);
-
-/*
- * Types autorisés.
- *
- * BAARO utilise actuellement principalement
- * les images et vidéos.
- */
-function isAllowedContentType(
-  contentType
-) {
-  const type =
-    String(contentType || "")
-      .toLowerCase()
-      .split(";")[0]
-      .trim();
-
-  return (
-    type.startsWith("image/") ||
-    type.startsWith("video/") ||
-    type.startsWith("audio/") ||
-    type === "application/pdf"
-  );
+function normalizeContentType(value) {
+  return String(value || "")
+    .toLowerCase()
+    .split(";")[0]
+    .trim();
 }
 
-/* ==========================================================
- * UTILITAIRES
- * ========================================================== */
-
 function safeFolder(folder) {
-  const value =
-    String(folder || "posts")
-      .toLowerCase()
-      .replace(
-        /[^a-z0-9_-]/g,
-        ""
-      );
+  const value = String(folder || "posts")
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, "");
 
   return value || "posts";
 }
 
 function safeName(name) {
-  const value =
-    String(name || "file")
-      .replace(
-        /[\\/:*?"<>|\x00-\x1f]/g,
-        "_"
-      )
-      .trim()
-      .slice(0, 180);
+  const value = String(name || "file")
+    .replace(/[\\/:*?"<>|\x00-\x1f]/g, "_")
+    .trim()
+    .slice(0, 180);
 
   return value || "file";
 }
 
-function randomId() {
-  return crypto
-    .randomBytes(16)
-    .toString("hex");
-}
-
-/*
- * Garde uniquement l'extension du fichier.
- *
- * Exemple :
- * photo.jpg
- * → .jpg
- */
 function getExtension(name) {
-  const clean =
-    safeName(name);
+  const clean = safeName(name);
+  const match = clean.match(/\.([a-zA-Z0-9]{1,10})$/);
 
-  const match =
-    clean.match(
-      /\.([a-zA-Z0-9]{1,10})$/
-    );
-
-  if (!match) {
-    return "";
-  }
+  if (!match) return "";
 
   return `.${match[1].toLowerCase()}`;
 }
 
-/*
- * Création d'une clé unique dans R2.
- *
- * Exemple :
- *
- * posts/
- *   UUID_UTILISATEUR/
- *     1759140000000-a8f...jpg
- */
-function createObjectKey({
-  userId,
-  folder,
-  name,
-}) {
-  const extension =
-    getExtension(name);
+function randomId() {
+  return crypto.randomBytes(16).toString("hex");
+}
+
+function createObjectKey({ userId, folder, name }) {
+  const extension = getExtension(name);
 
   return [
     folder,
@@ -162,9 +104,7 @@ function createObjectKey({
 function encodeObjectKey(key) {
   return key
     .split("/")
-    .map((part) =>
-      encodeURIComponent(part)
-    )
+    .map((part) => encodeURIComponent(part))
     .join("/");
 }
 
@@ -175,10 +115,6 @@ function createPublicUrl(key) {
 
   return `${R2_PUBLIC_URL}/${encodeObjectKey(key)}`;
 }
-
-/* ==========================================================
- * CLIENT R2
- * ========================================================== */
 
 function getR2Client() {
   if (
@@ -193,68 +129,40 @@ function getR2Client() {
 
   return new S3Client({
     region: "auto",
-
-    endpoint:
-      `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-
+    endpoint: `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
     credentials: {
-      accessKeyId:
-        R2_ACCESS_KEY_ID,
-
-      secretAccessKey:
-        R2_SECRET_ACCESS_KEY,
+      accessKeyId: R2_ACCESS_KEY_ID,
+      secretAccessKey: R2_SECRET_ACCESS_KEY,
     },
   });
 }
 
-/* ==========================================================
- * HANDLER VERCEL
- * ========================================================== */
-
-export default async function handler(
-  req,
-  res
-) {
+export default async function handler(req, res) {
   /*
-   * CORS partagé BAARO.
+   * CORS doit être appliqué avant toute autre réponse.
    */
   if (applyCors(req, res)) {
     return;
   }
 
-  /*
-   * Cette route prépare uniquement
-   * les uploads.
-   */
   if (req.method !== "POST") {
     return res.status(405).json({
       ok: false,
-      error:
-        "Méthode non autorisée",
+      error: "Méthode non autorisée",
     });
   }
 
   try {
-    /* ======================================================
-     * RATE LIMIT
-     * ====================================================== */
-
-    const limit =
-      await rateLimitAsync(req, {
-        key: "r2-media",
-        max: 30,
-        windowMs: 60_000,
-      });
+    const limit = await rateLimitAsync(req, {
+      key: "r2-media",
+      max: 30,
+      windowMs: 60_000,
+    });
 
     if (!limit.ok) {
-      Object.entries(
-        limit.headers || {}
-      ).forEach(
+      Object.entries(limit.headers || {}).forEach(
         ([key, value]) => {
-          res.setHeader(
-            key,
-            value
-          );
+          res.setHeader(key, value);
         }
       );
 
@@ -263,10 +171,9 @@ export default async function handler(
         .json(limit.body);
     }
 
-    /* ======================================================
-     * CONFIGURATION
-     * ====================================================== */
-
+    /*
+     * Vérification de la configuration serveur.
+     */
     if (
       !R2_ACCOUNT_ID ||
       !R2_BUCKET_NAME ||
@@ -284,182 +191,95 @@ export default async function handler(
       );
     }
 
-    /* ======================================================
-     * AUTHENTIFICATION SUPABASE
-     * ====================================================== */
+    /*
+     * Authentification Supabase.
+     */
+    const admin = getAdminClient();
+    const user = await requireUser(req, admin);
 
-    const admin =
-      getAdminClient();
+    const body = req.body || {};
 
-    const user =
-      await requireUser(
-        req,
-        admin
-      );
+    const folder = safeFolder(body.folder);
+    const name = safeName(body.name);
 
-    /* ======================================================
-     * DONNÉES
-     * ====================================================== */
+    const contentType = normalizeContentType(
+      body.contentType
+    );
 
-    const body =
-      req.body || {};
+    const size = Number(body.size || 0);
 
-    const folder =
-      safeFolder(
-        body.folder
-      );
-
-    const name =
-      safeName(
-        body.name
-      );
-
-    const contentType =
-      String(
-        body.contentType ||
-          "application/octet-stream"
-      )
-        .toLowerCase()
-        .split(";")[0]
-        .trim();
-
-    const size =
-      Number(
-        body.size || 0
-      );
-
-    /* ======================================================
-     * VALIDATION DOSSIER
-     * ====================================================== */
-
-    if (
-      !ALLOWED_FOLDERS.has(
-        folder
-      )
-    ) {
+    /*
+     * Vérification dossier.
+     */
+    if (!ALLOWED_FOLDERS.has(folder)) {
       return res.status(400).json({
         ok: false,
-        error:
-          "Dossier média non autorisé",
+        error: "Dossier média non autorisé",
       });
     }
 
-    /* ======================================================
-     * VALIDATION TAILLE
-     * ====================================================== */
-
-    if (
-      !Number.isFinite(size) ||
-      size <= 0
-    ) {
+    /*
+     * Vérification taille.
+     */
+    if (!Number.isFinite(size) || size <= 0) {
       return res.status(400).json({
         ok: false,
-        error:
-          "Taille de fichier invalide",
+        error: "Taille de fichier invalide",
       });
     }
 
-    if (
-      size > MAX_SIZE
-    ) {
+    if (size > MAX_SIZE) {
       return res.status(413).json({
         ok: false,
-        error:
-          "Fichier trop volumineux (max 50 Mo)",
+        error: "Fichier trop volumineux (max 50 Mo)",
       });
     }
 
-    /* ======================================================
-     * VALIDATION TYPE
-     * ====================================================== */
-
-    if (
-      !isAllowedContentType(
-        contentType
-      )
-    ) {
+    /*
+     * Vérification type MIME.
+     */
+    if (!ALLOWED_TYPES.has(contentType)) {
       return res.status(400).json({
         ok: false,
-        error:
-          "Type de fichier non autorisé",
+        error: `Type de fichier non autorisé: ${contentType}`,
       });
     }
 
-    /* ======================================================
-     * CLÉ R2
-     * ====================================================== */
+    /*
+     * Création d'une clé privée unique.
+     */
+    const key = createObjectKey({
+      userId: user.id,
+      folder,
+      name,
+    });
+
+    const r2 = getR2Client();
 
     /*
      * IMPORTANT :
-     *
-     * On n'utilise PAS body.userId pour construire
-     * le chemin.
-     *
-     * On utilise l'utilisateur réellement authentifié
-     * par Supabase.
+     * Le ContentType est inclus dans la signature.
+     * Le navigateur doit donc envoyer exactement
+     * le même Content-Type pendant le PUT.
      */
-    const key =
-      createObjectKey({
-        userId:
-          user.id,
-        folder,
-        name,
-      });
-
-    /* ======================================================
-     * CLIENT R2
-     * ====================================================== */
-
-    const r2 =
-      getR2Client();
-
-    /* ======================================================
-     * COMMANDE PUT
-     * ====================================================== */
-
-    const command =
-      new PutObjectCommand({
-        Bucket:
-          R2_BUCKET_NAME,
-
-        Key:
-          key,
-
-        ContentType:
-          contentType,
-      });
-
-    /* ======================================================
-     * URL PRÉSIGNÉE
-     * ====================================================== */
+    const command = new PutObjectCommand({
+      Bucket: R2_BUCKET_NAME,
+      Key: key,
+      ContentType: contentType,
+    });
 
     /*
-     * 5 minutes.
-     *
-     * Le navigateur devra utiliser cette URL
-     * avec :
-     *
-     * PUT
-     * Content-Type: même type MIME
-     * Body: fichier
+     * URL valable 5 minutes.
      */
-    const uploadUrl =
-      await getSignedUrl(
-        r2,
-        command,
-        {
-          expiresIn: 300,
-        }
-      );
+    const uploadUrl = await getSignedUrl(
+      r2,
+      command,
+      {
+        expiresIn: 300,
+      }
+    );
 
-    /* ======================================================
-     * URL PUBLIQUE
-     * ====================================================== */
-
-    const publicUrl =
-      createPublicUrl(
-        key
-      );
+    const publicUrl = createPublicUrl(key);
 
     if (!publicUrl) {
       throw new Error(
@@ -467,31 +287,16 @@ export default async function handler(
       );
     }
 
-    /* ======================================================
-     * RÉPONSE
-     * ====================================================== */
-
     return res.status(200).json({
       ok: true,
-
-      provider:
-        "cloudflare-r2",
-
+      provider: "cloudflare-r2",
       uploadUrl,
-
       publicUrl,
-
       key,
-
-      bucket:
-        R2_BUCKET_NAME,
-
+      bucket: R2_BUCKET_NAME,
       contentType,
-
       size,
-
-      expiresIn:
-        300,
+      expiresIn: 300,
     });
   } catch (error) {
     console.error(
@@ -499,16 +304,13 @@ export default async function handler(
       error
     );
 
-    return res
-      .status(
-        error?.status || 500
-      )
-      .json({
-        ok: false,
-
-        error:
-          error?.message ||
-          "Préparation R2 impossible",
-      });
+    return res.status(
+      error?.status || 500
+    ).json({
+      ok: false,
+      error:
+        error?.message ||
+        "Préparation R2 impossible",
+    });
   }
 }
