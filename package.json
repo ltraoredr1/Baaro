@@ -22,6 +22,8 @@
     "ci": "npm run check:lock && npm run check:production && npm run audit:security && npm run check:e2e && npm run check:e2e:smoke && npm run check:payout && npm run check:performance && npm run check:android && npm run build"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.859.0",
+    "@aws-sdk/s3-request-presigner": "^3.859.0",
     "@capacitor-community/contacts": "^6.0.0",
     "@capacitor/android": "^6.2.2",
     "@capacitor/app": "^6.0.0",

@@ -39,6 +39,7 @@ import { RichTextComposer } from "../../components/RichTextComposer.jsx";
 import { RichTextRenderer } from "../../components/RichTextRenderer.jsx";
 import { NotificationDrawer } from "../../components/NotificationDrawer.jsx";
 import { API_BASE } from "../../config.js";
+import { uploadExternalMedia } from "../../lib/externalMedia.js";
 
 /** auth.users.id (UUID) uniquement */
 function isValidAuthUserId(value) {
@@ -420,23 +421,17 @@ export function FeedTab({ userId, id: idProp, onOpenProfile, onRewardPoints }) {
   };
 
   const uploadMedia = async (file, authorId) => {
-    const ext = file.name.split(".").pop() || "bin";
-    const safeExt = ext.toLowerCase().replace(/[^a-z0-9]/g, "") || "bin";
-    const path = `${authorId}/${randomId("media")}.${safeExt}`;
+    // Stockage externe (Telegram / R2) — plus de Supabase Storage
+    const result = await uploadExternalMedia(file, {
+      folder: "posts",
+      userId: authorId,
+      maxBytes: file.type.startsWith("video")
+        ? 50 * 1024 * 1024
+        : 10 * 1024 * 1024,
+    });
 
-    const { error: uploadError } = await supabase.storage
-      .from("media")
-      .upload(path, file, {
-        cacheControl: "3600",
-        upsert: false,
-        contentType: file.type,
-      });
-
-    if (uploadError) throw uploadError;
-
-    const { data } = supabase.storage.from("media").getPublicUrl(path);
     return {
-      media_url: data.publicUrl,
+      media_url: result.url,
       media_type: file.type.startsWith("video") ? "video" : "image",
     };
   };
