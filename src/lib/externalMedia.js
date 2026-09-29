@@ -3,18 +3,22 @@ import { getApiBase } from "../config.js";
 
 function apiUrl() {
   const base = getApiBase?.() ?? "";
+
   return `${String(base).replace(/\/$/, "")}/api/r2-upload`;
 }
 
 async function getAccessToken() {
-  const { data, error } =
-    await supabase.auth.getSession();
+  const {
+    data,
+    error,
+  } = await supabase.auth.getSession();
 
   if (error) {
     throw error;
   }
 
-  const token = data?.session?.access_token;
+  const token =
+    data?.session?.access_token;
 
   if (!token) {
     throw new Error(
@@ -26,7 +30,9 @@ async function getAccessToken() {
 }
 
 function safeFolder(folder) {
-  const value = String(folder || "posts")
+  const value = String(
+    folder || "posts"
+  )
     .toLowerCase()
     .replace(/[^a-z0-9_-]/g, "");
 
@@ -34,7 +40,9 @@ function safeFolder(folder) {
 }
 
 async function readJsonResponse(response) {
-  const text = await response.text().catch(() => "");
+  const text = await response
+    .text()
+    .catch(() => "");
 
   if (!text) {
     return {};
@@ -44,7 +52,7 @@ async function readJsonResponse(response) {
     return JSON.parse(text);
   } catch {
     return {
-      raw: text.slice(0, 300),
+      raw: text.slice(0, 500),
     };
   }
 }
@@ -58,11 +66,15 @@ export async function uploadExternalMedia(
   } = {}
 ) {
   if (!file) {
-    throw new Error("Fichier manquant");
+    throw new Error(
+      "Fichier manquant"
+    );
   }
 
   if (!userId) {
-    throw new Error("Utilisateur non connecté");
+    throw new Error(
+      "Utilisateur non connecté"
+    );
   }
 
   if (file.size > maxBytes) {
@@ -73,34 +85,47 @@ export async function uploadExternalMedia(
     );
   }
 
-  const token = await getAccessToken();
+  const token =
+    await getAccessToken();
 
   /*
-   * ÉTAPE 1
-   * Demande à notre API Vercel
-   * une URL d'upload signée Cloudflare R2.
+   * Étape 1 :
+   * demander à Vercel une URL présignée R2.
    */
   let response;
 
   try {
-    response = await fetch(apiUrl(), {
-      method: "POST",
+    response = await fetch(
+      apiUrl(),
+      {
+        method: "POST",
 
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
+        headers: {
+          "Content-Type":
+            "application/json",
 
-      body: JSON.stringify({
-        folder: safeFolder(folder),
-        name: file.name,
-        contentType:
-          file.type ||
-          "application/octet-stream",
-        size: file.size,
-        userId,
-      }),
-    });
+          Authorization:
+            `Bearer ${token}`,
+        },
+
+        body: JSON.stringify({
+          folder:
+            safeFolder(folder),
+
+          name:
+            file.name,
+
+          contentType:
+            file.type ||
+            "application/octet-stream",
+
+          size:
+            file.size,
+
+          userId,
+        }),
+      }
+    );
   } catch (error) {
     console.error(
       "[externalMedia] API R2 inaccessible:",
@@ -108,12 +133,14 @@ export async function uploadExternalMedia(
     );
 
     throw new Error(
-      "Impossible de joindre l’API R2 BAARO. Vérifiez le déploiement Vercel."
+      "Impossible de joindre l’API R2 BAARO. Vérifie le déploiement Vercel."
     );
   }
 
   const json =
-    await readJsonResponse(response);
+    await readJsonResponse(
+      response
+    );
 
   if (
     !response.ok ||
@@ -122,16 +149,23 @@ export async function uploadExternalMedia(
   ) {
     throw new Error(
       json.error ||
-        json.raw ||
-        `Préparation R2 impossible (${response.status})`
+      json.raw ||
+      `Préparation R2 impossible (${response.status})`
     );
   }
 
   /*
-   * ÉTAPE 2
-   * Upload DIRECT du fichier vers Cloudflare R2.
-   *
-   * Le fichier ne passe pas par Vercel.
+   * Le serveur a signé l'URL avec ce Content-Type.
+   * Nous devons utiliser exactement la même valeur.
+   */
+  const contentType =
+    json.contentType ||
+    file.type ||
+    "application/octet-stream";
+
+  /*
+   * Étape 2 :
+   * upload DIRECT du navigateur vers R2.
    */
   let upload;
 
@@ -143,8 +177,7 @@ export async function uploadExternalMedia(
 
         headers: {
           "Content-Type":
-            file.type ||
-            "application/octet-stream",
+            contentType,
         },
 
         body: file,
@@ -157,23 +190,46 @@ export async function uploadExternalMedia(
     );
 
     throw new Error(
-      "Impossible d’envoyer le fichier vers Cloudflare R2. Vérifiez la configuration CORS du bucket."
-    );
-  }
-
-  if (!upload.ok) {
-    const text =
-      await upload.text().catch(() => "");
-
-    throw new Error(
-      text ||
-        `Upload Cloudflare R2 échoué (${upload.status})`
+      "Impossible d’envoyer le fichier vers Cloudflare R2. Vérifie la configuration CORS du bucket."
     );
   }
 
   /*
-   * L'API Vercel nous fournit l'URL publique
-   * qui sera enregistrée dans posts.media_url.
+   * Récupération du corps d'erreur
+   * pour éviter de masquer un éventuel 403.
+   */
+  if (!upload.ok) {
+    const text =
+      await upload.text()
+        .catch(() => "");
+
+    console.error(
+      "[externalMedia] R2 HTTP error:",
+      upload.status,
+      text
+    );
+
+    if (upload.status === 403) {
+      throw new Error(
+        "Cloudflare R2 a refusé l’upload (403). Vérifie le CORS du bucket et le Content-Type signé."
+      );
+    }
+
+    if (upload.status === 404) {
+      throw new Error(
+        "Bucket Cloudflare R2 introuvable ou URL présignée invalide."
+      );
+    }
+
+    throw new Error(
+      text ||
+      `Upload Cloudflare R2 échoué (${upload.status})`
+    );
+  }
+
+  /*
+   * L'URL publique a été générée
+   * par notre API Vercel.
    */
   if (!json.publicUrl) {
     throw new Error(
@@ -182,14 +238,14 @@ export async function uploadExternalMedia(
   }
 
   return {
-    url: json.publicUrl,
+    url:
+      json.publicUrl,
 
     path:
       json.key || "",
 
     mime:
-      file.type ||
-      "application/octet-stream",
+      contentType,
 
     size:
       file.size,
