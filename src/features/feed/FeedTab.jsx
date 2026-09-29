@@ -420,20 +420,42 @@ export function FeedTab({ userId, id: idProp, onOpenProfile, onRewardPoints }) {
     setMediaPreview(null);
   };
 
+  // ============================================================
+  // CORRECTION 1 : UPLOAD MÉDIA R2
+  // ============================================================
+
   const uploadMedia = async (file, authorId) => {
     // Stockage externe (Telegram / R2) — plus de Supabase Storage
-    const result = await uploadExternalMedia(file, {
-      folder: "posts",
-      userId: authorId,
-      maxBytes: file.type.startsWith("video")
-        ? 50 * 1024 * 1024
-        : 10 * 1024 * 1024,
-    });
+    try {
+      console.log("[BAARO][POST] Upload média:", {
+        name: file?.name,
+        type: file?.type,
+        size: file?.size,
+        authorId,
+      });
 
-    return {
-      media_url: result.url,
-      media_type: file.type.startsWith("video") ? "video" : "image",
-    };
+      const result = await uploadExternalMedia(file, {
+        folder: "posts",
+        userId: authorId,
+        maxBytes: file.type.startsWith("video")
+          ? 50 * 1024 * 1024
+          : 10 * 1024 * 1024,
+      });
+
+      if (!result?.url) {
+        throw new Error(
+          "L'upload du média a réussi mais aucune URL publique n'a été retournée."
+        );
+      }
+
+      return {
+        media_url: result.url,
+        media_type: file.type.startsWith("video") ? "video" : "image",
+      };
+    } catch (error) {
+      console.error("[BAARO][POST] Erreur upload média:", error);
+      throw error;
+    }
   };
 
   const handleReportPost = async (postId) => {
@@ -475,12 +497,21 @@ export function FeedTab({ userId, id: idProp, onOpenProfile, onRewardPoints }) {
 
     setSubmitting(true);
 
+    // ============================================================
+    // CORRECTION 2 : NE PAS MASQUER L'ERREUR D'UPLOAD R2
+    // ============================================================
+
+    let mediaUploadFailed = false;
+
     try {
       let mediaData = {};
       if (mediaFile) {
         setUploadingMedia(true);
         try {
           mediaData = await uploadMedia(mediaFile, authorId);
+        } catch (uploadError) {
+          mediaUploadFailed = true;
+          throw uploadError;
         } finally {
           setUploadingMedia(false);
         }
@@ -536,7 +567,16 @@ export function FeedTab({ userId, id: idProp, onOpenProfile, onRewardPoints }) {
 
       await loadPosts();
     } catch (error) {
-      handleDbError(error, showToast, "Impossible de publier");
+      console.error("[BAARO][POST] Erreur publication:", error);
+
+      if (mediaUploadFailed) {
+        showToast(
+          error?.message || "Impossible d'envoyer le média.",
+          "error"
+        );
+      } else {
+        handleDbError(error, showToast, "Impossible de publier");
+      }
     } finally {
       setSubmitting(false);
     }
