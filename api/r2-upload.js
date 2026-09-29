@@ -16,6 +16,10 @@ import {
   rateLimitAsync,
 } from "./_shared.js";
 
+/* =========================================================
+   CLOUDFLARE R2 CONFIGURATION
+   ========================================================= */
+
 const R2_ACCOUNT_ID =
   process.env.R2_ACCOUNT_ID || "";
 
@@ -33,9 +37,16 @@ const R2_PUBLIC_URL =
     process.env.R2_PUBLIC_URL || ""
   ).replace(/\/$/, "");
 
+/*
+ * Limite serveur :
+ * 50 Mo par fichier.
+ */
 const MAX_SIZE =
   50 * 1024 * 1024;
 
+/*
+ * Dossiers R2 autorisés.
+ */
 const ALLOWED_FOLDERS =
   new Set([
     "posts",
@@ -46,36 +57,51 @@ const ALLOWED_FOLDERS =
     "chat",
   ]);
 
+/*
+ * Types de fichiers autorisés.
+ */
 const ALLOWED_TYPES =
   new Set([
+    // Images
     "image/jpeg",
     "image/png",
     "image/webp",
     "image/gif",
     "image/avif",
 
+    // Vidéos
     "video/mp4",
     "video/webm",
     "video/quicktime",
     "video/ogg",
 
+    // Audio
     "audio/mpeg",
     "audio/mp4",
     "audio/ogg",
     "audio/wav",
     "audio/webm",
 
+    // Documents
     "application/pdf",
   ]);
 
-function normalizeContentType(value) {
-  return String(
+/* =========================================================
+   HELPERS
+   ========================================================= */
+
+function normalizeContentType(
+  value
+) {
+  const type = String(
     value ||
       "application/octet-stream"
   )
     .toLowerCase()
     .split(";")[0]
     .trim();
+
+  return type;
 }
 
 function safeFolder(folder) {
@@ -106,15 +132,17 @@ function safeName(name) {
       .trim()
       .slice(0, 180);
 
-  return value || "file";
+  return (
+    value || "file"
+  );
 }
 
 function getExtension(name) {
-  const clean =
+  const cleanName =
     safeName(name);
 
   const match =
-    clean.match(
+    cleanName.match(
       /\.([a-zA-Z0-9]{1,10})$/
     );
 
@@ -122,7 +150,10 @@ function getExtension(name) {
     return "";
   }
 
-  return `.${match[1].toLowerCase()}`;
+  return (
+    "." +
+    match[1].toLowerCase()
+  );
 }
 
 function randomId() {
@@ -130,6 +161,21 @@ function randomId() {
     .randomBytes(16)
     .toString("hex");
 }
+
+/* =========================================================
+   R2 OBJECT KEY
+   ========================================================= */
+
+/*
+ * Exemple :
+ *
+ * posts/
+ *   user-uuid/
+ *     1759150000000-a8f3...jpg
+ *
+ * L'ID utilisateur provient exclusivement
+ * de la session Supabase vérifiée.
+ */
 
 function createObjectKey({
   userId,
@@ -146,7 +192,13 @@ function createObjectKey({
   ].join("/");
 }
 
-function encodeObjectKey(key) {
+/* =========================================================
+   URL PUBLIQUE R2
+   ========================================================= */
+
+function encodeObjectKey(
+  key
+) {
   return key
     .split("/")
     .map((part) =>
@@ -155,15 +207,23 @@ function encodeObjectKey(key) {
     .join("/");
 }
 
-function createPublicUrl(key) {
+function createPublicUrl(
+  key
+) {
   if (!R2_PUBLIC_URL) {
     return "";
   }
 
-  return `${R2_PUBLIC_URL}/${encodeObjectKey(
-    key
-  )}`;
+  return (
+    `${R2_PUBLIC_URL}/${encodeObjectKey(
+      key
+    )}`
+  );
 }
+
+/* =========================================================
+   R2 CLIENT
+   ========================================================= */
 
 function getR2Client() {
   if (
@@ -192,19 +252,30 @@ function getR2Client() {
   });
 }
 
+/* =========================================================
+   HTTP HANDLER
+   ========================================================= */
+
 export default async function handler(
   req,
   res
 ) {
   /*
-   * CORS de l'API Vercel.
+   * CORS.
    */
   if (
-    applyCors(req, res)
+    applyCors(
+      req,
+      res
+    )
   ) {
     return;
   }
 
+  /*
+   * Cette route prépare uniquement
+   * une URL PUT présignée.
+   */
   if (
     req.method !== "POST"
   ) {
@@ -218,9 +289,10 @@ export default async function handler(
   }
 
   try {
-    /*
-     * Rate limit.
-     */
+    /* =====================================================
+       RATE LIMIT
+       ===================================================== */
+
     const limit =
       await rateLimitAsync(
         req,
@@ -247,12 +319,15 @@ export default async function handler(
         .status(
           limit.status
         )
-        .json(limit.body);
+        .json(
+          limit.body
+        );
     }
 
-    /*
-     * Configuration R2.
-     */
+    /* =====================================================
+       CONFIGURATION
+       ===================================================== */
+
     if (
       !R2_ACCOUNT_ID ||
       !R2_BUCKET_NAME ||
@@ -260,19 +335,20 @@ export default async function handler(
       !R2_SECRET_ACCESS_KEY
     ) {
       throw new Error(
-        "Configuration Cloudflare R2 manquante"
+        "Configuration Cloudflare R2 manquante. Vérifie R2_ACCOUNT_ID, R2_BUCKET_NAME, R2_ACCESS_KEY_ID et R2_SECRET_ACCESS_KEY dans Vercel."
       );
     }
 
     if (!R2_PUBLIC_URL) {
       throw new Error(
-        "R2_PUBLIC_URL manquante"
+        "R2_PUBLIC_URL manquante dans Vercel."
       );
     }
 
-    /*
-     * Authentification Supabase.
-     */
+    /* =====================================================
+       AUTHENTIFICATION SUPABASE
+       ===================================================== */
+
     const admin =
       getAdminClient();
 
@@ -281,6 +357,21 @@ export default async function handler(
         req,
         admin
       );
+
+    if (!user?.id) {
+      const error =
+        new Error(
+          "Utilisateur non authentifié"
+        );
+
+      error.status = 401;
+
+      throw error;
+    }
+
+    /* =====================================================
+       BODY
+       ===================================================== */
 
     const body =
       req.body || {};
@@ -305,9 +396,10 @@ export default async function handler(
         body.size || 0
       );
 
-    /*
-     * Dossier.
-     */
+    /* =====================================================
+       VALIDATION DOSSIER
+       ===================================================== */
+
     if (
       !ALLOWED_FOLDERS.has(
         folder
@@ -322,9 +414,10 @@ export default async function handler(
         });
     }
 
-    /*
-     * Taille.
-     */
+    /* =====================================================
+       VALIDATION TAILLE
+       ===================================================== */
+
     if (
       !Number.isFinite(
         size
@@ -352,9 +445,10 @@ export default async function handler(
         });
     }
 
-    /*
-     * Type MIME.
-     */
+    /* =====================================================
+       VALIDATION TYPE MIME
+       ===================================================== */
+
     if (
       !ALLOWED_TYPES.has(
         contentType
@@ -369,25 +463,31 @@ export default async function handler(
         });
     }
 
-    /*
-     * Clé unique.
-     */
+    /* =====================================================
+       CRÉATION DE LA CLÉ R2
+       ===================================================== */
+
     const key =
       createObjectKey({
         userId:
           user.id,
+
         folder,
+
         name,
       });
+
+    /* =====================================================
+       CLIENT R2
+       ===================================================== */
 
     const r2 =
       getR2Client();
 
-    /*
-     * Le Content-Type est signé.
-     * Le navigateur devra envoyer
-     * exactement cette valeur.
-     */
+    /* =====================================================
+       COMMANDE PUT
+       ===================================================== */
+
     const command =
       new PutObjectCommand({
         Bucket:
@@ -400,14 +500,33 @@ export default async function handler(
           contentType,
       });
 
+    /* =====================================================
+       URL PRÉSIGNÉE
+       ===================================================== */
+
+    /*
+     * 15 minutes.
+     *
+     * Le fichier n'est PAS envoyé à Vercel.
+     * Le navigateur envoie directement
+     * le fichier vers Cloudflare R2.
+     */
+
+    const expiresIn =
+      900;
+
     const uploadUrl =
       await getSignedUrl(
         r2,
         command,
         {
-          expiresIn: 900,
+          expiresIn,
         }
       );
+
+    /* =====================================================
+       URL PUBLIQUE
+       ===================================================== */
 
     const publicUrl =
       createPublicUrl(
@@ -420,9 +539,10 @@ export default async function handler(
       );
     }
 
-    /*
-     * Retour explicite.
-     */
+    /* =====================================================
+       RÉPONSE
+       ===================================================== */
+
     return res
       .status(200)
       .json({
@@ -444,19 +564,21 @@ export default async function handler(
 
         size,
 
-        expiresIn: 900,
+        expiresIn,
       });
   } catch (error) {
     console.error(
-      "[r2-upload]",
+      "[r2-upload] Erreur:",
       error
     );
 
+    const status =
+      Number(
+        error?.status
+      ) || 500;
+
     return res
-      .status(
-        error?.status ||
-          500
-      )
+      .status(status)
       .json({
         ok: false,
 
