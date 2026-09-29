@@ -4,9 +4,14 @@ const crypto = require("node:crypto");
 const express = require("express");
 const { Telegraf } = require("telegraf");
 
+/* =========================================================
+   CONFIGURATION
+   ========================================================= */
+
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const CHANNEL_ID = process.env.TELEGRAM_CHANNEL_ID;
 const API_SECRET = process.env.TELEGRAM_API_SECRET;
+
 const PUBLIC_BASE_URL = String(
   process.env.PUBLIC_BASE_URL || ""
 ).replace(/\/$/, "");
@@ -15,88 +20,141 @@ const PORT = Number(process.env.PORT || 3000);
 
 const MAX_SIZE = 50 * 1024 * 1024;
 
+/*
+ * Origines autorisées à appeler l'API média.
+ *
+ * Production :
+ *   https://baaro-xi.vercel.app
+ *
+ * Développement :
+ *   localhost:5173
+ *   localhost:3000
+ */
+const ALLOWED_ORIGINS = new Set(
+  (
+    process.env.ALLOWED_ORIGINS ||
+    [
+      "https://baaro-xi.vercel.app",
+      "http://localhost:5173",
+      "http://localhost:3000",
+      "http://127.0.0.1:5173",
+      "http://127.0.0.1:3000",
+    ].join(",")
+  )
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean)
+);
+
+/* =========================================================
+   VÉRIFICATION DE LA CONFIGURATION
+   ========================================================= */
+
 if (!TOKEN || !CHANNEL_ID || !API_SECRET || !PUBLIC_BASE_URL) {
   throw new Error(
-    "TELEGRAM_BOT_TOKEN, TELEGRAM_CHANNEL_ID, TELEGRAM_API_SECRET et PUBLIC_BASE_URL sont requis."
+    [
+      "Configuration Telegram incomplète.",
+      "",
+      "Variables obligatoires :",
+      "TELEGRAM_BOT_TOKEN",
+      "TELEGRAM_CHANNEL_ID",
+      "TELEGRAM_API_SECRET",
+      "PUBLIC_BASE_URL",
+    ].join("\n")
   );
 }
 
+/* =========================================================
+   TELEGRAM + EXPRESS
+   ========================================================= */
+
 const bot = new Telegraf(TOKEN);
 const app = express();
+
+app.disable("x-powered-by");
 
 /* =========================================================
    CORS
    ========================================================= */
 
-const ALLOWED_ORIGINS = new Set(
-  [
-    "https://baaro-xi.vercel.app",
-    process.env.BAARO_APP_URL,
-    process.env.PUBLIC_APP_URL,
-  ]
-    .filter(Boolean)
-    .map((value) => String(value).replace(/\/$/, ""))
-);
-
-function isAllowedOrigin(origin) {
-  if (!origin) return true;
-
-  return ALLOWED_ORIGINS.has(String(origin).replace(/\/$/, ""));
-}
-
-app.use((req, res, next) => {
+function applyCors(req, res) {
   const origin = req.headers.origin;
 
-  if (origin && isAllowedOrigin(origin)) {
+  /*
+   * Si le navigateur envoie une Origin, elle doit être
+   * explicitement autorisée.
+   */
+  if (origin && ALLOWED_ORIGINS.has(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Vary", "Origin");
+
+    res.setHeader(
+      "Access-Control-Allow-Methods",
+      "GET, PUT, OPTIONS"
+    );
+
+    res.setHeader(
+      "Access-Control-Allow-Headers",
+      "Content-Type, Authorization"
+    );
+
+    res.setHeader(
+      "Access-Control-Expose-Headers",
+      "Content-Length, Content-Range, Accept-Ranges"
+    );
+
+    res.setHeader(
+      "Access-Control-Max-Age",
+      "86400"
+    );
   }
 
-  res.setHeader("Vary", "Origin");
-
-  res.setHeader(
-    "Access-Control-Allow-Methods",
-    "GET, PUT, OPTIONS"
-  );
-
-  res.setHeader(
-    "Access-Control-Allow-Headers",
-    "Content-Type, Authorization"
-  );
-
-  res.setHeader(
-    "Access-Control-Max-Age",
-    "86400"
-  );
-
+  /*
+   * Réponse au preflight CORS.
+   *
+   * BAARO utilise PUT pour envoyer les médias.
+   * Le navigateur peut donc envoyer OPTIONS avant PUT.
+   */
   if (req.method === "OPTIONS") {
-    if (origin && !isAllowedOrigin(origin)) {
-      return res.status(403).json({
-        ok: false,
-        error: "Origin non autorisée",
-      });
+    if (!origin || ALLOWED_ORIGINS.has(origin)) {
+      return true;
     }
 
-    return res.status(204).end();
-  }
-
-  if (origin && !isAllowedOrigin(origin)) {
-    return res.status(403).json({
+    res.status(403).json({
       ok: false,
       error: "Origin non autorisée",
     });
+
+    return true;
+  }
+
+  return false;
+}
+
+app.use((req, res, next) => {
+  if (applyCors(req, res)) {
+    if (req.method === "OPTIONS" && res.statusCode === 200) {
+      return res.status(204).end();
+    }
+
+    return;
   }
 
   next();
 });
 
 /* =========================================================
-   BODY
+   BODY JSON
    ========================================================= */
 
-app.use(express.json({ limit: "1mb" }));
+app.use(
+  express.json({
+    limit: "1mb",
+  })
+);
 
 /* =========================================================
-   HELPERS
+   OUTILS
    ========================================================= */
 
 function cleanName(name) {
@@ -111,6 +169,10 @@ function base64url(value) {
   return Buffer.from(value).toString("base64url");
 }
 
+/* =========================================================
+   VÉRIFICATION DES TOKENS
+   ========================================================= */
+
 function verifyToken(token) {
   const [body, signature] = String(token || "").split(".");
 
@@ -123,19 +185,28 @@ function verifyToken(token) {
     .update(body)
     .digest("base64url");
 
+  const signatureBuffer = Buffer.from(signature);
+  const expectedBuffer = Buffer.from(expected);
+
   if (
-    signature.length !== expected.length ||
+    signatureBuffer.length !== expectedBuffer.length ||
     !crypto.timingSafeEqual(
-      Buffer.from(signature),
-      Buffer.from(expected)
+      signatureBuffer,
+      expectedBuffer
     )
   ) {
     throw new Error("Signature invalide");
   }
 
-  const payload = JSON.parse(
-    Buffer.from(body, "base64url").toString("utf8")
-  );
+  let payload;
+
+  try {
+    payload = JSON.parse(
+      Buffer.from(body, "base64url").toString("utf8")
+    );
+  } catch {
+    throw new Error("Jeton malformé");
+  }
 
   if (
     !payload.exp ||
@@ -147,17 +218,33 @@ function verifyToken(token) {
   return payload;
 }
 
-function signMediaToken(fileId, filename, contentType) {
+/* =========================================================
+   TOKEN PUBLIC POUR LES MÉDIAS
+   ========================================================= */
+
+function signMediaToken(
+  fileId,
+  filename,
+  contentType
+) {
   const payload = {
     v: 1,
-    exp: Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60,
+    exp:
+      Math.floor(Date.now() / 1000) +
+      30 * 24 * 60 * 60,
+
     fileId,
+
     filename: cleanName(filename),
+
     contentType:
-      contentType || "application/octet-stream",
+      contentType ||
+      "application/octet-stream",
   };
 
-  const body = base64url(JSON.stringify(payload));
+  const body = base64url(
+    JSON.stringify(payload)
+  );
 
   const signature = crypto
     .createHmac("sha256", API_SECRET)
@@ -168,31 +255,45 @@ function signMediaToken(fileId, filename, contentType) {
 }
 
 /* =========================================================
-   HEALTH
+   HEALTH CHECK
    ========================================================= */
 
 app.get("/health", (_req, res) => {
   res.json({
-    ok: true,
-    provider: "telegram",
-    service: "baaro-media",
+    status: "ok",
+    uptime: process.uptime(),
+    files: 0,
   });
 });
 
 /* =========================================================
-   UPLOAD
+   UPLOAD MÉDIA
    ========================================================= */
 
 app.put("/api/upload", async (req, res) => {
   try {
-    const payload = verifyToken(req.query?.token);
+    /*
+     * Vérification du token généré par Vercel.
+     */
+    const payload = verifyToken(
+      req.query?.token
+    );
 
-    const expectedSize = Number(payload.size || 0);
+    /*
+     * Taille attendue signée par Vercel.
+     */
+    const expectedSize = Number(
+      payload.size || 0
+    );
 
     const chunks = [];
+
     let total = 0;
     let tooLarge = false;
 
+    /*
+     * Réception du fichier en streaming.
+     */
     req.on("data", (chunk) => {
       total += chunk.length;
 
@@ -203,20 +304,15 @@ app.put("/api/upload", async (req, res) => {
       }
     });
 
-    req.on("error", (error) => {
-      console.error("[telegram-upload-request]", error);
-
-      if (!res.headersSent) {
-        res.status(400).json({
-          ok: false,
-          error: "Erreur pendant la réception du fichier",
-        });
-      }
-    });
-
     req.on("end", async () => {
       try {
-        if (tooLarge || total > MAX_SIZE) {
+        /*
+         * Vérification taille maximale.
+         */
+        if (
+          tooLarge ||
+          total > MAX_SIZE
+        ) {
           return res.status(413).json({
             ok: false,
             error:
@@ -224,7 +320,13 @@ app.put("/api/upload", async (req, res) => {
           });
         }
 
-        if (expectedSize && total !== expectedSize) {
+        /*
+         * Vérification de la taille signée.
+         */
+        if (
+          expectedSize &&
+          total !== expectedSize
+        ) {
           return res.status(400).json({
             ok: false,
             error:
@@ -232,6 +334,9 @@ app.put("/api/upload", async (req, res) => {
           });
         }
 
+        /*
+         * Fichier vide.
+         */
         if (!total) {
           return res.status(400).json({
             ok: false,
@@ -239,10 +344,15 @@ app.put("/api/upload", async (req, res) => {
           });
         }
 
-        const filename = cleanName(payload.filename);
+        const filename = cleanName(
+          payload.filename
+        );
 
         const buffer = Buffer.concat(chunks);
 
+        /*
+         * Informations stockées dans le message Telegram.
+         */
         const caption = [
           "BAARO_MEDIA",
           `folder=${payload.folder || "posts"}`,
@@ -254,10 +364,9 @@ app.put("/api/upload", async (req, res) => {
           }`,
         ].join("\n");
 
-        console.log(
-          `[telegram-upload] Réception: ${filename} (${total} octets)`
-        );
-
+        /*
+         * Envoi vers le canal Telegram.
+         */
         const message =
           await bot.telegram.sendDocument(
             CHANNEL_ID,
@@ -279,20 +388,20 @@ app.put("/api/upload", async (req, res) => {
           );
         }
 
-        const mediaToken = signMediaToken(
-          fileId,
-          filename,
-          payload.contentType
-        );
+        /*
+         * Création d'une URL publique signée.
+         */
+        const mediaToken =
+          signMediaToken(
+            fileId,
+            filename,
+            payload.contentType
+          );
 
         const publicUrl =
           `${PUBLIC_BASE_URL}/api/file?token=${encodeURIComponent(
             mediaToken
           )}`;
-
-        console.log(
-          `[telegram-upload] Succès Telegram: ${filename}`
-        );
 
         return res.json({
           ok: true,
@@ -300,7 +409,9 @@ app.put("/api/upload", async (req, res) => {
           fileId,
           publicUrl,
           filename,
-          contentType: payload.contentType,
+          contentType:
+            payload.contentType ||
+            "application/octet-stream",
           size: total,
         });
       } catch (error) {
@@ -309,14 +420,27 @@ app.put("/api/upload", async (req, res) => {
           error
         );
 
-        if (!res.headersSent) {
-          return res.status(500).json({
-            ok: false,
-            error:
-              error?.message ||
-              "Upload Telegram impossible",
-          });
-        }
+        return res.status(500).json({
+          ok: false,
+          error:
+            error?.message ||
+            "Upload Telegram impossible",
+        });
+      }
+    });
+
+    req.on("error", (error) => {
+      console.error(
+        "[telegram-upload-request]",
+        error
+      );
+
+      if (!res.headersSent) {
+        res.status(500).json({
+          ok: false,
+          error:
+            "Erreur pendant la réception du fichier",
+        });
       }
     });
   } catch (error) {
@@ -335,7 +459,7 @@ app.put("/api/upload", async (req, res) => {
 });
 
 /* =========================================================
-   SERVE MEDIA
+   SERVIR UN MÉDIA DEPUIS TELEGRAM
    ========================================================= */
 
 app.get("/api/file", async (req, res) => {
@@ -344,9 +468,14 @@ app.get("/api/file", async (req, res) => {
       req.query?.token
     );
 
-    const file = await bot.telegram.getFile(
-      payload.fileId
-    );
+    /*
+     * Récupération du chemin du fichier
+     * auprès de Telegram.
+     */
+    const file =
+      await bot.telegram.getFile(
+        payload.fileId
+      );
 
     if (!file?.file_path) {
       throw new Error(
@@ -357,23 +486,37 @@ app.get("/api/file", async (req, res) => {
     const telegramUrl =
       `https://api.telegram.org/file/bot${TOKEN}/${file.file_path}`;
 
+    /*
+     * Support du téléchargement partiel.
+     * Important pour les vidéos.
+     */
     const headers = {};
 
     if (req.headers.range) {
-      headers.Range = req.headers.range;
+      headers.Range =
+        req.headers.range;
     }
 
     const upstream = await fetch(
       telegramUrl,
-      { headers }
+      {
+        headers,
+      }
     );
 
     if (!upstream.ok) {
       return res
         .status(upstream.status)
-        .send("Média Telegram indisponible");
+        .send(
+          "Média Telegram indisponible"
+        );
     }
 
+    /*
+     * Code HTTP :
+     * 200 pour fichier complet
+     * 206 pour Range / vidéo
+     */
     res.status(upstream.status);
 
     res.setHeader(
@@ -385,6 +528,11 @@ app.get("/api/file", async (req, res) => {
     res.setHeader(
       "Cache-Control",
       "public, max-age=2592000, immutable"
+    );
+
+    res.setHeader(
+      "Accept-Ranges",
+      "bytes"
     );
 
     const contentLength =
@@ -411,11 +559,10 @@ app.get("/api/file", async (req, res) => {
       );
     }
 
-    res.setHeader(
-      "Accept-Ranges",
-      "bytes"
-    );
-
+    /*
+     * Transmission du flux Telegram
+     * vers le navigateur.
+     */
     const reader =
       upstream.body?.getReader();
 
@@ -430,7 +577,9 @@ app.get("/api/file", async (req, res) => {
           value,
         } = await reader.read();
 
-        if (done) break;
+        if (done) {
+          break;
+        }
 
         res.write(
           Buffer.from(value)
@@ -456,63 +605,134 @@ app.get("/api/file", async (req, res) => {
 });
 
 /* =========================================================
-   BOT
+   ROUTE RACINE
    ========================================================= */
 
-bot.start((ctx) =>
+app.get("/", (_req, res) => {
+  res.json({
+    ok: true,
+    service: "BAARO Telegram Media API",
+    status: "online",
+  });
+});
+
+/* =========================================================
+   BOT TELEGRAM
+   ========================================================= */
+
+bot.start((ctx) => {
   ctx.reply(
     "BAARO Media Bot actif."
-  )
-);
+  );
+});
 
-bot.command("health", (ctx) =>
+bot.command("health", (ctx) => {
   ctx.reply(
     "BAARO Media Bot: OK"
-  )
-);
+  );
+});
 
-bot.catch((error) =>
+bot.catch((error) => {
   console.error(
     "[telegram-bot]",
     error
-  )
-);
-
-bot.launch({
-  allowedUpdates: [
-    "message",
-    "channel_post",
-  ],
-  dropPendingUpdates: true,
-});
-
-/* =========================================================
-   SERVER
-   ========================================================= */
-
-app.listen(PORT, () => {
-  console.log(
-    `BAARO Telegram Media API listening on :${PORT}`
-  );
-
-  console.log(
-    `PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}`
-  );
-
-  console.log(
-    "CORS origins:",
-    [...ALLOWED_ORIGINS]
   );
 });
 
 /* =========================================================
-   SHUTDOWN
+   DÉMARRAGE DU BOT
    ========================================================= */
 
-process.once("SIGINT", () =>
-  bot.stop("SIGINT")
+bot
+  .launch({
+    allowedUpdates: [
+      "message",
+      "channel_post",
+    ],
+    dropPendingUpdates: true,
+  })
+  .then(() => {
+    console.log(
+      "BAARO Telegram Bot LANCÉ"
+    );
+    console.log(
+      "API média Telegram prête."
+    );
+  })
+  .catch((error) => {
+    console.error(
+      "Erreur démarrage Telegram :",
+      error
+    );
+    process.exit(1);
+  });
+
+/* =========================================================
+   DÉMARRAGE EXPRESS
+   ========================================================= */
+
+const server = app.listen(
+  PORT,
+  () => {
+    console.log(
+      `BAARO Telegram Media API listening on :${PORT}`
+    );
+
+    console.log(
+      `Public URL: ${PUBLIC_BASE_URL}`
+    );
+
+    console.log(
+      `CORS autorisé pour: ${[
+        ...ALLOWED_ORIGINS,
+      ].join(", ")}`
+    );
+  }
 );
 
-process.once("SIGTERM", () =>
-  bot.stop("SIGTERM")
+/* =========================================================
+   ARRÊT PROPRE
+   ========================================================= */
+
+async function shutdown(
+  signal
+) {
+  console.log(
+    `\nArrêt demandé (${signal})...`
+  );
+
+  try {
+    await bot.stop(signal);
+  } catch (error) {
+    console.error(
+      "Erreur arrêt bot:",
+      error
+    );
+  }
+
+  server.close(() => {
+    console.log(
+      "Serveur HTTP arrêté."
+    );
+
+    process.exit(0);
+  });
+
+  /*
+   * Sécurité : ne pas rester bloqué
+   * indéfiniment pendant l'arrêt.
+   */
+  setTimeout(() => {
+    process.exit(0);
+  }, 5000).unref();
+}
+
+process.once(
+  "SIGINT",
+  () => shutdown("SIGINT")
+);
+
+process.once(
+  "SIGTERM",
+  () => shutdown("SIGTERM")
 );
