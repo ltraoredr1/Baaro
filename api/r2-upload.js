@@ -16,83 +16,128 @@ import {
   rateLimitAsync,
 } from "./_shared.js";
 
-const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID || "";
-const R2_BUCKET_NAME = process.env.R2_BUCKET_NAME || "";
-const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID || "";
-const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY || "";
-const R2_PUBLIC_URL = String(process.env.R2_PUBLIC_URL || "").replace(/\/$/, "");
+const R2_ACCOUNT_ID =
+  process.env.R2_ACCOUNT_ID || "";
 
-const MAX_SIZE = 50 * 1024 * 1024;
+const R2_BUCKET_NAME =
+  process.env.R2_BUCKET_NAME || "";
 
-const ALLOWED_FOLDERS = new Set([
-  "posts",
-  "videos",
-  "stories",
-  "profiles",
-  "shop",
-  "chat",
-]);
+const R2_ACCESS_KEY_ID =
+  process.env.R2_ACCESS_KEY_ID || "";
 
-const ALLOWED_TYPES = new Set([
-  "image/jpeg",
-  "image/png",
-  "image/webp",
-  "image/gif",
-  "image/avif",
+const R2_SECRET_ACCESS_KEY =
+  process.env.R2_SECRET_ACCESS_KEY || "";
 
-  "video/mp4",
-  "video/webm",
-  "video/quicktime",
-  "video/ogg",
+const R2_PUBLIC_URL =
+  String(
+    process.env.R2_PUBLIC_URL || ""
+  ).replace(/\/$/, "");
 
-  "audio/mpeg",
-  "audio/mp4",
-  "audio/ogg",
-  "audio/wav",
-  "audio/webm",
+const MAX_SIZE =
+  50 * 1024 * 1024;
 
-  "application/pdf",
-]);
+const ALLOWED_FOLDERS =
+  new Set([
+    "posts",
+    "videos",
+    "stories",
+    "profiles",
+    "shop",
+    "chat",
+  ]);
+
+const ALLOWED_TYPES =
+  new Set([
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/gif",
+    "image/avif",
+
+    "video/mp4",
+    "video/webm",
+    "video/quicktime",
+    "video/ogg",
+
+    "audio/mpeg",
+    "audio/mp4",
+    "audio/ogg",
+    "audio/wav",
+    "audio/webm",
+
+    "application/pdf",
+  ]);
 
 function normalizeContentType(value) {
-  return String(value || "")
+  return String(
+    value ||
+      "application/octet-stream"
+  )
     .toLowerCase()
     .split(";")[0]
     .trim();
 }
 
 function safeFolder(folder) {
-  const value = String(folder || "posts")
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]/g, "");
+  const value =
+    String(
+      folder || "posts"
+    )
+      .toLowerCase()
+      .replace(
+        /[^a-z0-9_-]/g,
+        ""
+      );
 
-  return value || "posts";
+  return (
+    value || "posts"
+  );
 }
 
 function safeName(name) {
-  const value = String(name || "file")
-    .replace(/[\\/:*?"<>|\x00-\x1f]/g, "_")
-    .trim()
-    .slice(0, 180);
+  const value =
+    String(
+      name || "file"
+    )
+      .replace(
+        /[\\/:*?"<>|\x00-\x1f]/g,
+        "_"
+      )
+      .trim()
+      .slice(0, 180);
 
   return value || "file";
 }
 
 function getExtension(name) {
-  const clean = safeName(name);
-  const match = clean.match(/\.([a-zA-Z0-9]{1,10})$/);
+  const clean =
+    safeName(name);
 
-  if (!match) return "";
+  const match =
+    clean.match(
+      /\.([a-zA-Z0-9]{1,10})$/
+    );
+
+  if (!match) {
+    return "";
+  }
 
   return `.${match[1].toLowerCase()}`;
 }
 
 function randomId() {
-  return crypto.randomBytes(16).toString("hex");
+  return crypto
+    .randomBytes(16)
+    .toString("hex");
 }
 
-function createObjectKey({ userId, folder, name }) {
-  const extension = getExtension(name);
+function createObjectKey({
+  userId,
+  folder,
+  name,
+}) {
+  const extension =
+    getExtension(name);
 
   return [
     folder,
@@ -104,7 +149,9 @@ function createObjectKey({ userId, folder, name }) {
 function encodeObjectKey(key) {
   return key
     .split("/")
-    .map((part) => encodeURIComponent(part))
+    .map((part) =>
+      encodeURIComponent(part)
+    )
     .join("/");
 }
 
@@ -113,7 +160,9 @@ function createPublicUrl(key) {
     return "";
   }
 
-  return `${R2_PUBLIC_URL}/${encodeObjectKey(key)}`;
+  return `${R2_PUBLIC_URL}/${encodeObjectKey(
+    key
+  )}`;
 }
 
 function getR2Client() {
@@ -129,50 +178,80 @@ function getR2Client() {
 
   return new S3Client({
     region: "auto",
-    endpoint: `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+
+    endpoint:
+      `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+
     credentials: {
-      accessKeyId: R2_ACCESS_KEY_ID,
-      secretAccessKey: R2_SECRET_ACCESS_KEY,
+      accessKeyId:
+        R2_ACCESS_KEY_ID,
+
+      secretAccessKey:
+        R2_SECRET_ACCESS_KEY,
     },
   });
 }
 
-export default async function handler(req, res) {
+export default async function handler(
+  req,
+  res
+) {
   /*
-   * CORS doit être appliqué avant toute autre réponse.
+   * CORS de l'API Vercel.
    */
-  if (applyCors(req, res)) {
+  if (
+    applyCors(req, res)
+  ) {
     return;
   }
 
-  if (req.method !== "POST") {
-    return res.status(405).json({
-      ok: false,
-      error: "Méthode non autorisée",
-    });
+  if (
+    req.method !== "POST"
+  ) {
+    return res
+      .status(405)
+      .json({
+        ok: false,
+        error:
+          "Méthode non autorisée",
+      });
   }
 
   try {
-    const limit = await rateLimitAsync(req, {
-      key: "r2-media",
-      max: 30,
-      windowMs: 60_000,
-    });
+    /*
+     * Rate limit.
+     */
+    const limit =
+      await rateLimitAsync(
+        req,
+        {
+          key: "r2-media",
+          max: 30,
+          windowMs: 60_000,
+        }
+      );
 
     if (!limit.ok) {
-      Object.entries(limit.headers || {}).forEach(
+      Object.entries(
+        limit.headers || {}
+      ).forEach(
         ([key, value]) => {
-          res.setHeader(key, value);
+          res.setHeader(
+            key,
+            value
+          );
         }
       );
 
       return res
-        .status(limit.status)
+        .status(
+          limit.status
+        )
         .json(limit.body);
     }
 
     /*
-     * Vérification de la configuration serveur.
+     * Configuration R2.
      */
     if (
       !R2_ACCOUNT_ID ||
@@ -194,92 +273,146 @@ export default async function handler(req, res) {
     /*
      * Authentification Supabase.
      */
-    const admin = getAdminClient();
-    const user = await requireUser(req, admin);
+    const admin =
+      getAdminClient();
 
-    const body = req.body || {};
+    const user =
+      await requireUser(
+        req,
+        admin
+      );
 
-    const folder = safeFolder(body.folder);
-    const name = safeName(body.name);
+    const body =
+      req.body || {};
 
-    const contentType = normalizeContentType(
-      body.contentType
-    );
+    const folder =
+      safeFolder(
+        body.folder
+      );
 
-    const size = Number(body.size || 0);
+    const name =
+      safeName(
+        body.name
+      );
+
+    const contentType =
+      normalizeContentType(
+        body.contentType
+      );
+
+    const size =
+      Number(
+        body.size || 0
+      );
 
     /*
-     * Vérification dossier.
+     * Dossier.
      */
-    if (!ALLOWED_FOLDERS.has(folder)) {
-      return res.status(400).json({
-        ok: false,
-        error: "Dossier média non autorisé",
-      });
+    if (
+      !ALLOWED_FOLDERS.has(
+        folder
+      )
+    ) {
+      return res
+        .status(400)
+        .json({
+          ok: false,
+          error:
+            "Dossier média non autorisé",
+        });
     }
 
     /*
-     * Vérification taille.
+     * Taille.
      */
-    if (!Number.isFinite(size) || size <= 0) {
-      return res.status(400).json({
-        ok: false,
-        error: "Taille de fichier invalide",
-      });
+    if (
+      !Number.isFinite(
+        size
+      ) ||
+      size <= 0
+    ) {
+      return res
+        .status(400)
+        .json({
+          ok: false,
+          error:
+            "Taille de fichier invalide",
+        });
     }
 
-    if (size > MAX_SIZE) {
-      return res.status(413).json({
-        ok: false,
-        error: "Fichier trop volumineux (max 50 Mo)",
-      });
+    if (
+      size > MAX_SIZE
+    ) {
+      return res
+        .status(413)
+        .json({
+          ok: false,
+          error:
+            "Fichier trop volumineux (max 50 Mo)",
+        });
     }
 
     /*
-     * Vérification type MIME.
+     * Type MIME.
      */
-    if (!ALLOWED_TYPES.has(contentType)) {
-      return res.status(400).json({
-        ok: false,
-        error: `Type de fichier non autorisé: ${contentType}`,
-      });
+    if (
+      !ALLOWED_TYPES.has(
+        contentType
+      )
+    ) {
+      return res
+        .status(400)
+        .json({
+          ok: false,
+          error:
+            `Type de fichier non autorisé: ${contentType}`,
+        });
     }
 
     /*
-     * Création d'une clé privée unique.
+     * Clé unique.
      */
-    const key = createObjectKey({
-      userId: user.id,
-      folder,
-      name,
-    });
+    const key =
+      createObjectKey({
+        userId:
+          user.id,
+        folder,
+        name,
+      });
 
-    const r2 = getR2Client();
+    const r2 =
+      getR2Client();
 
     /*
-     * IMPORTANT :
-     * Le ContentType est inclus dans la signature.
-     * Le navigateur doit donc envoyer exactement
-     * le même Content-Type pendant le PUT.
+     * Le Content-Type est signé.
+     * Le navigateur devra envoyer
+     * exactement cette valeur.
      */
-    const command = new PutObjectCommand({
-      Bucket: R2_BUCKET_NAME,
-      Key: key,
-      ContentType: contentType,
-    });
+    const command =
+      new PutObjectCommand({
+        Bucket:
+          R2_BUCKET_NAME,
 
-    /*
-     * URL valable 5 minutes.
-     */
-    const uploadUrl = await getSignedUrl(
-      r2,
-      command,
-      {
-        expiresIn: 300,
-      }
-    );
+        Key:
+          key,
 
-    const publicUrl = createPublicUrl(key);
+        ContentType:
+          contentType,
+      });
+
+    const uploadUrl =
+      await getSignedUrl(
+        r2,
+        command,
+        {
+          expiresIn: 900,
+        }
+      );
+
+    const publicUrl =
+      createPublicUrl(
+        key
+      );
 
     if (!publicUrl) {
       throw new Error(
@@ -287,30 +420,49 @@ export default async function handler(req, res) {
       );
     }
 
-    return res.status(200).json({
-      ok: true,
-      provider: "cloudflare-r2",
-      uploadUrl,
-      publicUrl,
-      key,
-      bucket: R2_BUCKET_NAME,
-      contentType,
-      size,
-      expiresIn: 300,
-    });
+    /*
+     * Retour explicite.
+     */
+    return res
+      .status(200)
+      .json({
+        ok: true,
+
+        provider:
+          "cloudflare-r2",
+
+        uploadUrl,
+
+        publicUrl,
+
+        key,
+
+        bucket:
+          R2_BUCKET_NAME,
+
+        contentType,
+
+        size,
+
+        expiresIn: 900,
+      });
   } catch (error) {
     console.error(
       "[r2-upload]",
       error
     );
 
-    return res.status(
-      error?.status || 500
-    ).json({
-      ok: false,
-      error:
-        error?.message ||
-        "Préparation R2 impossible",
-    });
+    return res
+      .status(
+        error?.status ||
+          500
+      )
+      .json({
+        ok: false,
+
+        error:
+          error?.message ||
+          "Préparation R2 impossible",
+      });
   }
 }
