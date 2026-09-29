@@ -1,75 +1,129 @@
 import { supabase } from "../supabaseClient.js";
 import { getApiBase } from "../config.js";
 
-function apiUrl(path) {
+/**
+ * Construit l'URL de l'API R2.
+ *
+ * Sur Vercel :
+ *   /api/r2-upload
+ *
+ * Si getApiBase() retourne une URL complète :
+ *   https://mon-site.vercel.app/api/r2-upload
+ */
+function apiUrl() {
   const base = getApiBase?.() ?? "";
-<<<<<<< HEAD
-  return `\( {String(base).replace(/\/ \)/, "")}${path}`;
+  const cleanBase = String(base).replace(/\/+$/, "");
+
+  return `${cleanBase}/api/r2-upload`;
 }
 
+/**
+ * Récupère le token Supabase de l'utilisateur connecté.
+ */
 async function getAccessToken() {
   const { data, error } = await supabase.auth.getSession();
-  if (error) throw error;
-  const token = data?.session?.access_token;
-  if (!token) {
-    throw new Error("Session expiree. Reconnecte-toi.");
-  }
-=======
-
-  return `${String(base).replace(/\/$/, "")}/api/r2-upload`;
-}
-
-async function getAccessToken() {
-  const {
-    data,
-    error,
-  } = await supabase.auth.getSession();
 
   if (error) {
     throw error;
   }
 
-  const token =
-    data?.session?.access_token;
+  const token = data?.session?.access_token;
 
   if (!token) {
-    throw new Error(
-      "Session expirée. Reconnecte-toi."
-    );
+    throw new Error("Session expirée. Reconnecte-toi.");
   }
 
->>>>>>> f034ceea0f0f2f1c9189e479a5b112dc35008a92
   return token;
 }
 
-function safeFolder(folder) {
-  const value = String(
-    folder || "posts"
-  )
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]/g, "");
+/**
+ * Nettoie et valide le dossier R2.
+ */
+function cleanFolder(folder) {
+  const value = String(folder || "posts")
+    .trim()
+    .replace(/^\/+|\/+$/g, "");
 
-  return value || "posts";
-}
-
-<<<<<<< HEAD
-function getFileContentType(file) {
-  return String(file?.type || "application/octet-stream")
-=======
-async function readResponseBody(response) {
-  const text = await response
-    .text()
-    .catch(() => "");
-
-  if (!text) {
-    return "";
+  if (!value) {
+    return "posts";
   }
 
-  return text;
+  // Empêche les chemins dangereux.
+  if (
+    value.includes("..") ||
+    value.includes("\\") ||
+    value.startsWith(".")
+  ) {
+    throw new Error("Dossier média invalide.");
+  }
+
+  return value;
 }
 
-async function readJsonResponse(response) {
-  const text = await readResponseBody(response);
+/**
+ * Détermine le Content-Type réel à envoyer à R2.
+ */
+function getContentType(file) {
+  const type = String(file?.type || "")
+    .split(";")[0]
+    .trim()
+    .toLowerCase();
+
+  if (type) {
+    return type;
+  }
+
+  const name = String(file?.name || "").toLowerCase();
+
+  if (name.endsWith(".jpg") || name.endsWith(".jpeg")) {
+    return "image/jpeg";
+  }
+
+  if (name.endsWith(".png")) {
+    return "image/png";
+  }
+
+  if (name.endsWith(".webp")) {
+    return "image/webp";
+  }
+
+  if (name.endsWith(".gif")) {
+    return "image/gif";
+  }
+
+  if (name.endsWith(".mp4")) {
+    return "video/mp4";
+  }
+
+  if (name.endsWith(".webm")) {
+    return "video/webm";
+  }
+
+  if (name.endsWith(".mov")) {
+    return "video/quicktime";
+  }
+
+  if (name.endsWith(".mp3")) {
+    return "audio/mpeg";
+  }
+
+  if (name.endsWith(".wav")) {
+    return "audio/wav";
+  }
+
+  if (name.endsWith(".ogg")) {
+    return "audio/ogg";
+  }
+
+  return "application/octet-stream";
+}
+
+/**
+ * Lit proprement la réponse d'une API,
+ * même lorsque Vercel renvoie du texte au lieu du JSON.
+ */
+async function readApiResponse(response) {
+  const text = await response.text();
 
   if (!text) {
     return {};
@@ -79,38 +133,23 @@ async function readJsonResponse(response) {
     return JSON.parse(text);
   } catch {
     return {
-      raw: text.slice(0, 1000),
+      raw: text,
     };
   }
 }
 
-function getFileContentType(file) {
-  return String(
-    file?.type ||
-      "application/octet-stream"
-  )
->>>>>>> f034ceea0f0f2f1c9189e479a5b112dc35008a92
-    .toLowerCase()
-    .split(";")[0]
-    .trim();
-}
-
-<<<<<<< HEAD
-function fileToBase64(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = String(reader.result || "");
-      const base64 = result.includes(",") ? result.split(",")[1] : result;
-      resolve(base64);
-    };
-    reader.onerror = () => reject(new Error("Lecture fichier impossible"));
-    reader.readAsDataURL(file);
-  });
-}
-
-=======
->>>>>>> f034ceea0f0f2f1c9189e479a5b112dc35008a92
+/**
+ * Upload d'un fichier vers Cloudflare R2.
+ *
+ * Fonctionnement :
+ *
+ * 1. Le navigateur demande à Vercel une URL R2 signée.
+ * 2. Vercel vérifie l'utilisateur.
+ * 3. Vercel génère l'URL PUT temporaire.
+ * 4. Le navigateur envoie directement le fichier à R2.
+ *
+ * Les identifiants R2 ne sont donc jamais exposés au navigateur.
+ */
 export async function uploadExternalMedia(
   file,
   {
@@ -119,73 +158,58 @@ export async function uploadExternalMedia(
     maxBytes = 50 * 1024 * 1024,
   } = {}
 ) {
-<<<<<<< HEAD
-  if (!file) throw new Error("Fichier manquant");
-  if (!userId) throw new Error("Utilisateur non connecte");
+  if (!file) {
+    throw new Error("Fichier manquant.");
+  }
+
+  if (!userId) {
+    throw new Error("Utilisateur non identifié.");
+  }
+
   if (!Number.isFinite(file.size) || file.size <= 0) {
-    throw new Error("Taille de fichier invalide");
+    throw new Error("Fichier vide ou invalide.");
   }
+
   if (file.size > maxBytes) {
-    throw new Error(`Fichier trop volumineux (max ${Math.round(maxBytes / 1024 / 1024)} Mo)`);
+    const maxMb = Math.round(maxBytes / (1024 * 1024));
+
+    throw new Error(
+      `Fichier trop lourd. Taille maximale : ${maxMb} Mo.`
+    );
   }
+
+  const contentType = getContentType(file);
+
+  if (
+    !contentType ||
+    contentType === "application/octet-stream"
+  ) {
+    throw new Error(
+      "Type de fichier non reconnu."
+    );
+  }
+
+  const cleanFolderName = cleanFolder(file ? folder : "posts");
 
   const token = await getAccessToken();
-  const contentType = getFileContentType(file);
-  const cleanFolder = safeFolder(folder);
 
-  // Fichiers <= 4 Mo : proxy Vercel (pas de CORS R2)
-  if (file.size <= 4 * 1024 * 1024) {
-    const data = await fileToBase64(file);
-
-    let response;
-    try {
-      response = await fetch(apiUrl("/api/r2-put"), {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          folder: cleanFolder,
-          contentType,
-          data,
-          name: file.name || "file",
-        }),
-      });
-    } catch (error) {
-      throw new Error(
-        `API media BAARO inaccessible: ${error?.message || "Erreur reseau"}`
-      );
-    }
-
-    const json = await response.json().catch(() => ({}));
-
-    if (!response.ok || !json.ok || !(json.publicUrl || json.url)) {
-      throw new Error(
-        json.error || `Upload R2 impossible (${response.status})`
-      );
-    }
-
-    return {
-      url: json.publicUrl || json.url,
-      path: json.key || "",
-      mime: contentType,
-      size: file.size,
-      fileName: file.name,
-    };
-  }
-
-  // Fichiers > 4 Mo : URL presignee (ancien flux)
+  /**
+   * Étape 1 :
+   * demander à Vercel de générer l'URL signée R2.
+   */
   let response;
+
   try {
-    response = await fetch(apiUrl("/api/r2-upload"), {
+    response = await fetch(apiUrl(), {
       method: "POST",
+
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${token}`,
       },
+
       body: JSON.stringify({
-        folder: cleanFolder,
+        folder: cleanFolderName,
         name: file.name || "file",
         contentType,
         size: file.size,
@@ -194,340 +218,133 @@ export async function uploadExternalMedia(
     });
   } catch (error) {
     throw new Error(
-      `API media BAARO inaccessible: ${error?.message || "Erreur reseau"}`
+      `Serveur média BAARO inaccessible : ${
+        error?.message || "Erreur réseau."
+      }`
     );
   }
-=======
-  if (!file) {
+
+  const json = await readApiResponse(response);
+
+  if (!response.ok) {
     throw new Error(
-      "Fichier manquant"
+      json?.error ||
+        json?.message ||
+        json?.raw ||
+        `Erreur API média (${response.status}).`
     );
   }
 
-  if (!userId) {
+  if (!json?.ok) {
     throw new Error(
-      "Utilisateur non connecté"
+      json?.error ||
+        json?.message ||
+        "Impossible de préparer l'upload R2."
     );
   }
 
-  if (!Number.isFinite(file.size)) {
+  if (!json?.uploadUrl) {
     throw new Error(
-      "Taille de fichier invalide"
+      "Le serveur n'a pas fourni d'URL d'upload R2."
     );
   }
 
-  if (file.size <= 0) {
-    throw new Error(
-      "Le fichier est vide"
-    );
-  }
-
-  if (file.size > maxBytes) {
-    throw new Error(
-      `Fichier trop volumineux (max ${Math.round(
-        maxBytes / 1024 / 1024
-      )} Mo)`
-    );
-  }
-
-  const token =
-    await getAccessToken();
-
-  const contentType =
-    getFileContentType(file);
->>>>>>> f034ceea0f0f2f1c9189e479a5b112dc35008a92
-
-  const cleanFolder =
-    safeFolder(folder);
-
-  /*
-   * --------------------------------------------------
-   * ÉTAPE 1
-   * Demander à Vercel une URL présignée R2.
-   * --------------------------------------------------
+  /**
+   * Le Content-Type utilisé ici DOIT être identique
+   * à celui utilisé lors de la génération de l'URL signée.
    */
-
-  let response;
-
-  try {
-    response = await fetch(
-      apiUrl(),
-      {
-        method: "POST",
-
-        headers: {
-          "Content-Type":
-            "application/json",
-
-          Authorization:
-            `Bearer ${token}`,
-        },
-
-        body: JSON.stringify({
-          folder:
-            cleanFolder,
-
-          name:
-            file.name || "file",
-
-          contentType,
-
-          size:
-            file.size,
-
-          userId,
-        }),
-      }
-    );
-  } catch (error) {
-    console.error(
-      "[externalMedia] Impossible de joindre Vercel:",
-      error
-    );
-
-    throw new Error(
-<<<<<<< HEAD
-      json.error || `Preparation R2 impossible (${response.status})`
-    );
-  }
-
-  const signedContentType = String(json.contentType || contentType)
-    .toLowerCase()
+  const signedContentType = String(
+    json.contentType || contentType
+  )
     .split(";")[0]
-    .trim();
+    .trim()
+    .toLowerCase();
 
-  let upload;
+  /**
+   * Étape 2 :
+   * upload direct navigateur → Cloudflare R2.
+   */
+  let uploadResponse;
+
   try {
-    upload = await fetch(json.uploadUrl, {
+    uploadResponse = await fetch(json.uploadUrl, {
       method: "PUT",
-      headers: { "Content-Type": signedContentType },
+
+      headers: {
+        "Content-Type": signedContentType,
+      },
+
       body: file,
     });
   } catch (error) {
     throw new Error(
-      `Connexion Cloudflare R2 impossible: ${error?.message || "Erreur reseau ou CORS"}`
+      `Connexion Cloudflare R2 impossible : ${
+        error?.message ||
+        "Erreur réseau ou configuration CORS."
+      }`
     );
   }
 
-  if (!upload.ok) {
-    throw new Error(`Upload Cloudflare R2 echoue (${upload.status})`);
+  /**
+   * Une URL signée peut être valide mais refusée par R2
+   * si le Content-Type ou la signature ne correspondent pas,
+   * ou si le CORS du bucket bloque le navigateur.
+   */
+  if (!uploadResponse.ok) {
+    let detail = "";
+
+    try {
+      detail = await uploadResponse.text();
+    } catch {
+      // Rien à faire.
+    }
+
+    if (uploadResponse.status === 403) {
+      throw new Error(
+        "Upload R2 refusé (403). Vérifie la signature, le Content-Type et le CORS du bucket R2."
+      );
+    }
+
+    if (uploadResponse.status === 400) {
+      throw new Error(
+        "Upload R2 invalide (400). Le Content-Type envoyé ne correspond probablement pas à celui signé."
+      );
+    }
+
+    if (uploadResponse.status === 413) {
+      throw new Error(
+        "Fichier trop volumineux pour R2."
+      );
+    }
+
+    throw new Error(
+      `Échec de l'upload R2 (${uploadResponse.status})${
+        detail ? ` : ${detail.slice(0, 300)}` : "."
+      }`
+    );
   }
 
+  /**
+   * L'API doit nous retourner l'URL publique finale
+   * qui sera enregistrée dans Supabase.
+   */
   if (!json.publicUrl) {
-    throw new Error("Upload R2 reussi mais aucune URL publique");
+    throw new Error(
+      "Upload R2 réussi, mais aucune URL publique n'a été retournée par le serveur."
+    );
   }
 
   return {
     url: json.publicUrl,
     path: json.key || "",
+    key: json.key || "",
     mime: signedContentType,
     size: file.size,
-    fileName: file.name,
-=======
-      `API média BAARO inaccessible: ${
-        error?.message ||
-        "Erreur réseau"
-      }`
-    );
-  }
-
-  const json =
-    await readJsonResponse(
-      response
-    );
-
-  if (
-    !response.ok ||
-    !json.ok ||
-    !json.uploadUrl
-  ) {
-    console.error(
-      "[externalMedia] Erreur API R2:",
-      {
-        status: response.status,
-        response: json,
-      }
-    );
-
-    throw new Error(
-      json.error ||
-        json.raw ||
-        `Préparation R2 impossible (${response.status})`
-    );
-  }
-
-  /*
-   * Le Content-Type utilisé lors du PUT doit
-   * correspondre à celui utilisé pour générer
-   * l'URL présignée.
-   */
-  const signedContentType =
-    String(
-      json.contentType ||
-        contentType
-    )
-      .toLowerCase()
-      .split(";")[0]
-      .trim();
-
-  /*
-   * --------------------------------------------------
-   * ÉTAPE 2
-   * Upload direct navigateur → Cloudflare R2.
-   * --------------------------------------------------
-   */
-
-  let upload;
-
-  try {
-    upload = await fetch(
-      json.uploadUrl,
-      {
-        method: "PUT",
-
-        headers: {
-          "Content-Type":
-            signedContentType,
-        },
-
-        body: file,
-      }
-    );
-  } catch (error) {
-    /*
-     * IMPORTANT :
-     * On ne masque plus l'erreur réelle derrière
-     * "Vérifiez le CORS".
-     */
-    console.error(
-      "[externalMedia] Erreur réseau R2:",
-      error
-    );
-
-    throw new Error(
-      `Connexion Cloudflare R2 impossible: ${
-        error?.message ||
-        "Erreur réseau ou CORS"
-      }`
-    );
-  }
-
-  /*
-   * --------------------------------------------------
-   * ÉTAPE 3
-   * Vérifier la réponse réelle de R2.
-   * --------------------------------------------------
-   */
-
-  if (!upload.ok) {
-    const errorBody =
-      await readResponseBody(upload);
-
-    console.error(
-      "[externalMedia] Réponse R2:",
-      {
-        status:
-          upload.status,
-
-        statusText:
-          upload.statusText,
-
-        body:
-          errorBody,
-
-        url:
-          json.uploadUrl,
-      }
-    );
-
-    if (upload.status === 403) {
-      throw new Error(
-        `Cloudflare R2 a refusé l'upload (403). Réponse R2: ${
-          errorBody ||
-          "AccessDenied / SignatureDoesNotMatch"
-        }`
-      );
-    }
-
-    if (upload.status === 400) {
-      throw new Error(
-        `Cloudflare R2 a rejeté la requête (400): ${
-          errorBody ||
-          "Requête invalide"
-        }`
-      );
-    }
-
-    if (upload.status === 404) {
-      throw new Error(
-        `Cloudflare R2 introuvable (404): ${
-          errorBody ||
-          "Bucket ou objet introuvable"
-        }`
-      );
-    }
-
-    if (upload.status === 413) {
-      throw new Error(
-        "Cloudflare R2 a refusé le fichier car il est trop volumineux."
-      );
-    }
-
-    throw new Error(
-      `Upload Cloudflare R2 échoué (${upload.status} ${
-        upload.statusText || ""
-      }): ${
-        errorBody ||
-        "Réponse vide"
-      }`
-    );
-  }
-
-  /*
-   * --------------------------------------------------
-   * ÉTAPE 4
-   * Vérifier l'URL publique.
-   * --------------------------------------------------
-   */
-
-  if (!json.publicUrl) {
-    throw new Error(
-      "Upload R2 réussi mais aucune URL publique n'a été retournée."
-    );
-  }
-
-  console.log(
-    "[externalMedia] Upload R2 réussi:",
-    {
-      url:
-        json.publicUrl,
-
-      key:
-        json.key,
-
-      contentType:
-        signedContentType,
-
-      size:
-        file.size,
-    }
-  );
-
-  return {
-    url:
-      json.publicUrl,
-
-    path:
-      json.key || "",
-
-    mime:
-      signedContentType,
-
-    size:
-      file.size,
-
-    fileName:
-      file.name,
->>>>>>> f034ceea0f0f2f1c9189e479a5b112dc35008a92
+    fileName: file.name || "file",
   };
 }
+
+/**
+ * Alias pratique pour les anciens appels éventuels.
+ */
+export const uploadMedia = uploadExternalMedia;
