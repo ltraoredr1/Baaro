@@ -188,7 +188,7 @@ function createObjectKey({
   return [
     folder,
     userId,
-    `${Date.now()}-${randomId()}${extension}`,
+    `\( {Date.now()}- \){randomId()}${extension}`,
   ].join("/");
 }
 
@@ -215,7 +215,7 @@ function createPublicUrl(
   }
 
   return (
-    `${R2_PUBLIC_URL}/${encodeObjectKey(
+    `\( {R2_PUBLIC_URL}/ \){encodeObjectKey(
       key
     )}`
   );
@@ -232,7 +232,7 @@ function getR2Client() {
     !R2_SECRET_ACCESS_KEY
   ) {
     throw new Error(
-      "Configuration Cloudflare R2 incomplète"
+      "Configuration Cloudflare R2 incomplete"
     );
   }
 
@@ -249,6 +249,8 @@ function getR2Client() {
       secretAccessKey:
         R2_SECRET_ACCESS_KEY,
     },
+
+    forcePathStyle: true,
   });
 }
 
@@ -273,8 +275,8 @@ export default async function handler(
   }
 
   /*
-   * Cette route prépare uniquement
-   * une URL PUT présignée.
+   * Cette route prepare uniquement
+   * une URL PUT presignee.
    */
   if (
     req.method !== "POST"
@@ -284,7 +286,7 @@ export default async function handler(
       .json({
         ok: false,
         error:
-          "Méthode non autorisée",
+          "Methode non autorisee",
       });
   }
 
@@ -335,7 +337,7 @@ export default async function handler(
       !R2_SECRET_ACCESS_KEY
     ) {
       throw new Error(
-        "Configuration Cloudflare R2 manquante. Vérifie R2_ACCOUNT_ID, R2_BUCKET_NAME, R2_ACCESS_KEY_ID et R2_SECRET_ACCESS_KEY dans Vercel."
+        "Configuration Cloudflare R2 manquante. Verifie R2_ACCOUNT_ID, R2_BUCKET_NAME, R2_ACCESS_KEY_ID et R2_SECRET_ACCESS_KEY dans Vercel."
       );
     }
 
@@ -361,7 +363,7 @@ export default async function handler(
     if (!user?.id) {
       const error =
         new Error(
-          "Utilisateur non authentifié"
+          "Utilisateur non authentifie"
         );
 
       error.status = 401;
@@ -410,7 +412,7 @@ export default async function handler(
         .json({
           ok: false,
           error:
-            "Dossier média non autorisé",
+            "Dossier media non autorise",
         });
     }
 
@@ -459,12 +461,12 @@ export default async function handler(
         .json({
           ok: false,
           error:
-            `Type de fichier non autorisé: ${contentType}`,
+            `Type de fichier non autorise: ${contentType}`,
         });
     }
 
     /* =====================================================
-       CRÉATION DE LA CLÉ R2
+       CREATION DE LA CLE R2
        ===================================================== */
 
     const key =
@@ -501,13 +503,13 @@ export default async function handler(
       });
 
     /* =====================================================
-       URL PRÉSIGNÉE
+       URL PRESIGNEE
        ===================================================== */
 
     /*
      * 15 minutes.
      *
-     * Le fichier n'est PAS envoyé à Vercel.
+     * Le fichier n'est PAS envoye a Vercel.
      * Le navigateur envoie directement
      * le fichier vers Cloudflare R2.
      */
@@ -540,7 +542,7 @@ export default async function handler(
     }
 
     /* =====================================================
-       RÉPONSE
+       REPONSE
        ===================================================== */
 
     return res
@@ -584,7 +586,7 @@ export default async function handler(
 
         error:
           error?.message ||
-          "Préparation R2 impossible",
+          "Preparation R2 impossible",
       });
   }
 }
