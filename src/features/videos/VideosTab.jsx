@@ -38,6 +38,218 @@ const formatTime = (seconds) => {
   return `${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
 };
 
+const isMissingColumn = (error) =>
+  !!error &&
+  (error.code === "42703" ||
+    error.code === "PGRST204" ||
+    /column|schema cache/i.test(error.message || ""));
+
+// Insère une vidéo ; si les colonnes son (migration 053) n'existent pas encore,
+// on réessaie sans elles pour ne jamais bloquer la publication.
+const insertVideo = async (base, extra = {}) => {
+  const hasExtra = Object.keys(extra).length > 0;
+  let res = await supabase
+    .from("videos")
+    .insert({ ...base, ...extra })
+    .select("id")
+    .single();
+  let degraded = false;
+  if (res.error && hasExtra && isMissingColumn(res.error)) {
+    res = await supabase.from("videos").insert(base).select("id").single();
+    degraded = !res.error;
+  }
+  return { ...res, degraded };
+};
+
+// ---------- Création de vidéo à partir de photos / texte (100 % navigateur) ----------
+const CANVAS_W = 720;
+const CANVAS_H = 1280;
+const MAX_PHOTOS = 10;
+
+const TEXT_THEMES = [
+  ["#f59e0b", "#b45309"],
+  ["#ec4899", "#7c3aed"],
+  ["#06b6d4", "#1d4ed8"],
+  ["#22c55e", "#065f46"],
+  ["#1f2937", "#000000"],
+];
+
+const pickRecorderMime = () => {
+  const candidates = [
+    "video/webm;codecs=vp9,opus",
+    "video/webm;codecs=vp8,opus",
+    "video/webm",
+    "video/mp4",
+  ];
+  return candidates.find((type) => window.MediaRecorder?.isTypeSupported?.(type)) || "";
+};
+
+const loadImage = (url) =>
+  new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("Une photo est illisible."));
+    img.src = url;
+  });
+
+const wrapText = (ctx, text, maxWidth) => {
+  const lines = [];
+  text.split("\n").forEach((paragraph) => {
+    const words = paragraph.split(/\s+/).filter(Boolean);
+    if (!words.length) {
+      lines.push("");
+      return;
+    }
+    let line = words[0];
+    for (let i = 1; i < words.length; i += 1) {
+      const test = `${line} ${words[i]}`;
+      if (ctx.measureText(test).width <= maxWidth) line = test;
+      else {
+        lines.push(line);
+        line = words[i];
+      }
+    }
+    lines.push(line);
+  });
+  return lines;
+};
+
+const drawCover = (ctx, img, zoom = 1) => {
+  const scale = Math.max(CANVAS_W / img.width, CANVAS_H / img.height) * zoom;
+  const w = img.width * scale;
+  const h = img.height * scale;
+  ctx.drawImage(img, (CANVAS_W - w) / 2, (CANVAS_H - h) / 2, w, h);
+};
+
+const makePhotoDrawer = (images, secondsEach) => {
+  const fade = 0.5;
+  return (ctx, ms) => {
+    const t = ms / 1000;
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+    const idx = Math.min(images.length - 1, Math.floor(t / secondsEach));
+    const local = t - idx * secondsEach;
+    if (idx > 0 && local < fade) {
+      drawCover(ctx, images[idx - 1], 1.08);
+      ctx.globalAlpha = local / fade;
+    }
+    drawCover(ctx, images[idx], 1 + 0.08 * Math.min(1, local / secondsEach));
+    ctx.globalAlpha = 1;
+  };
+};
+
+const makeTextDrawer = (text, themeIndex) => {
+  const [c1, c2] = TEXT_THEMES[themeIndex] || TEXT_THEMES[0];
+  let layout = null;
+  return (ctx, ms) => {
+    const gradient = ctx.createLinearGradient(0, 0, CANVAS_W, CANVAS_H);
+    gradient.addColorStop(0, c1);
+    gradient.addColorStop(1, c2);
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+    if (!layout) {
+      let size = 84;
+      let lines = [];
+      for (; size >= 32; size -= 4) {
+        ctx.font = `800 ${size}px system-ui, -apple-system, sans-serif`;
+        lines = wrapText(ctx, text, CANVAS_W - 120);
+        if (lines.length * size * 1.25 <= CANVAS_H - 500) break;
+      }
+      layout = { size, lines, lh: size * 1.25 };
+    }
+
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.globalAlpha = Math.min(1, ms / 500);
+    ctx.fillStyle = "#fff";
+    ctx.font = `800 ${layout.size}px system-ui, -apple-system, sans-serif`;
+    const top = CANVAS_H / 2 - ((layout.lines.length - 1) * layout.lh) / 2;
+    layout.lines.forEach((line, i) => ctx.fillText(line, CANVAS_W / 2, top + i * layout.lh));
+
+    ctx.globalAlpha = 0.6;
+    ctx.font = "700 28px system-ui, -apple-system, sans-serif";
+    ctx.fillText("BAARO", CANVAS_W / 2, CANVAS_H - 80);
+    ctx.globalAlpha = 1;
+  };
+};
+
+// Dessine en temps réel sur un canvas, enregistre (image + musique) et renvoie un File.
+const renderToFile = async ({ drawFrame, totalMs, audioUrl, audioCtx, onProgress }) => {
+  if (!window.MediaRecorder) {
+    throw new Error("L'enregistrement vidéo n'est pas supporté par ce navigateur.");
+  }
+  const canvas = document.createElement("canvas");
+  canvas.width = CANVAS_W;
+  canvas.height = CANVAS_H;
+  if (!canvas.captureStream) {
+    throw new Error("Ce navigateur ne peut pas créer de vidéo depuis le canvas.");
+  }
+  const ctx = canvas.getContext("2d");
+  drawFrame(ctx, 0);
+  const stream = canvas.captureStream(30);
+
+  if (audioUrl && audioCtx) {
+    let buffer;
+    try {
+      const response = await fetch(audioUrl);
+      buffer = await audioCtx.decodeAudioData(await response.arrayBuffer());
+    } catch {
+      throw new Error("Impossible de charger le son choisi.");
+    }
+    const dest = audioCtx.createMediaStreamDestination();
+    const gain = audioCtx.createGain();
+    const source = audioCtx.createBufferSource();
+    source.buffer = buffer;
+    source.loop = true;
+    source.connect(gain);
+    gain.connect(dest);
+    const endAt = audioCtx.currentTime + totalMs / 1000;
+    gain.gain.setValueAtTime(1, Math.max(audioCtx.currentTime, endAt - 0.6));
+    gain.gain.linearRampToValueAtTime(0, endAt);
+    source.start();
+    dest.stream.getAudioTracks().forEach((track) => stream.addTrack(track));
+  }
+
+  const mimeType = pickRecorderMime();
+  const recorder = new MediaRecorder(
+    stream,
+    mimeType ? { mimeType, videoBitsPerSecond: 2500000 } : undefined
+  );
+  const chunks = [];
+  recorder.ondataavailable = (event) => {
+    if (event.data?.size) chunks.push(event.data);
+  };
+  const stopped = new Promise((resolve, reject) => {
+    recorder.onstop = () => resolve();
+    recorder.onerror = (event) => reject(event.error || new Error("Erreur d'enregistrement."));
+  });
+
+  recorder.start(500);
+  const startedAt = performance.now();
+  await new Promise((resolve) => {
+    const tick = () => {
+      const elapsed = performance.now() - startedAt;
+      drawFrame(ctx, Math.min(elapsed, totalMs));
+      onProgress?.(Math.min(1, elapsed / totalMs));
+      if (elapsed >= totalMs) resolve();
+      else requestAnimationFrame(tick);
+    };
+    tick();
+  });
+  recorder.stop();
+  await stopped;
+  stream.getTracks().forEach((track) => track.stop());
+
+  const type = (recorder.mimeType || mimeType || "video/webm").split(";")[0];
+  const blob = new Blob(chunks, { type });
+  if (!blob.size) throw new Error("Aucune vidéo n'a été créée.");
+  const ext = type.includes("mp4") ? "mp4" : "webm";
+  return new File([blob], `baaro-${Date.now()}.${ext}`, { type, lastModified: Date.now() });
+};
+
 const readDuration = (file) =>
   new Promise((resolve) => {
     const url = URL.createObjectURL(file);
@@ -83,6 +295,18 @@ export function VideosTab({ onRewardPoints, onExit }) {
   const [uploadDescription, setUploadDescription] = useState("");
   const [selectedSound, setSelectedSound] = useState(null);
   const [showSoundPicker, setShowSoundPicker] = useState(false);
+  const [muteOriginal, setMuteOriginal] = useState(false);
+  const [previewingSoundId, setPreviewingSoundId] = useState(null);
+  const [createMode, setCreateMode] = useState("video");
+  const [photoFiles, setPhotoFiles] = useState([]);
+  const [photoSeconds, setPhotoSeconds] = useState(3);
+  const [textContent, setTextContent] = useState("");
+  const [textTheme, setTextTheme] = useState(0);
+  const [generating, setGenerating] = useState(false);
+  const [generateProgress, setGenerateProgress] = useState(0);
+  const [generated, setGenerated] = useState(false);
+  const [bakedAudio, setBakedAudio] = useState(false);
+  const [generatedSeconds, setGeneratedSeconds] = useState(0);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
 
@@ -99,6 +323,13 @@ export function VideosTab({ onRewardPoints, onExit }) {
   const cameraTimerRef = useRef(null);
 
   const videoRefs = useRef({});
+  const audioRefs = useRef({});
+  const mutedRef = useRef(true);
+  const soundPreviewRef = useRef(null);
+  const soundFileInputRef = useRef(null);
+  const photoInputRef = useRef(null);
+  const previewVideoRef = useRef(null);
+  const previewAudioRef = useRef(null);
   const observerRef = useRef(null);
   const viewedRef = useRef(new Set());
   const fileInputRef = useRef(null);
@@ -112,31 +343,39 @@ export function VideosTab({ onRewardPoints, onExit }) {
     setLoadError(null);
 
     try {
-      const { data, error } = await supabase
-        .from("videos")
-        .select(`
-          id,
-          title,
-          description,
-          video_url,
-          thumbnail_url,
-          duration,
-          views,
-          likes,
-          comments_count,
-          is_repost,
-          created_at,
-          author_id,
-          sound_id,
-          profiles:author_id (
-            display_name,
-            handle,
-            flag,
-            avatar_url
-          )
-        `)
-        .order("created_at", { ascending: false })
-        .limit(100);
+      const buildSelect = (withSound) => `
+        id,
+        title,
+        description,
+        video_url,
+        thumbnail_url,
+        duration,
+        views,
+        likes,
+        comments_count,
+        is_repost,
+        created_at,
+        author_id,
+        sound_id,${withSound ? "\n        sound_url,\n        sound_title,\n        mute_original," : ""}
+        profiles:author_id (
+          display_name,
+          handle,
+          flag,
+          avatar_url
+        )
+      `;
+
+      const fetchFeed = (withSound) =>
+        supabase
+          .from("videos")
+          .select(buildSelect(withSound))
+          .order("created_at", { ascending: false })
+          .limit(100);
+
+      let { data, error } = await fetchFeed(true);
+      if (error && isMissingColumn(error)) {
+        ({ data, error } = await fetchFeed(false));
+      }
 
       if (error) throw error;
       setVideos(data || []);
@@ -168,14 +407,44 @@ export function VideosTab({ onRewardPoints, onExit }) {
   useEffect(() => {
     let active = true;
 
-    supabase
-      .from("sounds")
-      .select("*")
-      .order("usage_count", { ascending: false })
-      .limit(50)
-      .then(({ data }) => {
-        if (active) setSounds(data || []);
-      });
+    (async () => {
+      const merged = new Map();
+      try {
+        const { data } = await supabase
+          .from("sounds")
+          .select("*")
+          .order("usage_count", { ascending: false })
+          .limit(50);
+        (data || []).forEach((item) => {
+          if (item?.audio_url) merged.set(String(item.id), item);
+        });
+      } catch {
+        // table absente ou inaccessible : on continue avec la bibliothèque audio
+      }
+      try {
+        const { data, error } = await supabase.rpc("search_audio_library", {
+          p_query: null,
+          p_genre: null,
+          p_limit: 50,
+        });
+        if (!error) {
+          (data || []).forEach((track) => {
+            const key = String(track.id);
+            if (track?.audio_url && !merged.has(key)) {
+              merged.set(key, {
+                id: track.id,
+                title: track.title,
+                artist: track.artist,
+                audio_url: track.audio_url,
+              });
+            }
+          });
+        }
+      } catch {
+        // bibliothèque audio indisponible
+      }
+      if (active) setSounds(Array.from(merged.values()));
+    })();
 
     return () => {
       active = false;
@@ -247,9 +516,10 @@ export function VideosTab({ onRewardPoints, onExit }) {
             });
         }
 
-        video.muted = muted;
+        video.muted = mutedRef.current || video.dataset.muteOriginal === "1";
         video.play().catch(() => {
           video.muted = true;
+          mutedRef.current = true;
           setMuted(true);
           video.play().catch(() => {});
         });
@@ -264,7 +534,51 @@ export function VideosTab({ onRewardPoints, onExit }) {
     });
 
     return () => observer.disconnect();
-  }, [visibleVideos, muted]);
+  }, [visibleVideos]);
+
+  const soundsById = useMemo(() => {
+    const map = {};
+    sounds.forEach((item) => {
+      map[String(item.id)] = item;
+    });
+    return map;
+  }, [sounds]);
+
+  const getVideoSound = useCallback(
+    (video) => {
+      const known = video.sound_id ? soundsById[String(video.sound_id)] : null;
+      const url = video.sound_url || known?.audio_url || null;
+      if (!url) return null;
+      return {
+        url,
+        title: video.sound_title || known?.title || "Son BAARO",
+        artist: known?.artist || "",
+      };
+    },
+    [soundsById]
+  );
+
+  const syncAudioTime = (videoEl, audio) => {
+    if (!videoEl || !audio) return;
+    let t = videoEl.currentTime || 0;
+    const d = audio.duration;
+    if (Number.isFinite(d) && d > 0) t = t % d;
+    if (Math.abs((audio.currentTime || 0) - t) > 0.4) {
+      try {
+        audio.currentTime = t;
+      } catch {
+        // métadonnées pas encore chargées
+      }
+    }
+  };
+
+  const playAudioFor = (id, videoEl) => {
+    const audio = audioRefs.current[id];
+    if (!audio) return;
+    audio.muted = mutedRef.current;
+    syncAudioTime(videoEl, audio);
+    if (!mutedRef.current) audio.play().catch(() => {});
+  };
 
   const togglePlay = (id) => {
     const video = videoRefs.current[id];
@@ -281,10 +595,20 @@ export function VideosTab({ onRewardPoints, onExit }) {
 
   const toggleMute = () => {
     const next = !muted;
+    mutedRef.current = next;
     setMuted(next);
-    Object.values(videoRefs.current).forEach((video) => {
-      if (video) video.muted = next;
+
+    Object.entries(videoRefs.current).forEach(([vid, el]) => {
+      if (el) el.muted = next || el.dataset.muteOriginal === "1";
+      const audio = audioRefs.current[vid];
+      if (audio) audio.muted = next;
     });
+
+    // Le geste utilisateur autorise enfin la lecture du son.
+    if (!next && playingId) {
+      const current = videoRefs.current[playingId];
+      if (current && !current.paused) playAudioFor(playingId, current);
+    }
   };
 
   const toggleFullscreen = async (id) => {
@@ -306,6 +630,9 @@ export function VideosTab({ onRewardPoints, onExit }) {
     const video = event.currentTarget;
     const value = video.duration ? video.currentTime / video.duration : 0;
     setProgress((prev) => ({ ...prev, [id]: value }));
+
+    const audio = audioRefs.current[id];
+    if (audio && !video.paused) syncAudioTime(video, audio);
   };
 
   const handleLike = async (videoId) => {
@@ -446,9 +773,8 @@ export function VideosTab({ onRewardPoints, onExit }) {
     }
 
     try {
-      const { data, error } = await supabase
-        .from("videos")
-        .insert({
+      const { data, error } = await insertVideo(
+        {
           author_id: user.id,
           video_url: video.video_url,
           title: `🔁 ${video.title || "Vidéo BAARO"}`,
@@ -459,9 +785,15 @@ export function VideosTab({ onRewardPoints, onExit }) {
           is_repost: true,
           original_author_id: video.author_id,
           sound_id: video.sound_id || null,
-        })
-        .select("id")
-        .single();
+        },
+        video.sound_url
+          ? {
+              sound_url: video.sound_url,
+              sound_title: video.sound_title || null,
+              mute_original: !!video.mute_original,
+            }
+          : {}
+      );
 
       if (error) throw error;
 
@@ -614,7 +946,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
       setCameraRecording(false);
     };
     recorder.onstop = () => {
-      const type = recorder.mimeType || mimeType || "video/webm";
+      const type = (recorder.mimeType || mimeType || "video/webm").split(";")[0];
       const blob = new Blob(cameraChunksRef.current, { type });
       if (!blob.size) {
         setCameraError("Aucune vidéo n'a été enregistrée.");
@@ -650,7 +982,171 @@ export function VideosTab({ onRewardPoints, onExit }) {
     setCameraRecording(false);
   };
 
+  const stopSoundPreview = useCallback(() => {
+    if (soundPreviewRef.current) {
+      soundPreviewRef.current.pause();
+      soundPreviewRef.current = null;
+    }
+    setPreviewingSoundId(null);
+  }, []);
+
+  useEffect(() => () => stopSoundPreview(), [stopSoundPreview]);
+
+  const toggleSoundPreview = (sound) => {
+    const key = String(sound.id ?? sound.audio_url);
+    if (previewingSoundId === key) {
+      stopSoundPreview();
+      return;
+    }
+    stopSoundPreview();
+    if (!sound.audio_url) {
+      showToast("Ce son n'a pas de fichier audio.", "error");
+      return;
+    }
+    const audio = new Audio(sound.audio_url);
+    audio.onended = () => stopSoundPreview();
+    audio.onerror = () => {
+      showToast("Impossible de lire ce son.", "error");
+      stopSoundPreview();
+    };
+    soundPreviewRef.current = audio;
+    setPreviewingSoundId(key);
+    audio.play().catch(() => stopSoundPreview());
+  };
+
+  const chooseSound = (sound) => {
+    stopSoundPreview();
+    setSelectedSound(sound);
+    if (!sound) setMuteOriginal(false);
+    setShowSoundPicker(false);
+  };
+
+  const handleSoundFile = (file) => {
+    if (!file) return;
+    if (!file.type.startsWith("audio/")) {
+      showToast("Sélectionne un fichier audio.", "error");
+      return;
+    }
+    if (file.size > 20 * 1024 * 1024) {
+      showToast("Audio trop lourd (20 Mo max).", "error");
+      return;
+    }
+    chooseSound({
+      id: null,
+      title: file.name.replace(/\.[^.]+$/, "") || "Mon audio",
+      artist: "Audio importé",
+      audio_url: URL.createObjectURL(file),
+      file,
+    });
+  };
+
+  const handlePhotosSelected = (fileList) => {
+    const incoming = Array.from(fileList || []).filter((f) => f.type.startsWith("image/"));
+    if (!incoming.length) {
+      showToast("Sélectionne des photos.", "error");
+      return;
+    }
+    setPhotoFiles((prev) => {
+      const room = MAX_PHOTOS - prev.length;
+      if (incoming.length > room) showToast(`${MAX_PHOTOS} photos maximum.`, "error");
+      const added = incoming
+        .filter((f) => f.size <= 15 * 1024 * 1024)
+        .slice(0, Math.max(0, room))
+        .map((file) => ({
+          id: crypto.randomUUID(),
+          file,
+          url: URL.createObjectURL(file),
+        }));
+      return [...prev, ...added];
+    });
+  };
+
+  const removePhoto = (id) => {
+    setPhotoFiles((prev) => {
+      const target = prev.find((item) => item.id === id);
+      if (target) URL.revokeObjectURL(target.url);
+      return prev.filter((item) => item.id !== id);
+    });
+  };
+
+  const handleGenerate = async () => {
+    if (generating) return;
+    const wantSound = !!selectedSound?.audio_url;
+    let audioCtx = null;
+
+    try {
+      if (wantSound) {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (AC) {
+          audioCtx = new AC();
+          audioCtx.resume?.().catch(() => {});
+        }
+      }
+
+      stopSoundPreview();
+      setGenerating(true);
+      setGenerateProgress(0);
+
+      let drawFrame;
+      let totalMs;
+
+      if (createMode === "photo") {
+        if (!photoFiles.length) {
+          showToast("Ajoute au moins une photo.", "error");
+          return;
+        }
+        const images = await Promise.all(photoFiles.map((item) => loadImage(item.url)));
+        totalMs = images.length * photoSeconds * 1000;
+        drawFrame = makePhotoDrawer(images, photoSeconds);
+      } else {
+        const text = textContent.trim();
+        if (!text) {
+          showToast("Écris ton texte.", "error");
+          return;
+        }
+        const words = text.split(/\s+/).length;
+        totalMs = Math.min(15, Math.max(5, Math.ceil(words * 0.5))) * 1000;
+        drawFrame = makeTextDrawer(text, textTheme);
+      }
+
+      const file = await renderToFile({
+        drawFrame,
+        totalMs,
+        audioUrl: wantSound ? selectedSound.audio_url : null,
+        audioCtx,
+        onProgress: setGenerateProgress,
+      });
+
+      handleFileSelected(file);
+      setGenerated(true);
+      setBakedAudio(wantSound);
+      setGeneratedSeconds(Math.round(totalMs / 1000));
+    } catch (error) {
+      console.error(error);
+      showToast(`Création impossible : ${error.message || "erreur"}`, "error");
+    } finally {
+      audioCtx?.close?.().catch(() => {});
+      setGenerating(false);
+      setGenerateProgress(0);
+    }
+  };
+
+  const backToCreator = () => {
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    setSelectedFile(null);
+    setPreviewUrl("");
+    setGenerated(false);
+    setBakedAudio(false);
+  };
+
   const resetUpload = () => {
+    stopSoundPreview();
+    setMuteOriginal(false);
+    photoFiles.forEach((item) => URL.revokeObjectURL(item.url));
+    setPhotoFiles([]);
+    setTextContent("");
+    setGenerated(false);
+    setBakedAudio(false);
     if (previewUrl) URL.revokeObjectURL(previewUrl);
     setSelectedFile(null);
     setPreviewUrl("");
@@ -669,6 +1165,8 @@ export function VideosTab({ onRewardPoints, onExit }) {
     }
 
     if (previewUrl) URL.revokeObjectURL(previewUrl);
+    setGenerated(false);
+    setBakedAudio(false);
     setSelectedFile(file);
     setPreviewUrl(URL.createObjectURL(file));
   };
@@ -705,12 +1203,36 @@ export function VideosTab({ onRewardPoints, onExit }) {
         .from("videos")
         .getPublicUrl(path);
 
-      const duration = await readDuration(selectedFile);
+      const duration = generated
+        ? formatTime(generatedSeconds)
+        : await readDuration(selectedFile);
+
+      // Son séparé (vidéo importée/filmée) : on envoie l'audio importé si besoin.
+      let soundUrl = null;
+      if (selectedSound?.audio_url && !bakedAudio) {
+        soundUrl = selectedSound.audio_url;
+        if (selectedSound.file) {
+          const audioExt = (selectedSound.file.name.split(".").pop() || "mp3").toLowerCase();
+          const audioPath = `${user.id}/sounds/${crypto.randomUUID()}.${audioExt}`;
+          const { error: audioError } = await supabase.storage
+            .from("videos")
+            .upload(audioPath, selectedSound.file, {
+              cacheControl: "3600",
+              upsert: false,
+              contentType: selectedSound.file.type,
+            });
+          if (audioError) {
+            throw new Error(
+              `${audioError.message} — applique la migration 053_video_sounds.sql (audio autorisé dans le bucket).`
+            );
+          }
+          soundUrl = supabase.storage.from("videos").getPublicUrl(audioPath).data.publicUrl;
+        }
+      }
       setUploadProgress(80);
 
-      const { data: created, error: dbError } = await supabase
-        .from("videos")
-        .insert({
+      const { data: created, error: dbError, degraded } = await insertVideo(
+        {
           author_id: user.id,
           video_url: publicData.publicUrl,
           title: uploadTitle.trim() || "Vidéo BAARO",
@@ -718,10 +1240,15 @@ export function VideosTab({ onRewardPoints, onExit }) {
           duration,
           views: 0,
           likes: 0,
-          sound_id: selectedSound?.id || null,
-        })
-        .select("id")
-        .single();
+          sound_id: selectedSound?.id ? String(selectedSound.id) : null,
+        },
+        selectedSound
+          ? {
+              sound_title: selectedSound.title || null,
+              ...(soundUrl ? { sound_url: soundUrl, mute_original: !!muteOriginal } : {}),
+            }
+          : {}
+      );
 
       if (dbError) throw dbError;
 
@@ -729,6 +1256,9 @@ export function VideosTab({ onRewardPoints, onExit }) {
       onRewardPoints?.("publish_video", "Vidéo publiée", created?.id);
       showPointsReward?.(25, "Vidéo publiée");
       showToast("Vidéo publiée avec succès 🎉", "success");
+      if (degraded && soundUrl) {
+        showToast("Son non enregistré : applique la migration 053_video_sounds.sql.", "error");
+      }
 
       setShowUpload(false);
       resetUpload();
@@ -860,6 +1390,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
             const profile = video.profiles || {};
             const captionOpen = expandedCaption === video.id;
             const caption = [video.title, video.description].filter(Boolean).join(" · ");
+            const sound = getVideoSound(video);
 
             return (
               <article
@@ -876,11 +1407,19 @@ export function VideosTab({ onRewardPoints, onExit }) {
                   className="absolute inset-0 h-full w-full object-cover"
                   playsInline
                   loop
-                  muted={muted}
+                  muted={muted || !!video.mute_original}
+                  data-mute-original={video.mute_original ? "1" : "0"}
                   preload="metadata"
-                  onPlay={() => setPlayingId(id)}
-                  onPause={() =>
-                    setPlayingId((current) => (current === id ? null : current))
+                  onPlay={(event) => {
+                    setPlayingId(id);
+                    playAudioFor(video.id, event.currentTarget);
+                  }}
+                  onPause={() => {
+                    setPlayingId((current) => (current === id ? null : current));
+                    audioRefs.current[video.id]?.pause();
+                  }}
+                  onSeeked={(event) =>
+                    syncAudioTime(event.currentTarget, audioRefs.current[video.id])
                   }
                   onTimeUpdate={(event) => handleTimeUpdate(video.id, event)}
                   onError={() =>
@@ -888,6 +1427,19 @@ export function VideosTab({ onRewardPoints, onExit }) {
                   }
                   onClick={() => togglePlay(video.id)}
                 />
+
+                {sound && (
+                  <audio
+                    ref={(el) => {
+                      if (el) audioRefs.current[video.id] = el;
+                      else delete audioRefs.current[video.id];
+                    }}
+                    src={sound.url}
+                    loop
+                    preload="auto"
+                    muted={muted}
+                  />
+                )}
 
                 <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-transparent to-black/30 pointer-events-none" />
 
@@ -988,12 +1540,14 @@ export function VideosTab({ onRewardPoints, onExit }) {
                       videoId={video.id}
                     />
                   </div>
-                  {video.sound_id && (
-                    <div className="mt-2 flex items-center gap-1.5 text-[11px] text-white/65">
-                      <Music2 size={13} />
-                      <span>Son original / audio BAARO</span>
-                    </div>
-                  )}
+                  <div className="mt-2 flex items-center gap-1.5 text-[11px] text-white/65 min-w-0">
+                    <Music2 size={13} className="shrink-0" />
+                    <span className="truncate">
+                      {sound
+                        ? `${sound.title}${sound.artist ? ` · ${sound.artist}` : ""}`
+                        : "Son original"}
+                    </span>
+                  </div>
                 </div>
 
                 <div className="absolute right-2 bottom-28 z-30 flex flex-col items-center gap-3">
@@ -1273,6 +1827,26 @@ export function VideosTab({ onRewardPoints, onExit }) {
             <div className="p-4 space-y-4">
               {!selectedFile ? (
                 <div className="space-y-3">
+                  <div className="grid grid-cols-3 gap-1 p-1 rounded-2xl bg-white/5">
+                    {[
+                      ["video", "🎬 Vidéo"],
+                      ["photo", "🖼️ Photos"],
+                      ["text", "✍️ Texte"],
+                    ].map(([key, label]) => (
+                      <button
+                        key={key}
+                        onClick={() => setCreateMode(key)}
+                        className={`py-2 rounded-xl text-xs font-bold ${
+                          createMode === key ? "bg-white text-black" : "text-white/60"
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+
+                  {createMode === "video" && (
+                <div className="space-y-3">
                   <button
                     onClick={openCamera}
                     className="w-full aspect-[9/14] max-h-[52dvh] rounded-3xl border border-white/10 bg-white/[0.04] flex flex-col items-center justify-center active:scale-[0.99]"
@@ -1297,23 +1871,179 @@ export function VideosTab({ onRewardPoints, onExit }) {
                     Choisir une vidéo dans la galerie
                   </button>
                 </div>
+                  )}
+
+                  {createMode === "photo" && (
+                    <div className="space-y-3">
+                      <input
+                        ref={photoInputRef}
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        className="hidden"
+                        onChange={(event) => {
+                          handlePhotosSelected(event.target.files);
+                          event.target.value = "";
+                        }}
+                      />
+                      <button
+                        onClick={() => photoInputRef.current?.click()}
+                        className="w-full rounded-2xl border border-dashed border-white/20 bg-white/[0.04] py-8 flex flex-col items-center gap-2"
+                      >
+                        <Plus size={22} />
+                        <span className="text-sm font-bold">
+                          Ajouter des photos ({photoFiles.length}/{MAX_PHOTOS})
+                        </span>
+                      </button>
+
+                      {photoFiles.length > 0 && (
+                        <div className="grid grid-cols-4 gap-2">
+                          {photoFiles.map((item) => (
+                            <div
+                              key={item.id}
+                              className="relative aspect-square rounded-xl overflow-hidden bg-zinc-800"
+                            >
+                              <img src={item.url} alt="" className="h-full w-full object-cover" />
+                              <button
+                                onClick={() => removePhoto(item.id)}
+                                className="absolute top-1 right-1 h-6 w-6 rounded-full bg-black/70 flex items-center justify-center"
+                                aria-label="Retirer la photo"
+                              >
+                                <X size={12} />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      <div className="flex items-center justify-between rounded-2xl bg-white/10 px-4 py-3 text-sm">
+                        <span>Durée par photo</span>
+                        <select
+                          value={photoSeconds}
+                          onChange={(event) => setPhotoSeconds(Number(event.target.value))}
+                          className="bg-transparent outline-none font-bold"
+                        >
+                          {[2, 3, 5].map((n) => (
+                            <option key={n} value={n} className="text-black">
+                              {n} s
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <button
+                        onClick={handleGenerate}
+                        disabled={generating || !photoFiles.length}
+                        className="w-full py-3.5 rounded-2xl font-black disabled:opacity-40"
+                        style={{ background: COLORS.gold, color: "#000" }}
+                      >
+                        {generating
+                          ? `Création… ${Math.round(generateProgress * 100)}%`
+                          : "Créer la vidéo"}
+                      </button>
+                      <p className="text-[10px] text-white/40 text-center">
+                        Choisis ta musique ci-dessous, puis crée. Reste sur cet écran pendant la création.
+                      </p>
+                    </div>
+                  )}
+
+                  {createMode === "text" && (
+                    <div className="space-y-3">
+                      <div
+                        className="relative rounded-3xl overflow-hidden aspect-[9/14] max-h-[40dvh] mx-auto flex items-center justify-center p-6 text-center"
+                        style={{
+                          background: `linear-gradient(135deg, ${TEXT_THEMES[textTheme][0]}, ${TEXT_THEMES[textTheme][1]})`,
+                        }}
+                      >
+                        <p className="font-black text-xl leading-tight break-words whitespace-pre-wrap">
+                          {textContent.trim() || "Ton texte apparaîtra ici"}
+                        </p>
+                      </div>
+
+                      <textarea
+                        value={textContent}
+                        onChange={(event) => setTextContent(event.target.value)}
+                        placeholder="Écris ton message…"
+                        rows={3}
+                        maxLength={280}
+                        className="w-full rounded-2xl bg-white/10 px-4 py-3 outline-none text-sm resize-none"
+                      />
+
+                      <div className="flex items-center gap-3">
+                        {TEXT_THEMES.map(([c1, c2], index) => (
+                          <button
+                            key={index}
+                            onClick={() => setTextTheme(index)}
+                            className="h-9 w-9 rounded-full border-2"
+                            style={{
+                              background: `linear-gradient(135deg, ${c1}, ${c2})`,
+                              borderColor: textTheme === index ? "#fff" : "transparent",
+                            }}
+                            aria-label={`Couleur ${index + 1}`}
+                          />
+                        ))}
+                      </div>
+
+                      <button
+                        onClick={handleGenerate}
+                        disabled={generating || !textContent.trim()}
+                        className="w-full py-3.5 rounded-2xl font-black disabled:opacity-40"
+                        style={{ background: COLORS.gold, color: "#000" }}
+                      >
+                        {generating
+                          ? `Création… ${Math.round(generateProgress * 100)}%`
+                          : "Créer la vidéo"}
+                      </button>
+                      <p className="text-[10px] text-white/40 text-center">
+                        Choisis ta musique ci-dessous, puis crée. Reste sur cet écran pendant la création.
+                      </p>
+                    </div>
+                  )}
+                </div>
               ) : (
                 <div className="relative rounded-3xl overflow-hidden bg-black aspect-[9/14] max-h-[52dvh]">
                   <video
+                    ref={previewVideoRef}
                     src={previewUrl}
                     controls
                     playsInline
+                    muted={muteOriginal && !!selectedSound?.audio_url && !bakedAudio}
                     className="h-full w-full object-contain"
+                    onPlay={() => {
+                      const a = previewAudioRef.current;
+                      if (!a) return;
+                      stopSoundPreview();
+                      a.currentTime = previewVideoRef.current?.currentTime || 0;
+                      a.play().catch(() => {});
+                    }}
+                    onPause={() => previewAudioRef.current?.pause()}
+                    onEnded={() => previewAudioRef.current?.pause()}
+                    onSeeked={() => {
+                      const a = previewAudioRef.current;
+                      if (a) a.currentTime = previewVideoRef.current?.currentTime || 0;
+                    }}
                   />
+                  {selectedSound?.audio_url && !bakedAudio && (
+                    <audio
+                      ref={previewAudioRef}
+                      src={selectedSound.audio_url}
+                      loop
+                      preload="auto"
+                    />
+                  )}
                   <button
                     disabled={uploading}
                     onClick={() => {
+                      if (generated) {
+                        backToCreator();
+                        return;
+                      }
                       resetUpload();
                       fileInputRef.current?.click();
                     }}
                     className="absolute top-3 right-3 px-3 py-2 rounded-xl bg-black/60 backdrop-blur-md text-xs font-bold"
                   >
-                    Changer
+                    {generated ? "Modifier" : "Changer"}
                   </button>
                 </div>
               )}
@@ -1344,12 +2074,17 @@ export function VideosTab({ onRewardPoints, onExit }) {
               />
 
               <button
-                onClick={() => setShowSoundPicker((value) => !value)}
+                onClick={() => {
+                  stopSoundPreview();
+                  setShowSoundPicker((value) => !value);
+                }}
                 className="w-full flex items-center justify-between rounded-2xl bg-white/10 px-4 py-3"
               >
-                <span className="flex items-center gap-2 text-sm">
-                  <Music2 size={17} />
-                  {selectedSound?.title || selectedSound?.name || "Ajouter un son"}
+                <span className="flex items-center gap-2 text-sm min-w-0">
+                  <Music2 size={17} className="shrink-0" />
+                  <span className="truncate">
+                    {selectedSound?.title || selectedSound?.name || "Ajouter un son"}
+                  </span>
                 </span>
                 <ChevronDown
                   size={17}
@@ -1357,33 +2092,81 @@ export function VideosTab({ onRewardPoints, onExit }) {
                 />
               </button>
 
+              <input
+                ref={soundFileInputRef}
+                type="file"
+                accept="audio/*"
+                className="hidden"
+                onChange={(event) => {
+                  handleSoundFile(event.target.files?.[0]);
+                  event.target.value = "";
+                }}
+              />
+
               {showSoundPicker && (
-                <div className="rounded-2xl bg-white/5 border border-white/10 max-h-48 overflow-y-auto">
+                <div className="rounded-2xl bg-white/5 border border-white/10 overflow-hidden">
                   <button
-                    onClick={() => {
-                      setSelectedSound(null);
-                      setShowSoundPicker(false);
-                    }}
+                    onClick={() => soundFileInputRef.current?.click()}
+                    className="w-full px-4 py-3 text-left text-sm font-bold border-b border-white/10"
+                    style={{ color: COLORS.gold }}
+                  >
+                    🎵 Importer mon audio
+                  </button>
+                  <button
+                    onClick={() => chooseSound(null)}
                     className="w-full px-4 py-3 text-left text-sm border-b border-white/10"
                   >
-                    Aucun son
+                    Aucun son (son d'origine)
                   </button>
-                  {sounds.map((sound) => (
-                    <button
-                      key={sound.id}
-                      onClick={() => {
-                        setSelectedSound(sound);
-                        setShowSoundPicker(false);
-                      }}
-                      className="w-full px-4 py-3 text-left text-sm border-b border-white/5 last:border-0"
-                    >
-                      <div className="font-bold">{sound.title || sound.name || "Son BAARO"}</div>
-                      <div className="text-[10px] text-white/40">
-                        {sound.artist || "Audio BAARO"}
-                      </div>
-                    </button>
-                  ))}
+                  <div className="max-h-56 overflow-y-auto">
+                    {sounds.length === 0 && (
+                      <p className="px-4 py-4 text-xs text-white/40">
+                        Aucun son dans la bibliothèque. Importe ton propre audio ci-dessus.
+                      </p>
+                    )}
+                    {sounds.map((item) => {
+                      const key = String(item.id);
+                      const isPreviewing = previewingSoundId === key;
+                      return (
+                        <div
+                          key={key}
+                          className="flex items-center gap-2 px-2 border-b border-white/5 last:border-0"
+                        >
+                          <button
+                            onClick={() => toggleSoundPreview(item)}
+                            className="h-9 w-9 shrink-0 rounded-full bg-white/10 flex items-center justify-center"
+                            aria-label={isPreviewing ? "Arrêter l'écoute" : "Écouter"}
+                          >
+                            {isPreviewing ? <Pause size={15} /> : <Play size={15} />}
+                          </button>
+                          <button
+                            onClick={() => chooseSound(item)}
+                            className="flex-1 min-w-0 py-3 text-left text-sm"
+                          >
+                            <div className="font-bold truncate">
+                              {item.title || item.name || "Son BAARO"}
+                            </div>
+                            <div className="text-[10px] text-white/40 truncate">
+                              {item.artist || "Audio BAARO"}
+                            </div>
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
+              )}
+
+              {selectedFile && selectedSound?.audio_url && !bakedAudio && (
+                <label className="flex items-center justify-between gap-3 rounded-2xl bg-white/10 px-4 py-3 text-sm">
+                  <span>Couper le son d'origine de la vidéo</span>
+                  <input
+                    type="checkbox"
+                    checked={muteOriginal}
+                    onChange={(event) => setMuteOriginal(event.target.checked)}
+                    className="h-5 w-5"
+                  />
+                </label>
               )}
 
               {uploading && (
