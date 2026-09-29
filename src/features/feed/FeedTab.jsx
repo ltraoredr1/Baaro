@@ -1,12 +1,6 @@
-import * as feedEvents from "../../lib/feedEvents.js";
-import { useCursorFeed } from "../../hooks/useCursorFeed.js";
-import { usePrefersReducedMotion } from "../../hooks/usePrefersReducedMotion.js";
-import * as queries from "../../lib/queries.js";
-import { reportContent } from "../../lib/reportContent.js";
 import { ConnectionStatus } from "../../components/ConnectionStatus.jsx";
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
-  Flag,
   Heart,
   MessageCircle,
   Share2,
@@ -18,7 +12,7 @@ import {
   Trash2,
   MoreHorizontal,
   Check,
-  Bell,
+  Bell, // 🆕 Ajout de l'icône Bell
 } from "lucide-react";
 import { FeedStories } from "../../components/FeedStories.jsx";
 import { COLORS } from "../../theme.js";
@@ -29,86 +23,71 @@ import { handleDbError } from "../../lib/dbErrors.js";
 import { checkRateLimit, rateLimitMessage } from "../../lib/rateLimit.js";
 import { GuestBanner } from "../../components/GuestBanner.jsx";
 import { TranslateButton } from "../../components/TranslateButton.jsx";
-import {
-  PollCard,
-  SocialPostEnhancements,
-  SocialSuggestions,
-} from "./SocialEnhancements.jsx";
+import { PollCard, SocialPostEnhancements, SocialSuggestions } from "./SocialEnhancements.jsx";
 import { PollComposer } from "../../components/PollComposer.jsx";
 import { RichTextComposer } from "../../components/RichTextComposer.jsx";
 import { RichTextRenderer } from "../../components/RichTextRenderer.jsx";
-import { NotificationDrawer } from "../../components/NotificationDrawer.jsx";
-import { API_BASE } from "../../config.js";
-import { uploadExternalMedia } from "../../lib/externalMedia.js";
+import { NotificationDrawer } from "../../components/NotificationDrawer.jsx"; // 🆕 Import du Drawer
 
-/** auth.users.id (UUID) uniquement */
-function isValidAuthUserId(value) {
-  if (!value || typeof value !== "string") return false;
-  if (value.startsWith("@") || (value.includes("@") && value.includes(".")))
-    return false;
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-    value
-  );
-}
-
+// Taille de page pour le fil. Pagination par CURSEUR (created_at + id)
 const PAGE_SIZE = 20;
-const MAX_IMAGE_SIZE = 10 * 1024 * 1024;
-const MAX_VIDEO_SIZE = 50 * 1024 * 1024;
+
+// Limites d'upload média
+const MAX_IMAGE_SIZE = 10 * 1024 * 1024; // 10 Mo
+const MAX_VIDEO_SIZE = 50 * 1024 * 1024; // 50 Mo
 
 function applyCursor(query, cursor) {
   if (!cursor) return query;
-
   return query.or(
     `created_at.lt.${cursor.created_at},and(created_at.eq.${cursor.created_at},id.lt.${cursor.id})`
   );
 }
 
-export function FeedTab({ userId, id: idProp, onOpenProfile, onRewardPoints }) {
-  const prefersReducedMotion = usePrefersReducedMotion();
-  const cursorFeed = useCursorFeed({ autoLoad: false });
+export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
   const { showToast, showPointsReward } = useToast();
-
   const [posts, setPosts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
-
   const [newText, setNewText] = useState("");
   const [mood, setMood] = useState("");
   const [showPoll, setShowPoll] = useState(false);
+  
+  // États pour la création de sondage
   const [pollQuestion, setPollQuestion] = useState("");
   const [pollOptions, setPollOptions] = useState(["", ""]);
-
+  
   const [likedPosts, setLikedPosts] = useState({});
   const [commentOpen, setCommentOpen] = useState({});
   const [commentsMap, setCommentsMap] = useState({});
   const [newCommentText, setNewCommentText] = useState({});
   const [translatedMap, setTranslatedMap] = useState({});
-
   const [user, setUser] = useState(null);
   const [submitting, setSubmitting] = useState(false);
   const [menuOpenId, setMenuOpenId] = useState(null);
   const [editingId, setEditingId] = useState(null);
   const [editText, setEditText] = useState("");
   const [savingEdit, setSavingEdit] = useState(false);
+  
+  // 🆕 État pour le drawer de notifications
   const [notifOpen, setNotifOpen] = useState(false);
 
+  // Média en cours de composition
   const [mediaFile, setMediaFile] = useState(null);
   const [mediaPreview, setMediaPreview] = useState(null);
   const [uploadingMedia, setUploadingMedia] = useState(false);
-
   const fileInputRef = useRef(null);
+
   const cursorRef = useRef(null);
   const sentinelRef = useRef(null);
 
-  const meId = user?.id || userId || idProp || null;
+  // 🆕 Identifiant utilisateur unifié (disponible tôt pour le rendu)
+  const meId = user?.id || userId;
 
   useEffect(() => {
     const getUser = async () => {
       try {
-        const {
-          data: { user },
-        } = await supabase.auth.getUser();
+        const { data: { user } } = await supabase.auth.getUser();
         setUser(user);
       } catch (error) {
         handleDbError(error, showToast, "Erreur session");
@@ -119,9 +98,7 @@ export function FeedTab({ userId, id: idProp, onOpenProfile, onRewardPoints }) {
 
   useEffect(() => {
     return () => {
-      if (mediaPreview) {
-        URL.revokeObjectURL(mediaPreview);
-      }
+      if (mediaPreview) URL.revokeObjectURL(mediaPreview);
     };
   }, [mediaPreview]);
 
@@ -175,9 +152,7 @@ export function FeedTab({ userId, id: idProp, onOpenProfile, onRewardPoints }) {
   const fetchPostsPageFallback = useCallback(async (cursor) => {
     let query = supabase
       .from("posts")
-      .select(
-        "id, author_id, text, media_url, media_type, created_at, likes_count, comments_count"
-      )
+      .select("id, author_id, text, media_url, media_type, created_at, likes_count, comments_count")
       .order("created_at", { ascending: false })
       .order("id", { ascending: false })
       .limit(PAGE_SIZE);
@@ -187,11 +162,9 @@ export function FeedTab({ userId, id: idProp, onOpenProfile, onRewardPoints }) {
     const { data, error: err2 } = await query;
     if (err2) throw err2;
 
-    const authorIds = [
-      ...new Set((data || []).map((p) => p.author_id).filter(Boolean)),
-    ];
-
+    const authorIds = [...new Set((data || []).map((p) => p.author_id).filter(Boolean))];
     let profilesMap = {};
+
     if (authorIds.length > 0) {
       const { data: profiles } = await supabase
         .from("profiles")
@@ -220,10 +193,7 @@ export function FeedTab({ userId, id: idProp, onOpenProfile, onRewardPoints }) {
   const updateCursorFromRows = (rows) => {
     if (rows.length > 0) {
       const last = rows[rows.length - 1];
-      cursorRef.current = {
-        created_at: last.created_at,
-        id: last.id,
-      };
+      cursorRef.current = { created_at: last.created_at, id: last.id };
     }
     setHasMore(rows.length === PAGE_SIZE);
   };
@@ -231,22 +201,17 @@ export function FeedTab({ userId, id: idProp, onOpenProfile, onRewardPoints }) {
   const loadPosts = useCallback(async () => {
     setLoading(true);
     cursorRef.current = null;
-
     try {
       const rows = await fetchPostsPage(null);
       setPosts(rows);
       updateCursorFromRows(rows);
-
       if (meId && rows.length) {
         const { data: likes } = await supabase
           .from("post_likes")
           .select("post_id")
-          .eq("user_id", meId)
+          .eq("id", meId) // ✅ Convention : id uniquement
           .in("post_id", rows.map((row) => row.id));
-
-        setLikedPosts(
-          Object.fromEntries((likes || []).map((like) => [like.post_id, true]))
-        );
+        setLikedPosts(Object.fromEntries((likes || []).map((like) => [like.post_id, true])));
       } else {
         setLikedPosts({});
       }
@@ -256,17 +221,13 @@ export function FeedTab({ userId, id: idProp, onOpenProfile, onRewardPoints }) {
         const rows = await fetchPostsPageFallback(null);
         setPosts(rows);
         updateCursorFromRows(rows);
-
         if (meId && rows.length) {
           const { data: likes } = await supabase
             .from("post_likes")
             .select("post_id")
-            .eq("user_id", meId)
+            .eq("id", meId) // ✅ Convention : id uniquement
             .in("post_id", rows.map((row) => row.id));
-
-          setLikedPosts(
-            Object.fromEntries((likes || []).map((like) => [like.post_id, true]))
-          );
+          setLikedPosts(Object.fromEntries((likes || []).map((like) => [like.post_id, true])));
         } else {
           setLikedPosts({});
         }
@@ -281,13 +242,9 @@ export function FeedTab({ userId, id: idProp, onOpenProfile, onRewardPoints }) {
   }, [fetchPostsPage, fetchPostsPageFallback, showToast, meId]);
 
   const loadMorePosts = useCallback(async () => {
-    if (loadingMore || !hasMore || loading || !cursorRef.current) {
-      return;
-    }
-
+    if (loadingMore || !hasMore || loading || !cursorRef.current) return;
     setLoadingMore(true);
     const cursor = cursorRef.current;
-
     try {
       const rows = await fetchPostsPage(cursor);
       setPosts((prev) => [...prev, ...rows]);
@@ -310,36 +267,28 @@ export function FeedTab({ userId, id: idProp, onOpenProfile, onRewardPoints }) {
   }, [loadPosts]);
 
   const postIdsKey = posts.map((p) => p.id).join(",");
-
   useEffect(() => {
     if (!meId || !postIdsKey) return;
     let cancelled = false;
     const ids = postIdsKey.split(",");
-
     (async () => {
       const { data: likes } = await supabase
         .from("post_likes")
         .select("post_id")
-        .eq("user_id", meId)
+        .eq("id", meId) // ✅ Convention : id uniquement
         .in("post_id", ids);
-
       if (!cancelled && likes) {
         setLikedPosts(Object.fromEntries(likes.map((l) => [l.post_id, true])));
       }
     })();
-
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [meId, postIdsKey]);
 
   useEffect(() => {
     if (!sentinelRef.current) return;
     const observer = new IntersectionObserver(
       (entries) => {
-        if (entries[0].isIntersecting) {
-          loadMorePosts();
-        }
+        if (entries[0].isIntersecting) loadMorePosts();
       },
       { rootMargin: "400px" }
     );
@@ -347,141 +296,59 @@ export function FeedTab({ userId, id: idProp, onOpenProfile, onRewardPoints }) {
     return () => observer.disconnect();
   }, [loadMorePosts]);
 
-  const realtimeReloadTimerRef = useRef(null);
-
   useEffect(() => {
-    const scheduleReload = () => {
-      if (realtimeReloadTimerRef.current) {
-        clearTimeout(realtimeReloadTimerRef.current);
-      }
-      realtimeReloadTimerRef.current = setTimeout(() => {
-        realtimeReloadTimerRef.current = null;
-        loadPosts();
-      }, 1200);
-    };
-
     const channel = supabase
       .channel("posts_feed")
-      .on(
-        "postgres_changes",
-        { event: "INSERT", schema: "public", table: "posts" },
-        scheduleReload
-      )
-      .on(
-        "postgres_changes",
-        { event: "DELETE", schema: "public", table: "posts" },
-        scheduleReload
-      )
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "posts" }, () => loadPosts())
+      .on("postgres_changes", { event: "DELETE", schema: "public", table: "posts" }, () => loadPosts())
       .subscribe();
-
-    return () => {
-      if (realtimeReloadTimerRef.current) {
-        clearTimeout(realtimeReloadTimerRef.current);
-        realtimeReloadTimerRef.current = null;
-      }
-      supabase.removeChannel(channel);
-    };
+    return () => { supabase.removeChannel(channel); };
   }, [loadPosts]);
 
   const handleFileSelect = (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
     const isVideo = file.type.startsWith("video");
     const isImage = file.type.startsWith("image");
-
     if (!isVideo && !isImage) {
       showToast("Format non supporté (image ou vidéo uniquement)", "error");
       e.target.value = "";
       return;
     }
-
     const maxSize = isVideo ? MAX_VIDEO_SIZE : MAX_IMAGE_SIZE;
     if (file.size > maxSize) {
       showToast(`Fichier trop lourd (max ${isVideo ? "50" : "10"} Mo)`, "error");
       e.target.value = "";
       return;
     }
-
-    if (mediaPreview) {
-      URL.revokeObjectURL(mediaPreview);
-    }
-
+    if (mediaPreview) URL.revokeObjectURL(mediaPreview);
     setMediaFile(file);
     setMediaPreview(URL.createObjectURL(file));
     e.target.value = "";
   };
 
   const handleRemoveMedia = () => {
-    if (mediaPreview) {
-      URL.revokeObjectURL(mediaPreview);
-    }
+    if (mediaPreview) URL.revokeObjectURL(mediaPreview);
     setMediaFile(null);
     setMediaPreview(null);
   };
 
-  // ============================================================
-  // CORRECTION 1 : UPLOAD MÉDIA R2
-  // ============================================================
-
   const uploadMedia = async (file, authorId) => {
-    // Stockage externe (Telegram / R2) — plus de Supabase Storage
-    try {
-      console.log("[BAARO][POST] Upload média:", {
-        name: file?.name,
-        type: file?.type,
-        size: file?.size,
-        authorId,
-      });
-
-      const result = await uploadExternalMedia(file, {
-        folder: "posts",
-        userId: authorId,
-        maxBytes: file.type.startsWith("video")
-          ? 50 * 1024 * 1024
-          : 10 * 1024 * 1024,
-      });
-
-      if (!result?.url) {
-        throw new Error(
-          "L'upload du média a réussi mais aucune URL publique n'a été retournée."
-        );
-      }
-
-      return {
-        media_url: result.url,
-        media_type: file.type.startsWith("video") ? "video" : "image",
-      };
-    } catch (error) {
-      console.error("[BAARO][POST] Erreur upload média:", error);
-      throw error;
-    }
-  };
-
-  const handleReportPost = async (postId) => {
-    setMenuOpenId(null);
-    try {
-      await reportContent({
-        targetType: "post",
-        targetId: postId,
-        reason: "signalement_utilisateur",
-        details: "",
-      });
-      showToast?.("Publication signalée. Merci.", "success");
-    } catch (e) {
-      showToast?.(e.message || "Signalement impossible", "error");
-    }
+    const ext = file.name.split(".").pop() || "bin";
+    const safeExt = ext.toLowerCase().replace(/[^a-z0-9]/g, "") || "bin";
+    const path = `${authorId}/${randomId("media")}.${safeExt}`;
+    const { error: uploadError } = await supabase.storage
+      .from("media")
+      .upload(path, file, { cacheControl: "3600", upsert: false, contentType: file.type });
+    if (uploadError) throw uploadError;
+    const { data } = supabase.storage.from("media").getPublicUrl(path);
+    return { media_url: data.publicUrl, media_type: file.type.startsWith("video") ? "video" : "image" };
   };
 
   const handleCreatePost = async (e) => {
     e.preventDefault();
-
-    const hasPollDraft =
-      showPoll && pollQuestion.trim() && pollOptions.filter((x) => x.trim()).length >= 2;
-
-    if ((!newText.trim() && !mediaFile && !hasPollDraft) || submitting) {
-      return;
-    }
+    const hasPollDraft = showPoll && pollQuestion.trim() && pollOptions.filter((x) => x.trim()).length >= 2;
+    if ((!newText.trim() && !mediaFile && !hasPollDraft) || submitting) return;
 
     const limit = checkRateLimit("create_post", { max: 5, windowMs: 60_000 });
     if (!limit.allowed) {
@@ -490,28 +357,18 @@ export function FeedTab({ userId, id: idProp, onOpenProfile, onRewardPoints }) {
     }
 
     const authorId = meId;
-    if (!authorId || !isValidAuthUserId(authorId)) {
+    if (!authorId) {
       showToast("Vous devez être connecté", "error");
       return;
     }
 
     setSubmitting(true);
-
-    // ============================================================
-    // CORRECTION 2 : NE PAS MASQUER L'ERREUR D'UPLOAD R2
-    // ============================================================
-
-    let mediaUploadFailed = false;
-
     try {
       let mediaData = {};
       if (mediaFile) {
         setUploadingMedia(true);
         try {
           mediaData = await uploadMedia(mediaFile, authorId);
-        } catch (uploadError) {
-          mediaUploadFailed = true;
-          throw uploadError;
         } finally {
           setUploadingMedia(false);
         }
@@ -529,9 +386,9 @@ export function FeedTab({ userId, id: idProp, onOpenProfile, onRewardPoints }) {
 
       if (error) throw error;
 
+      // CRÉATION DU SONDAGE EN BASE DE DONNÉES
       if (showPoll && hasPollDraft) {
         const cleanOptions = pollOptions.map((x) => x.trim()).filter(Boolean).slice(0, 6);
-
         const { data: poll, error: pollError } = await supabase
           .from("polls")
           .insert({ post_id: createdPost.id, question: pollQuestion.trim() })
@@ -547,7 +404,6 @@ export function FeedTab({ userId, id: idProp, onOpenProfile, onRewardPoints }) {
             position,
           }))
         );
-
         if (optionsError) throw optionsError;
       }
 
@@ -558,25 +414,11 @@ export function FeedTab({ userId, id: idProp, onOpenProfile, onRewardPoints }) {
       setPollOptions(["", ""]);
       handleRemoveMedia();
 
-      onRewardPoints?.(
-        mediaData?.media_url ? "publish_post_media" : "publish_post",
-        "Publication créée !",
-        createdPost?.id
-      );
+      onRewardPoints?.(mediaData?.media_url ? "publish_post_media" : "publish_post", "Publication créée !", createdPost?.id);
       showPointsReward?.(mediaData?.media_url ? 8 : 5, "Publication créée !");
-
       await loadPosts();
     } catch (error) {
-      console.error("[BAARO][POST] Erreur publication:", error);
-
-      if (mediaUploadFailed) {
-        showToast(
-          error?.message || "Impossible d'envoyer le média.",
-          "error"
-        );
-      } else {
-        handleDbError(error, showToast, "Impossible de publier");
-      }
+      handleDbError(error, showToast, "Impossible de publier");
     } finally {
       setSubmitting(false);
     }
@@ -587,189 +429,107 @@ export function FeedTab({ userId, id: idProp, onOpenProfile, onRewardPoints }) {
       showToast("Vous devez être connecté", "error");
       return;
     }
-
     const limit = checkRateLimit("like", { max: 30, windowMs: 60_000 });
     if (!limit.allowed) {
       showToast(rateLimitMessage(limit.retryAfterSec), "error");
       return;
     }
-
     const isLiked = !!likedPosts[postId];
-
     setLikedPosts((prev) => ({ ...prev, [postId]: !isLiked }));
-    setPosts((prev) =>
-      prev.map((p) =>
-        p.id === postId ? { ...p, likes: Math.max(0, (p.likes || 0) + (isLiked ? -1 : 1)) } : p
-      )
-    );
+    setPosts((prev) => prev.map((p) => p.id === postId ? { ...p, likes: Math.max(0, (p.likes || 0) + (isLiked ? -1 : 1)) } : p));
 
     try {
       if (isLiked) {
-        const { error } = await supabase.from("post_likes").delete().eq("post_id", postId).eq("user_id", meId);
+        const { error } = await supabase.from("post_likes").delete().eq("post_id", postId).eq("id", meId); // ✅ id uniquement
         if (error) throw error;
       } else {
-        const { error } = await supabase.from("post_likes").insert({ post_id: postId, user_id: meId });
+        const { error } = await supabase.from("post_likes").insert({ post_id: postId, id: meId }); // ✅ id uniquement
         if (error) throw error;
-
         onRewardPoints?.("like_post", "J'aime distribué", postId);
         showPointsReward?.(2, "J'aime distribué");
       }
     } catch (error) {
       setLikedPosts((prev) => ({ ...prev, [postId]: isLiked }));
-      setPosts((prev) =>
-        prev.map((p) =>
-          p.id === postId ? { ...p, likes: Math.max(0, (p.likes || 0) + (isLiked ? 1 : -1)) } : p
-        )
-      );
+      setPosts((prev) => prev.map((p) => p.id === postId ? { ...p, likes: Math.max(0, (p.likes || 0) + (isLiked ? 1 : -1)) } : p));
       handleDbError(error, showToast, "Impossible d'aimer");
     }
   };
 
-  // ============================================================
-  // CORRECTION : GESTION DES COMMENTAIRES BLINDÉE
-  // ============================================================
-
   const loadComments = async (postId) => {
     if (!postId) return;
     try {
-      // 1. Récupération simple sans jointure complexe pour éviter les erreurs
       const { data, error } = await supabase
         .from("comments")
-        .select("id, text, author_id, created_at")
+        .select(`id, text, created_at, author_id, profiles:author_id (display_name, handle)`)
         .eq("post_id", postId)
-        .order("created_at", { ascending: true });
-
+        .order("created_at", { ascending: true })
+        .limit(50);
       if (error) throw error;
-
-      // 2. Récupération des profils séparément
-      const authorIds = [...new Set(data.map(c => c.author_id).filter(Boolean))];
-      let profilesMap = {};
-      
-      if (authorIds.length > 0) {
-        const { data: profiles } = await supabase
-          .from("profiles")
-          .select("id, display_name, handle, flag, avatar_url")
-          .in("id", authorIds);
-        
-        (profiles || []).forEach(p => { profilesMap[p.id] = p; });
-      }
-
-      // 3. Assemblage des données
-      const rows = data.map((c) => {
-        const profile = profilesMap[c.author_id] || {};
-        return {
-          id: c.id,
-          text: c.text,
-          author: profile.display_name || profile.handle || "Membre",
-          author_id: c.author_id,
-          created_at: c.created_at,
-        };
-      });
-
+      const rows = (data || []).map((c) => ({
+        id: c.id,
+        text: c.text,
+        author: c.profiles?.display_name || c.profiles?.handle || "Membre",
+        author_id: c.author_id,
+        created_at: c.created_at,
+      }));
       setCommentsMap((prev) => ({ ...prev, [postId]: rows }));
     } catch (e) {
-      console.error("Erreur chargement commentaires:", e);
-      handleDbError(e, showToast, "Impossible de charger les commentaires");
+      try {
+        const { data } = await supabase
+          .from("comments")
+          .select("id, text, created_at, author_id")
+          .eq("post_id", postId)
+          .order("created_at", { ascending: true })
+          .limit(50);
+        setCommentsMap((prev) => ({
+          ...prev,
+          [postId]: (data || []).map((c) => ({ id: c.id, text: c.text, author: "Membre", author_id: c.author_id, created_at: c.created_at })),
+        }));
+      } catch (err) {
+        handleDbError(err, showToast, "Impossible de charger les commentaires");
+      }
     }
   };
 
   const handleAddComment = async (postId) => {
     const text = (newCommentText[postId] || "").trim();
-    if (!text || !meId) {
-      showToast("Vous devez être connecté et écrire un texte", "error");
-      return;
-    }
-
+    if (!text) return;
     const limit = checkRateLimit("comment", { max: 20, windowMs: 60_000 });
     if (!limit.allowed) {
       showToast(rateLimitMessage(limit.retryAfterSec), "error");
       return;
     }
-
-    try {
-      // Ajout de target_type: 'post' pour respecter strictement votre schéma de base de données
-      const { data: comment, error: insertError } = await supabase
-        .from("comments")
-        .insert({ 
-          post_id: postId, 
-          author_id: meId, 
-          text: text,
-          target_type: 'post' 
-        })
-        .select("id, text, author_id, created_at")
-        .single();
-
-      if (insertError || !comment) {
-        console.error("Détail erreur insert:", insertError);
-        throw new Error(insertError?.message || "Échec de l'insertion");
-      }
-
-      const newCmt = {
-        id: comment.id,
-        author: "Vous",
-        text: comment.text,
-        author_id: meId,
-        created_at: comment.created_at,
-      };
-
-      setCommentsMap((prev) => ({ ...prev, [postId]: [...(prev[postId] || []), newCmt] }));
-      setPosts((prev) =>
-        prev.map((p) => (p.id === postId ? { ...p, comments_count: (p.comments_count || 0) + 1 } : p))
-      );
-      setNewCommentText((prev) => ({ ...prev, [postId]: "" }));
-
-      onRewardPoints?.("comment", "Commentaire ajouté", comment.id);
-      showPointsReward?.(1, "Commentaire ajouté");
-    } catch (error) {
-      console.error("Erreur commentaire:", error);
-      handleDbError(error, showToast, "Impossible de commenter : " + error.message);
+    if (!meId) {
+      showToast("Vous devez être connecté", "error");
+      return;
     }
-  };
-
-  const handleDeleteComment = async (postId, commentId) => {
-    if (!meId) return;
-    if (!window.confirm("Supprimer ce commentaire ?")) return;
-
     try {
-      const { error } = await supabase
+      const { data: createdComment, error } = await supabase
         .from("comments")
-        .delete()
-        .eq("id", commentId)
-        .eq("author_id", meId);
-
+        .insert({ post_id: postId, author_id: meId, text })
+        .select("id")
+        .single();
       if (error) throw error;
 
-      setCommentsMap((prev) => ({
-        ...prev,
-        [postId]: (prev[postId] || []).filter((c) => c.id !== commentId),
-      }));
-
-      setPosts((prev) =>
-        prev.map((p) =>
-          p.id === postId ? { ...p, comments_count: Math.max(0, (p.comments_count || 1) - 1) } : p
-        )
-      );
-
-      showToast("Commentaire supprimé", "success");
-    } catch (e) {
-      handleDbError(e, showToast, "Impossible de supprimer le commentaire");
+      const newCmt = { id: `c_${Date.now()}`, author: "Vous", text, author_id: meId };
+      setCommentsMap((prev) => ({ ...prev, [postId]: [...(prev[postId] || []), newCmt] }));
+      setPosts((prev) => prev.map((p) => p.id === postId ? { ...p, comments_count: (p.comments_count || 0) + 1 } : p));
+      setNewCommentText((prev) => ({ ...prev, [postId]: "" }));
+      
+      onRewardPoints?.("comment", "Commentaire ajouté", createdComment?.id);
+      showPointsReward?.(1, "Commentaire ajouté");
+    } catch (error) {
+      handleDbError(error, showToast, "Impossible de commenter");
     }
   };
 
-  // ============================================================
-
   const handleDeletePost = async (postId) => {
-    if (!meId) {
-      return showToast("Connecte-toi", "error");
-    }
+    if (!meId) return showToast("Connecte-toi", "error");
     if (!window.confirm("Supprimer cette publication ?")) return;
-
     setMenuOpenId(null);
-
     try {
       const { error } = await supabase.from("posts").delete().eq("id", postId).eq("author_id", meId);
       if (error) throw error;
-
       setPosts((prev) => prev.filter((p) => p.id !== postId));
       showToast("Publication supprimée", "success");
     } catch (e) {
@@ -791,15 +551,11 @@ export function FeedTab({ userId, id: idProp, onOpenProfile, onRewardPoints }) {
   const saveEditPost = async (postId) => {
     if (!meId) return;
     const text = editText.trim();
-    if (!text) {
-      return showToast("Texte vide", "error");
-    }
-
+    if (!text) return showToast("Texte vide", "error");
     setSavingEdit(true);
     try {
       const { error } = await supabase.from("posts").update({ text }).eq("id", postId).eq("author_id", meId);
       if (error) throw error;
-
       setPosts((prev) => prev.map((p) => (p.id === postId ? { ...p, text } : p)));
       setEditingId(null);
       setEditText("");
@@ -808,6 +564,20 @@ export function FeedTab({ userId, id: idProp, onOpenProfile, onRewardPoints }) {
       handleDbError(e, showToast, "Impossible de modifier");
     } finally {
       setSavingEdit(false);
+    }
+  };
+
+  const handleDeleteComment = async (postId, commentId) => {
+    if (!meId) return;
+    if (!window.confirm("Supprimer ce commentaire ?")) return;
+    try {
+      const { error } = await supabase.from("comments").delete().eq("id", commentId).eq("author_id", meId);
+      if (error) throw error;
+      setCommentsMap((prev) => ({ ...prev, [postId]: (prev[postId] || []).filter((c) => c.id !== commentId) }));
+      setPosts((prev) => prev.map((p) => p.id === postId ? { ...p, comments_count: Math.max(0, (p.comments_count || 1) - 1) } : p));
+      showToast("Commentaire supprimé", "success");
+    } catch (e) {
+      handleDbError(e, showToast, "Impossible de supprimer le commentaire");
     }
   };
 
@@ -822,8 +592,9 @@ export function FeedTab({ userId, id: idProp, onOpenProfile, onRewardPoints }) {
 
   return (
     <div className="flex flex-col gap-4 max-w-2xl mx-auto w-full pb-20">
-      <FeedStories userId={meId || userId || idProp} onRewardPoints={onRewardPoints} />
-
+      <FeedStories userId={userId} onRewardPoints={onRewardPoints} />
+      
+      {/* 🔔 Notifications (visible uniquement si connecté) */}
       {meId && (
         <div className="flex justify-end">
           <button
@@ -838,18 +609,12 @@ export function FeedTab({ userId, id: idProp, onOpenProfile, onRewardPoints }) {
         </div>
       )}
 
+      {/* Suggestions de comptes (visible uniquement si connecté) */}
       {meId && <SocialSuggestions userId={meId} onOpenProfile={onOpenProfile} />}
 
-      <form
-        onSubmit={handleCreatePost}
-        className="glass-card rounded-2xl p-4 shadow-xl border"
-        style={{ borderColor: COLORS.borderGold }}
-      >
+      <form onSubmit={handleCreatePost} className="glass-card rounded-2xl p-4 shadow-xl border" style={{ borderColor: COLORS.borderGold }}>
         <div className="flex gap-3 mb-3">
-          <div
-            className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm shadow-md gold-glow"
-            style={{ background: COLORS.gold, color: COLORS.bg }}
-          >
+          <div className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm shadow-md gold-glow" style={{ background: COLORS.gold, color: COLORS.bg }}>
             {user?.email?.charAt(0)?.toUpperCase() || "V"}
           </div>
           <div className="flex-1 min-w-0">
@@ -870,23 +635,23 @@ export function FeedTab({ userId, id: idProp, onOpenProfile, onRewardPoints }) {
             ) : (
               <img src={mediaPreview} alt="Prévisualisation" className="w-full max-h-64 object-cover" />
             )}
-            <button
-              type="button"
-              onClick={handleRemoveMedia}
-              className="absolute top-2 right-2 bg-black/70 hover:bg-black/90 rounded-full p-1.5 text-white transition"
-              aria-label="Retirer le média"
-            >
+            <button type="button" onClick={handleRemoveMedia} className="absolute top-2 right-2 bg-black/70 hover:bg-black/90 rounded-full p-1.5 text-white transition" aria-label="Retirer le média">
               <X size={14} />
             </button>
           </div>
         )}
 
+        {/* Formulaire de création de sondage complet */}
         {showPoll && (
           <PollComposer
             value={{ question: pollQuestion, options: pollOptions }}
             onChange={(next) => {
               setPollQuestion(next.question || "");
-              setPollOptions(Array.isArray(next.options) && next.options.length ? next.options : ["", ""]);
+              setPollOptions(
+                Array.isArray(next.options) && next.options.length
+                  ? next.options
+                  : ["", ""]
+              );
             }}
             onClose={() => setShowPoll(false)}
           />
@@ -894,36 +659,16 @@ export function FeedTab({ userId, id: idProp, onOpenProfile, onRewardPoints }) {
 
         <div className="flex items-center justify-between pt-2 border-t" style={{ borderColor: COLORS.border }}>
           <div className="flex items-center gap-2">
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*,video/*"
-              onChange={handleFileSelect}
-              className="hidden"
-            />
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={uploadingMedia}
-              className="p-2 rounded-lg hover:bg-white/5 text-amber-400 flex items-center gap-1 text-xs disabled:opacity-40"
-            >
+            <input ref={fileInputRef} type="file" accept="image/*,video/*" onChange={handleFileSelect} className="hidden" />
+            <button type="button" onClick={() => fileInputRef.current?.click()} disabled={uploadingMedia} className="p-2 rounded-lg hover:bg-white/5 text-amber-400 flex items-center gap-1 text-xs disabled:opacity-40">
               <ImageIcon size={16} />
               <span className="hidden sm:inline">Média</span>
             </button>
-            <button
-              type="button"
-              onClick={() => setShowPoll(!showPoll)}
-              className="p-2 rounded-lg hover:bg-white/5 text-teal-400 flex items-center gap-1 text-xs"
-            >
+            <button type="button" onClick={() => setShowPoll(!showPoll)} className="p-2 rounded-lg hover:bg-white/5 text-teal-400 flex items-center gap-1 text-xs">
               <BarChart2 size={16} />
               <span className="hidden sm:inline">Sondage</span>
             </button>
-            <select
-              value={mood}
-              onChange={(e) => setMood(e.target.value)}
-              className="bg-transparent text-xs p-1 rounded border outline-none"
-              style={{ borderColor: COLORS.border, color: COLORS.muted }}
-            >
+            <select value={mood} onChange={(e) => setMood(e.target.value)} className="bg-transparent text-xs p-1 rounded border outline-none" style={{ borderColor: COLORS.border, color: COLORS.muted }}>
               <option value="">Humeur ?</option>
               <option value="🔥 Inspiré">🔥 Inspiré</option>
               <option value="💡 Innovant">💡 Innovant</option>
@@ -931,23 +676,14 @@ export function FeedTab({ userId, id: idProp, onOpenProfile, onRewardPoints }) {
             </select>
           </div>
 
-          <button
-            type="submit"
-            disabled={(!newText.trim() && !mediaFile && !(showPoll && pollQuestion.trim())) || submitting}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold shadow-lg transition disabled:opacity-40"
-            style={{ background: "linear-gradient(135deg, #D9AE52 0%, #2DBFA6 100%)", color: COLORS.bg }}
-          >
+          <button type="submit" disabled={(!newText.trim() && !mediaFile && !(showPoll && pollQuestion.trim())) || submitting} className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold shadow-lg transition disabled:opacity-40" style={{ background: "linear-gradient(135deg, #D9AE52 0%, #2DBFA6 100%)", color: COLORS.bg }}>
             <span>{uploadingMedia ? "Envoi du média..." : submitting ? "..." : "Publier"}</span>
-            <span className="text-[10px] px-1.5 py-0.5 rounded-full font-extrabold bg-black/20 text-white">
-              +15 pts
-            </span>
+            <span className="text-[10px] px-1.5 py-0.5 rounded-full font-extrabold bg-black/20 text-white">+15 pts</span>
           </button>
         </div>
       </form>
 
-      <GuestBanner
-        onUpgrade={() => showToast("Crée un compte depuis Réglages pour gagner des points", "info")}
-      />
+      <GuestBanner onUpgrade={() => showToast("Crée un compte depuis Réglages pour gagner des points", "info")} />
 
       {posts.length === 0 ? (
         <div className="text-center py-8 text-gray-400">
@@ -963,20 +699,10 @@ export function FeedTab({ userId, id: idProp, onOpenProfile, onRewardPoints }) {
             const comments = commentsMap[post.id] || [];
 
             return (
-              <article
-                key={post.id}
-                className="glass-card rounded-2xl p-5 shadow-xl border flex flex-col gap-3"
-                style={{ borderColor: COLORS.border }}
-              >
+              <article key={post.id} className="glass-card rounded-2xl p-5 shadow-xl border flex flex-col gap-3" style={{ borderColor: COLORS.border }}>
                 <div className="flex items-center justify-between">
-                  <div
-                    className="flex items-center gap-3 cursor-pointer group"
-                    onClick={() => onOpenProfile?.(post.author_id)}
-                  >
-                    <div
-                      className="w-10 h-10 rounded-full overflow-hidden border flex items-center justify-center font-bold text-sm"
-                      style={{ borderColor: COLORS.borderGold, background: COLORS.surface }}
-                    >
+                  <div className="flex items-center gap-3 cursor-pointer group" onClick={() => onOpenProfile?.(post.author_id)}>
+                    <div className="w-10 h-10 rounded-full overflow-hidden border flex items-center justify-center font-bold text-sm" style={{ borderColor: COLORS.borderGold, background: COLORS.surface }}>
                       {post.avatar ? (
                         <img src={post.avatar} alt="" className="w-full h-full object-cover" />
                       ) : (
@@ -984,114 +710,49 @@ export function FeedTab({ userId, id: idProp, onOpenProfile, onRewardPoints }) {
                       )}
                     </div>
                     <div>
-                      <p className="font-bold text-sm group-hover:underline" style={{ color: COLORS.ivory }}>
-                        {post.display_name} {post.flag}
-                      </p>
+                      <p className="font-bold text-sm group-hover:underline" style={{ color: COLORS.ivory }}>{post.display_name} {post.flag}</p>
                       <p className="text-xs" style={{ color: COLORS.muted }}>
-                        {post.handle} ·{" "}
-                        {new Date(post.created_at).toLocaleDateString("fr-FR", {
-                          day: "numeric",
-                          month: "short",
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })}
+                        {post.handle} · {new Date(post.created_at).toLocaleDateString("fr-FR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
                       </p>
                     </div>
                   </div>
 
-                  <div className="relative">
-                    <button
-                      type="button"
-                      onClick={() => setMenuOpenId((id) => (id === post.id ? null : post.id))}
-                      className="p-2 rounded-lg hover:bg-white/5"
-                      style={{ color: COLORS.muted }}
-                      aria-label="Actions"
-                    >
-                      <MoreHorizontal size={18} />
-                    </button>
-
-                    {menuOpenId === post.id && (
-                      <div
-                        className="absolute right-0 top-9 z-20 min-w-[160px] rounded-xl border shadow-xl py-1"
-                        style={{ background: COLORS.surface, borderColor: COLORS.borderGold }}
-                      >
-                        {post.author_id === meId && (
-                          <>
-                            <button
-                              type="button"
-                              onClick={() => startEditPost(post)}
-                              className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-white/5"
-                              style={{ color: COLORS.ivory }}
-                            >
-                              <Pencil size={14} /> Modifier
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleDeletePost(post.id)}
-                              className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-white/5 text-red-400"
-                            >
-                              <Trash2 size={14} /> Supprimer
-                            </button>
-                          </>
-                        )}
-                        {post.author_id !== meId && (
-                          <button
-                            type="button"
-                            onClick={() => handleReportPost(post.id)}
-                            className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-white/5 text-red-400"
-                          >
-                            <Flag size={14} /> Signaler
+                  {post.author_id === meId && (
+                    <div className="relative">
+                      <button type="button" onClick={() => setMenuOpenId((id) => (id === post.id ? null : post.id))} className="p-2 rounded-lg hover:bg-white/5" style={{ color: COLORS.muted }} aria-label="Actions">
+                        <MoreHorizontal size={18} />
+                      </button>
+                      {menuOpenId === post.id && (
+                        <div className="absolute right-0 top-9 z-20 min-w-[160px] rounded-xl border shadow-xl py-1" style={{ background: COLORS.surface, borderColor: COLORS.borderGold }}>
+                          <button type="button" onClick={() => startEditPost(post)} className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-white/5" style={{ color: COLORS.ivory }}>
+                            <Pencil size={14} /> Modifier
                           </button>
-                        )}
-                      </div>
-                    )}
-                  </div>
+                          <button type="button" onClick={() => handleDeletePost(post.id)} className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-white/5 text-red-400">
+                            <Trash2 size={14} /> Supprimer
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 {editingId === post.id ? (
                   <div className="flex flex-col gap-2">
-                    <textarea
-                      value={editText}
-                      onChange={(e) => setEditText(e.target.value)}
-                      rows={3}
-                      className="w-full rounded-xl px-3 py-2 text-sm outline-none border resize-none"
-                      style={{ background: COLORS.surface2, borderColor: COLORS.borderGold, color: COLORS.ivory }}
-                    />
+                    <textarea value={editText} onChange={(e) => setEditText(e.target.value)} rows={3} className="w-full rounded-xl px-3 py-2 text-sm outline-none border resize-none" style={{ background: COLORS.surface2, borderColor: COLORS.borderGold, color: COLORS.ivory }} />
                     <div className="flex gap-2 justify-end">
-                      <button
-                        type="button"
-                        onClick={cancelEdit}
-                        className="px-3 py-1.5 rounded-lg text-xs"
-                        style={{ color: COLORS.muted }}
-                      >
-                        Annuler
-                      </button>
-                      <button
-                        type="button"
-                        disabled={savingEdit}
-                        onClick={() => saveEditPost(post.id)}
-                        className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-bold disabled:opacity-40"
-                        style={{ background: COLORS.gold, color: "#000" }}
-                      >
+                      <button type="button" onClick={cancelEdit} className="px-3 py-1.5 rounded-lg text-xs" style={{ color: COLORS.muted }}>Annuler</button>
+                      <button type="button" disabled={savingEdit} onClick={() => saveEditPost(post.id)} className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-bold disabled:opacity-40" style={{ background: COLORS.gold, color: "#000" }}>
                         <Check size={14} /> {savingEdit ? "…" : "Enregistrer"}
                       </button>
                     </div>
                   </div>
                 ) : (
                   <p className="text-sm leading-relaxed whitespace-pre-wrap" style={{ color: COLORS.ivory }}>
-                    {isTranslated ? (
-                      translatedMap[post.id]
-                    ) : (
-                      <RichTextRenderer content={post.text} />
-                    )}
+                    {isTranslated ? translatedMap[post.id] : <RichTextRenderer content={post.text} />}
                   </p>
                 )}
-
-                {isTranslated && (
-                  <p className="text-[10px]" style={{ color: COLORS.muted }}>
-                    Traduit par BAARO
-                  </p>
-                )}
+                
+                {isTranslated && <p className="text-[10px]" style={{ color: COLORS.muted }}>Traduit par BAARO</p>}
 
                 {post.media_url && (
                   <div className="rounded-xl overflow-hidden">
@@ -1103,18 +764,21 @@ export function FeedTab({ userId, id: idProp, onOpenProfile, onRewardPoints }) {
                   </div>
                 )}
 
+                {/* Barre d'actions unifiée avec Sondage, Réactions, Commentaires et Traduction */}
                 <div className="flex flex-col gap-3 pt-2 border-t" style={{ borderColor: COLORS.border }}>
+                  {/* 1. Sondage (s'affiche uniquement si le post en a un) */}
                   <PollCard postId={post.id} userId={meId} />
+
+                  {/* 2. Actions sociales avancées (Réactions, Favoris, Partage, Suivi) */}
                   <SocialPostEnhancements post={post} userId={meId} />
 
+                  {/* 3. Commentaires et Traduction (conservés) */}
                   <div className="flex items-center gap-4">
                     <button
                       onClick={() => {
                         const next = !commentOpen[post.id];
                         setCommentOpen((prev) => ({ ...prev, [post.id]: next }));
-                        if (next) {
-                          loadComments(post.id);
-                        }
+                        if (next) loadComments(post.id);
                       }}
                       className="flex items-center gap-1.5 text-xs"
                       style={{ color: COLORS.muted }}
@@ -1127,9 +791,7 @@ export function FeedTab({ userId, id: idProp, onOpenProfile, onRewardPoints }) {
                       text={post.text}
                       isTranslated={!!translatedMap[post.id]}
                       preferredLang="fr"
-                      onTranslated={(translated) =>
-                        setTranslatedMap((prev) => ({ ...prev, [post.id]: translated }))
-                      }
+                      onTranslated={(translated) => setTranslatedMap((prev) => ({ ...prev, [post.id]: translated }))}
                       onClear={() => setTranslatedMap((prev) => ({ ...prev, [post.id]: null }))}
                     />
                   </div>
@@ -1138,45 +800,26 @@ export function FeedTab({ userId, id: idProp, onOpenProfile, onRewardPoints }) {
                 {commentOpen[post.id] && (
                   <div className="pt-3 border-t space-y-2" style={{ borderColor: COLORS.border }}>
                     {comments.map((c) => (
-                      <div
-                        key={c.id}
-                        className="text-xs flex items-start justify-between gap-2"
-                        style={{ color: COLORS.muted }}
-                      >
+                      <div key={c.id} className="text-xs flex items-start justify-between gap-2" style={{ color: COLORS.muted }}>
                         <div>
-                          <span className="font-bold" style={{ color: COLORS.ivory }}>
-                            {c.author}
-                          </span>{" "}
-                          : {c.text}
+                          <span className="font-bold" style={{ color: COLORS.ivory }}>{c.author}</span> : {c.text}
                         </div>
                         {c.author_id === meId && (
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteComment(post.id, c.id)}
-                            className="shrink-0 p-1 text-red-400/80 hover:text-red-400"
-                            aria-label="Supprimer commentaire"
-                          >
+                          <button type="button" onClick={() => handleDeleteComment(post.id, c.id)} className="shrink-0 p-1 text-red-400/80 hover:text-red-400" aria-label="Supprimer commentaire">
                             <Trash2 size={12} />
                           </button>
                         )}
                       </div>
                     ))}
-
                     <div className="flex gap-2">
                       <input
                         value={newCommentText[post.id] || ""}
-                        onChange={(e) =>
-                          setNewCommentText((prev) => ({ ...prev, [post.id]: e.target.value }))
-                        }
+                        onChange={(e) => setNewCommentText((prev) => ({ ...prev, [post.id]: e.target.value }))}
                         placeholder="Ajouter un commentaire..."
                         className="flex-1 px-3 py-2 rounded-lg border text-xs outline-none"
                         style={{ background: COLORS.surface2, borderColor: COLORS.border, color: COLORS.ivory }}
                       />
-                      <button
-                        onClick={() => handleAddComment(post.id)}
-                        className="p-2 rounded-lg"
-                        style={{ background: COLORS.gold, color: "#000" }}
-                      >
+                      <button onClick={() => handleAddComment(post.id)} className="p-2 rounded-lg" style={{ background: COLORS.gold, color: "#000" }}>
                         <Send size={14} />
                       </button>
                     </div>
@@ -1187,18 +830,8 @@ export function FeedTab({ userId, id: idProp, onOpenProfile, onRewardPoints }) {
           })}
 
           {hasMore && <div ref={sentinelRef} style={{ height: 1 }} />}
-
-          {loadingMore && (
-            <div className="text-center py-4 text-xs" style={{ color: COLORS.muted }}>
-              Chargement de plus de publications...
-            </div>
-          )}
-
-          {!hasMore && posts.length > 0 && (
-            <div className="text-center py-4 text-xs" style={{ color: COLORS.muted }}>
-              Vous avez tout vu ✨
-            </div>
-          )}
+          {loadingMore && <div className="text-center py-4 text-xs" style={{ color: COLORS.muted }}>Chargement de plus de publications...</div>}
+          {!hasMore && posts.length > 0 && <div className="text-center py-4 text-xs" style={{ color: COLORS.muted }}>Vous avez tout vu ✨</div>}
         </div>
       )}
     </div>
