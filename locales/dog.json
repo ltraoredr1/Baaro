@@ -1,0 +1,49 @@
+{
+  "common": {
+    "cancel": "Annuler",
+    "confirm": "Confirmer",
+    "loading": "Chargement…",
+    "save": "Enregistrer",
+    "back": "Retour",
+    "error": "Erreur",
+    "success": "Succès",
+    "search": "Rechercher"
+  },
+  "nav": {
+    "feed": "Fil",
+    "videos": "Vidéos",
+    "messages": "Messagerie",
+    "debates": "Débats",
+    "shop": "Boutique",
+    "discover": "Découvrir",
+    "companies": "Entreprises",
+    "community": "Communauté",
+    "friends": "Amis",
+    "crypto": "BARO",
+    "wallet": "Portefeuille",
+    "offline": "Hors-ligne",
+    "assistant": "Assistant IA",
+    "settings": "Réglages",
+    "more": "Plus"
+  },
+  "app": {
+    "name": "BAARO",
+    "tagline": "Réseau social mondial"
+  },
+  "economy": {
+    "title": "BAARO Economy",
+    "available": "Disponible",
+    "pending": "En attente",
+    "payout_hold": "Retrait réservé",
+    "paid_out": "Payé",
+    "minimum": "Retrait minimum",
+    "request_payout": "Demander le paiement",
+    "kyc_required": "La vérification KYC est requise avant le retrait.",
+    "tip": "Pourboire",
+    "support_creator": "Soutenir ce créateur",
+    "payment_success": "Paiement confirmé.",
+    "payment_cancelled": "Paiement annulé.",
+    "payment_return": "Retour du paiement reçu; confirmation finale après le webhook.",
+    "creator_subscription": "Abonnement créateur"
+  }
+}

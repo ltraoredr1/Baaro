@@ -1,0 +1,33 @@
+{
+  "appId": "com.baaro.app",
+  "appName": "BAARO",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https"
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 1500,
+      "launchAutoHide": true,
+      "showSpinner": false,
+      "androidScaleType": "CENTER_CROP",
+      "backgroundColor": "#0b1220",
+      "splashFullScreen": true,
+      "splashImmersive": true
+    },
+    "PushNotifications": {
+      "presentationOptions": ["badge", "sound", "alert"]
+    },
+    "Keyboard": {
+      "resize": "native",
+      "resizeOnFullScreen": true
+    },
+    "StatusBar": {
+      "style": "DARK",
+      "backgroundColor": "#0b1220"
+    }
+  },
+  "android": {
+    "backgroundColor": "#0b1220"
+  }
+}

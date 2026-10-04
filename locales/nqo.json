@@ -1,0 +1,49 @@
+{
+  "common": {
+    "cancel": "ߓߊ߬ߕߊ߬",
+    "confirm": "ߘߍ߬ߓߊ߬",
+    "loading": "ߓߊ߬ߟߊ߲߬߬…",
+    "save": "ߟߊ߬ߞߊ߬",
+    "back": "ߣߊ߬ߕߊ߬",
+    "error": "ߝߏ߬ߟߏ߬",
+    "success": "ߞߍ߬ߣߍ߬",
+    "search": "ߢߊ߬ߟߊ߬"
+  },
+  "nav": {
+    "feed": "ߞߊ߬ߟߊ߬",
+    "videos": "ߞߙߍ߬ߟߊ߬",
+    "messages": "ߞߎ߬ߘߊ߬",
+    "debates": "ߛߊ߲߬߬ߘߊ߬",
+    "shop": "ߛߊ߲߬߬ߠߊ߬",
+    "discover": "ߞߍ߬ߟߊ߬",
+    "companies": "ߓߊ߬ߙߊ߲߬߬",
+    "community": "ߘߊ߬ߡߊ߲߬߬",
+    "friends": "ߘߏ߲߬߬ߓߊ߬",
+    "crypto": "BARO",
+    "wallet": "ߘߎ߲߬߬ߘߎ߬",
+    "offline": "ߕߍ߬ߘߍ߬",
+    "assistant": "ߞߙߊ߲߬߬ߘߊ߬",
+    "settings": "ߟߊ߬ߞߊ߬",
+    "more": "ߝߊ߲߬߬"
+  },
+  "app": {
+    "name": "BAARO",
+    "tagline": "ߕߊ߬ߙߊ߲߬߬ߠߊ߬ߡߊ߬ ߘߊ߬ߡߊ߲߬߬"
+  },
+  "economy": {
+    "title": "ߓߊߊߙߏ ߘߍ߬ߓߊ",
+    "available": "ߊ߬ ߘߏ߫",
+    "pending": "ߞߊ߬ ߛߋ߫",
+    "payout_hold": "ߛߊ߬ߟߊ߬ ߓߊ߬ߟߊ",
+    "paid_out": "ߞߊ߬ ߟߊ߬ߕߊ",
+    "minimum": "ߛߊ߬ߟߊ߬ ߛߊ߬ߓߊ߬",
+    "request_payout": "ߛߊ߬ߟߊ߬ ߛߊ߬ߓߊ߬",
+    "kyc_required": "KYC ߢߍ߬ߓߊ߬ ߛߊ߬ߟߊ߬ ߞߊ߬ ߕߍ߬.",
+    "tip": "ߛߊ߬ߙߊ߬",
+    "support_creator": "ߊ߬ ߘߏ߬ ߛߊ߬ߙߊ߬",
+    "payment_success": "ߛߊ߬ߟߊ߬ ߘߏ߬ߕߊ.",
+    "payment_cancelled": "ߛߊ߬ߟߊ߬ ߞߊ߬ߘߏ.",
+    "payment_return": "ߛߊ߬ߟߊ߬ ߘߏ߬ߕߊ ߞߊ߬ߛߊ߬; webhook ߘߐ߬ߕߊ߬.",
+    "creator_subscription": "ߓߊ߬ߙߊ߬ ߛߊ߬ߟߊ߬"
+  }
+}

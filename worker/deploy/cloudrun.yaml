@@ -1,0 +1,85 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: baaro-media-worker
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: "0"
+        autoscaling.knative.dev/maxScale: "5"
+        run.googleapis.com/cpu-throttling: "false"
+    spec:
+      containerConcurrency: 1
+      timeoutSeconds: 3600
+      containers:
+        - image: REGION-docker.pkg.dev/PROJECT_ID/REPOSITORY/baaro-media-worker:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: BAARO_WORKER_PORT
+              value: "8080"
+            - name: BAARO_WORKER_TMP_DIR
+              value: /tmp/baaro-worker
+            - name: FFMPEG_BIN
+              value: ffmpeg
+            - name: FFPROBE_BIN
+              value: ffprobe
+            - name: WHISPER_BIN
+              value: whisper
+            - name: WHISPER_MODEL
+              value: small
+            - name: R2_BUCKET_NAME
+              value: baaro-media
+            - name: R2_ACCOUNT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: baaro-r2-account-id
+                  key: latest
+            - name: R2_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: baaro-r2-access-key-id
+                  key: latest
+            - name: R2_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: baaro-r2-secret-access-key
+                  key: latest
+            - name: R2_PUBLIC_BASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: baaro-r2-public-base-url
+                  key: latest
+            - name: BAARO_WORKER_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: baaro-worker-secret
+                  key: latest
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: baaro-openai-api-key
+                  key: latest
+            - name: OPENAI_API_BASE
+              value: https://api.openai.com/v1
+            - name: OPENAI_MODEL
+              value: gpt-4o-mini
+          resources:
+            limits:
+              cpu: "4"
+              memory: 8Gi
+              ephemeral-storage: 20Gi
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            periodSeconds: 30
+            failureThreshold: 3

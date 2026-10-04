@@ -1,0 +1,67 @@
+name: Android Build
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+        # cache: 'npm' retiré pour éviter l'erreur de fichier de verrouillage manquant
+
+    - name: Install deps
+      run: npm ci
+
+    - name: Security checks
+      run: npm run check:security-hardening && npm run check:secrets
+
+    - name: Build Web (Vite)
+      run: npm run build
+      env:
+        VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
+        VITE_API_SECONDARY_URL: ${{ secrets.VITE_API_SECONDARY_URL }}
+        VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+        VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+        VITE_TURNSTILE_SITE_KEY: ${{ secrets.VITE_TURNSTILE_SITE_KEY }}
+
+    - name: Init Capacitor Android if missing
+      run: |
+        npm install -D @capacitor/cli@6 --legacy-peer-deps
+        if [ ! -d "android" ]; then
+          npx cap add android
+        fi
+        npx cap sync android
+        npx cap copy android
+
+    - name: Set up JDK 21
+      uses: actions/setup-java@v5
+      with:
+        java-version: '21'
+        distribution: 'temurin'
+
+    - name: Setup Android SDK
+      uses: android-actions/setup-android@v3
+      with:
+        packages: platform-tools build-tools;34.0.0 platforms;android-34
+
+    - name: Build with Gradle
+      run: |
+        cd android
+        chmod +x gradlew
+        ./gradlew assembleDebug --no-daemon --stacktrace
+
+    - name: Upload APK Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: baaro-app-debug
+        path: android/app/build/outputs/apk/debug/app-debug.apk
+

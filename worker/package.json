@@ -1,0 +1,12 @@
+{
+  "name": "baaro-media-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "process": "node processor.mjs"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.859.0"
+  }
+}

@@ -1,0 +1,87 @@
+{
+  "auth": {
+    "phone_label": "رقم الهاتف",
+    "phone_placeholder": "أدخل رقم هاتفك",
+    "phone_invalid": "رقم الهاتف غير صالح لهذا البلد.",
+    "send_code": "استلام الرمز",
+    "sending": "جارٍ الإرسال...",
+    "otp_label": "الرمز المستلم عبر الرسائل القصيرة ({{phone}})",
+    "otp_invalid": "رمز غير صالح.",
+    "verify": "تأكيد",
+    "verifying": "جارٍ التحقق...",
+    "change_number": "تغيير الرقم",
+    "resend": "إعادة إرسال الرمز",
+    "resend_cooldown": "إعادة الإرسال ({{seconds}} ثانية)",
+    "continue_with_google": "المتابعة باستخدام Google",
+    "continue_with_microsoft": "المتابعة باستخدام Microsoft",
+    "continue_with_phone": "المتابعة برقم الهاتف"
+  },
+  "shop": {
+    "register_title": "تسجيل متجري",
+    "name_placeholder": "اسم المتجر / النشاط التجاري",
+    "category_placeholder": "الفئة (مثال: خياطة، إلكترونيات، مطعم...)",
+    "city_placeholder": "المدينة / الحي",
+    "description_placeholder": "وصف النشاط",
+    "required_fields": "الاسم والمدينة مطلوبان.",
+    "price_normal": "الاشتراك السنوي: {{amount}} {{currency}} — {{premiumAmount}} {{currency}} مع BAARO Premium",
+    "price_premium": "سعر Premium: {{amount}} {{currency}} بدلاً من {{normalAmount}} {{currency}}",
+    "pay_and_activate": "ادفع {{amount}} {{currency}} وفعّل متجري",
+    "preparing_payment": "جارٍ تجهيز الدفع...",
+    "secure_payment_note": "دفع آمن. سيتم تفعيل متجرك تلقائياً بعد التأكيد."
+  },
+  "payment": {
+    "choose_method": "اختر وسيلة الدفع",
+    "mobile_money": "الدفع عبر الهاتف (أورنج موني، موڤ موني، ويف...)",
+    "card": "بطاقة بنكية",
+    "status_pending": "الدفع قيد الانتظار",
+    "status_confirmed": "تم تأكيد الدفع",
+    "status_failed": "فشل الدفع"
+  },
+  "common": {
+    "cancel": "إلغاء",
+    "confirm": "تأكيد",
+    "loading": "جارٍ التحميل...",
+    "save": "حفظ",
+    "back": "رجوع",
+    "error": "خطأ",
+    "success": "نجاح",
+    "search": "بحث"
+  },
+  "nav": {
+    "feed": "الخلاصة",
+    "videos": "فيديوهات",
+    "messages": "دردشة",
+    "debates": "بث مباشر",
+    "shop": "متجر",
+    "discover": "اكتشف",
+    "companies": "شركات",
+    "community": "مجتمع",
+    "friends": "أصدقاء",
+    "crypto": "BARO",
+    "wallet": "محفظة",
+    "offline": "بدون إنترنت",
+    "assistant": "مساعد ذكي",
+    "settings": "الإعدادات",
+    "more": "المزيد"
+  },
+  "app": {
+    "name": "BAARO",
+    "tagline": "شبكة اجتماعية عالمية"
+  },
+  "economy": {
+    "title": "اقتصاد BAARO",
+    "available": "متاح",
+    "pending": "قيد الانتظار",
+    "payout_hold": "محجوز للسحب",
+    "paid_out": "تم الدفع",
+    "minimum": "الحد الأدنى للسحب",
+    "request_payout": "طلب الدفع",
+    "kyc_required": "التحقق من الهوية مطلوب قبل السحب.",
+    "tip": "إكرامية",
+    "support_creator": "ادعم هذا المنشئ",
+    "payment_success": "تم تأكيد الدفع.",
+    "payment_cancelled": "تم إلغاء الدفع.",
+    "payment_return": "تم استلام العودة من الدفع؛ التأكيد النهائي بعد إشعار المزود.",
+    "creator_subscription": "اشتراك منشئ"
+  }
+}

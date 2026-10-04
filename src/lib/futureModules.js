@@ -1,0 +1,16 @@
+export const FUTURE_MODULES = {
+  feed: { title: 'Feed intelligent', capabilities: ['fils adaptatif explicable','anti-bulle configurable','résumé IA','contrôle de densité'], actions: ['Personnaliser le fil','Analyser mes recommandations'] },
+  videos: { title: 'Studio vidéo futur', capabilities: ['montage IA','traduction/doublage','reframing multi-format','détection de moments forts'], actions: ['Créer avec IA','Optimiser une vidéo'] },
+  messages: { title: 'Communication souveraine', capabilities: ['E2E','multi-appareils','traduction instantanée','anti-arnaque contextuel'], actions: ['Vérifier mes appareils','Confidentialité du chat'] },
+  friends: { title: 'Graphe social sain', capabilities: ['suggestions explicables','contrôle des interactions','détection de comptes suspects','cercles privés'], actions: ['Gérer mes cercles','Contrôler les recommandations'] },
+  debates: { title: 'Débats augmentés', capabilities: ['sources contextuelles','résumés contradictoires','modération assistée','votes anti-manipulation'], actions: ['Résumé du débat','Règles de discussion'] },
+  offline: { title: 'BAARO résilient', capabilities: ['file locale chiffrée','synchronisation différée','reprise réseau','partage de proximité'], actions: ['Synchronisation','Stockage local'] },
+  assistant: { title: 'Nexus personnel', capabilities: ['mémoire contrôlée','actions avec consentement','agents spécialisés','journal d’activité IA'], actions: ['Gérer ma mémoire','Voir les actions IA'] },
+  innovation: { title: 'Laboratoire BAARO', capabilities: ['expériences isolées','tests utilisateurs','feature flags','mesure d’impact'], actions: ['Laboratoire','Contrôler les expériences'] },
+  shop: { title: 'Commerce intelligent', capabilities: ['vendeurs vérifiés','anti-fraude','recommandations responsables','suivi de commande'], actions: ['Sécurité achat','Espace vendeur'] },
+  companies: { title: 'Entreprise augmentée', capabilities: ['identité vérifiée','équipes et rôles','analytics privés','API partenaires'], actions: ['Vérifier l’entreprise','Gestion des accès'] },
+  discover: { title: 'Découverte universelle', capabilities: ['recherche sémantique','résultats multimodaux','sources et confiance','personnalisation privée'], actions: ['Préférences de recherche','Historique privé'] },
+  community: { title: 'Communautés souveraines', capabilities: ['gouvernance','rôles avancés','modération distribuée','événements et espaces'], actions: ['Centre de modération','Règles de communauté'] },
+  stories: { title: 'Stories interactives', capabilities: ['remix contrôlé','traduction','audience intelligente','protection contre les captures abusives'], actions: ['Audience et confidentialité','Créer une Story IA'] },
+  settings: { title: 'Centre de contrôle', capabilities: ['privacy dashboard','sessions/appareils','export/suppression','consentements granulaires'], actions: ['Audit de sécurité','Exporter mes données'] },
+};

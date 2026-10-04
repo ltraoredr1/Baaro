@@ -1,0 +1,304 @@
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useState,
+} from "react";
+import { supabase } from "../supabaseClient.js";
+import { API_BASE } from "../config.js";
+import { getDeviceId } from "../device.js";
+
+export const AppContext = createContext(null);
+
+const GUEST_KEY = "baaro_is_guest";
+const GUEST_OK_KEY = "baaro_guest_ok";
+
+const DEFAULT_PROFILE = {
+  display_name: "Membre BAARO",
+  handle: "@membre",
+  flag: "🌍",
+  bio: "",
+};
+
+function safeGet(key, storage = localStorage) {
+  try { return storage.getItem(key); } catch { return null; }
+}
+function safeSet(key, value, storage = localStorage) {
+  try { storage.setItem(key, value); } catch {}
+}
+function safeRemove(key, storage = localStorage) {
+  try { storage.removeItem(key); } catch {}
+}
+
+function clearGuestFlags() {
+  safeRemove(GUEST_KEY);
+  safeRemove(GUEST_OK_KEY);
+  try { safeRemove(GUEST_OK_KEY, sessionStorage); } catch {}
+}
+
+function isGuestOkThisSession() {
+  return safeGet(GUEST_OK_KEY) === "1" || (() => {
+    try { return sessionStorage.getItem(GUEST_OK_KEY) === "1"; } catch { return false; }
+  })();
+}
+
+export function AppProvider({ children }) {
+  const [session, setSession] = useState(null);
+  const [user, setUser] = useState(null);
+  const [profile, setProfile] = useState(null);
+  const [userProfile, setUserProfile] = useState(DEFAULT_PROFILE);
+  const [loading, setLoading] = useState(true);
+  const [isGuest, setIsGuest] = useState(false);
+  const [isAnonymous, setIsAnonymous] = useState(false);
+
+  const id = user?.id || null;
+
+  const resetUserData = useCallback(() => {
+    setUser(null);
+    setSession(null);
+    setProfile(null);
+    setUserProfile(DEFAULT_PROFILE);
+    setIsAnonymous(false);
+  }, []);
+
+  const loadProfile = useCallback(async (userId) => {
+    if (!userId) {
+      setProfile(null);
+      setUserProfile(DEFAULT_PROFILE);
+      return null;
+    }
+    try {
+      let { data, error } = await supabase.from("profiles").select("*").eq("id", userId).maybeSingle();
+      if (error) throw error;
+
+      if (!data) {
+        const short = String(userId).replace(/-/g, "").slice(0, 12);
+        const fallback = {
+          id: userId,
+          display_name: "Membre BAARO",
+          handle: `@user_${short}`,
+          flag: "🌍",
+          bio: "",
+          updated_at: new Date().toISOString(),
+        };
+
+        const created = await supabase
+          .from("profiles")
+          .upsert(fallback, { onConflict: "id" })
+          .select("*")
+          .maybeSingle();
+
+        if (!created.error && created.data) {
+          data = created.data;
+        } else {
+          // Le trigger auth peut encore être en train de créer la ligne.
+          // Relire avant de conclure à une absence de profil.
+          const reread = await supabase
+            .from("profiles")
+            .select("*")
+            .eq("id", userId)
+            .maybeSingle();
+
+          if (reread.error) throw reread.error;
+          data = reread.data || null;
+
+          if (!data && created.error) {
+            console.error("[BAARO] Création profil échouée:", created.error);
+          }
+        }
+      }
+      if (data) {
+        const normalized = {...data, id: data.id || userId };
+        setProfile(normalized);
+        setUserProfile({
+          display_name: normalized.display_name || DEFAULT_PROFILE.display_name,
+          handle: normalized.handle || DEFAULT_PROFILE.handle,
+          flag: normalized.flag || DEFAULT_PROFILE.flag,
+          bio: normalized.bio || DEFAULT_PROFILE.bio,
+         ...normalized,
+        });
+        return normalized;
+      }
+      return null;
+    } catch (error) {
+      console.error("[BAARO] Erreur chargement profil:", error);
+      return null;
+    }
+  }, []);
+
+  const registerDevice = useCallback(async () => {
+    const { data: { session: currentSession } } = await supabase.auth.getSession();
+    if (!currentSession?.access_token) return;
+    try {
+      await fetch(`${API_BASE}/api/register-device`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${currentSession.access_token}` },
+        body: JSON.stringify({ deviceId: getDeviceId() }),
+      });
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    const initialize = async () => {
+      try {
+        const { data: { session: currentSession }, error } = await supabase.auth.getSession();
+        if (error) console.error("[BAARO] Session error:", error);
+        if (!mounted) return;
+        if (currentSession?.user?.is_anonymous) {
+          if (!isGuestOkThisSession()) {
+            try { await supabase.auth.signOut({ scope: "local" }); } catch {}
+            if (!mounted) return;
+            resetUserData();
+            setIsGuest(false);
+            setIsAnonymous(false);
+            return;
+          }
+          setSession(currentSession);
+          setUser(currentSession.user);
+          setIsAnonymous(true);
+          setIsGuest(false);
+          setLoading(false);
+          return;
+        }
+        if (currentSession?.user) {
+          setSession(currentSession);
+          setUser(currentSession.user);
+          setIsGuest(false);
+          setIsAnonymous(false);
+        } else {
+          resetUserData();
+          setIsGuest(false);
+          setIsAnonymous(false);
+        }
+      } catch (error) {
+        console.error("[BAARO] Erreur initialisation auth:", error);
+      } finally {
+        if (mounted) setLoading(false);
+      }
+    };
+    initialize();
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, nextSession) => {
+      if (!mounted) return;
+      if (nextSession?.user?.is_anonymous) {
+        if (!isGuestOkThisSession()) {
+          try { await supabase.auth.signOut({ scope: "local" }); } catch {}
+          if (!mounted) return;
+          resetUserData();
+          setIsGuest(false);
+          setIsAnonymous(false);
+          setLoading(false);
+          return;
+        }
+        setSession(nextSession);
+        setUser(nextSession.user);
+        setIsAnonymous(true);
+        setIsGuest(false);
+        setLoading(false);
+        return;
+      }
+      if (nextSession?.user) {
+        clearGuestFlags();
+        setSession(nextSession);
+        setUser(nextSession.user);
+        setIsGuest(false);
+        setIsAnonymous(false);
+      } else {
+        resetUserData();
+        setIsGuest(false);
+        setIsAnonymous(false);
+      }
+      setLoading(false);
+    });
+    return () => {
+      mounted = false;
+      subscription?.unsubscribe();
+    };
+  }, [resetUserData]);
+
+  useEffect(() => {
+    if (!id) return;
+    let cancelled = false;
+    const loadUserData = async () => {
+      await loadProfile(id);
+      if (cancelled) return;
+      if (cancelled) return;
+      await registerDevice();
+    };
+    loadUserData().catch(() => {});
+    return () => { cancelled = true; };
+  }, [id, loadProfile, registerDevice]);
+
+  const enableGuestMode = useCallback(() => {
+    safeSet(GUEST_OK_KEY, "1");
+    safeRemove(GUEST_KEY);
+    setIsGuest(true);
+    setIsAnonymous(true);
+    resetUserData();
+  }, [resetUserData]);
+
+  const logout = useCallback(async () => {
+    clearGuestFlags();
+    try { await supabase.auth.signOut(); } catch {}
+    setIsGuest(false);
+    setIsAnonymous(false);
+    resetUserData();
+  }, [resetUserData]);
+
+  const updateProfile = useCallback(async (updates) => {
+    if (!id) return { ok: false, error: "Non authentifié" };
+
+    const payload = {
+      ...updates,
+      id,
+      updated_at: new Date().toISOString(),
+    };
+
+    const saved = await supabase
+      .from("profiles")
+      .upsert(payload, { onConflict: "id" })
+      .select("*")
+      .single();
+
+    if (saved.error) {
+      // Une ligne peut avoir été créée par le trigger entre deux lectures.
+      // Une seconde tentative rend la sauvegarde idempotente.
+      const retry = await supabase
+        .from("profiles")
+        .upsert(payload, { onConflict: "id" })
+        .select("*")
+        .single();
+
+      if (retry.error) {
+        console.error("[BAARO] Persistance profil échouée:", saved.error, retry.error);
+        return { ok: false, error: retry.error };
+      }
+
+      setProfile(retry.data);
+      setUserProfile((previous) => ({ ...previous, ...retry.data }));
+      return { ok: true, profile: retry.data };
+    }
+
+    setProfile(saved.data);
+    setUserProfile((previous) => ({ ...previous, ...saved.data }));
+    return { ok: true, profile: saved.data };
+  }, [id]);
+
+  const value = {
+    id, user, session, profile, userProfile,
+    userId: id, setProfile, setUserProfile,
+    isGuest, isAnonymous, loading, enableGuestMode, logout,
+    updateProfile,
+  };
+
+  return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
+}
+
+export function useApp() {
+  const context = useContext(AppContext);
+  if (!context) throw new Error("useApp doit être utilisé dans AppProvider");
+  return context;
+}
+
+export default AppContext;

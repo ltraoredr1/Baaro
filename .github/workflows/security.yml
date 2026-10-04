@@ -1,0 +1,34 @@
+name: BAARO Security Checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Security hardening checks
+        run: npm run check:security-hardening
+
+      - name: Secret scan
+        run: npm run check:secrets
+
+      - name: Dependency audit
+        run: npm audit --audit-level=high
