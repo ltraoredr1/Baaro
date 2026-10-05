@@ -40,6 +40,23 @@ create table if not exists public.posts (
   updated_at timestamptz not null default now()
 );
 
+-- FIX: tables comments et post_likes creees ici car referencees par des index
+-- plus bas (avant leur definition d'origine). "if not exists" => sans conflit.
+create table if not exists public.comments (
+  id uuid primary key default gen_random_uuid(),
+  post_id uuid not null references public.posts(id) on delete cascade,
+  author_id uuid not null references auth.users(id) on delete cascade,
+  text text not null,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.post_likes (
+  post_id uuid not null references public.posts(id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key (post_id, user_id)
+);
+
 create table if not exists public.videos (
   id uuid primary key default gen_random_uuid(),
   author_id uuid not null references public.profiles(id) on delete cascade,
