@@ -574,7 +574,7 @@ create trigger debate_participants_role_guard
 -- [removed CREATE TABLE gift_types]
 
 
-insert into gift_types (id, label, icon, cost_points) values
+-- [skip] insert into gift_types (id, label, icon, cost_points) values
   ('heart_gold', 'Cœur doré', '💛', 10),
   ('rose', 'Rose', '🌹', 50),
   ('star', 'Étoile', '⭐', 100),
@@ -593,11 +593,11 @@ drop table if exists public.gifts_sent cascade;
 
 -- [skip index]
 
-alter table gift_types enable row level security;
+-- [skip] alter table gift_types enable row level security;
 alter table gifts_sent enable row level security;
 
-drop policy if exists "gift_types_public_read" on gift_types;
-create policy "gift_types_public_read" on gift_types for select using (true);
+-- [skip] drop policy if exists "gift_types_public_read" on gift_types;
+-- [skip] create policy "gift_types_public_read" on gift_types for select using (true);
 
 -- [skip]
 -- [skip policy]
