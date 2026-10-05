@@ -9772,7 +9772,8 @@ create policy ai_action_log_owner on public.ai_action_log for select using (auth
 drop policy if exists automation_rules_owner on public.automation_rules;
 create policy automation_rules_owner on public.automation_rules for all using (auth.uid() = id) with check (auth.uid() = id);
 drop policy if exists data_export_jobs_owner on public.data_export_jobs;
-create policy data_export_jobs_owner on public.data_export_jobs for select, insert using (auth.uid() = id) with check (auth.uid() = id);
+create policy data_export_jobs_owner_select on public.data_export_jobs for select using (auth.uid() = user_id);
+create policy data_export_jobs_owner_insert on public.data_export_jobs for insert with check (auth.uid() = user_id);
 
 
 
