@@ -1,3 +1,4 @@
+-- VERSION CORRIGEE v2 (profiles.id, gifts_sent, group_role, notifications, sans crypto)
 -- BAARO UNIFIED DATABASE MIGRATION
 -- Fresh database: one coordinated migration.
 
