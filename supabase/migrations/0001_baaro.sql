@@ -574,13 +574,7 @@ create trigger debate_participants_role_guard
 -- [removed CREATE TABLE gift_types]
 
 
--- [skip] insert into gift_types (id, label, icon, cost_points) values
-  ('heart_gold', 'Cœur doré', '💛', 10),
-  ('rose', 'Rose', '🌹', 50),
-  ('star', 'Étoile', '⭐', 100),
-  ('crown', 'Couronne', '👑', 500)
-on conflict (id) do nothing;
-
+-- [skip] -- [skip entire insert gift_types]
 -- FIX: une 1re version de gifts_sent (sender_id/receiver_id/gift_id) est creee plus haut.
 -- "create table if not exists" ne la remplacerait pas : on la supprime pour obtenir
 -- le schema attendu par la suite (from_user_id/to_user_id/gift_type_id/points_spent).
@@ -594,7 +588,7 @@ drop table if exists public.gifts_sent cascade;
 -- [skip index]
 
 -- [skip] alter table gift_types enable row level security;
-alter table gifts_sent enable row level security;
+-- [skip] alter table gifts_sent enable row level security;
 
 -- [skip] drop policy if exists "gift_types_public_read" on gift_types;
 -- [skip] create policy "gift_types_public_read" on gift_types for select using (true);
@@ -2249,7 +2243,7 @@ drop policy if exists role_requests_insert on public.debate_role_requests;
 drop policy if exists role_requests_update on public.debate_role_requests;
 
 -- 6. Realtime for live gifts/roles.
-do $$ begin alter publication supabase_realtime add table public.gifts_sent; exception when duplicate_object then null; end $$;
+-- [skip] do $$ begin alter publication supabase_realtime add table public.gifts_sent; exception when duplicate_object then null; end $$;
 do $$ begin alter publication supabase_realtime add table public.debate_role_requests; exception when duplicate_object then null; end $$;
 
 -- 7. Gift feed is visible only to participants of the room or the sender/recipient.
