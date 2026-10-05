@@ -318,7 +318,7 @@ create policy "follows_all_own" on public.follows for all using (auth.uid() = fo
 
 -- Notification : owner only
 drop policy if exists "notif_own" on public.notification_preferences;
-create policy "notif_own" on public.notification_preferences for all using (auth.uid() = id);
+create policy "notif_own" on public.notification_preferences for all using (auth.uid() = user_id);
 
 -- Gifts sent : lecture salon, écriture authentifiée
 drop policy if exists "gifts_read_room" on public.gifts_sent;
@@ -446,8 +446,8 @@ create policy "debate_rooms_update_host" on debate_rooms for update using (auth.
 -- Participation : chacun voit qui participe aux salons ; chacun ne peut
 -- s'ajouter/se retirer que lui-même.
 create policy "debate_participants_read" on debate_participants for select using (auth.uid() is not null);
-create policy "debate_participants_insert" on debate_participants for insert with check (auth.uid() = id);
-create policy "debate_participants_update_own" on debate_participants for update using (auth.uid() = id);
+create policy "debate_participants_insert" on debate_participants for insert with check (auth.uid() = user_id);
+create policy "debate_participants_update_own" on debate_participants for update using (auth.uid() = user_id);
 
 -- Messages : lisibles et écrits uniquement par les membres du salon.
 -- Un message peut aussi être envoyé "au nom de l'IA" (sender_id = null,
@@ -1110,7 +1110,7 @@ create policy sounds_read on public.sounds for select using (true);
 drop policy if exists video_likes_read on public.video_likes;
 create policy video_likes_read on public.video_likes for select using (auth.uid() is not null);
 drop policy if exists video_likes_own on public.video_likes;
-create policy video_likes_own on public.video_likes for all using (auth.uid() = id) with check (auth.uid() = id);
+create policy video_likes_own on public.video_likes for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
 drop policy if exists video_comments_read on public.video_comments;
 create policy video_comments_read on public.video_comments for select using (true);
@@ -2654,7 +2654,7 @@ create policy notification_preferences_own
 on public.notification_preferences
 for all
 using (auth.uid() = user_id)
-with check (auth.uid() = id);
+with check (auth.uid() = user_id);
 
 create index if not exists idx_push_tokens_platform on public.push_tokens(platform);
 create index if not exists idx_push_tokens_updated on public.push_tokens(updated_at desc);
@@ -4747,18 +4747,18 @@ DROP POLICY IF EXISTS "notif_own"
 CREATE POLICY "notifications_select_own"
 ON public.notifications
 FOR SELECT
-USING (auth.uid() = id);
+USING (auth.uid() = user_id);
 
 CREATE POLICY "notifications_update_own"
 ON public.notifications
 FOR UPDATE
 USING (auth.uid() = user_id)
-WITH CHECK (auth.uid() = id);
+WITH CHECK (auth.uid() = user_id);
 
 CREATE POLICY "notifications_delete_own"
 ON public.notifications
 FOR DELETE
-USING (auth.uid() = id);
+USING (auth.uid() = user_id);
 
 -- ------------------------------------------------------------
 -- 9. Compteur notifications non lues
@@ -6873,11 +6873,11 @@ create policy post_likes_read on public.post_likes
 
 create policy post_likes_insert on public.post_likes
   for insert to authenticated
-  with check (auth.uid() = id);
+  with check (auth.uid() = user_id);
 
 create policy post_likes_delete on public.post_likes
   for delete to authenticated
-  using (auth.uid() = id);
+  using (auth.uid() = user_id);
 
 -- 4. Trigger compteur commentaires
 create or replace function public.baaro_sync_post_comment_count()
@@ -7632,10 +7632,10 @@ alter table public.safety_reports enable row level security;
 alter table public.reputation_events enable row level security;
 
 -- User-owned data
-create policy innovation_preferences_owner on public.user_preferences for all using (auth.uid() = id) with check (auth.uid() = id);
+create policy innovation_preferences_owner on public.user_preferences for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 create policy innovation_bookmarks_owner on public.content_bookmarks for all using (auth.uid() = id) with check (auth.uid() = id);
 create policy innovation_searches_owner on public.saved_searches for all using (auth.uid() = id) with check (auth.uid() = id);
-create policy innovation_progress_owner on public.learning_progress for all using (auth.uid() = id) with check (auth.uid() = id);
+create policy innovation_progress_owner on public.learning_progress for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 create policy innovation_subscriptions_owner on public.creator_subscriptions for all using (auth.uid() = subscriber_id or auth.uid() = creator_id) with check (auth.uid() = subscriber_id or auth.uid() = creator_id);
 create policy innovation_blocks_owner on public.user_blocks for all using (auth.uid() = blocker_id) with check (auth.uid() = blocker_id);
 create policy innovation_reports_owner on public.safety_reports for insert with check (auth.uid() = reporter_id);
@@ -7643,8 +7643,8 @@ create policy innovation_reports_read_owner on public.safety_reports for select 
 
 -- Public/discoverable records
 create policy innovation_creator_public on public.creator_profiles for select using (true);
-create policy innovation_creator_owner on public.creator_profiles for insert with check (auth.uid() = id);
-create policy innovation_creator_update on public.creator_profiles for update using (auth.uid() = id) with check (auth.uid() = id);
+create policy innovation_creator_owner on public.creator_profiles for insert with check (auth.uid() = user_id);
+create policy innovation_creator_update on public.creator_profiles for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
 create policy innovation_courses_public on public.learning_courses for select using (published = true or auth.uid() = creator_id);
 create policy innovation_courses_owner on public.learning_courses for all using (auth.uid() = creator_id) with check (auth.uid() = creator_id);
 create policy innovation_jobs_public on public.job_listings for select using (status = 'open' or auth.uid() = owner_id);
@@ -7653,7 +7653,7 @@ create policy innovation_services_public on public.service_listings for select u
 create policy innovation_services_owner on public.service_listings for all using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
 create policy innovation_events_public on public.community_events for select using (status in ('published','finished') or auth.uid() = organizer_id);
 create policy innovation_events_owner on public.community_events for all using (auth.uid() = organizer_id) with check (auth.uid() = organizer_id);
-create policy innovation_attendees_owner on public.event_attendees for all using (auth.uid() = id) with check (auth.uid() = id);
+create policy innovation_attendees_owner on public.event_attendees for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 create policy innovation_attendees_organizer_read on public.event_attendees for select using (exists (select 1 from public.community_events e where e.id = event_id and e.organizer_id = auth.uid()));
 create policy innovation_reputation_public on public.reputation_events for select using (true);
 
@@ -8673,9 +8673,9 @@ DROP POLICY IF EXISTS "notif_own" ON public.notifications;
 DROP POLICY IF EXISTS "notifications_insert_system" ON public.notifications;
 DROP POLICY IF EXISTS "notifications_insert_authenticated" ON public.notifications;
 
-CREATE POLICY "notifications_select_own" ON public.notifications FOR SELECT USING (auth.uid() = id);
-CREATE POLICY "notifications_update_own" ON public.notifications FOR UPDATE USING (auth.uid() = user_id) WITH CHECK (auth.uid() = id);
-CREATE POLICY "notifications_delete_own" ON public.notifications FOR DELETE USING (auth.uid() = id);
+CREATE POLICY "notifications_select_own" ON public.notifications FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY "notifications_update_own" ON public.notifications FOR UPDATE USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
+CREATE POLICY "notifications_delete_own" ON public.notifications FOR DELETE USING (auth.uid() = user_id);
 CREATE POLICY "notifications_insert_system" ON public.notifications FOR INSERT TO service_role WITH CHECK (true);
 CREATE POLICY "notifications_insert_authenticated" ON public.notifications FOR INSERT TO authenticated WITH CHECK (auth.uid() = actor_id);
 
@@ -8745,7 +8745,7 @@ create table if not exists public.notification_preferences (
 alter table public.notification_preferences enable row level security;
 drop policy if exists notification_preferences_own on public.notification_preferences;
 create policy notification_preferences_own on public.notification_preferences
-  for all using (auth.uid() = id) with check (auth.uid() = id);
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
 -- ============================================================
 -- SECTION 3 : PUSH TOKENS
@@ -9123,7 +9123,7 @@ alter table public.video_challenge_entries enable row level security;
 create policy video_collections_read on public.video_collections for select using (is_public or auth.uid() = owner_id);
 create policy video_collections_write on public.video_collections for all using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
 
-create policy video_bookmarks_own on public.video_bookmarks for all using (auth.uid() = id) with check (auth.uid() = id);
+create policy video_bookmarks_own on public.video_bookmarks for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
 create policy video_collaborations_read on public.video_collaborations for select using (auth.uid() = owner_id or auth.uid() = collaborator_id);
 create policy video_collaborations_insert on public.video_collaborations for insert with check (auth.uid() = owner_id);
@@ -9139,7 +9139,7 @@ create policy video_chapters_write on public.video_chapters for all using (auth.
 create policy video_polls_read on public.video_polls for select using (true);
 create policy video_polls_write on public.video_polls for all using (auth.uid() = (select author_id from public.videos where id = video_id)) with check (auth.uid() = (select author_id from public.videos where id = video_id));
 
-create policy video_poll_votes_own on public.video_poll_votes for all using (auth.uid() = id) with check (auth.uid() = id);
+create policy video_poll_votes_own on public.video_poll_votes for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
 create policy video_questions_read on public.video_questions for select using (status <> 'hidden' or auth.uid() = author_id or auth.uid() = (select author_id from public.videos where id = video_id));
 create policy video_questions_insert on public.video_questions for insert with check (auth.uid() = author_id);
@@ -9269,7 +9269,7 @@ alter table public.creator_earnings enable row level security;
 
 create policy media_jobs_owner_read on public.media_jobs for select using (auth.uid() = owner_id);
 create policy watch_events_own on public.video_watch_events for all using (auth.uid() = id) with check (auth.uid() = id);
-create policy recommendation_profile_own on public.video_recommendation_profiles for all using (auth.uid() = id) with check (auth.uid() = id);
+create policy recommendation_profile_own on public.video_recommendation_profiles for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 create policy creator_monetization_own on public.creator_monetization for all using (auth.uid() = creator_id) with check (auth.uid() = creator_id);
 create policy creator_earnings_own on public.creator_earnings for select using (auth.uid() = creator_id);
 
@@ -9766,7 +9766,7 @@ alter table public.automation_rules enable row level security;
 alter table public.data_export_jobs enable row level security;
 
 drop policy if exists module_preferences_owner on public.module_preferences;
-create policy module_preferences_owner on public.module_preferences for all using (auth.uid() = id) with check (auth.uid() = id);
+create policy module_preferences_owner on public.module_preferences for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 drop policy if exists ai_action_log_owner on public.ai_action_log;
 create policy ai_action_log_owner on public.ai_action_log for select using (auth.uid() = id);
 drop policy if exists automation_rules_owner on public.automation_rules;
@@ -9956,7 +9956,7 @@ create policy security_devices_delete on public.security_devices
 -- Settings are strictly owner-scoped.
 drop policy if exists security_settings_owner on public.security_settings;
 create policy security_settings_owner on public.security_settings
-  for all using (auth.uid() = id) with check (auth.uid() = id);
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
 create index if not exists idx_security_devices_user on public.security_devices(user_id, last_seen_at desc);
 create index if not exists idx_security_devices_active on public.security_devices(user_id) where revoked_at is null;
