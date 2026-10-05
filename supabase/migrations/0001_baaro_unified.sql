@@ -6778,119 +6778,6 @@ $$;
 drop function if exists public.join_community_group(uuid, text);
 drop function if exists public.join_community_group(uuid);
 
-create or replace function public.join_community_group(
-  p_group uuid default null,
-  p_code text default null
-)
-returns jsonb
-language plpgsql
-security definer
-set search_path = public
-as $$
-declare
-  v_uid uuid := auth.uid();
-  v_group_id uuid;
-  v_public boolean;
-  v_inv public.group_invites;
-begin
-  if v_uid is null then
-    raise exception 'Non authentifie';
-  end if;
-
-  -- Mode 1: code d'invitation
-  if p_code is not null and length(trim(p_code)) > 0 then
-    select * into v_inv
-    from public.group_invites
-    where upper(code) = upper(trim(p_code))
-      and (expires_at is null or expires_at > now())
-      and (coalesce(max_uses, 0) = 0 or coalesce(uses, 0) < max_uses)
-    for update;
-
-    if not found then
-      raise exception 'Invitation invalide ou expiree';
-    end if;
-
-    v_group_id := v_inv.group_id;
-
-    if public.is_banned(v_group_id, v_uid) then
-      raise exception 'Acces refuse';
-    end if;
-
-    if public.group_role(v_group_id) is not null then
-      return jsonb_build_object(
-        'ok', true,
-        'group_id', v_group_id,
-        'already_member', true
-      );
-    end if;
-
-    update public.group_invites
-    set uses = coalesce(uses, 0) + 1
-    where id = v_inv.id;
-
-    insert into public.group_members (group_id, user_id, role)
-    values (v_group_id, v_uid, 'member')
-    on conflict do nothing;
-
-    return jsonb_build_object(
-      'ok', true,
-      'group_id', v_group_id,
-      'via', 'invite'
-    );
-  end if;
-
-  -- Mode 2: groupe public
-  if p_group is null then
-    raise exception 'Groupe ou code requis';
-  end if;
-
-  v_group_id := p_group;
-
-  if public.is_banned(v_group_id, v_uid) then
-    raise exception 'Acces refuse';
-  end if;
-
-  if public.group_role(v_group_id) is not null then
-    return jsonb_build_object(
-      'ok', true,
-      'group_id', v_group_id,
-      'already_member', true
-    );
-  end if;
-
-  select coalesce(is_public, true) into v_public
-  from public.groups
-  where id = v_group_id;
-
-  if not found then
-    raise exception 'Groupe introuvable';
-  end if;
-
-  if not v_public then
-    raise exception 'Groupe prive : code d''invitation requis';
-  end if;
-
-  insert into public.group_members (group_id, user_id, role)
-  values (v_group_id, v_uid, 'member')
-  on conflict do nothing;
-
-  return jsonb_build_object(
-    'ok', true,
-    'group_id', v_group_id,
-    'via', 'public'
-  );
-end;
-$$;
-
-grant execute on function public.can_post_in_channel(uuid) to authenticated;
-grant execute on function public.create_community_channel(uuid, text, text, text) to authenticated;
-grant execute on function public.create_group_invite(uuid, int, int) to authenticated;
-grant execute on function public.list_group_invites(uuid) to authenticated;
-grant execute on function public.revoke_group_invite(uuid) to authenticated;
-grant execute on function public.peek_group_invite(text) to authenticated;
-grant execute on function public.join_community_group(uuid, text) to authenticated;
-
-push_subscriptions
 create table if not exists public.push_subscriptions (
   id uuid primary key default gen_random_uuid(),
   user_id uuid references auth.users(id) on delete cascade not null,
@@ -8421,6 +8308,8 @@ begin
   );
 end;
 $$;
+
+grant execute on function public.join_community_group(uuid, text) to authenticated;
 
 create or replace function public.ban_community_member(
   p_group uuid,
