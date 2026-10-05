@@ -114,12 +114,6 @@ create table if not exists public.wallets (
   updated_at timestamptz not null default now()
 );
 
-create table if not exists public.crypto_holdings (
-  id uuid primary key references public.profiles(id) on delete cascade,
-  holdings numeric not null default 0 check (holdings >= 0),
-  updated_at timestamptz not null default now()
-);
-
 create table if not exists public.transactions (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references public.profiles(id) on delete cascade,
@@ -226,7 +220,6 @@ alter table public.posts enable row level security;
 alter table public.videos enable row level security;
 alter table public.messages enable row level security;
 alter table public.wallets enable row level security;
-alter table public.crypto_holdings enable row level security;
 alter table public.transactions enable row level security;
 alter table public.blocks enable row level security;
 alter table public.groups enable row level security;
@@ -368,7 +361,7 @@ create policy "gifts_insert_auth" on public.gifts_sent for insert with check (au
 -- anti faux-comptes. À coller dans le SQL Editor de Supabase et exécuter
 -- APRÈS supabase-schema.sql (et les autres migrations déjà appliquées).
 
--- 1) Le portefeuille, l'historique et les avoirs crypto ne doivent plus
+-- 1) Le portefeuille et l'historique ne doivent plus
 --    jamais être modifiables directement depuis le navigateur : jusqu'ici,
 --    la policy vérifiait seulement "auth.uid() = user_id", pas que la
 --    valeur écrite était légitime — n'importe qui pouvait donc se créer
@@ -376,11 +369,9 @@ create policy "gifts_insert_auth" on public.gifts_sent for insert with check (au
 --    ses propres lignes reste autorisée ; toutes les écritures passent par
 --    /api/wallet, avec la clé de service (qui ignore RLS).
 drop policy if exists "wallet_own" on wallets;
-drop policy if exists "crypto_own" on crypto_holdings;
 drop policy if exists "tx_own" on transactions;
 
 create policy "wallet_read_own" on wallets for select using (auth.uid() = id);
-create policy "crypto_read_own" on crypto_holdings for select using (auth.uid() = id);
 create policy "tx_read_own" on transactions for select using (auth.uid() = id);
 -- Volontairement aucune policy insert/update/delete pour anon/authenticated
 -- sur ces trois tables : seul service_role (bypass RLS) peut désormais y
@@ -1384,56 +1375,12 @@ begin
 end;
 $$;
 
-create or replace function public.wallet_convert(
-  p_user_id uuid,
-  p_pts numeric,
-  p_points_per_baro numeric default 100
-)
-returns jsonb
-language plpgsql
-security definer
-set search_path = public
-as $$
-declare
-  w public.wallets%rowtype;
-  h public.crypto_holdings%rowtype;
-  tx public.transactions%rowtype;
-  baro numeric;
-begin
-  if p_pts is null or p_pts <= 0 or p_pts <> trunc(p_pts) then raise exception 'INVALID_POINTS'; end if;
-  if p_points_per_baro <= 0 then raise exception 'INVALID_RATE'; end if;
-
-  perform public.wallet_ensure(p_user_id, 0);
-  select * into w from public.wallets where id = p_user_id for update;
-  if w.balance < p_pts then raise exception 'INSUFFICIENT_BALANCE'; end if;
-  baro := round((p_pts / p_points_per_baro)::numeric, 3);
-
-  insert into public.crypto_holdings(id, holdings)
-  values (p_user_id, 0)
-  on conflict (user_id) do nothing;
-  select * into h from public.crypto_holdings where id = p_user_id for update;
-
-  update public.wallets set balance = balance - p_pts, updated_at = now()
-  where id = p_user_id returning * into w;
-  update public.crypto_holdings set holdings = holdings + baro, updated_at = now()
-  where id = p_user_id returning * into h;
-
-  insert into public.transactions(user_id, label, pts, action_key, day_key)
-  values (p_user_id, format('Conversion en %s BARO', baro), -p_pts, 'convert_baro', current_date)
-  returning * into tx;
-
-  return jsonb_build_object('balance', w.balance, 'holdings', h.holdings, 'transaction', to_jsonb(tx));
-end;
-$$;
-
 revoke all on function public.wallet_ensure(uuid, numeric) from public, anon, authenticated;
 revoke all on function public.wallet_earn(uuid, numeric, text, text, numeric, boolean) from public, anon, authenticated;
 revoke all on function public.wallet_redeem(uuid, numeric, text, text) from public, anon, authenticated;
-revoke all on function public.wallet_convert(uuid, numeric, numeric) from public, anon, authenticated;
 grant execute on function public.wallet_ensure(uuid, numeric) to service_role;
 grant execute on function public.wallet_earn(uuid, numeric, text, text, numeric, boolean) to service_role;
 grant execute on function public.wallet_redeem(uuid, numeric, text, text) to service_role;
-grant execute on function public.wallet_convert(uuid, numeric, numeric) to service_role;
 
 
 -- Calls: participants may update status, but identity/room fields cannot be rewritten.
@@ -3638,7 +3585,6 @@ BEGIN
       ('profiles','user_id'),
       ('wallets','user_id'),
       ('transactions','user_id'),
-      ('crypto_holdings','user_id'),
       ('post_likes','user_id'),
       ('comments','author_id'),
       ('follows','follower_id'),
@@ -3712,7 +3658,7 @@ COMMENT ON SCHEMA public IS 'BAARO: auth.users.id is the single canonical user i
 -- SOURCE: 0035_rename_user_id_to_id.sql
 -- ============================================================
 -- BAARO: supprimer le problème user_id — identité unique = id
--- profiles.id / wallets.id / crypto_holdings.id = auth.users.id
+-- profiles.id / wallets.id = auth.users.id
 -- Ne renomme PAS les colonnes FK des tables de relation (post_likes.user_id, etc.)
 
 DO $$
@@ -3736,16 +3682,6 @@ BEGIN
   ) THEN
     ALTER TABLE public.wallets RENAME COLUMN user_id TO id;
   END IF;
-
-  IF EXISTS (
-    SELECT 1 FROM information_schema.columns
-    WHERE table_schema='public' AND table_name='crypto_holdings' AND column_name='user_id'
-  ) AND NOT EXISTS (
-    SELECT 1 FROM information_schema.columns
-    WHERE table_schema='public' AND table_name='crypto_holdings' AND column_name='id'
-  ) THEN
-    ALTER TABLE public.crypto_holdings RENAME COLUMN user_id TO id;
-  END IF;
 END $$;
 
 -- Policies
@@ -3758,20 +3694,16 @@ BEGIN
 
   DROP POLICY IF EXISTS "wallet_own" ON public.wallets;
   CREATE POLICY "wallet_own" ON public.wallets FOR ALL USING (auth.uid() = id) WITH CHECK (auth.uid() = id);
-
-  DROP POLICY IF EXISTS "crypto_own" ON public.crypto_holdings;
-  CREATE POLICY "crypto_own" ON public.crypto_holdings FOR ALL USING (auth.uid() = id) WITH CHECK (auth.uid() = id);
 EXCEPTION WHEN undefined_table THEN NULL;
 END $$;
 
 COMMENT ON TABLE public.profiles IS 'BAARO: id = auth.users.id (identité unique, plus de user_id)';
 COMMENT ON TABLE public.wallets IS 'BAARO: id = auth.users.id';
-COMMENT ON TABLE public.crypto_holdings IS 'BAARO: id = auth.users.id';
 
 -- =====================================================================
 -- IMPORTANT : les fonctions PL/pgSQL ne sont PAS mises à jour automatiquement
 -- par un RENAME COLUMN. On corrige les références wallets.user_id / 
--- profiles.user_id / crypto_holdings.user_id dans les corps de fonctions.
+-- profiles.user_id dans les corps de fonctions.
 -- =====================================================================
 DO $$
 DECLARE
@@ -3785,22 +3717,19 @@ BEGIN
     JOIN pg_namespace n ON n.oid = p.pronamespace
     WHERE n.nspname = 'public'
       AND p.prokind = 'f'
-      AND pg_get_functiondef(p.oid) ~* '(wallets|profiles|crypto_holdings).*user_id|from public\.(wallets|profiles|crypto_holdings) where user_id'
+      AND pg_get_functiondef(p.oid) ~* '(wallets|profiles).*user_id|from public\.(wallets|profiles) where user_id'
   LOOP
     def := pg_get_functiondef(r.oid);
     new_def := def;
     -- Remplacements ciblés pour les tables d'identité uniquement
     new_def := regexp_replace(new_def, 'from public\.wallets where user_id', 'from public.wallets where id', 'gi');
     new_def := regexp_replace(new_def, 'from public\.profiles where user_id', 'from public.profiles where id', 'gi');
-    new_def := regexp_replace(new_def, 'from public\.crypto_holdings where user_id', 'from public.crypto_holdings where id', 'gi');
     new_def := regexp_replace(new_def, 'update public\.wallets set ([^;]+) where user_id', 'update public.wallets set \1 where id', 'gi');
     new_def := regexp_replace(new_def, 'update public\.profiles set ([^;]+) where user_id', 'update public.profiles set \1 where id', 'gi');
-    new_def := regexp_replace(new_def, 'update public\.crypto_holdings set ([^;]+) where user_id', 'update public.crypto_holdings set \1 where id', 'gi');
     new_def := regexp_replace(new_def, 'join public\.profiles p on p\.user_id', 'join public.profiles p on p.id', 'gi');
     new_def := regexp_replace(new_def, 'left join public\.profiles p on p\.user_id', 'left join public.profiles p on p.id', 'gi');
     new_def := regexp_replace(new_def, 'profiles\.user_id', 'profiles.id', 'gi');
     new_def := regexp_replace(new_def, 'wallets\.user_id', 'wallets.id', 'gi');
-    new_def := regexp_replace(new_def, 'crypto_holdings\.user_id', 'crypto_holdings.id', 'gi');
 
     IF new_def IS DISTINCT FROM def THEN
       BEGIN
@@ -3818,7 +3747,7 @@ END $$;
 -- SOURCE: 0036_identity_id_only_and_profile_persistence.sql
 -- ============================================================
 -- BAARO 038: identité unique = id uniquement + persistance des profils
--- - profiles / wallets / crypto_holdings : clé primaire = id (UUID auth.users.id)
+-- - profiles / wallets : clé primaire = id (UUID auth.users.id)
 -- - Plus de colonne user_id sur ces tables d'identité
 -- - FKs qui référençaient profiles(user_id) pointent vers profiles(id)
 -- - RLS et trigger de création automatique de profil à l'inscription
@@ -3844,16 +3773,6 @@ BEGIN
     WHERE table_schema = 'public' AND table_name = 'wallets' AND column_name = 'id'
   ) THEN
     ALTER TABLE public.wallets RENAME COLUMN user_id TO id;
-  END IF;
-
-  IF EXISTS (
-    SELECT 1 FROM information_schema.columns
-    WHERE table_schema = 'public' AND table_name = 'crypto_holdings' AND column_name = 'user_id'
-  ) AND NOT EXISTS (
-    SELECT 1 FROM information_schema.columns
-    WHERE table_schema = 'public' AND table_name = 'crypto_holdings' AND column_name = 'id'
-  ) THEN
-    ALTER TABLE public.crypto_holdings RENAME COLUMN user_id TO id;
   END IF;
 END $$;
 
@@ -3991,17 +3910,6 @@ BEGIN
     ALTER TABLE public.wallets ENABLE ROW LEVEL SECURITY;
     DROP POLICY IF EXISTS "wallet_own" ON public.wallets;
     CREATE POLICY "wallet_own" ON public.wallets
-      FOR ALL USING (auth.uid() = id) WITH CHECK (auth.uid() = id);
-  END IF;
-END $$;
-
--- crypto_holdings
-DO $$
-BEGIN
-  IF to_regclass('public.crypto_holdings') IS NOT NULL THEN
-    ALTER TABLE public.crypto_holdings ENABLE ROW LEVEL SECURITY;
-    DROP POLICY IF EXISTS "crypto_own" ON public.crypto_holdings;
-    CREATE POLICY "crypto_own" ON public.crypto_holdings
       FOR ALL USING (auth.uid() = id) WITH CHECK (auth.uid() = id);
   END IF;
 END $$;
@@ -4261,56 +4169,14 @@ BEGIN
 END;
 $$;
 
--- wallet_convert (points → holdings)
-CREATE OR REPLACE FUNCTION public.wallet_convert(
-  p_user_id uuid,
-  p_pts numeric
-)
-RETURNS jsonb
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public
-AS $$
-DECLARE
-  w public.wallets%rowtype;
-  h public.crypto_holdings%rowtype;
-  tx public.transactions%rowtype;
-BEGIN
-  IF p_pts IS NULL OR p_pts <= 0 THEN RAISE EXCEPTION 'INVALID_POINTS'; END IF;
-  PERFORM public.wallet_ensure(p_user_id, 0);
-  SELECT * INTO w FROM public.wallets WHERE id = p_user_id FOR UPDATE;
-  IF w.balance < p_pts THEN RAISE EXCEPTION 'INSUFFICIENT_BALANCE'; END IF;
-
-  INSERT INTO public.crypto_holdings(id, holdings, updated_at)
-  VALUES (p_user_id, 0, now())
-  ON CONFLICT (id) DO NOTHING;
-
-  UPDATE public.wallets SET balance = balance - p_pts, updated_at = now()
-  WHERE id = p_user_id RETURNING * INTO w;
-
-  UPDATE public.crypto_holdings
-    SET holdings = holdings + p_pts, updated_at = now()
-  WHERE id = p_user_id
-  RETURNING * INTO h;
-
-  INSERT INTO public.transactions(user_id, label, pts, action_key, day_key)
-  VALUES (p_user_id, 'Conversion points → BAARO', -p_pts, 'convert_to_baro', current_date)
-  RETURNING * INTO tx;
-
-  RETURN jsonb_build_object('balance', w.balance, 'holdings', h.holdings, 'transaction', to_jsonb(tx));
-END;
-$$;
-
 -- Grants
 REVOKE ALL ON FUNCTION public.wallet_ensure(uuid, numeric) FROM public, anon, authenticated;
 REVOKE ALL ON FUNCTION public.wallet_earn(uuid, numeric, text, text, numeric, boolean, uuid) FROM public, anon, authenticated;
 REVOKE ALL ON FUNCTION public.wallet_redeem(uuid, numeric, text, text) FROM public, anon, authenticated;
-REVOKE ALL ON FUNCTION public.wallet_convert(uuid, numeric) FROM public, anon, authenticated;
 
 GRANT EXECUTE ON FUNCTION public.wallet_ensure(uuid, numeric) TO service_role;
 GRANT EXECUTE ON FUNCTION public.wallet_earn(uuid, numeric, text, text, numeric, boolean, uuid) TO service_role;
 GRANT EXECUTE ON FUNCTION public.wallet_redeem(uuid, numeric, text, text) TO service_role;
-GRANT EXECUTE ON FUNCTION public.wallet_convert(uuid, numeric) TO service_role;
 
 
 -- ============================================================
@@ -4383,7 +4249,7 @@ SET search_path = public;
 -- BAARO 041: identité canonique unique + identifiant public unique
 --
 -- Règle définitive :
---   auth.users.id = profiles.id = wallets.id = crypto_holdings.id
+--   auth.users.id = profiles.id = wallets.id
 --   => un seul UUID canonique pour l'identité d'un compte.
 --
 -- Les colonnes user_id des tables relationnelles restent des FK vers profiles.id.
@@ -4431,14 +4297,6 @@ BEGIN
       ADD CONSTRAINT wallets_id_fkey
       FOREIGN KEY (id) REFERENCES auth.users(id) ON DELETE CASCADE;
   END IF;
-
-  IF to_regclass('public.crypto_holdings') IS NOT NULL THEN
-    ALTER TABLE public.crypto_holdings ALTER COLUMN id SET NOT NULL;
-    ALTER TABLE public.crypto_holdings DROP CONSTRAINT IF EXISTS crypto_holdings_id_fkey;
-    ALTER TABLE public.crypto_holdings
-      ADD CONSTRAINT crypto_holdings_id_fkey
-      FOREIGN KEY (id) REFERENCES auth.users(id) ON DELETE CASCADE;
-  END IF;
 END $$;
 
 -- Vérification finale : aucune table d'identité ne doit avoir user_id.
@@ -4446,7 +4304,7 @@ DO $$
 DECLARE
   t text;
 BEGIN
-  FOREACH t IN ARRAY ARRAY['profiles','wallets','crypto_holdings'] LOOP
+  FOREACH t IN ARRAY ARRAY['profiles','wallets'] LOOP
     IF EXISTS (
       SELECT 1
       FROM information_schema.columns
@@ -6543,6 +6401,38 @@ END $$;
 -- ============================================================
 -- SOURCE: 0051_baaro_community_final.sql
 -- ============================================================
+-- FIX: prerequis deplaces ici. Les policies invites_* et la fonction SQL
+-- can_post_in_channel (plus bas) appellent group_role()/is_banned(), qui
+-- n'etaient definies que bien plus tard => erreur "function does not exist".
+-- Tout est idempotent (if not exists / create or replace).
+-- ============================================================
+create table if not exists public.group_bans (
+  group_id uuid references public.groups(id) on delete cascade,
+  user_id uuid references auth.users(id) on delete cascade,
+  banned_by uuid references auth.users(id),
+  reason text,
+  created_at timestamptz default now(),
+  primary key (group_id, user_id)
+);
+
+create or replace function public.group_role(p_group uuid)
+returns text language sql stable security definer set search_path = public as $$
+  select case when g.owner_id = auth.uid() then 'owner' else gm.role end
+  from public.groups g
+  left join public.group_members gm
+    on gm.group_id = g.id and gm.user_id = auth.uid()
+  where g.id = p_group;
+$$;
+
+create or replace function public.is_banned(p_group uuid, p_user uuid)
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (
+    select 1 from public.group_bans
+    where group_id = p_group and user_id = p_user
+  );
+$$;
+
+-- ============================================================
 -- ============================================================
 -- BAARO COMMUNAUTE — FINAL (invites + canaux style Telegram)
 -- Pre-requis: script communaute v4 deja applique
@@ -7824,7 +7714,7 @@ $$;
 
 CREATE TRIGGER trg_video_likes_count
 AFTER INSERT OR DELETE ON public.video_likes
-FOR EACH ROW EXECUTE FUNCTION public.update_likes_count();
+FOR EACH ROW EXECUTE FUNCTION public.update_video_likes_count();
 
 
 -- ============================================================
@@ -10968,6 +10858,8 @@ DROP TABLE IF EXISTS public.gifts_sent CASCADE;
 DROP TABLE IF EXISTS public.gifts_catalog CASCADE;
 DROP TABLE IF EXISTS public.wallet_ledger CASCADE;
 DROP TABLE IF EXISTS public.crypto_holdings CASCADE;
+DROP FUNCTION IF EXISTS public.wallet_convert(uuid, numeric);
+DROP FUNCTION IF EXISTS public.wallet_convert(uuid, numeric, numeric);
 DROP TABLE IF EXISTS public.wallets CASCADE;
 
 ALTER TABLE IF EXISTS public.user_settings DROP COLUMN IF EXISTS wallet;
@@ -12309,8 +12201,5 @@ BEGIN
   END IF;
   IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='wallets' AND column_name='user_id') THEN
     RAISE EXCEPTION 'BAARO_SCHEMA_INVALID: wallets.user_id must not exist; wallets.id is canonical';
-  END IF;
-  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='crypto_holdings' AND column_name='user_id') THEN
-    RAISE EXCEPTION 'BAARO_SCHEMA_INVALID: crypto_holdings.user_id must not exist; crypto_holdings.id is canonical';
   END IF;
 END $$;
