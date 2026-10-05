@@ -2253,7 +2253,6 @@ grant execute on function public.register_video_view(uuid) to authenticated;
 update public.videos v
 set views = greatest(coalesce(v.views, 0), 0);
 
-  for select using (expires_at > now());
 
 create index if not exists idx_posts_created_id
   on public.posts(created_at desc, id desc);
