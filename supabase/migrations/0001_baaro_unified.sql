@@ -57,6 +57,20 @@ create table if not exists public.post_likes (
   primary key (post_id, user_id)
 );
 
+-- FIX: notifications creee ici car referencee par des index (section 7) avant
+-- sa definition d'origine (migration notifications). "if not exists" => sans conflit.
+create table if not exists public.notifications (
+  notification_id uuid primary key default gen_random_uuid(),
+  user_id uuid not null,
+  actor_id uuid null,
+  type text null default 'general',
+  message text not null default '',
+  source_id uuid null,
+  read boolean not null default false,
+  read_at timestamptz null,
+  created_at timestamptz not null default now()
+);
+
 create table if not exists public.videos (
   id uuid primary key default gen_random_uuid(),
   author_id uuid not null references public.profiles(id) on delete cascade,
