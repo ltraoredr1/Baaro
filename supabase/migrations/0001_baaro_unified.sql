@@ -280,6 +280,7 @@ create trigger on_auth_user_created
   after insert on auth.users for each row execute procedure public.handle_new_user();
 
 -- 3. FOLLOWS / FRIENDS - 4 FK vers profiles.id
+DROP TABLE IF EXISTS public.follows CASCADE;
 create table if not exists public.follows (
   follower_id uuid not null references public.profiles(id) on delete cascade,
   followed_id uuid not null references public.profiles(id) on delete cascade,
@@ -4236,6 +4237,7 @@ CREATE POLICY "Suppression par l'utilisateur connecté" ON public.follows
 
 -- 4. Fonction RPC pour récupérer les amis réciproques[span_3](start_span)[span_3](end_span)
 DROP FUNCTION IF EXISTS public.get_user_friends(uuid) CASCADE;
+DROP FUNCTION IF EXISTS public.get_user_friends(uuid) CASCADE;
 CREATE OR REPLACE FUNCTION public.get_user_friends(user_id_param UUID)
 RETURNS TABLE (friend_id UUID) AS $$
 BEGIN
@@ -4871,6 +4873,7 @@ DROP FUNCTION IF EXISTS public.get_user_friends(user_id_param UUID);
 
 -- 3. Créer la fonction avec le bon paramètre (id, pas user_id)
 DROP FUNCTION IF EXISTS public.get_user_friends(uuid) CASCADE;
+DROP FUNCTION IF EXISTS public.get_user_friends(uuid) CASCADE;
 CREATE OR REPLACE FUNCTION public.get_user_friends(user_id UUID)
 RETURNS TABLE (friend_id UUID) AS $$
 BEGIN
@@ -4912,6 +4915,7 @@ BEGIN;
 -- 1. Vérification de la table follows
 -- ============================================================
 
+DROP TABLE IF EXISTS public.follows CASCADE;
 CREATE TABLE IF NOT EXISTS public.follows (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     follower_id uuid NOT NULL,
@@ -5250,6 +5254,7 @@ $function$;
 -- 12. Fonction : obtenir les amis
 -- ============================================================
 
+DROP FUNCTION IF EXISTS public.get_user_friends(uuid) CASCADE;
 DROP FUNCTION IF EXISTS public.get_user_friends(uuid) CASCADE;
 CREATE OR REPLACE FUNCTION public.get_user_friends(
     p_user_id uuid
