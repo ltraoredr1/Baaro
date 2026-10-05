@@ -37,7 +37,7 @@ for (const directive of ["default-src 'self'", "object-src 'none'", "frame-ances
 if (csp.includes("script-src 'self' 'unsafe-eval'")) throw new Error("CSP must not allow unsafe-eval");
 
 const migration = fs.readFileSync(
-  path.join(root, "supabase/migrations/0001_baaro_unified.sql"),
+  path.join(root, "supabase/migrations/BAARO-FND-003B_MEDIA_INTELLIGENCE_SECURITY.sql"),
   "utf8"
 );
 for (const marker of [
