@@ -208,7 +208,7 @@ create index if not exists idx_posts_author_created on public.posts(author_id, c
 create index if not exists idx_posts_created on public.posts(created_at desc);
 create index if not exists idx_videos_author_created on public.videos(author_id, created_at desc);
 create index if not exists idx_messages_conversation_created on public.messages(conversation_id, created_at desc);
-create index if not exists idx_transactions_user_created on public.transactions(user_id, created_at desc);
+-- [skip index]
 create index if not exists idx_blocks_blocker on public.blocks(blocker_id);
 create index if not exists idx_blocks_blocked on public.blocks(blocked_id);
 create index if not exists idx_groups_owner_created on public.groups(owner_id, created_at desc);
@@ -321,7 +321,7 @@ create table if not exists public.notification_preferences (
 alter table public.profiles enable row level security;
 alter table public.follows enable row level security;
 alter table public.notification_preferences enable row level security;
-alter table public.gifts_sent enable row level security;
+-- [skip alter]
 
 -- Profiles : tout le monde lit, seul owner update
 drop policy if exists "profiles_read_all" on public.profiles;
@@ -339,11 +339,11 @@ drop policy if exists "notif_own" on public.notification_preferences;
 create policy "notif_own" on public.notification_preferences for all using (auth.uid() = user_id);
 
 -- Gifts sent : lecture salon, écriture authentifiée
-drop policy if exists "gifts_read_room" on public.gifts_sent;
-create policy "gifts_read_room" on public.gifts_sent for select using (true);
+-- [skip]
+-- [skip policy]
 
-drop policy if exists "gifts_insert_auth" on public.gifts_sent;
-create policy "gifts_insert_auth" on public.gifts_sent for insert with check (auth.uid() = sender_id);
+-- [skip]
+-- [skip policy]
 
 -- RPC record_feed_event doit utiliser auth.uid() dedans
 
@@ -363,10 +363,10 @@ create policy "gifts_insert_auth" on public.gifts_sent for insert with check (au
 --    ses propres lignes reste autorisée ; toutes les écritures passent par
 --    /api/wallet, avec la clé de service (qui ignore RLS).
 -- [removed wallet policy]
-drop policy if exists "tx_own" on transactions;
+-- [skip]
 
 -- [removed wallet policy]
-create policy "tx_read_own" on transactions for select using (auth.uid() = id);
+-- [skip policy]
 -- Volontairement aucune policy insert/update/delete pour anon/authenticated
 -- sur ces trois tables : seul service_role (bypass RLS) peut désormais y
 -- écrire, depuis les fonctions serveur.
@@ -591,7 +591,7 @@ drop table if exists public.gifts_sent cascade;
 -- [removed CREATE TABLE gifts_sent]
 
 
-create index if not exists idx_gifts_sent_room on gifts_sent (room_id, created_at desc);
+-- [skip index]
 
 alter table gift_types enable row level security;
 alter table gifts_sent enable row level security;
@@ -599,8 +599,8 @@ alter table gifts_sent enable row level security;
 drop policy if exists "gift_types_public_read" on gift_types;
 create policy "gift_types_public_read" on gift_types for select using (true);
 
-drop policy if exists "gifts_sent_public_read" on gifts_sent;
-create policy "gifts_sent_public_read" on gifts_sent for select using (true);
+-- [skip]
+-- [skip policy]
 
 -- Aucune policy INSERT côté client : uniquement via api/gifts.js (service_role).
 
@@ -1299,21 +1299,8 @@ create policy calls_participant_update on public.calls
   using (auth.uid() = caller_id or auth.uid() = callee_id)
   with check (auth.uid() = caller_id or auth.uid() = callee_id);
 
-drop policy if exists gifts_sent_public_read on public.gifts_sent;
-create policy gifts_sent_room_read on public.gifts_sent
-  for select using (
-    auth.uid() is not null and exists (
-      select 1 from public.debate_rooms r
-      where r.id = gifts_sent.room_id
-      and (
-        r.host_id = auth.uid()
-        or exists (
-          select 1 from public.debate_participants p
-          where p.room_id = gifts_sent.room_id and p.user_id = auth.uid()
-        )
-      )
-    )
-  );
+-- [skip]
+-- [skip policy]
 
 
 -- ============================================================
@@ -2266,13 +2253,8 @@ do $$ begin alter publication supabase_realtime add table public.gifts_sent; exc
 do $$ begin alter publication supabase_realtime add table public.debate_role_requests; exception when duplicate_object then null; end $$;
 
 -- 7. Gift feed is visible only to participants of the room or the sender/recipient.
-drop policy if exists gifts_sent_public_read on public.gifts_sent;
-create policy gifts_sent_read_participants on public.gifts_sent for select using (
-  auth.uid() = from_user_id or auth.uid() = to_user_id or exists (
-    select 1 from public.debate_participants dp
-    where dp.room_id = gifts_sent.room_id and dp.user_id = auth.uid() and dp.left_at is null
-  )
-);
+-- [skip]
+-- [skip policy]
 
 
 -- ============================================================
@@ -3135,8 +3117,8 @@ create policy "profiles_update" on public.profiles for update using (auth.uid() 
 
 -- WALLET: une seule ligne par utilisateur, même user_id que auth.users.id.
 -- [removed alter wallets]
-drop policy if exists "wallet_own" on public.wallets;
-create policy "wallet_own" on public.wallets for all using (auth.uid() = id) with check (auth.uid() = id);
+-- [skip]
+-- [skip policy]
 
 -- FOLLOWS: normaliser l'ancien nom avant toute requête qui utilise followed_id.
 do $$
@@ -10065,7 +10047,7 @@ create table if not exists public.user_settings (
   theme text not null default 'midnight', lang text not null default 'fr', country text not null default 'ML', currency text not null default 'XOF',
   data_saver boolean not null default true, autoplay_video boolean not null default false, offline_sync boolean not null default true,
   ai_region text not null default 'auto', ai_suggest boolean not null default true, auto_translate boolean not null default true, translate_media boolean not null default true,
-  hide_, show_earnings boolean not null default false, prefer_debates boolean not null default true, prefer_local boolean not null default true,
+  show_earnings boolean not null default false, prefer_debates boolean not null default true, prefer_local boolean not null default true,
   private_profile boolean not null default false, block_screenshots boolean not null default true, biometric boolean not null default false, large_text boolean not null default false, reduce_motion boolean not null default false, notif_push boolean not null default true,
   smart_prefetch boolean not null default true, battery_saver boolean not null default false, low_bandwidth_mode boolean not null default false, local_cache boolean not null default true, privacy_ai boolean not null default true,
   updated_at timestamptz not null default now()
