@@ -591,6 +591,12 @@ insert into gift_types (id, label, icon, cost_points) values
   ('crown', 'Couronne', '👑', 500)
 on conflict (id) do nothing;
 
+-- FIX: une 1re version de gifts_sent (sender_id/receiver_id/gift_id) est creee plus haut.
+-- "create table if not exists" ne la remplacerait pas : on la supprime pour obtenir
+-- le schema attendu par la suite (from_user_id/to_user_id/gift_type_id/points_spent).
+-- Sans risque : la fonctionnalite cadeaux est supprimee en fin de migration.
+drop table if exists public.gifts_sent cascade;
+
 create table if not exists gifts_sent (
   id uuid primary key default gen_random_uuid(),
   room_id uuid not null references debate_rooms(id) on delete cascade,
