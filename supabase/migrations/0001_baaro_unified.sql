@@ -1,7 +1,26 @@
 -- BAARO UNIFIED DATABASE MIGRATION
 -- Fresh database: one coordinated migration.
--- API directory intentionally untouched.
 
+
+
+-- ============================================================
+-- FRESH DATABASE BOOTSTRAP — CANONICAL IDENTITY FIRST
+-- profiles.id is auth.users.id. No public.profiles.user_id exists.
+-- ============================================================
+create extension if not exists "uuid-ossp";
+
+create table if not exists public.profiles (
+  id uuid primary key references auth.users(id) on delete cascade,
+  display_name text not null default 'Membre BAARO',
+  handle text unique not null,
+  flag text default '🌍',
+  bio text default '',
+  avatar_url text,
+  phone text,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+create index if not exists idx_profiles_handle on public.profiles(handle);
 
 -- ===== SOURCE 0001_initial_baaro.sql =====
 -- ============================================================
@@ -59,13 +78,13 @@ create table if not exists public.messages (
 );
 
 create table if not exists public.wallets (
-  user_id uuid primary key references public.profiles(id) on delete cascade,
+  id uuid primary key references public.profiles(id) on delete cascade,
   balance numeric not null default 0 check (balance >= 0),
   updated_at timestamptz not null default now()
 );
 
 create table if not exists public.crypto_holdings (
-  user_id uuid primary key references public.profiles(id) on delete cascade,
+  id uuid primary key references public.profiles(id) on delete cascade,
   holdings numeric not null default 0 check (holdings >= 0),
   updated_at timestamptz not null default now()
 );
@@ -299,7 +318,7 @@ create policy "follows_all_own" on public.follows for all using (auth.uid() = fo
 
 -- Notification : owner only
 drop policy if exists "notif_own" on public.notification_preferences;
-create policy "notif_own" on public.notification_preferences for all using (auth.uid() = user_id);
+create policy "notif_own" on public.notification_preferences for all using (auth.uid() = id);
 
 -- Gifts sent : lecture salon, écriture authentifiée
 drop policy if exists "gifts_read_room" on public.gifts_sent;
@@ -329,9 +348,9 @@ drop policy if exists "wallet_own" on wallets;
 drop policy if exists "crypto_own" on crypto_holdings;
 drop policy if exists "tx_own" on transactions;
 
-create policy "wallet_read_own" on wallets for select using (auth.uid() = user_id);
-create policy "crypto_read_own" on crypto_holdings for select using (auth.uid() = user_id);
-create policy "tx_read_own" on transactions for select using (auth.uid() = user_id);
+create policy "wallet_read_own" on wallets for select using (auth.uid() = id);
+create policy "crypto_read_own" on crypto_holdings for select using (auth.uid() = id);
+create policy "tx_read_own" on transactions for select using (auth.uid() = id);
 -- Volontairement aucune policy insert/update/delete pour anon/authenticated
 -- sur ces trois tables : seul service_role (bypass RLS) peut désormais y
 -- écrire, depuis les fonctions serveur.
@@ -427,8 +446,8 @@ create policy "debate_rooms_update_host" on debate_rooms for update using (auth.
 -- Participation : chacun voit qui participe aux salons ; chacun ne peut
 -- s'ajouter/se retirer que lui-même.
 create policy "debate_participants_read" on debate_participants for select using (auth.uid() is not null);
-create policy "debate_participants_insert" on debate_participants for insert with check (auth.uid() = user_id);
-create policy "debate_participants_update_own" on debate_participants for update using (auth.uid() = user_id);
+create policy "debate_participants_insert" on debate_participants for insert with check (auth.uid() = id);
+create policy "debate_participants_update_own" on debate_participants for update using (auth.uid() = id);
 
 -- Messages : lisibles et écrits uniquement par les membres du salon.
 -- Un message peut aussi être envoyé "au nom de l'IA" (sender_id = null,
@@ -1091,7 +1110,7 @@ create policy sounds_read on public.sounds for select using (true);
 drop policy if exists video_likes_read on public.video_likes;
 create policy video_likes_read on public.video_likes for select using (auth.uid() is not null);
 drop policy if exists video_likes_own on public.video_likes;
-create policy video_likes_own on public.video_likes for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy video_likes_own on public.video_likes for all using (auth.uid() = id) with check (auth.uid() = id);
 
 drop policy if exists video_comments_read on public.video_comments;
 create policy video_comments_read on public.video_comments for select using (true);
@@ -1104,7 +1123,7 @@ create policy video_comments_delete_own on public.video_comments for delete usin
 
 
 drop policy if exists push_tokens_own on public.push_tokens;
-create policy push_tokens_own on public.push_tokens for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy push_tokens_own on public.push_tokens for all using (auth.uid() = id) with check (auth.uid() = id);
 
 drop policy if exists calls_participant_read on public.calls;
 create policy calls_participant_read on public.calls for select using (auth.uid() = caller_id or auth.uid() = callee_id);
@@ -1116,9 +1135,9 @@ create policy calls_participant_update on public.calls for update using (auth.ui
 drop policy if exists role_requests_read on public.debate_role_requests;
 create policy role_requests_read on public.debate_role_requests for select using (auth.uid() = user_id or exists (select 1 from public.debate_rooms r where r.id = debate_role_requests.room_id and r.host_id = auth.uid()));
 drop policy if exists role_requests_insert on public.debate_role_requests;
-create policy role_requests_insert on public.debate_role_requests for insert with check (auth.uid() = user_id);
+create policy role_requests_insert on public.debate_role_requests for insert with check (auth.uid() = id);
 drop policy if exists role_requests_update on public.debate_role_requests;
-create policy role_requests_update on public.debate_role_requests for update using (exists (select 1 from public.debate_rooms r where r.id = debate_role_requests.room_id and r.host_id = auth.uid()) or auth.uid() = user_id) with check (exists (select 1 from public.debate_rooms r where r.id = debate_role_requests.room_id and r.host_id = auth.uid()) or auth.uid() = user_id);
+create policy role_requests_update on public.debate_role_requests for update using (exists (select 1 from public.debate_rooms r where r.id = debate_role_requests.room_id and r.host_id = auth.uid()) or auth.uid() = user_id) with check (exists (select 1 from public.debate_rooms r where r.id = debate_role_requests.room_id and r.host_id = auth.uid()) or auth.uid() = id);
 
 drop policy if exists referral_rewards_read_own on public.referral_rewards;
 create policy referral_rewards_read_own on public.referral_rewards for select using (auth.uid() = referrer_id or auth.uid() = referred_id);
@@ -1223,11 +1242,11 @@ declare
   w public.wallets%rowtype;
   bonus numeric := greatest(coalesce(p_welcome_bonus, 0), 0);
 begin
-  insert into public.wallets(user_id, balance)
+  insert into public.wallets(id, balance)
   values (p_user_id, 0)
   on conflict (user_id) do nothing;
 
-  select * into w from public.wallets where user_id = p_user_id for update;
+  select * into w from public.wallets where id = p_user_id for update;
 
   if bonus > 0 and not exists (
     select 1 from public.transactions
@@ -1242,7 +1261,7 @@ begin
     values (p_user_id, 'Bonus de bienvenue', bonus, 'welcome_bonus', current_date);
   end if;
 
-  return jsonb_build_object('user_id', w.user_id, 'balance', w.balance, 'updated_at', w.updated_at);
+  return jsonb_build_object('user_id', w.id, 'balance', w.balance, 'updated_at', w.updated_at);
 end;
 $$;
 
@@ -1269,7 +1288,7 @@ begin
   if length(coalesce(p_label,'')) = 0 then raise exception 'INVALID_LABEL'; end if;
 
   perform public.wallet_ensure(p_user_id, 0);
-  select * into w from public.wallets where user_id = p_user_id for update;
+  select * into w from public.wallets where id = p_user_id for update;
 
   select coalesce(sum(pts), 0) into earned
   from public.transactions
@@ -1320,11 +1339,11 @@ declare
 begin
   if p_cost is null or p_cost <= 0 then raise exception 'INVALID_COST'; end if;
   perform public.wallet_ensure(p_user_id, 0);
-  select * into w from public.wallets where user_id = p_user_id for update;
+  select * into w from public.wallets where id = p_user_id for update;
   if w.balance < p_cost then raise exception 'INSUFFICIENT_BALANCE'; end if;
 
   update public.wallets set balance = balance - p_cost, updated_at = now()
-  where user_id = p_user_id returning * into w;
+  where id = p_user_id returning * into w;
 
   insert into public.transactions(user_id, label, pts, action_key, day_key)
   values (p_user_id, left(p_label, 120), -p_cost, p_action_key, current_date)
@@ -1354,19 +1373,19 @@ begin
   if p_points_per_baro <= 0 then raise exception 'INVALID_RATE'; end if;
 
   perform public.wallet_ensure(p_user_id, 0);
-  select * into w from public.wallets where user_id = p_user_id for update;
+  select * into w from public.wallets where id = p_user_id for update;
   if w.balance < p_pts then raise exception 'INSUFFICIENT_BALANCE'; end if;
   baro := round((p_pts / p_points_per_baro)::numeric, 3);
 
-  insert into public.crypto_holdings(user_id, holdings)
+  insert into public.crypto_holdings(id, holdings)
   values (p_user_id, 0)
   on conflict (user_id) do nothing;
-  select * into h from public.crypto_holdings where user_id = p_user_id for update;
+  select * into h from public.crypto_holdings where id = p_user_id for update;
 
   update public.wallets set balance = balance - p_pts, updated_at = now()
-  where user_id = p_user_id returning * into w;
+  where id = p_user_id returning * into w;
   update public.crypto_holdings set holdings = holdings + baro, updated_at = now()
-  where user_id = p_user_id returning * into h;
+  where id = p_user_id returning * into h;
 
   insert into public.transactions(user_id, label, pts, action_key, day_key)
   values (p_user_id, format('Conversion en %s BARO', baro), -p_pts, 'convert_baro', current_date)
@@ -1560,13 +1579,13 @@ begin
   if p_sender_id::text < room.host_id::text then
     perform public.wallet_ensure(p_sender_id, 0);
     perform public.wallet_ensure(room.host_id, 0);
-    select * into sender from public.wallets where user_id = p_sender_id for update;
-    select * into host from public.wallets where user_id = room.host_id for update;
+    select * into sender from public.wallets where id = p_sender_id for update;
+    select * into host from public.wallets where id = room.host_id for update;
   else
     perform public.wallet_ensure(room.host_id, 0);
     perform public.wallet_ensure(p_sender_id, 0);
-    select * into host from public.wallets where user_id = room.host_id for update;
-    select * into sender from public.wallets where user_id = p_sender_id for update;
+    select * into host from public.wallets where id = room.host_id for update;
+    select * into sender from public.wallets where id = p_sender_id for update;
   end if;
 
   if sender.balance < gift.cost_points then raise exception 'INSUFFICIENT_BALANCE'; end if;
@@ -1585,7 +1604,7 @@ begin
   values (p_room_id, p_sender_id, room.host_id, gift.id, gift.cost_points)
   returning * into gift_row;
 
-  select * into sender from public.wallets where user_id = p_sender_id;
+  select * into sender from public.wallets where id = p_sender_id;
   return jsonb_build_object('balance', sender.balance, 'gift', to_jsonb(gift_row));
 end;
 $$;
@@ -1615,10 +1634,10 @@ begin
 
   update public.profiles
     set referred_by = p_referrer_id
-  where user_id = p_referred_id and referred_by is null;
+  where id = p_referred_id and referred_by is null;
   if not found then raise exception 'REFERRAL_ALREADY_APPLIED'; end if;
 
-  if not exists (select 1 from public.profiles where user_id = p_referrer_id and referral_code = upper(trim(p_code))) then
+  if not exists (select 1 from public.profiles where id = p_referrer_id and referral_code = upper(trim(p_code))) then
     raise exception 'INVALID_REFERRAL_CODE';
   end if;
 
@@ -2077,7 +2096,7 @@ begin
   end if;
 
   perform public.wallet_ensure(p_user_id, 0);
-  select * into w from public.wallets where user_id = p_user_id for update;
+  select * into w from public.wallets where id = p_user_id for update;
 
   select coalesce(sum(pts), 0) into earned
   from public.transactions
@@ -2138,12 +2157,12 @@ begin
 
   if p_sender_id::text < room.host_id::text then
     perform public.wallet_ensure(p_sender_id, 0); perform public.wallet_ensure(room.host_id, 0);
-    select * into sender from public.wallets where user_id = p_sender_id for update;
-    select * into host from public.wallets where user_id = room.host_id for update;
+    select * into sender from public.wallets where id = p_sender_id for update;
+    select * into host from public.wallets where id = room.host_id for update;
   else
     perform public.wallet_ensure(room.host_id, 0); perform public.wallet_ensure(p_sender_id, 0);
-    select * into host from public.wallets where user_id = room.host_id for update;
-    select * into sender from public.wallets where user_id = p_sender_id for update;
+    select * into host from public.wallets where id = room.host_id for update;
+    select * into sender from public.wallets where id = p_sender_id for update;
   end if;
 
   if sender.balance < gift.cost_points then raise exception 'INSUFFICIENT_BALANCE'; end if;
@@ -2156,7 +2175,7 @@ begin
   insert into public.gifts_sent(room_id, from_user_id, to_user_id, gift_type_id, points_spent)
   values (p_room_id, p_sender_id, room.host_id, gift.id, gift.cost_points)
   returning * into gift_row;
-  select * into sender from public.wallets where user_id = p_sender_id;
+  select * into sender from public.wallets where id = p_sender_id;
   return jsonb_build_object('balance', sender.balance, 'gift', to_jsonb(gift_row));
 end;
 $$;
@@ -2636,7 +2655,7 @@ create policy notification_preferences_own
 on public.notification_preferences
 for all
 using (auth.uid() = user_id)
-with check (auth.uid() = user_id);
+with check (auth.uid() = id);
 
 create index if not exists idx_push_tokens_platform on public.push_tokens(platform);
 create index if not exists idx_push_tokens_updated on public.push_tokens(updated_at desc);
@@ -2694,7 +2713,7 @@ DROP POLICY IF EXISTS "Users can read own ledger" ON public.wallet_ledger;
 CREATE POLICY "Users can read own ledger"
   ON public.wallet_ledger
   FOR SELECT
-  USING (auth.uid() = user_id);
+  USING (auth.uid() = id);
 
 -- Aucune policy INSERT/UPDATE/DELETE pour le rôle authentifié.
 -- Seul service_role (côté serveur) peut écrire.
@@ -2787,12 +2806,12 @@ alter table public.payout_requests enable row level security;
 drop policy if exists payout_accounts_select_own on public.payout_accounts;
 create policy payout_accounts_select_own
 on public.payout_accounts for select
-using (auth.uid() = user_id);
+using (auth.uid() = id);
 
 drop policy if exists payout_requests_select_own on public.payout_requests;
 create policy payout_requests_select_own
 on public.payout_requests for select
-using (auth.uid() = user_id);
+using (auth.uid() = id);
 
 -- No client INSERT/UPDATE/DELETE policies are intentionally created.
 -- Payout mutations must happen through authenticated server-side functions.
@@ -2861,7 +2880,7 @@ grant execute on function public.create_payout_request(text,bigint,text) to auth
 -- BAARO 024: entreprises, transports, voyages, programmes, tarifs et informations
 create table if not exists public.companies (
   id uuid primary key default gen_random_uuid(),
-  owner_id uuid not null references public.profiles(user_id) on delete cascade,
+  owner_id uuid not null references public.profiles(id) on delete cascade,
   name text not null,
   description text,
   company_type text not null default 'other',
@@ -3010,7 +3029,7 @@ create policy "company_subscriptions_owner_select" on public.company_subscriptio
 create table if not exists public.company_reviews (
   id uuid primary key default gen_random_uuid(),
   company_id uuid not null references public.companies(id) on delete cascade,
-  user_id uuid not null references public.profiles(user_id) on delete cascade,
+  user_id uuid not null references public.profiles(id) on delete cascade,
   rating integer not null check (rating between 1 and 5),
   comment text,
   created_at timestamptz not null default now(),
@@ -3117,8 +3136,8 @@ select
   left('@user_' || substr(replace(u.id::text, '-', ''), 1, 8), 40),
   '🌍'
 from auth.users u
-left join public.profiles p on p.user_id = u.id
-where p.user_id is null;
+left join public.profiles p on p.id = u.id
+where p.id is null;
 
 
 -- ============================================================
@@ -3131,7 +3150,7 @@ where p.user_id is null;
 
 create table if not exists public.profile_contacts (
   id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references public.profiles(user_id) on delete cascade,
+  user_id uuid not null references public.profiles(id) on delete cascade,
   contact_type text not null check (contact_type in ('phone','email')),
   value text not null,
   label text not null default '',
@@ -3148,7 +3167,7 @@ create unique index if not exists profile_contacts_one_primary
 
 create table if not exists public.profile_links (
   id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references public.profiles(user_id) on delete cascade,
+  user_id uuid not null references public.profiles(id) on delete cascade,
   link_type text not null check (link_type in ('website','link')),
   label text not null default '',
   url text not null,
@@ -3159,7 +3178,7 @@ create table if not exists public.profile_links (
 
 create table if not exists public.profile_social_links (
   id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references public.profiles(user_id) on delete cascade,
+  user_id uuid not null references public.profiles(id) on delete cascade,
   platform text not null check (
     platform in (
       'facebook','youtube','tiktok','bigo','instagram','x',
@@ -3188,7 +3207,7 @@ create policy profile_contacts_public_read on public.profile_contacts
 
 drop policy if exists profile_contacts_owner_write on public.profile_contacts;
 create policy profile_contacts_owner_write on public.profile_contacts
-  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+  for all using (auth.uid() = id) with check (auth.uid() = id);
 
 drop policy if exists profile_links_public_read on public.profile_links;
 create policy profile_links_public_read on public.profile_links
@@ -3196,7 +3215,7 @@ create policy profile_links_public_read on public.profile_links
 
 drop policy if exists profile_links_owner_write on public.profile_links;
 create policy profile_links_owner_write on public.profile_links
-  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+  for all using (auth.uid() = id) with check (auth.uid() = id);
 
 drop policy if exists profile_social_public_read on public.profile_social_links;
 create policy profile_social_public_read on public.profile_social_links
@@ -3204,7 +3223,7 @@ create policy profile_social_public_read on public.profile_social_links
 
 drop policy if exists profile_social_owner_write on public.profile_social_links;
 create policy profile_social_owner_write on public.profile_social_links
-  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+  for all using (auth.uid() = id) with check (auth.uid() = id);
 
 -- Limite stricte de 3 numéros et 3 e-mails par profil.
 create or replace function public.enforce_profile_contact_limit()
@@ -3454,7 +3473,6 @@ create index if not exists idx_profiles_country on public.profiles(country);
 create index if not exists idx_profiles_registered_country on public.profiles(registered_country);
 create index if not exists idx_profiles_country_change_available on public.profiles(country_change_available_at);
 
-comment on column public.profiles.user_id is 'Identifiant utilisateur stable: UUID Supabase Auth, distinct du handle public.';
 comment on column public.profiles.first_name is 'Prénom du profil.';
 comment on column public.profiles.last_name is 'Nom de famille du profil.';
 comment on column public.profiles.birth_date is 'Date de naissance; l''âge affiché est calculé à partir de cette date.';
@@ -3484,14 +3502,14 @@ alter table public.profiles enable row level security;
 drop policy if exists "profiles_read" on public.profiles;
 create policy "profiles_read" on public.profiles for select using (true);
 drop policy if exists "profiles_insert" on public.profiles;
-create policy "profiles_insert" on public.profiles for insert with check (auth.uid() = user_id);
+create policy "profiles_insert" on public.profiles for insert with check (auth.uid() = id);
 drop policy if exists "profiles_update" on public.profiles;
-create policy "profiles_update" on public.profiles for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy "profiles_update" on public.profiles for update using (auth.uid() = id) with check (auth.uid() = id);
 
 -- WALLET: une seule ligne par utilisateur, même user_id que auth.users.id.
 alter table public.wallets enable row level security;
 drop policy if exists "wallet_own" on public.wallets;
-create policy "wallet_own" on public.wallets for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy "wallet_own" on public.wallets for all using (auth.uid() = id) with check (auth.uid() = id);
 
 -- FOLLOWS: normaliser l'ancien nom avant toute requête qui utilise followed_id.
 do $$
@@ -4730,18 +4748,18 @@ DROP POLICY IF EXISTS "notif_own"
 CREATE POLICY "notifications_select_own"
 ON public.notifications
 FOR SELECT
-USING (auth.uid() = user_id);
+USING (auth.uid() = id);
 
 CREATE POLICY "notifications_update_own"
 ON public.notifications
 FOR UPDATE
 USING (auth.uid() = user_id)
-WITH CHECK (auth.uid() = user_id);
+WITH CHECK (auth.uid() = id);
 
 CREATE POLICY "notifications_delete_own"
 ON public.notifications
 FOR DELETE
-USING (auth.uid() = user_id);
+USING (auth.uid() = id);
 
 -- ------------------------------------------------------------
 -- 9. Compteur notifications non lues
@@ -5452,12 +5470,12 @@ create policy "reactions_select_participants"
 drop policy if exists "reactions_insert_own" on message_reactions;
 create policy "reactions_insert_own"
   on message_reactions for insert
-  with check (auth.uid() = user_id);
+  with check (auth.uid() = id);
 
 drop policy if exists "reactions_delete_own" on message_reactions;
 create policy "reactions_delete_own"
   on message_reactions for delete
-  using (auth.uid() = user_id);
+  using (auth.uid() = id);
 
 -- 4) Activer le Realtime sur les nouvelles tables / colonnes suivies
 -- (Database > Replication dans Supabase, ou via SQL si la publication existe déjà) :
@@ -6969,11 +6987,11 @@ create policy post_likes_read on public.post_likes
 
 create policy post_likes_insert on public.post_likes
   for insert to authenticated
-  with check (auth.uid() = user_id);
+  with check (auth.uid() = id);
 
 create policy post_likes_delete on public.post_likes
   for delete to authenticated
-  using (auth.uid() = user_id);
+  using (auth.uid() = id);
 
 -- 4. Trigger compteur commentaires
 create or replace function public.baaro_sync_post_comment_count()
@@ -7069,7 +7087,7 @@ end $$;
 -- Boutiques
 create table if not exists public.shops (
   id uuid primary key default gen_random_uuid(),
-  owner_id uuid not null references public.profiles(user_id) on delete cascade,
+  owner_id uuid not null references public.profiles(id) on delete cascade,
   name text not null,
   description text,
   category text,
@@ -7221,7 +7239,7 @@ grant execute on function public.activate_shop_subscription(uuid, text, numeric,
 create table if not exists public.delivery_orders (
   id uuid primary key default gen_random_uuid(),
   shop_id uuid not null references public.shops(id) on delete cascade,
-  buyer_id uuid not null references public.profiles(user_id) on delete cascade,
+  buyer_id uuid not null references public.profiles(id) on delete cascade,
   shop_product_id uuid references public.shop_products(id) on delete set null,
   method text not null check (method in ('pickup', 'courier', 'drone')),
   provider text not null default 'mock',
@@ -7728,10 +7746,10 @@ alter table public.safety_reports enable row level security;
 alter table public.reputation_events enable row level security;
 
 -- User-owned data
-create policy innovation_preferences_owner on public.user_preferences for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
-create policy innovation_bookmarks_owner on public.content_bookmarks for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
-create policy innovation_searches_owner on public.saved_searches for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
-create policy innovation_progress_owner on public.learning_progress for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy innovation_preferences_owner on public.user_preferences for all using (auth.uid() = id) with check (auth.uid() = id);
+create policy innovation_bookmarks_owner on public.content_bookmarks for all using (auth.uid() = id) with check (auth.uid() = id);
+create policy innovation_searches_owner on public.saved_searches for all using (auth.uid() = id) with check (auth.uid() = id);
+create policy innovation_progress_owner on public.learning_progress for all using (auth.uid() = id) with check (auth.uid() = id);
 create policy innovation_subscriptions_owner on public.creator_subscriptions for all using (auth.uid() = subscriber_id or auth.uid() = creator_id) with check (auth.uid() = subscriber_id or auth.uid() = creator_id);
 create policy innovation_blocks_owner on public.user_blocks for all using (auth.uid() = blocker_id) with check (auth.uid() = blocker_id);
 create policy innovation_reports_owner on public.safety_reports for insert with check (auth.uid() = reporter_id);
@@ -7739,8 +7757,8 @@ create policy innovation_reports_read_owner on public.safety_reports for select 
 
 -- Public/discoverable records
 create policy innovation_creator_public on public.creator_profiles for select using (true);
-create policy innovation_creator_owner on public.creator_profiles for insert with check (auth.uid() = user_id);
-create policy innovation_creator_update on public.creator_profiles for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy innovation_creator_owner on public.creator_profiles for insert with check (auth.uid() = id);
+create policy innovation_creator_update on public.creator_profiles for update using (auth.uid() = id) with check (auth.uid() = id);
 create policy innovation_courses_public on public.learning_courses for select using (published = true or auth.uid() = creator_id);
 create policy innovation_courses_owner on public.learning_courses for all using (auth.uid() = creator_id) with check (auth.uid() = creator_id);
 create policy innovation_jobs_public on public.job_listings for select using (status = 'open' or auth.uid() = owner_id);
@@ -7749,7 +7767,7 @@ create policy innovation_services_public on public.service_listings for select u
 create policy innovation_services_owner on public.service_listings for all using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
 create policy innovation_events_public on public.community_events for select using (status in ('published','finished') or auth.uid() = organizer_id);
 create policy innovation_events_owner on public.community_events for all using (auth.uid() = organizer_id) with check (auth.uid() = organizer_id);
-create policy innovation_attendees_owner on public.event_attendees for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy innovation_attendees_owner on public.event_attendees for all using (auth.uid() = id) with check (auth.uid() = id);
 create policy innovation_attendees_organizer_read on public.event_attendees for select using (exists (select 1 from public.community_events e where e.id = event_id and e.organizer_id = auth.uid()));
 create policy innovation_reputation_public on public.reputation_events for select using (true);
 
@@ -8173,6 +8191,7 @@ create policy channels_delete on public.channels for delete to authenticated
 -- MESSAGES
 create policy messages_select on public.channel_messages for select to authenticated
   using (public.can_see_group(public.channel_group(channel_id)));
+drop policy if exists messages_insert on public.channel_messages;
 create policy messages_insert on public.channel_messages for insert to authenticated
   with check (
     sender_id = auth.uid()
@@ -8192,11 +8211,14 @@ create policy messages_delete on public.channel_messages for delete to authentic
   );
 
 -- INVITATIONS
+drop policy if exists invites_select on public.group_invites;
 create policy invites_select on public.group_invites for select to authenticated
   using (public.group_role(group_id) in ('owner','admin'));
+drop policy if exists invites_insert on public.group_invites;
 create policy invites_insert on public.group_invites for insert to authenticated
   with check (created_by = auth.uid()
               and public.group_role(group_id) in ('owner','admin'));
+drop policy if exists invites_delete on public.group_invites;
 create policy invites_delete on public.group_invites for delete to authenticated
   using (public.group_role(group_id) in ('owner','admin'));
 
@@ -8763,9 +8785,9 @@ DROP POLICY IF EXISTS "notif_own" ON public.notifications;
 DROP POLICY IF EXISTS "notifications_insert_system" ON public.notifications;
 DROP POLICY IF EXISTS "notifications_insert_authenticated" ON public.notifications;
 
-CREATE POLICY "notifications_select_own" ON public.notifications FOR SELECT USING (auth.uid() = user_id);
-CREATE POLICY "notifications_update_own" ON public.notifications FOR UPDATE USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
-CREATE POLICY "notifications_delete_own" ON public.notifications FOR DELETE USING (auth.uid() = user_id);
+CREATE POLICY "notifications_select_own" ON public.notifications FOR SELECT USING (auth.uid() = id);
+CREATE POLICY "notifications_update_own" ON public.notifications FOR UPDATE USING (auth.uid() = user_id) WITH CHECK (auth.uid() = id);
+CREATE POLICY "notifications_delete_own" ON public.notifications FOR DELETE USING (auth.uid() = id);
 CREATE POLICY "notifications_insert_system" ON public.notifications FOR INSERT TO service_role WITH CHECK (true);
 CREATE POLICY "notifications_insert_authenticated" ON public.notifications FOR INSERT TO authenticated WITH CHECK (auth.uid() = actor_id);
 
@@ -8835,7 +8857,7 @@ create table if not exists public.notification_preferences (
 alter table public.notification_preferences enable row level security;
 drop policy if exists notification_preferences_own on public.notification_preferences;
 create policy notification_preferences_own on public.notification_preferences
-  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+  for all using (auth.uid() = id) with check (auth.uid() = id);
 
 -- ============================================================
 -- SECTION 3 : PUSH TOKENS
@@ -9213,7 +9235,7 @@ alter table public.video_challenge_entries enable row level security;
 create policy video_collections_read on public.video_collections for select using (is_public or auth.uid() = owner_id);
 create policy video_collections_write on public.video_collections for all using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
 
-create policy video_bookmarks_own on public.video_bookmarks for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy video_bookmarks_own on public.video_bookmarks for all using (auth.uid() = id) with check (auth.uid() = id);
 
 create policy video_collaborations_read on public.video_collaborations for select using (auth.uid() = owner_id or auth.uid() = collaborator_id);
 create policy video_collaborations_insert on public.video_collaborations for insert with check (auth.uid() = owner_id);
@@ -9229,7 +9251,7 @@ create policy video_chapters_write on public.video_chapters for all using (auth.
 create policy video_polls_read on public.video_polls for select using (true);
 create policy video_polls_write on public.video_polls for all using (auth.uid() = (select author_id from public.videos where id = video_id)) with check (auth.uid() = (select author_id from public.videos where id = video_id));
 
-create policy video_poll_votes_own on public.video_poll_votes for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy video_poll_votes_own on public.video_poll_votes for all using (auth.uid() = id) with check (auth.uid() = id);
 
 create policy video_questions_read on public.video_questions for select using (status <> 'hidden' or auth.uid() = author_id or auth.uid() = (select author_id from public.videos where id = video_id));
 create policy video_questions_insert on public.video_questions for insert with check (auth.uid() = author_id);
@@ -9358,8 +9380,8 @@ alter table public.creator_monetization enable row level security;
 alter table public.creator_earnings enable row level security;
 
 create policy media_jobs_owner_read on public.media_jobs for select using (auth.uid() = owner_id);
-create policy watch_events_own on public.video_watch_events for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
-create policy recommendation_profile_own on public.video_recommendation_profiles for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy watch_events_own on public.video_watch_events for all using (auth.uid() = id) with check (auth.uid() = id);
+create policy recommendation_profile_own on public.video_recommendation_profiles for all using (auth.uid() = id) with check (auth.uid() = id);
 create policy creator_monetization_own on public.creator_monetization for all using (auth.uid() = creator_id) with check (auth.uid() = creator_id);
 create policy creator_earnings_own on public.creator_earnings for select using (auth.uid() = creator_id);
 
@@ -9856,13 +9878,13 @@ alter table public.automation_rules enable row level security;
 alter table public.data_export_jobs enable row level security;
 
 drop policy if exists module_preferences_owner on public.module_preferences;
-create policy module_preferences_owner on public.module_preferences for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy module_preferences_owner on public.module_preferences for all using (auth.uid() = id) with check (auth.uid() = id);
 drop policy if exists ai_action_log_owner on public.ai_action_log;
-create policy ai_action_log_owner on public.ai_action_log for select using (auth.uid() = user_id);
+create policy ai_action_log_owner on public.ai_action_log for select using (auth.uid() = id);
 drop policy if exists automation_rules_owner on public.automation_rules;
-create policy automation_rules_owner on public.automation_rules for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy automation_rules_owner on public.automation_rules for all using (auth.uid() = id) with check (auth.uid() = id);
 drop policy if exists data_export_jobs_owner on public.data_export_jobs;
-create policy data_export_jobs_owner on public.data_export_jobs for select, insert using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy data_export_jobs_owner on public.data_export_jobs for select, insert using (auth.uid() = id) with check (auth.uid() = id);
 
 
 
@@ -9930,15 +9952,15 @@ alter table public.creator_revenue_events enable row level security;
 alter table public.observability_events enable row level security;
 
 drop policy if exists future_preferences_owner on public.future_preferences;
-create policy future_preferences_owner on public.future_preferences for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy future_preferences_owner on public.future_preferences for all using (auth.uid() = id) with check (auth.uid() = id);
 drop policy if exists ai_agent_tasks_owner on public.ai_agent_tasks;
-create policy ai_agent_tasks_owner on public.ai_agent_tasks for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy ai_agent_tasks_owner on public.ai_agent_tasks for all using (auth.uid() = id) with check (auth.uid() = id);
 drop policy if exists offline_sync_owner on public.offline_sync_queue;
-create policy offline_sync_owner on public.offline_sync_queue for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy offline_sync_owner on public.offline_sync_queue for all using (auth.uid() = id) with check (auth.uid() = id);
 drop policy if exists creator_revenue_owner on public.creator_revenue_events;
 create policy creator_revenue_owner on public.creator_revenue_events for select using (auth.uid() = creator_id);
 drop policy if exists safety_signal_owner on public.safety_signals;
-create policy safety_signal_owner on public.safety_signals for select using (auth.uid() = user_id);
+create policy safety_signal_owner on public.safety_signals for select using (auth.uid() = id);
 
 create or replace function public.future_export_user_data()
 returns jsonb language plpgsql security invoker set search_path = public as $$
@@ -10028,24 +10050,24 @@ revoke all on public.abuse_counters from anon, authenticated;
 -- Device registry: users can see/revoke only their own devices.
 drop policy if exists security_devices_owner on public.security_devices;
 create policy security_devices_owner on public.security_devices
-  for select using (auth.uid() = user_id);
+  for select using (auth.uid() = id);
 
 drop policy if exists security_devices_insert on public.security_devices;
 create policy security_devices_insert on public.security_devices
-  for insert with check (auth.uid() = user_id);
+  for insert with check (auth.uid() = id);
 
 drop policy if exists security_devices_update on public.security_devices;
 create policy security_devices_update on public.security_devices
-  for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+  for update using (auth.uid() = id) with check (auth.uid() = id);
 
 drop policy if exists security_devices_delete on public.security_devices;
 create policy security_devices_delete on public.security_devices
-  for delete using (auth.uid() = user_id);
+  for delete using (auth.uid() = id);
 
 -- Settings are strictly owner-scoped.
 drop policy if exists security_settings_owner on public.security_settings;
 create policy security_settings_owner on public.security_settings
-  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+  for all using (auth.uid() = id) with check (auth.uid() = id);
 
 create index if not exists idx_security_devices_user on public.security_devices(user_id, last_seen_at desc);
 create index if not exists idx_security_devices_active on public.security_devices(user_id) where revoked_at is null;
@@ -12355,3 +12377,20 @@ begin
 end $$;
 revoke all on function public.record_legal_consent(text,text,text,text) from public,anon;
 grant execute on function public.record_legal_consent(text,text,text,text) to authenticated;
+
+
+-- ============================================================
+-- BAARO FRESH SCHEMA INVARIANTS
+-- ============================================================
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='profiles' AND column_name='user_id') THEN
+    RAISE EXCEPTION 'BAARO_SCHEMA_INVALID: profiles.user_id must not exist; profiles.id is canonical';
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='wallets' AND column_name='user_id') THEN
+    RAISE EXCEPTION 'BAARO_SCHEMA_INVALID: wallets.user_id must not exist; wallets.id is canonical';
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='crypto_holdings' AND column_name='user_id') THEN
+    RAISE EXCEPTION 'BAARO_SCHEMA_INVALID: crypto_holdings.user_id must not exist; crypto_holdings.id is canonical';
+  END IF;
+END $$;
