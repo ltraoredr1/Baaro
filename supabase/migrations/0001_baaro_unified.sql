@@ -4235,6 +4235,7 @@ CREATE POLICY "Suppression par l'utilisateur connecté" ON public.follows
     FOR DELETE USING (auth.uid() = follower_id);
 
 -- 4. Fonction RPC pour récupérer les amis réciproques[span_3](start_span)[span_3](end_span)
+DROP FUNCTION IF EXISTS public.get_user_friends(uuid) CASCADE;
 CREATE OR REPLACE FUNCTION public.get_user_friends(user_id_param UUID)
 RETURNS TABLE (friend_id UUID) AS $$
 BEGIN
@@ -4869,6 +4870,7 @@ DROP FUNCTION IF EXISTS public.get_user_friends(UUID);
 DROP FUNCTION IF EXISTS public.get_user_friends(user_id_param UUID);
 
 -- 3. Créer la fonction avec le bon paramètre (id, pas user_id)
+DROP FUNCTION IF EXISTS public.get_user_friends(uuid) CASCADE;
 CREATE OR REPLACE FUNCTION public.get_user_friends(user_id UUID)
 RETURNS TABLE (friend_id UUID) AS $$
 BEGIN
@@ -5248,6 +5250,7 @@ $function$;
 -- 12. Fonction : obtenir les amis
 -- ============================================================
 
+DROP FUNCTION IF EXISTS public.get_user_friends(uuid) CASCADE;
 CREATE OR REPLACE FUNCTION public.get_user_friends(
     p_user_id uuid
 )
