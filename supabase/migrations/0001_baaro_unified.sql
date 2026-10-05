@@ -3091,9 +3091,9 @@ begin
     '@user_' || substr(replace(new.id::text, '-', ''), 1, 8)
   );
 
-  insert into public.profiles (user_id, display_name, handle, flag)
+  insert into public.profiles (id, display_name, handle, flag)
   values (new.id, left(base_name, 80), left(base_handle, 40), '🌍')
-  on conflict (user_id) do nothing;
+  on conflict (id) do nothing;
 
   return new;
 end;
@@ -3105,7 +3105,7 @@ after insert on auth.users
 for each row execute procedure public.handle_new_user();
 
 -- Répare également les utilisateurs déjà créés avant cette migration.
-insert into public.profiles (user_id, display_name, handle, flag)
+insert into public.profiles (id, display_name, handle, flag)
 select
   u.id,
   left(coalesce(
