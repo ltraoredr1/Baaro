@@ -6,13 +6,92 @@ import { EngagementList } from '../../components/EngagementList.jsx';
 
 export function StoriesTab({ id, onOpenProfile }) {
   const [stories,setStories]=useState([]); const [loading,setLoading]=useState(true); const [caption,setCaption]=useState(''); const [creating,setCreating]=useState(false); const [selected,setSelected]=useState(null); const [engagement,setEngagement]=useState(null); const [counts,setCounts]=useState({});
-  const load=async()=>{ setLoading(true); const {data}=await supabase.from('stories').select('id,author_id,media_url,media_type,caption,background,visibility,expires_at,created_at,profiles:author_id(display_name,handle,avatar_url,flag)').gt('expires_at',new Date().toISOString()).is('deleted_at',null).order('created_at',{ascending:false}).limit(80); setStories(data||[]); setLoading(false); };
+  const load=async()=>{
+  setLoading(true);
+  try {
+    const { data, error } = await supabase
+      .from('stories')
+      .select('id,author_id,media_url,media_type,caption,background,visibility,expires_at,created_at')
+      .gt('expires_at',new Date().toISOString())
+      .is('deleted_at',null)
+      .order('created_at',{ascending:false})
+      .limit(80);
+
+    if(error) throw error;
+
+    const ids=[...new Set((data||[]).map(s=>s.author_id).filter(Boolean))];
+    let profiles=[];
+
+    if(ids.length){
+      const {data:p,error:pe}=await supabase
+        .from('profiles')
+        .select('id,display_name,handle,avatar_url,flag')
+        .in('id',ids);
+
+      if(pe) throw pe;
+      profiles=p||[];
+    }
+
+    const map=new Map(profiles.map(p=>[p.id,p]));
+
+    setStories((data||[]).map(s=>({
+      ...s,
+      profiles:map.get(s.author_id)||null
+    })));
+  } catch(e) {
+    console.error('[Stories] load:',e);
+    setStories([]);
+  } finally {
+    setLoading(false);
+  }
+};
   const loadCounts=async(storyId)=>{ const [{count:views},{count:likes}] = await Promise.all([supabase.from('story_views').select('viewer_id',{count:'exact',head:true}).eq('story_id',storyId), supabase.from('story_reactions').select('user_id',{count:'exact',head:true}).eq('story_id',storyId)]); setCounts(prev=>({...prev,[storyId]:{views:views ?? 0, likes:likes ?? 0}})); };
   useEffect(()=>{ stories.filter(s=>s.author_id===id).forEach(s=>loadCounts(s.id)); },[stories,id]);
   useEffect(()=>{load(); const ch=supabase.channel('stories_live').on('postgres_changes',{event:'*',schema:'public',table:'stories'},load).subscribe(); return()=>supabase.removeChannel(ch);},[]);
   const mine=useMemo(()=>stories.filter(s=>s.author_id===id),[stories,id]);
-  const create=async()=>{if(!caption.trim()||!id)return;setCreating(true);await supabase.from('stories').insert({author_id:id,media_type:'text',caption:caption.trim(),visibility:'public'});setCaption('');setCreating(false);load();};
-  const react=async(s)=>{if(!id)return;await supabase.from('story_reactions').upsert({story_id:s.id,user_id:id,reaction:'❤️'});await supabase.rpc('record_story_view',{p_story_id:s.id});if(s.author_id===id)loadCounts(s.id);else setCounts(prev=>({...prev,[s.id]:{...prev[s.id],likes:(prev[s.id]?.likes||0)+1}}));};
+  const create=async()=>{
+  if(!caption.trim()||!id)return;
+  setCreating(true);
+  try {
+    const {error}=await supabase.from('stories').insert({
+      author_id:id,
+      media_type:'text',
+      caption:caption.trim(),
+      visibility:'public'
+    });
+    if(error) throw error;
+    setCaption('');
+    await load();
+  } catch(e) {
+    console.error('[Stories] create:',e);
+  } finally {
+    setCreating(false);
+  }
+};
+  const react=async(s)=>{
+  if(!id)return;
+
+  const {error}=await supabase
+    .from('story_reactions')
+    .upsert(
+      {story_id:s.id,user_id:id,reaction:'❤️'},
+      {onConflict:'story_id,user_id'}
+    );
+
+  if(error){
+    console.error('[Stories] reaction:',error);
+    return;
+  }
+
+  const {error:viewError}=await supabase.rpc(
+    'record_story_view',
+    {p_story_id:s.id}
+  );
+
+  if(viewError) console.error('[Stories] view:',viewError);
+
+  await loadCounts(s.id);
+};
   const remove=async(s)=>{if(s.author_id!==id)return;await supabase.from('stories').update({deleted_at:new Date().toISOString()}).eq('id',s.id);setSelected(null);load();};
   return <div className="space-y-4">
     <div className="flex items-center justify-between"><div><h2 className="text-xl font-bold" style={{color:C.ivory}}>Stories</h2><p className="text-xs" style={{color:C.muted}}>24 h · privé, public et cercle proche · réactions · vues</p></div></div>
