@@ -7,7 +7,7 @@ export async function callOpenAICompatible({ base, key, model, messages, system,
     body: JSON.stringify({ model, messages: [{ role: "system", content: system }, ...messages], max_tokens: maxTokens }),
   });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw Object.assign(new Error(data.error?.message || data.message || "Provider IA indisponible"), { status: response.status });
+  if (!response.ok) { const e0 = Array.isArray(data) ? data[0] : data; throw Object.assign(new Error(e0?.error?.message || e0?.message || "Provider IA indisponible"), { status: response.status }); }
   return {
     reply: data.choices?.[0]?.message?.content || data.output_text || "Désolé, je n'ai pas pu générer une réponse.",
     raw: data,
