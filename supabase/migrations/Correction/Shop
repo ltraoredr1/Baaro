@@ -1,0 +1,218 @@
+-- ============================================================
+-- BAARO : correctif complet de l'onglet Shop
+-- ============================================================
+
+-- 1. COLONNES MANQUANTES ------------------------------------
+alter table public.shops
+  add column if not exists trial_ends_at timestamptz;
+
+alter table public.shop_products
+  add column if not exists compare_at_price numeric(12,2),
+  add column if not exists stock integer,
+  add column if not exists images text[] not null default '{}';
+
+alter table public.profiles
+  add column if not exists is_premium boolean not null default false;
+
+-- 2. CONTRAINTES DES SOUSCRIPTIONS (essai autorisé) ---------
+alter table public.shop_subscriptions
+  drop constraint if exists shop_subscriptions_provider_check;
+alter table public.shop_subscriptions
+  drop constraint if exists shop_subscriptions_status_check;
+alter table public.shop_subscriptions
+  add constraint shop_subscriptions_status_check
+  check (status in ('pending','confirmed','failed','trial','expired','cancelled'));
+
+-- 3. PANIER -------------------------------------------------
+create table if not exists public.cart (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  item_id uuid not null references public.shop_products(id) on delete cascade,
+  quantity integer not null default 1 check (quantity > 0),
+  created_at timestamptz not null default now()
+);
+create unique index if not exists cart_user_item_uidx on public.cart(user_id, item_id);
+alter table public.cart enable row level security;
+drop policy if exists cart_owner on public.cart;
+create policy cart_owner on public.cart
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+-- 4. COMMANDES ----------------------------------------------
+create table if not exists public.orders (
+  id uuid primary key default gen_random_uuid(),
+  created_at timestamptz not null default now()
+);
+alter table public.orders
+  add column if not exists shop_id uuid references public.shops(id) on delete cascade,
+  add column if not exists buyer_id uuid references auth.users(id) on delete cascade,
+  add column if not exists method text not null default 'pickup',
+  add column if not exists status text not null default 'pending',
+  add column if not exists total_amount numeric(12,2) not null default 0,
+  add column if not exists currency text not null default 'XOF',
+  add column if not exists notes text,
+  add column if not exists updated_at timestamptz not null default now();
+
+create table if not exists public.order_items (
+  id uuid primary key default gen_random_uuid(),
+  created_at timestamptz not null default now()
+);
+alter table public.order_items
+  add column if not exists order_id uuid references public.orders(id) on delete cascade,
+  add column if not exists product_id uuid references public.shop_products(id) on delete set null,
+  add column if not exists name text,
+  add column if not exists quantity integer not null default 1,
+  add column if not exists unit_price numeric(12,2) not null default 0,
+  add column if not exists currency text not null default 'XOF';
+
+create index if not exists idx_orders_shop on public.orders(shop_id, created_at desc);
+create index if not exists idx_orders_buyer on public.orders(buyer_id, created_at desc);
+create index if not exists idx_order_items_order on public.order_items(order_id);
+
+alter table public.orders enable row level security;
+alter table public.order_items enable row level security;
+
+drop policy if exists orders_select_parties on public.orders;
+create policy orders_select_parties on public.orders for select using (
+  buyer_id = auth.uid()
+  or exists (select 1 from public.shops s where s.id = orders.shop_id and s.owner_id = auth.uid())
+);
+drop policy if exists orders_insert_buyer on public.orders;
+create policy orders_insert_buyer on public.orders
+  for insert with check (buyer_id = auth.uid());
+drop policy if exists orders_update_seller on public.orders;
+create policy orders_update_seller on public.orders for update using (
+  exists (select 1 from public.shops s where s.id = orders.shop_id and s.owner_id = auth.uid())
+);
+
+drop policy if exists order_items_select_parties on public.order_items;
+create policy order_items_select_parties on public.order_items for select using (
+  exists (
+    select 1 from public.orders o
+    where o.id = order_items.order_id
+      and (o.buyer_id = auth.uid()
+           or exists (select 1 from public.shops s where s.id = o.shop_id and s.owner_id = auth.uid()))
+  )
+);
+drop policy if exists order_items_insert_buyer on public.order_items;
+create policy order_items_insert_buyer on public.order_items for insert with check (
+  exists (select 1 from public.orders o where o.id = order_items.order_id and o.buyer_id = auth.uid())
+);
+
+-- 5. RATTRAPAGE DES ESSAIS EXISTANTS ------------------------
+update public.shops
+set trial_ends_at = created_at + interval '30 days'
+where subscription_status = 'trial' and trial_ends_at is null;
+
+-- 6. VISIBILITÉ : essai / abonnement expiré = boutique masquée
+create or replace function public.shop_is_live(
+  p_active boolean, p_status text, p_trial timestamptz, p_expires timestamptz
+) returns boolean
+language sql stable
+as $$
+  select coalesce(p_active, false) and (
+    case when coalesce(p_status, 'none') = 'trial'
+         then p_trial is not null and p_trial > now()
+         else p_expires is null or p_expires > now()
+    end
+  );
+$$;
+
+drop policy if exists "shops_select" on public.shops;
+create policy "shops_select" on public.shops
+  for select using (
+    owner_id = auth.uid()
+    or public.shop_is_live(is_active, subscription_status, trial_ends_at, subscription_expires_at)
+  );
+
+drop policy if exists "products_select" on public.shop_products;
+create policy "products_select" on public.shop_products
+  for select using (
+    exists (
+      select 1 from public.shops s
+      where s.id = shop_products.shop_id
+        and (s.owner_id = auth.uid()
+             or public.shop_is_live(s.is_active, s.subscription_status, s.trial_ends_at, s.subscription_expires_at))
+    )
+  );
+
+-- 7. SÉCURITÉ : le serveur décide de l'essai et de l'activation
+create or replace function public.shops_enforce_insert()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if auth.role() = 'authenticated' then
+    if exists (select 1 from public.shops where owner_id = new.owner_id) then
+      new.is_active := false;
+      new.subscription_status := 'none';
+      new.trial_ends_at := null;
+      new.subscription_expires_at := null;
+    else
+      new.is_active := true;
+      new.subscription_status := 'trial';
+      new.trial_ends_at := now() + interval '30 days';
+      new.subscription_expires_at := null;
+    end if;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_shops_enforce_insert on public.shops;
+create trigger trg_shops_enforce_insert
+  before insert on public.shops
+  for each row execute function public.shops_enforce_insert();
+
+create or replace function public.shops_protect_billing()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if auth.role() = 'authenticated' then
+    new.is_active := old.is_active;
+    new.subscription_status := old.subscription_status;
+    new.trial_ends_at := old.trial_ends_at;
+    new.subscription_expires_at := old.subscription_expires_at;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_shops_protect_billing on public.shops;
+create trigger trg_shops_protect_billing
+  before update on public.shops
+  for each row execute function public.shops_protect_billing();
+
+-- 8. PAIEMENT CONFIRMÉ : statut + expiration mis à jour -----
+create or replace function public.activate_shop_subscription(
+  p_shop_id uuid, p_payment_ref text, p_amount numeric,
+  p_currency text, p_provider text, p_was_premium boolean
+) returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  update public.shop_subscriptions
+  set status = 'confirmed',
+      period_start = now(),
+      period_end = now() + interval '1 year'
+  where payment_ref = p_payment_ref and status = 'pending';
+
+  update public.shops
+  set is_active = true,
+      subscription_status = 'active',
+      subscription_expires_at = now() + interval '1 year'
+  where id = p_shop_id;
+end;
+$$;
+
+revoke all on function public.activate_shop_subscription(uuid, text, numeric, text, text, boolean) from public, anon, authenticated;
+grant execute on function public.activate_shop_subscription(uuid, text, numeric, text, text, boolean) to service_role;
+
+-- 9. RAFRAÎCHIR LE CACHE DE L'API ---------------------------
+notify pgrst, 'reload schema';
