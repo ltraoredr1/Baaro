@@ -104,18 +104,16 @@ async function uploadViaWorker(file, onProgress) {
   }
 }
 
+/** Onglet Vidéos : <=500Mo R2 direct, >500Mo worker Render */
 export async function uploadLargeVideo(file, { onProgress, userId } = {}) {
   if (!file?.size) throw new Error("Video invalide");
   if (!looksLikeVideo(file)) throw new Error("Video invalide");
 
-  // <= 500 Mo : toujours /api/media (Vercel + R2), jamais le worker
   if (file.size <= DIRECT_MAX_BYTES) {
     return uploadDirect(file, onProgress, userId);
   }
-
   if (!DEFAULT_WORKER) {
     throw new Error("Fichier > 500 Mo : configure VITE_BAARO_MEDIA_WORKER_URL");
   }
-
   return uploadViaWorker(file, onProgress);
 }

@@ -1404,6 +1404,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
 
     try {
       const result = await uploadLargeVideo(selectedFile, {
+        userId: user.id,
         onProgress: (progress) => setUploadProgress(Math.max(10, Math.min(65, 10 + Math.round(progress * 0.55)))),
       });
       setUploadProgress(65);
