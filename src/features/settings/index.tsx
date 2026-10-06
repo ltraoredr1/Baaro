@@ -1,3 +1,4 @@
+/// <reference types="vite/client" />
 import { NotificationPrefsPanel } from "./NotificationPrefsPanel.jsx";
 import NotificationSoundSettings from "./NotificationSoundSettings.jsx";
 import { getNotificationPreferences, saveNotificationPreferences } from "../../lib/notificationPreferences.js";
