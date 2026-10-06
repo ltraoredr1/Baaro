@@ -304,7 +304,7 @@ export function DebateRoom({ inviteCode, onBack }) {
       
       {room?.mode !== "text" && (
         <>
-          <div ref={live.containerRef} className={live.joined ? "h-[45vh] w-full" : "hidden"} />
+          <div ref={live.containerRef} className={(live.joined || live.joining) ? "h-[45vh] w-full" : "hidden"} />
           {!live.joined && (
             <button type="button" onClick={live.joinLive} disabled={live.joining}
               className="m-3 py-3 rounded-xl font-bold"
