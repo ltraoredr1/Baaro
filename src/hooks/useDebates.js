@@ -388,7 +388,14 @@ export function useDebateLive(room, userId, isHost) {
         });
         callRef.current = call;
 
-        await call.join({ url: roomUrl, token: data.token });
+        await Promise.race([
+          call.join({ url: roomUrl, token: data.token }),
+          new Promise(function (_, rej) {
+            setTimeout(function () {
+              rej(new Error("Connexion Daily trop longue. Verifiez DAILY_DOMAIN et la camera/micro."));
+            }, 15000);
+          }),
+        ]);
         await call.setLocalAudio(micOn);
         await call.setLocalVideo(room.mode !== "audio" ? camOn : false);
 
