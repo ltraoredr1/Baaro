@@ -22,6 +22,16 @@ function extFromFile(file) {
   return map[mime] || "bin";
 }
 
+// fetch qui dit à quelle étape ça casse (une erreur réseau/CORS ne donne sinon que « Failed to fetch »)
+async function stepFetch(step, url, init, hint) {
+  try {
+    return await fetch(url, init);
+  } catch (err) {
+    const reason = err?.message || "réseau";
+    throw new Error(`${step} : connexion impossible (${reason}).${hint ? " " + hint : ""}`);
+  }
+}
+
 export async function uploadExternalMedia(file, {
   folder = "misc",
   userId,
@@ -38,57 +48,87 @@ export async function uploadExternalMedia(file, {
 
   const safeFolder = String(folder).replace(/[^a-zA-Z0-9/_-]/g, "").replace(/^\/+|\/+$/g, "") || "misc";
   const ext = extFromFile(file);
-  const prepare = await fetch(apiUrl("/api/media"), {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
+
+  // 1) Préparation : l'API BAARO renvoie une URL d'envoi signée vers R2
+  const prepare = await stepFetch(
+    "Préparation (API /api/media)",
+    apiUrl("/api/media"),
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        action: "prepare",
+        folder: safeFolder,
+        extension: ext,
+        contentType: file.type || "application/octet-stream",
+        size: file.size,
+        fileName: file.name || "upload",
+      }),
     },
-    body: JSON.stringify({
-      action: "prepare",
-      folder: safeFolder,
-      extension: ext,
-      contentType: file.type || "application/octet-stream",
-      size: file.size,
-      fileName: file.name || "upload",
-    }),
-  });
+    "Vérifie VITE_API_BASE_URL et ALLOWED_ORIGINS sur Vercel."
+  );
 
   const prepared = await prepare.json().catch(() => ({}));
   if (!prepare.ok || !prepared?.ok || !prepared?.uploadUrl) {
-    throw new Error(prepared?.error || "Impossible de préparer l'upload média");
+    throw new Error(
+      `Préparation refusée (${prepare.status}) : ` +
+        (prepared?.error || "impossible de préparer l'upload média")
+    );
   }
 
-  const upload = await fetch(prepared.uploadUrl, {
-    method: "PUT",
-    headers: {
-      "Content-Type": file.type || "application/octet-stream",
+  // 2) Envoi direct du fichier vers R2
+  const upload = await stepFetch(
+    "Envoi vers R2",
+    prepared.uploadUrl,
+    {
+      method: "PUT",
+      headers: {
+        "Content-Type": file.type || "application/octet-stream",
+      },
+      body: file,
     },
-    body: file,
-  });
+    "Probablement le CORS du bucket R2 (autoriser PUT depuis le site) ou un blocage réseau."
+  );
   if (!upload.ok) {
-    throw new Error(`Échec upload média (${upload.status})`);
+    let detail = "";
+    try {
+      detail = (await upload.text()).replace(/\s+/g, " ").slice(0, 160);
+    } catch {
+      /* ignore */
+    }
+    throw new Error(`Envoi vers R2 refusé (${upload.status})${detail ? " : " + detail : ""}`);
   }
 
-  const finalize = await fetch(apiUrl("/api/media"), {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify({
-      action: "finalize",
-      folder: safeFolder,
-      path: prepared.path,
-      publicUrl: prepared.publicUrl,
-      contentType: file.type || "application/octet-stream",
-      size: file.size,
-      fileName: file.name || "upload",
-    }),
-  });
+  // 3) Finalisation : l'API enregistre les métadonnées du média
+  const finalize = await stepFetch(
+    "Finalisation (API /api/media)",
+    apiUrl("/api/media"),
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        action: "finalize",
+        folder: safeFolder,
+        path: prepared.path,
+        publicUrl: prepared.publicUrl,
+        contentType: file.type || "application/octet-stream",
+        size: file.size,
+        fileName: file.name || "upload",
+      }),
+    }
+  );
   const finalized = await finalize.json().catch(() => ({}));
   if (!finalize.ok || !finalized?.ok) {
-    throw new Error(finalized?.error || "Impossible d'enregistrer les métadonnées du média");
+    throw new Error(
+      `Finalisation refusée (${finalize.status}) : ` +
+        (finalized?.error || "impossible d'enregistrer les métadonnées du média")
+    );
   }
 
   return {
