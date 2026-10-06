@@ -8,7 +8,7 @@ const SOURCES={ads:["Publicité",Megaphone],tips:["Pourboires",Gift],subscriptio
 const money=(v,c)=>formatAmount(Number(v||0)/100,c||"XOF");
 export function EconomyTab({id}){
  const { t } = useTranslation();
- const [dashboard,setDashboard]=useState(null),[busy,setBusy]=useState(false),[notice,setNotice]=useState(""),[payout,setPayout]=useState({amount:"",method:"mobile_money"});
+ const [dashboard,setDashboard]=useState(null),[busy,setBusy]=useState(false),[notice,setNotice]=useState(""),[payout,setPayout]=useState({amount:"",method:"mobile_money",phone:"",prefix:"223"}),[rewards,setRewards]=useState(null),[paymentFeedback,setPaymentFeedback]=useState("");
  async function load(){if(!id)return;const [{data,error},{data:rewardData}]=await Promise.all([supabase.rpc("get_economy_dashboard"),supabase.rpc("get_creator_rewards_summary")]);if(error)setNotice("Le tableau des revenus est temporairement indisponible.");else setDashboard(data||null);setRewards(rewardData||null)}
  useEffect(()=>{load();const params=new URLSearchParams(window.location.search);const state=params.get("payment");if(state==='success')setPaymentFeedback("Paiement confirmé : le fournisseur va confirmer définitivement la commande.");if(state==='cancelled')setPaymentFeedback("Paiement annulé.");if(state==='return')setPaymentFeedback("Retour du paiement reçu. La confirmation finale arrive après le webhook fournisseur.")},[id]);
  const currency=dashboard?.currency||"XOF",sources=useMemo(()=>dashboard?.by_source||[],[dashboard]);
