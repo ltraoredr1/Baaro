@@ -2,23 +2,20 @@ import { supabase } from "../supabaseClient.js";
 import { uploadExternalMedia } from "./externalMedia.js";
 
 const DEFAULT_WORKER = import.meta.env.VITE_BAARO_MEDIA_WORKER_URL || "";
-/** Sous ce seuil : upload direct via /api/media (Vercel → R2). Au-delà : worker multipart. */
 const DIRECT_MAX_BYTES = 500 * 1024 * 1024;
 const SIGN_BATCH = 50;
 
 function workerUrl(path) {
-  if (!DEFAULT_WORKER) throw new Error("Worker média non configuré (VITE_BAARO_MEDIA_WORKER_URL)");
-  return `\( {DEFAULT_WORKER.replace(/\/ \)/, "")}${path}`;
+  if (!DEFAULT_WORKER) throw new Error("Worker media non configure");
+  return DEFAULT_WORKER.replace(/\/$/, "") + path;
 }
 
 async function authHeaders() {
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-  if (!session?.access_token) throw new Error("Session expirée");
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session?.access_token) throw new Error("Session expiree");
   return {
     "Content-Type": "application/json",
-    Authorization: `Bearer ${session.access_token}`,
+    Authorization: "Bearer " + session.access_token,
   };
 }
 
@@ -29,7 +26,7 @@ async function post(path, body) {
     body: JSON.stringify(body),
   });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok || !data.ok) throw new Error(data.error || "Erreur upload vidéo");
+  if (!response.ok || !data.ok) throw new Error(data.error || "Erreur upload video");
   return data;
 }
 
@@ -41,11 +38,9 @@ function looksLikeVideo(file) {
 
 async function uploadDirect(file, onProgress, userId) {
   onProgress?.(20);
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
+  const { data: { session } } = await supabase.auth.getSession();
   const uid = userId || session?.user?.id;
-  if (!uid) throw new Error("Session expirée");
+  if (!uid) throw new Error("Session expiree");
   onProgress?.(40);
   const result = await uploadExternalMedia(file, {
     folder: "videos",
@@ -79,9 +74,7 @@ async function uploadViaWorker(file, onProgress) {
           method: "PUT",
           body: file.slice(start, end),
         });
-        if (!response.ok) {
-          throw new Error(`Échec de l'upload de la partie ${item.partNumber}`);
-        }
+        if (!response.ok) throw new Error("Echec upload partie " + item.partNumber);
         uploadedParts.push({
           PartNumber: item.partNumber,
           ETag: response.headers.get("ETag") || "",
@@ -111,33 +104,18 @@ async function uploadViaWorker(file, onProgress) {
   }
 }
 
-/**
- * ≤ 500 Mo  → /api/media (Vercel + R2)
- * > 500 Mo  → worker Render (multipart)
- * Si le worker échoue (CORS / Failed to fetch) → fallback direct si taille ≤ 500 Mo
- */
 export async function uploadLargeVideo(file, { onProgress, userId } = {}) {
-  if (!file?.size) throw new Error("Vidéo invalide");
-  if (!looksLikeVideo(file)) throw new Error("Vidéo invalide");
+  if (!file?.size) throw new Error("Video invalide");
+  if (!looksLikeVideo(file)) throw new Error("Video invalide");
 
-  const useWorker = file.size > DIRECT_MAX_BYTES && Boolean(DEFAULT_WORKER);
-
-  if (!useWorker) {
+  // <= 500 Mo : toujours /api/media (Vercel + R2), jamais le worker
+  if (file.size <= DIRECT_MAX_BYTES) {
     return uploadDirect(file, onProgress, userId);
   }
 
-  try {
-    return await uploadViaWorker(file, onProgress);
-  } catch (error) {
-    const msg = String(error?.message || error || "");
-    // Si failed to fetch / CORS et fichier encore acceptable en direct
-    if (
-      file.size <= DIRECT_MAX_BYTES &&
-      (/failed to fetch|network|cors|load failed/i.test(msg) || error?.name === "TypeError")
-    ) {
-      console.warn("[BAARO] Worker KO, fallback /api/media:", msg);
-      return uploadDirect(file, onProgress, userId);
-    }
-    throw error;
+  if (!DEFAULT_WORKER) {
+    throw new Error("Fichier > 500 Mo : configure VITE_BAARO_MEDIA_WORKER_URL");
   }
+
+  return uploadViaWorker(file, onProgress);
 }
