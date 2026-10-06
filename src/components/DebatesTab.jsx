@@ -196,7 +196,6 @@ export default function DebatesTab({ id, currentUserId, onRewardPoints, onOpenPr
 
 
   const fetchDebates = useCallback(async () => {
-    setLoading(true);
     setError(null);
     try {
       const { data, error: qErr } = await supabase
@@ -205,6 +204,7 @@ export default function DebatesTab({ id, currentUserId, onRewardPoints, onOpenPr
           "id, title, topic, mode, invite_code, status, created_at, host_id, daily_room_name"
         )
         .eq("status", "active")
+        .gte("created_at", new Date(Date.now() - 12 * 3600 * 1000).toISOString())
         .order("created_at", { ascending: false })
         .limit(40);
       if (qErr) {
@@ -253,9 +253,9 @@ export default function DebatesTab({ id, currentUserId, onRewardPoints, onOpenPr
         p_code: code,
       });
       if (rpcErr) throw rpcErr;
-      if (!data) throw new Error("Code invalide");
-      // Préférer le code renvoyé par la base (casse réelle)
-      const resolved = String(data.invite_code || code).trim() || code;
+      const row = Array.isArray(data) ? data[0] : data;
+      if (!row) throw new Error("Code invalide");
+      const resolved = String(row.invite_code || code).trim() || code;
       setActiveDebateCode(resolved);
       setJoinCode("");
       fetchDebates();

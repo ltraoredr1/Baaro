@@ -217,6 +217,14 @@ export function DebateRoom({ inviteCode, onBack }) {
     }
   };
 
+  const handleBack = async () => {
+    try { await live.leaveLive(); } catch (_) {}
+    if (isHost && room && room.mode !== "text") {
+      await supabase.from("debate_rooms").update({ status: "ended" }).eq("id", room.id).eq("host_id", userId);
+    }
+    onBack();
+  };
+
   if (error) {
     return (
       <div
@@ -255,7 +263,7 @@ export function DebateRoom({ inviteCode, onBack }) {
       >
         <button
           type="button"
-          onClick={onBack}
+          onClick={handleBack}
           className="p-2 rounded-full"
           style={{ color: COLORS.ivory }}
         >
