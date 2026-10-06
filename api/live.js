@@ -215,7 +215,7 @@ async function handleAiGateway(req, res, admin, user) {
     catch (err) { lastError = err; recordFailure(provider); logWarn("chat", `Provider ${provider} failed`, { userId: user.id, status: err?.status, message: err?.message }); }
   }
   const latency = Date.now() - start;
-  if (!result) { logError("chat", lastError || new Error("No provider"), { userId: user.id, country, tried }); return res.status(502).json({ error: "Fournisseur IA temporairement indisponible", tried }); }
+  if (!result) { logError("chat", lastError || new Error("No provider"), { userId: user.id, country, tried }); return res.status(502).json({ error: "Fournisseur IA temporairement indisponible" + (lastError ? ` [${lastError.status || "?"}] ${String(lastError.message || "").slice(0, 200)}` : ""), tried }); }
   res.setHeader("X-BAARO-AI-Provider", usedProvider);
   res.setHeader("X-BAARO-AI-Country", country || "unknown");
   res.setHeader("X-BAARO-AI-Latency-Ms", String(latency));
