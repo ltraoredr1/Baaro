@@ -143,7 +143,8 @@ async function invokeProvider(provider, ctx) {
   const cfg = providerConfig(provider);
   if (!cfg?.key || !cfg?.base) throw Object.assign(new Error(`Provider ${provider} mal configuré`), { status: 503 });
   const list = String(process.env[provider.toUpperCase() + "_MODELS"] || "").split(",").map((x) => x.trim()).filter(Boolean);
-  const models = publicModel ? [publicModel] : list.length ? list : [cfg.model];
+  const clean = (m) => String(m || "").replace(/["'\s]/g, "").replace(/^models\//, "");
+  const models = (publicModel ? [publicModel] : list.length ? list : [cfg.model]).map(clean).filter(Boolean);
   let lastErr;
   for (const model of models) {
     try {
