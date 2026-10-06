@@ -269,6 +269,10 @@ const STRINGS: Record<string, Record<string, string>> = {
     notifications_desc: "Contrôlez les alertes, les sons et les préférences push.",
     sound_settings: "Son des notifications",
     sound_settings_desc: "Volume, activation et test des sons de notification.",
+    biometric_desc: "Authentification biométrique",
+    handle_label: "Identifiant",
+    choose_country: "Choisir un pays",
+    contacts_links: "Coordonnées et réseaux",
   },
   en: {
     title: "Settings",
@@ -402,6 +406,29 @@ const STRINGS: Record<string, Record<string, string>> = {
     notifications_desc: "Control alerts, sounds, and push preferences.",
     sound_settings: "Notification sounds",
     sound_settings_desc: "Volume, enable, and test notification sounds.",
+    performance_section: "Performance & innovation",
+    performance_desc: "Control speed, battery, preloading, cache and on-device intelligence.",
+    smart_prefetch: "Smart preloading",
+    smart_prefetch_desc: "Only preloads what is likely to be useful.",
+    battery_saver: "Battery saver",
+    battery_saver_desc: "Reduces animations and background work.",
+    low_bandwidth_mode: "Low-bandwidth mode",
+    low_bandwidth_mode_desc: "Prioritizes text and compresses media further.",
+    local_cache: "Smart local cache",
+    local_cache_desc: "Temporarily keeps useful content available offline.",
+    privacy_ai: "Private AI by default",
+    privacy_ai_desc: "Prefers on-device processing when available.",
+    first_name: "First name",
+    last_name: "Last name",
+    birth_date: "Date of birth",
+    location: "Location",
+    registered_country: "Registration country",
+    current_country: "Current country",
+    country_change_wait: "Country change will be available after 4 months.",
+    country_change_ready: "You can change your current country.",
+    handle_label: "Username",
+    choose_country: "Choose a country",
+    contacts_links: "Contacts & links",
   },
   ar: {
     title: "الإعدادات",
@@ -527,6 +554,31 @@ const STRINGS: Record<string, Record<string, string>> = {
     notifications_desc: "التحكم في التنبيهات والأصوات وتفضيلات الدفع.",
     sound_settings: "أصوات الإشعارات",
     sound_settings_desc: "مستوى الصوت والتفعيل واختبار الأصوات.",
+    performance_section: "الأداء والابتكار",
+    performance_desc: "تحكّم في السرعة والبطارية والتحميل المسبق والذاكرة المؤقتة والذكاء المحلي.",
+    smart_prefetch: "التحميل المسبق الذكي",
+    smart_prefetch_desc: "يحمّل مسبقًا ما قد يكون مفيدًا فقط.",
+    battery_saver: "وضع توفير البطارية",
+    battery_saver_desc: "يقلّل الحركات والمعالجة في الخلفية.",
+    low_bandwidth_mode: "وضع الشبكة الضعيفة",
+    low_bandwidth_mode_desc: "يعطي الأولوية للنص ويضغط الوسائط أكثر.",
+    local_cache: "ذاكرة مؤقتة محلية ذكية",
+    local_cache_desc: "يحتفظ مؤقتًا بالمحتوى المفيد للاستخدام دون اتصال.",
+    privacy_ai: "ذكاء اصطناعي خاص افتراضيًا",
+    privacy_ai_desc: "يفضّل المعالجة على الجهاز عند توفرها.",
+    first_name: "الاسم الأول",
+    last_name: "اسم العائلة",
+    birth_date: "تاريخ الميلاد",
+    location: "الموقع",
+    account_email: "بريد الحساب",
+    account_phone: "هاتف الحساب",
+    registered_country: "بلد التسجيل",
+    current_country: "البلد الحالي",
+    country_change_wait: "سيصبح تغيير البلد متاحًا بعد 4 أشهر.",
+    country_change_ready: "يمكنك تغيير بلدك الحالي.",
+    handle_label: "المعرّف",
+    choose_country: "اختر بلدًا",
+    contacts_links: "جهات الاتصال والروابط",
   },
   bm: {
     title: "Sɛbɛnniw",
@@ -1777,7 +1829,7 @@ export default function SettingsTab({
               />
               <div>
                 <label className="text-xs font-semibold block mb-1" style={{ color: COLORS.muted }}>
-                  Identifiant
+                  {t("handle_label")}
                 </label>
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-bold" style={{ color: COLORS.gold }}>@</span>
@@ -1870,7 +1922,7 @@ export default function SettingsTab({
                   className="w-full rounded-xl p-3 text-sm outline-none border"
                   style={inputStyle}
                 >
-                  <option value="">Choisir un pays</option>
+                  <option value="">{t("choose_country")}</option>
                   {COUNTRIES.map((c) => <option key={c.code} value={c.code}>{c.flag} {c.label}</option>)}
                 </select>
                 <p className="text-[11px] mt-1" style={{ color: COLORS.muted }}>
@@ -1913,7 +1965,7 @@ export default function SettingsTab({
           {user?.id && !isAnonymous && (
             <div className="mt-3 pt-3 border-t" style={{ borderColor: COLORS.border }}>
               <p className="text-xs font-semibold mb-2" style={{ color: COLORS.muted }}>
-                Coordonnées et réseaux
+                {t("contacts_links")}
               </p>
               <ProfileContactsLinks userId={user.id} />
             </div>
