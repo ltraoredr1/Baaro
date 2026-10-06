@@ -1,5 +1,4 @@
 import { uploadExternalMedia } from "../../lib/externalMedia.js";
-import { uploadExternalMedia } from "../../lib/externalMedia.js";
 import { ConnectionStatus } from "../../components/ConnectionStatus.jsx";
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
