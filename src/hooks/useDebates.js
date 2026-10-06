@@ -385,8 +385,14 @@ export function useDebateLive(room, userId, isHost) {
         var call = DailyIframe.createFrame(containerRef.current, {
           iframeStyle: { width: "100%", height: "100%", border: "0" },
           showLeaveButton: false,
+          startVideoOff: room.mode === "audio",
+          startAudioOff: false,
         });
         callRef.current = call;
+        call.on("camera-error", function (ev) {
+          var m = ev && ev.errorMsg && ev.errorMsg.errorMsg;
+          setError("Caméra : " + (m || "accès refusé ou déjà utilisée"));
+        });
 
         await Promise.race([
           call.join({ url: roomUrl, token: data.token }),
@@ -396,8 +402,8 @@ export function useDebateLive(room, userId, isHost) {
             }, 15000);
           }),
         ]);
-        await call.setLocalAudio(micOn);
-        await call.setLocalVideo(room.mode !== "audio" ? camOn : false);
+        await call.setLocalAudio(true);
+        await call.setLocalVideo(room.mode !== "audio");
 
         setJoined(true);
       } catch (e) {
