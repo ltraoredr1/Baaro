@@ -116,6 +116,15 @@ const AI_REGIONS = [
 
 const RTL = new Set(["ar", "nqo"]);
 
+// Traductions de l'écran Réglages lues dans locales/<langue>.json (section "settings").
+// Toute clé absente retombe sur le dictionnaire interne, puis sur le français.
+const LOCALE_FILES = import.meta.glob("../../../locales/*.json", { eager: true }) as Record<string, any>;
+function localeSettings(code: string): Record<string, string> | null {
+  const mod = LOCALE_FILES[`../../../locales/${code}.json`];
+  const data = mod?.default ?? mod;
+  return data && typeof data.settings === "object" ? data.settings : null;
+}
+
 const STRINGS: Record<string, Record<string, string>> = {
   fr: {
     title: "Réglages",
@@ -1061,8 +1070,12 @@ export default function SettingsTab({
 
   const lang = uiLang(settings.lang);
   const t = useCallback(
-    (key: string) => STRINGS[lang]?.[key] ?? STRINGS.fr[key] ?? key,
-    [lang]
+    (key: string) =>
+      localeSettings(settings.lang)?.[key] ??
+      STRINGS[lang]?.[key] ??
+      STRINGS.fr[key] ??
+      key,
+    [lang, settings.lang]
   );
 
   const toggleSection = (id: string) =>
