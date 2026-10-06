@@ -283,3 +283,8 @@ $$;
 
 grant execute on function public.checkout_cart(text, text) to authenticated;
 notify pgrst, 'reload schema';
+
+alter table public.shop_products
+  add column if not exists category text;
+
+notify pgrst, 'reload schema';
