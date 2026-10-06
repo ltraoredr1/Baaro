@@ -216,3 +216,70 @@ grant execute on function public.activate_shop_subscription(uuid, text, numeric,
 
 -- 9. RAFRAÎCHIR LE CACHE DE L'API ---------------------------
 notify pgrst, 'reload schema';
+create or replace function public.checkout_cart(
+  p_method text default 'pickup',
+  p_notes text default null
+) returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_uid uuid := auth.uid();
+  v_order uuid;
+  v_count integer := 0;
+  r record;
+begin
+  if v_uid is null then raise exception 'NOT_AUTHENTICATED'; end if;
+  if p_method not in ('pickup','delivery') then raise exception 'INVALID_METHOD'; end if;
+  if not exists (select 1 from cart where user_id = v_uid) then raise exception 'CART_EMPTY'; end if;
+
+  if exists (
+    select 1 from cart c join shop_products p on p.id = c.item_id
+    where c.user_id = v_uid and p.type = 'produit'
+      and p.stock is not null and p.stock < c.quantity
+  ) then raise exception 'OUT_OF_STOCK'; end if;
+
+  for r in
+    select p.shop_id, p.currency
+    from cart c
+    join shop_products p on p.id = c.item_id and p.is_available
+    join shops s on s.id = p.shop_id
+    where c.user_id = v_uid
+      and public.shop_is_live(s.is_active, s.subscription_status, s.trial_ends_at, s.subscription_expires_at)
+    group by p.shop_id, p.currency
+  loop
+    insert into orders (shop_id, buyer_id, method, status, total_amount, currency, notes)
+    values (r.shop_id, v_uid, p_method, 'pending', 0, r.currency, p_notes)
+    returning id into v_order;
+
+    insert into order_items (order_id, product_id, name, quantity, unit_price, currency)
+    select v_order, p.id, p.name, c.quantity, p.price, p.currency
+    from cart c join shop_products p on p.id = c.item_id
+    where c.user_id = v_uid and p.shop_id = r.shop_id
+      and p.currency = r.currency and p.is_available;
+
+    update orders
+    set total_amount = (select coalesce(sum(quantity * unit_price), 0)
+                        from order_items where order_id = v_order)
+    where id = v_order;
+
+    v_count := v_count + 1;
+  end loop;
+
+  if v_count = 0 then raise exception 'NOTHING_TO_ORDER'; end if;
+
+  update shop_products p
+  set stock = p.stock - c.quantity
+  from cart c
+  where c.item_id = p.id and c.user_id = v_uid
+    and p.type = 'produit' and p.stock is not null;
+
+  delete from cart where user_id = v_uid;
+
+  return jsonb_build_object('orders', v_count);
+end;
+$$;
+
+grant execute on function public.checkout_cart(text, text) to authenticated;
+notify pgrst, 'reload schema';
