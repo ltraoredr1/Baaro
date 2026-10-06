@@ -211,6 +211,7 @@ export default function AuthScreen() {
     setError(null);
     setSuccess(null);
     setPassword("");
+    setLegalAccepted(false);
   };
 
   return (
@@ -409,9 +410,38 @@ export default function AuthScreen() {
               />
             </div>
 
+            {!isLogin && (
+              <label className="flex items-start gap-2 text-xs text-slate-400">
+                <input
+                  type="checkbox"
+                  checked={legalAccepted}
+                  onChange={(e) => setLegalAccepted(e.target.checked)}
+                  className="mt-0.5 accent-amber-500"
+                />
+                <span>
+                  J'accepte les{" "}
+                  <a href="/terms" className="underline text-amber-400 hover:text-amber-300">
+                    conditions d'utilisation
+                  </a>
+                  , la{" "}
+                  <a href="/privacy" className="underline text-amber-400 hover:text-amber-300">
+                    confidentialité
+                  </a>{" "}
+                  et les{" "}
+                  <a
+                    href="/community-guidelines"
+                    className="underline text-amber-400 hover:text-amber-300"
+                  >
+                    règles de la communauté
+                  </a>
+                  .
+                </span>
+              </label>
+            )}
+
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || (!isLogin && !legalAccepted)}
               className="w-full py-3.5 rounded-xl font-bold text-sm bg-gradient-to-r from-amber-500 to-teal-400 text-slate-950 shadow-lg disabled:opacity-50 hover:opacity-95 transition-all active:scale-[0.98]"
             >
               {loading
