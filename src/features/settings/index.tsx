@@ -116,6 +116,9 @@ const AI_REGIONS = [
 
 const RTL = new Set(["ar", "nqo"]);
 
+// Traductions en cours de validation par des locuteurs
+const BETA_LANGS = new Set(["nqo", "boz", "dog", "snk"]);
+
 // Traductions de l'écran Réglages lues dans locales/<langue>.json (section "settings").
 // Toute clé absente retombe sur le dictionnaire interne, puis sur le français.
 const LOCALE_FILES = import.meta.glob("../../../locales/*.json", { eager: true }) as Record<string, any>;
@@ -282,6 +285,7 @@ const STRINGS: Record<string, Record<string, string>> = {
     handle_label: "Identifiant",
     choose_country: "Choisir un pays",
     contacts_links: "Coordonnées et réseaux",
+    lang_beta_hint: "Bêta : ces traductions sont en cours de validation par des locuteurs. Certains textes peuvent être inexacts.",
   },
   en: {
     title: "Settings",
@@ -438,6 +442,7 @@ const STRINGS: Record<string, Record<string, string>> = {
     handle_label: "Username",
     choose_country: "Choose a country",
     contacts_links: "Contacts & links",
+    lang_beta_hint: "Beta: these translations are being validated by native speakers. Some texts may be inaccurate.",
   },
   ar: {
     title: "الإعدادات",
@@ -588,6 +593,7 @@ const STRINGS: Record<string, Record<string, string>> = {
     handle_label: "المعرّف",
     choose_country: "اختر بلدًا",
     contacts_links: "جهات الاتصال والروابط",
+    lang_beta_hint: "تجريبي: هذه الترجمات قيد المراجعة من قبل متحدثين أصليين، وقد تحتوي بعض النصوص على أخطاء.",
   },
   bm: {
     title: "Sɛbɛnniw",
@@ -2181,6 +2187,14 @@ export default function SettingsTab({
                   }}
                 >
                   {l.label}
+                  {BETA_LANGS.has(l.code) && (
+                    <span
+                      className="block text-[9px] font-bold mt-0.5"
+                      style={{ color: COLORS.gold }}
+                    >
+                      bêta
+                    </span>
+                  )}
                   {!l.fullUi && (
                     <span
                       className="block text-[9px] font-normal mt-0.5 opacity-70"
@@ -2195,6 +2209,9 @@ export default function SettingsTab({
           </div>
           <p className="text-[11px] leading-relaxed" style={{ color: COLORS.muted }}>
             {t("lang_partial_hint")}
+          </p>
+          <p className="text-[11px] leading-relaxed" style={{ color: COLORS.gold }}>
+            {t("lang_beta_hint")}
           </p>
         </CollapsibleSection>
       )}
