@@ -1,7 +1,10 @@
 /**
  * BAARO — configuration i18next
- * Langues UI complètes : fr, en, ar
+ * Langues UI complètes :
+ *   fr, en, ar, bm, nqo, boz, dog, snk, pt, es, sw, wo, ha, ff
  * Persistance : localStorage `baaro_i18n_lng`
+ * Chaînes : locales/<code>.json
+ *   (auth, shop, payment, common, nav, app, economy, settings, feed, messages)
  */
 import i18n from "i18next";
 import { initReactI18next } from "react-i18next";
@@ -9,12 +12,22 @@ import { initReactI18next } from "react-i18next";
 import fr from "./locales/fr.json";
 import en from "./locales/en.json";
 import ar from "./locales/ar.json";
+import bm from "./locales/bm.json";
 import nqo from "./locales/nqo.json";
 import boz from "./locales/boz.json";
 import dog from "./locales/dog.json";
 import snk from "./locales/snk.json";
+import pt from "./locales/pt.json";
+import es from "./locales/es.json";
+import sw from "./locales/sw.json";
+import wo from "./locales/wo.json";
+import ha from "./locales/ha.json";
+import ff from "./locales/ff.json";
 
-export const SUPPORTED_LANGUAGES = ["fr", "en", "ar", "nqo", "boz", "dog", "snk"];
+export const SUPPORTED_LANGUAGES = [
+  "fr", "en", "ar", "bm", "nqo", "boz", "dog", "snk",
+  "pt", "es", "sw", "wo", "ha", "ff",
+];
 export const RTL_LANGUAGES = ["ar", "nqo"];
 
 const STORAGE_KEY = "baaro_i18n_lng";
@@ -59,19 +72,26 @@ if (!i18n.isInitialized) {
       fr: { translation: fr },
       en: { translation: en },
       ar: { translation: ar },
+      bm: { translation: bm },
       nqo: { translation: nqo },
       boz: { translation: boz },
       dog: { translation: dog },
       snk: { translation: snk },
+      pt: { translation: pt },
+      es: { translation: es },
+      sw: { translation: sw },
+      wo: { translation: wo },
+      ha: { translation: ha },
+      ff: { translation: ff },
     },
     lng: guessDefaultLanguage(),
     fallbackLng: "fr",
     supportedLngs: SUPPORTED_LANGUAGES,
     interpolation: {
-      escapeValue: false, // React échappe déjà
+      escapeValue: false,
     },
     react: {
-      useSuspense: false, // évite Suspense obligatoire au démarrage
+      useSuspense: false,
     },
   });
 }
@@ -87,7 +107,7 @@ i18n.on("languageChanged", (lng) => {
 
 applyDocumentDirection(i18n.language);
 
-/** Change la langue UI (fr | en | ar). Ignore les codes hors UI complète. */
+/** Change la langue UI. Ignore les codes hors UI complète. */
 export function setAppLanguage(code) {
   const lng = String(code || "").split("-")[0].toLowerCase();
   if (!SUPPORTED_LANGUAGES.includes(lng)) return Promise.resolve(i18n.language);
