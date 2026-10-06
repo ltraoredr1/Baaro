@@ -1,3 +1,4 @@
+import { useDebateLive } from "../hooks/useDebates.js";
 import * as webrtc from "../lib/webrtc.js";
 import * as liveRoles from "../lib/liveRoles.js";
 import { useState, useEffect, useRef, memo } from "react";
@@ -51,6 +52,8 @@ export function DebateRoom({ inviteCode, onBack }) {
   const [error, setError] = useState(null);
   const [codeCopied, setCodeCopied] = useState(false);
   const messagesEndRef = useRef(null);
+  const isHost = room?.host_id === userId;
+  const live = useDebateLive(room, userId, isHost);
 
   useEffect(() => {
     let mounted = true;
@@ -297,6 +300,21 @@ export function DebateRoom({ inviteCode, onBack }) {
         </div>
         <Users size={14} style={{ color: COLORS.gold }} />
       </div>
+
+      
+      {room?.mode !== "text" && (
+        <>
+          <div ref={live.containerRef} className={live.joined ? "h-[45vh] w-full" : "hidden"} />
+          {!live.joined && (
+            <button type="button" onClick={live.joinLive} disabled={live.joining}
+              className="m-3 py-3 rounded-xl font-bold"
+              style={{ background: COLORS.gold, color: "#000" }}>
+              {live.joining ? "Connexion..." : isHost ? "Démarrer le live" : "Rejoindre le live"}
+            </button>
+          )}
+          {live.error && <p className="text-red-400 text-xs px-4">{live.error}</p>}
+        </>
+      )}
 
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
         {messages.map((m) => (

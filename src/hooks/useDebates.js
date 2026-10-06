@@ -45,6 +45,7 @@ export function useDebates(userId) {
         .from("debate_rooms")
         .select("*")
         .in("id", ids)
+        .eq("status", "active")
         .order("created_at", { ascending: false });
       setRooms(roomsData || []);
     } catch (err) {
@@ -317,6 +318,7 @@ export function useRoomChat(roomId, userId) {
 
 export function useDebateLive(room, userId, isHost) {
   const callRef = useRef(null);
+  const containerRef = useRef(null);
   const [camOn, setCamOn] = useState(room?.mode !== "audio");
   const [micOn, setMicOn] = useState(true);
   const [joined, setJoined] = useState(false);
@@ -342,7 +344,7 @@ export function useDebateLive(room, userId, isHost) {
         var sessionRes = await supabase.auth.getSession();
         var session = sessionRes.data?.session;
 
-        var res = await fetch(apiUrl("/api/create-room"), {
+        var res = await fetch(apiUrl("/api/live"), {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -380,11 +382,9 @@ export function useDebateLive(room, userId, isHost) {
           callRef.current = null;
         }
 
-        var call = DailyIframe.createCallObject({
-          audioSource: true,
-          videoSource: room.mode !== "audio",
-          subscribeToTracksAutomatically: true,
-          dailyConfig: { avoidEval: true },
+        var call = DailyIframe.createFrame(containerRef.current, {
+          iframeStyle: { width: "100%", height: "100%", border: "0" },
+          showLeaveButton: false,
         });
         callRef.current = call;
 
@@ -448,5 +448,6 @@ export function useDebateLive(room, userId, isHost) {
     joining,
     error,
     callRef,
+    containerRef,
   };
 }

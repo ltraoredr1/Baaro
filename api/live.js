@@ -247,7 +247,11 @@ async function handleToken(req, res, user, admin) {
   const body = req.body || {};
   const liveId = String(body.liveId || body.roomName || body.inviteCode || "").trim();
   if (!liveId) return res.status(400).json({ error: "liveId requis" });
-  const { data: room } = await admin.from("debate_rooms").select("id, host_id, daily_room_name, invite_code, status, mode").or(`invite_code.eq.${liveId},id.eq.${liveId},daily_room_name.eq.${liveId}`).maybeSingle();
+  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(liveId);
+  const filters = ["invite_code.eq." + liveId.toLowerCase(), "daily_room_name.eq." + liveId];
+  if (isUuid) filters.push("id.eq." + liveId);
+  const { data: room, error: roomErr } = await admin.from("debate_rooms").select("id, host_id, daily_room_name, invite_code, status, mode").or(filters.join(",")).maybeSingle();
+  if (roomErr) return res.status(500).json({ error: roomErr.message });
   if (!room || room.status === "ended") return res.status(404).json({ error: "Live introuvable ou terminé" });
   const isHost = room.host_id === user.id;
   if (!isHost) {
@@ -256,7 +260,8 @@ async function handleToken(req, res, user, admin) {
   }
   const roomName = room.daily_room_name || sanitizeRoomName(room.invite_code || liveId);
   try { await createDailyRoom(roomName); } catch (e) { logWarn("live", "ensure Daily room", { message: e.message }); }
-  const isOwner = isHost || body.isOwner === true;
+  if (!room.daily_room_name) await admin.from("debate_rooms").update({ daily_room_name: roomName }).eq("id", room.id);
+  const isOwner = isHost;
   const token = await createMeetingToken(roomName, { userId: user.id, userName: body.userName || (isOwner ? "Hôte" : "Participant"), isOwner });
   return res.status(200).json({ ok: true, token, roomName, url: roomUrl(roomName), isOwner });
 }
@@ -290,6 +295,7 @@ export default async function handler(req, res) {
 
     const body = req.body || {};
     const action = (body.action || "").toLowerCase();
+    if (action === "token") return await handleToken(req, res, user, admin);
 
     // 2. Live Daily
     if (urlPath.includes("create-room") || action === "create-room" || action === "create_room") {

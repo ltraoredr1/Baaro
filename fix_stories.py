@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+code = """import { useEffect, useState } from 'react';
 import { supabase } from '../../supabaseClient.js';
 import { COLORS as C } from '../../theme.js';
 import { Plus, Eye, Heart, Send, Trash2, Image as ImageIcon, X } from 'lucide-react';
@@ -286,4 +286,10 @@ export function StoriesTab({ id, onOpenProfile }) {
   );
 }
 
-export default StoriesTab;
+export default StoriesTab;"""
+
+with open("src/features/stories/index.jsx", "w", encoding="utf-8") as f:
+    f.write(code)
+
+print("✅ Fichier src/features/stories/index.jsx mis à jour avec succès !")
+print("🚀 Tu peux maintenant rafraîchir ton application et tester l'ajout de média.")
