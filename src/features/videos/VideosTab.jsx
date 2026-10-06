@@ -1373,7 +1373,10 @@ export function VideosTab({ onRewardPoints, onExit }) {
 
   const handleFileSelected = (file) => {
     if (!file) return;
-    if (!file.type.startsWith("video/")) {
+    const isVideo =
+      (file.type && file.type.startsWith("video/")) ||
+      /\.(mp4|webm|mov|m4v|mkv|3gp|avi)$/i.test(file.name || "");
+    if (!isVideo) {
       showToast("Sélectionne un fichier vidéo.", "error");
       return;
     }
