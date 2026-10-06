@@ -281,10 +281,147 @@ begin
 end;
 $$;
 
+
 grant execute on function public.checkout_cart(text, text) to authenticated;
 notify pgrst, 'reload schema';
 
 alter table public.shop_products
   add column if not exists category text;
+
+notify pgrst, 'reload schema';
+
+-- ============================================================
+-- 10. MISE À JOUR : colonnes produits / commandes, avis, commande sécurisée
+-- ============================================================
+
+alter table public.shop_products
+  add column if not exists category text,
+  add column if not exists sku text,
+  add column if not exists low_stock_threshold integer not null default 5,
+  add column if not exists tags text[] not null default '{}';
+
+alter table public.shop_products
+  drop constraint if exists shop_products_type_check;
+alter table public.shop_products
+  add constraint shop_products_type_check
+  check (type in ('produit', 'service', 'numerique'));
+
+alter table public.orders
+  add column if not exists pickup_code text
+    default lpad((floor(random() * 1000000))::int::text, 6, '0'),
+  add column if not exists dropoff_address text;
+
+update public.orders
+set pickup_code = lpad((floor(random() * 1000000))::int::text, 6, '0')
+where pickup_code is null;
+
+-- Avis boutique
+create table if not exists public.shop_reviews (
+  id uuid primary key default gen_random_uuid(),
+  shop_id uuid not null references public.shops(id) on delete cascade,
+  order_id uuid references public.orders(id) on delete set null,
+  buyer_id uuid not null references auth.users(id) on delete cascade,
+  rating integer not null check (rating between 1 and 5),
+  comment text,
+  created_at timestamptz not null default now()
+);
+
+alter table public.shop_reviews
+  add column if not exists order_id uuid references public.orders(id) on delete set null;
+
+create unique index if not exists shop_reviews_order_uidx
+  on public.shop_reviews(order_id) where order_id is not null;
+
+alter table public.shop_reviews enable row level security;
+
+drop policy if exists shop_reviews_read on public.shop_reviews;
+create policy shop_reviews_read on public.shop_reviews
+  for select using (true);
+
+drop policy if exists shop_reviews_insert_buyer on public.shop_reviews;
+create policy shop_reviews_insert_buyer on public.shop_reviews
+  for insert with check (
+    buyer_id = auth.uid()
+    and exists (
+      select 1 from public.orders o
+      where o.id = order_id
+        and o.buyer_id = auth.uid()
+        and o.shop_id = shop_reviews.shop_id
+        and o.status = 'delivered'
+    )
+  );
+
+-- Commande directe sécurisée (appelée par shopApi.createOrder)
+create or replace function public.create_order_secure(
+  p_shop_id uuid,
+  p_buyer_id uuid,
+  p_method text,
+  p_notes text,
+  p_dropoff_address text,
+  p_items jsonb
+) returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_uid uuid := auth.uid();
+  v_order uuid;
+  v_code text;
+  v_total numeric := 0;
+  v_currency text;
+  e jsonb;
+  prod record;
+  qty integer;
+begin
+  if v_uid is null then raise exception 'NOT_AUTHENTICATED'; end if;
+  if p_method not in ('pickup', 'delivery') then raise exception 'INVALID_METHOD'; end if;
+  if p_items is null or jsonb_typeof(p_items) <> 'array'
+     or jsonb_array_length(p_items) = 0 then
+    raise exception 'EMPTY_ORDER';
+  end if;
+
+  if not exists (
+    select 1 from shops s
+    where s.id = p_shop_id
+      and public.shop_is_live(s.is_active, s.subscription_status, s.trial_ends_at, s.subscription_expires_at)
+  ) then raise exception 'SHOP_UNAVAILABLE'; end if;
+
+  insert into orders (shop_id, buyer_id, method, status, total_amount, currency, notes, dropoff_address)
+  values (p_shop_id, v_uid, p_method, 'pending', 0, 'XOF', p_notes, p_dropoff_address)
+  returning id, pickup_code into v_order, v_code;
+
+  for e in select x from jsonb_array_elements(p_items) as x loop
+    qty := greatest(1, least(100, coalesce((e->>'quantity')::int, 1)));
+
+    select * into prod from shop_products
+    where id = (e->>'product_id')::uuid and shop_id = p_shop_id
+    for update;
+
+    if not found or not prod.is_available then raise exception 'PRODUCT_UNAVAILABLE'; end if;
+    if prod.type = 'produit' and prod.stock is not null and prod.stock < qty then
+      raise exception 'OUT_OF_STOCK';
+    end if;
+
+    insert into order_items (order_id, product_id, name, quantity, unit_price, currency)
+    values (v_order, prod.id, prod.name, qty, prod.price, prod.currency);
+
+    if prod.type = 'produit' and prod.stock is not null then
+      update shop_products set stock = stock - qty where id = prod.id;
+    end if;
+
+    v_total := v_total + prod.price * qty;
+    v_currency := coalesce(v_currency, prod.currency);
+  end loop;
+
+  update orders
+  set total_amount = v_total, currency = coalesce(v_currency, 'XOF')
+  where id = v_order;
+
+  return jsonb_build_object('order_id', v_order, 'pickup_code', v_code, 'total', v_total);
+end;
+$$;
+
+grant execute on function public.create_order_secure(uuid, uuid, text, text, text, jsonb) to authenticated;
 
 notify pgrst, 'reload schema';
