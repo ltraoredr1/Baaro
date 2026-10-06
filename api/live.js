@@ -142,7 +142,18 @@ async function invokeProvider(provider, ctx) {
   if (provider === "anthropic") return callAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY, messages: normalizedMessages, system, maxTokens });
   const cfg = providerConfig(provider);
   if (!cfg?.key || !cfg?.base) throw Object.assign(new Error(`Provider ${provider} mal configuré`), { status: 503 });
-  return callOpenAICompatible({ base: cfg.base, key: cfg.key, model: publicModel || cfg.model, messages: normalizedMessages, system, maxTokens });
+  const list = String(process.env[provider.toUpperCase() + "_MODELS"] || "").split(",").map((x) => x.trim()).filter(Boolean);
+  const models = publicModel ? [publicModel] : list.length ? list : [cfg.model];
+  let lastErr;
+  for (const model of models) {
+    try {
+      return await callOpenAICompatible({ base: cfg.base, key: cfg.key, model, messages: normalizedMessages, system, maxTokens });
+    } catch (e) {
+      lastErr = e;
+      if (e?.status === 401 || e?.status === 403) break; // clé refusée : inutile d'essayer les autres modèles
+    }
+  }
+  throw lastErr;
 }
 
 // ============== HANDLERS ==============
