@@ -8,18 +8,29 @@
  *   /api/live, /api/ai, /api/chat, /api/create-room, /api/live-roles -> ce fichier
  */
 
-import {
-  getAdminClient,
-  requireUser,
-  rateLimitAsync,
-  applyCors,
-  logError,
-  logInfo,
-  logWarn,
-} from "./_shared.js";
+import * as shared from "./_shared.js";
 import { chooseProvider, normalizeCountry, providerConfig } from "./_lib/ai/router.js";
 import { callOpenAICompatible } from "./_lib/ai/openai-compatible.js";
 import { isOpen, recordFailure, recordSuccess } from "./_lib/ai/circuit.js";
+
+const { getAdminClient, requireUser, applyCors } = shared;
+const rateLimitAsync = shared.rateLimitAsync || (async (req, opts) => (shared.rateLimit ? shared.rateLimit(req, opts) : { ok: true }));
+const logError = shared.logError || ((scope, err, meta) => console.error(`[${scope}]`, err?.message || err, meta || ""));
+const logInfo = shared.logInfo || ((scope, msg, meta) => console.log(`[${scope}]`, msg, meta || ""));
+const logWarn = shared.logWarn || ((scope, msg, meta) => console.warn(`[${scope}]`, msg, meta || ""));
+
+const DEFAULT_CLAUDE_MODEL = "claude-sonnet-5-5";
+function claudeModel() {
+  const raw = String(process.env.ANTHROPIC_MODEL || "").replace(/["'\s]/g, "");
+  return raw || DEFAULT_CLAUDE_MODEL;
+}
+// Claude exige que le premier message soit de rôle "user"
+function ensureFirstUser(list) {
+  const out = [...list];
+  while (out.length > 1 && out[0].role !== "user") out.shift();
+  if (out[0] && out[0].role !== "user") out[0] = { ...out[0], role: "user" };
+  return out;
+}
 
 // ============== DAILY CONFIG ==============
 const DAILY_API = "https://api.daily.co/v1";
@@ -94,8 +105,19 @@ function safeMaxTokens(value) { return Math.min(Math.max(Number(value) || 1200, 
 function safeCountry(req, context) {
   return normalizeCountry(context?.country) || normalizeCountry(req.headers["x-baaro-country"]) || null;
 }
+const BAARO_ASSISTANT_BASE = `Tu es l'assistant officiel de BAARO, plateforme sociale internationale (réseau social, vidéo, messagerie, communautés, IA, créateurs, commerce, langues locales).
+Style : tutoie l'utilisateur, ton chaleureux, clair et concis (3 à 6 phrases sauf demande de détails). Réponds dans la langue de l'utilisateur (français par défaut). Si l'utilisateur écrit seulement « ok » ou « rien », réponds très brièvement et propose une idée concrète.
+Ce que tu sais de BAARO (n'affirme rien d'autre) :
+- Onglets : Fil (publications texte/image/vidéo, sondages, likes, commentaires), Vidéos (vidéos longues, studio de création photo/vidéo/texte, musique de la bibliothèque BAARO Sounds ou son propre audio), Chat (messagerie chiffrée de bout en bout, vocaux, appels), Débats (lives et discussions en direct), Shop, Revenus, Stories (temporaires ; le propriétaire voit qui a vu et réagi), Plus (communautés, réglages, etc.).
+- Les vidéos du Fil sont limitées à 50 Mo ; l'onglet Vidéos n'a pas cette limite artificielle.
+- Le profil se modifie uniquement dans Réglages ; depuis la recherche, un profil est en lecture seule.
+- Réglages : performance (mode réseau faible, économie de données, batterie), IA (traduction, suggestions), confidentialité et sécurité.
+- Langues de l'interface : français, English, العربية, N'Ko, Bamanankan, Bozo, Dogon, Soninké.
+- L'onglet Revenus montre les gains créateurs : en attente, disponibles, réservés pour retrait et déjà payés (publicité, pourboires, abonnements, ventes, parrainage, bonus). Les retraits passent par une vérification avant paiement.
+Règles : n'invente jamais une fonction, un montant, un taux de gain ou une date de paiement ; si tu n'es pas sûr, dis-le et indique où vérifier dans l'application. Ne demande jamais de mot de passe, de clé ou de code. Pour les sujets médicaux, juridiques ou financiers, donne des informations générales et conseille un professionnel. Ne promets pas de gains ou de résultats garantis.`;
 function buildSystem(customSystem, mode, context) {
-  let system = customSystem || "Tu es l'assistant officiel de BAARO. Réponds de façon claire, utile et respectueuse.";
+  let system = BAARO_ASSISTANT_BASE;
+  if (customSystem && String(customSystem).trim()) system += `\n\nConsignes supplémentaires de l'application :\n${String(customSystem).trim()}`;
   if (context && typeof context === "object") {
     if (context.display_name) system += `\nUtilisateur: ${String(context.display_name).slice(0, 100)}`;
     if (context.language) system += `\nLangue préférée: ${String(context.language).slice(0, 20)}`;
@@ -110,7 +132,7 @@ async function callAnthropic({ apiKey, messages, system, maxTokens }) {
   const response = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
-    body: JSON.stringify({ model: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-20250514", max_tokens: maxTokens, system, messages }),
+    body: JSON.stringify({ model: claudeModel(), max_tokens: maxTokens, system, messages: ensureFirstUser(messages) }),
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw Object.assign(new Error(data.error?.message || "Erreur Anthropic"), { status: response.status });
@@ -183,17 +205,17 @@ async function handleAiDebateLegacy(req, res, admin, user) {
   }
   const { data: part } = await admin.from("debate_participants").select("user_id").eq("room_id", roomId).eq("user_id", user.id).is("left_at", null).maybeSingle();
   if (!part) return res.status(403).json({ error: "Tu n'es pas dans ce live" });
-  const { data: room } = await admin.from("debate_rooms").select("id, title, topic, status, ai_enabled").eq("id", roomId).maybeSingle();
-  if (!room || room.status !== "active") return res.status(400).json({ error: "Live introuvable ou terminé" });
+  const { data: room } = await admin.from("debate_rooms").select("*").eq("id", roomId).maybeSingle();
+  if (!room || room.status === "ended") return res.status(400).json({ error: "Live introuvable ou terminé" });
   if (room.ai_enabled === false) return res.status(400).json({ error: "L'IA est désactivée" });
   const { data: recent } = await admin.from("debate_messages").select("text, sender_type, created_at").eq("room_id", roomId).order("created_at", { ascending: false }).limit(12);
   const history = (recent || []).reverse().map(m => `${m.sender_type === "ai" ? "IA" : m.sender_type === "system" ? "Système" : "Participant"}: ${m.text}`).join("\n");
   const systemPrompt = `Tu es l'assistant IA du débat live BAARO intitulé « ${room.title || "Débat"} ».\nSujet : ${room.topic || "non précisé"}.\nTu aides TOUS les participants. Réponds en français, clair et concis (2 à 5 phrases).\n\nExtraits récents :\n${history || "(aucun)"}`;
   const response = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST", headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
-    body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 600, system: systemPrompt, messages: [{ role: "user", content: q }] }),
+    body: JSON.stringify({ model: claudeModel(), max_tokens: 600, system: systemPrompt, messages: [{ role: "user", content: q }] }),
   });
-  const data = await response.json();
+  const data = await response.json().catch(() => ({}));
   if (!response.ok) return res.status(response.status).json({ error: data.error?.message || "Erreur Claude" });
   const replyText = data.content?.find?.((c) => c.type === "text")?.text || data.content?.[0]?.text || "Désolé, je n'ai pas pu générer une réponse.";
   await admin.from("debate_messages").insert({ room_id: roomId, sender_id: null, sender_type: "ai", text: replyText });
@@ -208,7 +230,7 @@ async function handleAiGateway(req, res, admin, user) {
   if (!Array.isArray(messages) || messages.length < 1 || messages.length > 30) {
     return res.status(400).json({ error: "messages doit contenir entre 1 et 30 éléments" });
   }
-  const normalizedMessages = messages.map((m) => ({ role: m?.role === "assistant" ? "assistant" : "user", content: String(m?.content ?? m?.text ?? "").slice(0, 8000) }));
+  const normalizedMessages = ensureFirstUser(messages.map((m) => ({ role: m?.role === "assistant" ? "assistant" : "user", content: String(m?.content ?? m?.text ?? "").slice(0, 8000) })));
   if (normalizedMessages.some((m) => !m.content.trim())) return res.status(400).json({ error: "Message vide" });
   const profile = await loadCountry(admin, user.id);
   const country = safeCountry(req, { ...(context || {}), country: context?.country || profile.country });
@@ -262,7 +284,7 @@ async function handleToken(req, res, user, admin) {
   const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(liveId);
   const filters = ["invite_code.eq." + liveId.toLowerCase(), "daily_room_name.eq." + liveId];
   if (isUuid) filters.push("id.eq." + liveId);
-  const { data: room, error: roomErr } = await admin.from("debate_rooms").select("id, host_id, daily_room_name, invite_code, status, mode").or(filters.join(",")).maybeSingle();
+  const { data: room, error: roomErr } = await admin.from("debate_rooms").select("*").or(filters.join(",")).maybeSingle();
   if (roomErr) return res.status(500).json({ error: roomErr.message });
   if (!room || room.status === "ended") return res.status(404).json({ error: "Live introuvable ou terminé" });
   const isHost = room.host_id === user.id;
@@ -307,6 +329,8 @@ export default async function handler(req, res) {
 
     const body = req.body || {};
     const action = (body.action || "").toLowerCase();
+    if (Array.isArray(body.messages)) return await handleAiGateway(req, res, admin, user);
+    if (body.roomId && body.question) return await handleAiDebateLegacy(req, res, admin, user);
     if (action === "token") return await handleToken(req, res, user, admin);
 
     // 2. Live Daily
