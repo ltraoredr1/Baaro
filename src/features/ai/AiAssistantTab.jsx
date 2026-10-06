@@ -52,7 +52,7 @@ Que veux-tu faire ?`,
 
     try {
       const conversation = messages
-        .filter((m) => m.role === "user" || m.role === "assistant")
+        .filter((m) => m.id !== "welcome" && (m.role === "user" || m.role === "assistant"))
         .slice(-8)
         .map((m) => ({
           role: m.role,
@@ -82,7 +82,13 @@ Que veux-tu faire ?`,
       const reply =
         data.reply ||
         data.content?.[0]?.text ||
-        "Désolé, je n’ai pas pu répondre. Réessaie dans un instant.";
+        (data.error
+          ? `⚠️ ${data.error}${
+              Array.isArray(data.tried)
+                ? ` (essayés : ${data.tried.join(", ") || "aucun"})`
+                : ""
+            }`
+          : "Désolé, je n’ai pas pu répondre. Réessaie dans un instant.");
 
       setMessages((prev) => [
         ...prev,
@@ -135,7 +141,7 @@ Que veux-tu faire ?`,
           className="text-[10px] font-mono px-2.5 py-1 rounded-full border"
           style={{ borderColor: COLORS.borderTeal, color: COLORS.teal }}
         >
-          Claude Sonnet
+          Gemini
         </span>
       </div>
 
