@@ -809,7 +809,7 @@ export function FeedTab({ user_id, onOpenProfile, onRewardPoints }) {
                   </div>
 
                   {/* 3. Commentaires et Traduction (conservés) */}
-                  <div className="flex items-center gap-4 w-full">
+                  <div className="flex flex-wrap items-center gap-3 w-full min-h-[32px]">
                     <button
                       onClick={() => {
                         const next = !commentOpen[post.id];

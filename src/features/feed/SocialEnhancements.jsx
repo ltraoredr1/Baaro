@@ -177,7 +177,7 @@ export const SocialPostEnhancements = memo(function SocialPostEnhancements({ pos
       const [likesResult, sharesResult, bookmarkResult, followResult] = await Promise.all([
         supabase.from("post_likes").select("user_id").eq("post_id", post.id),
         supabase.from("post_shares").select("post_id", { count: "exact", head: true }).eq("post_id", post.id),
-        user_id ? supabase.from("post_bookmarks").select("post_id").eq("post_id", post.id).eq("id", user_id).maybeSingle() : Promise.resolve({ data: null, error: null }),
+        user_id ? supabase.from("post_bookmarks").select("post_id").eq("post_id", post.id).eq("user_id", user_id).maybeSingle() : Promise.resolve({ data: null, error: null }),
         user_id && post.author_id !== user_id ? supabase.from("follows").select("followed_id").eq("follower_id", user_id).eq("followed_id", post.author_id).maybeSingle() : Promise.resolve({ data: null, error: null }),
       ]);
 
@@ -225,11 +225,11 @@ export const SocialPostEnhancements = memo(function SocialPostEnhancements({ pos
     setBusy(true);
     try {
       if (saved) {
-        const { error } = await supabase.from("post_bookmarks").delete().eq("post_id", post.id).eq("id", user_id);
+        const { error } = await supabase.from("post_bookmarks").delete().eq("post_id", post.id).eq("user_id", user_id);
         if (error) throw error;
         setSaved(false);
       } else {
-        const { error } = await supabase.from("post_bookmarks").upsert({ post_id: post.id, id: user_id }, { onConflict: "post_id,id" });
+        const { error } = await supabase.from("post_bookmarks").upsert({ post_id: post.id, user_id }, { onConflict: "post_id,user_id" });
         if (error) throw error;
         setSaved(true);
       }
@@ -307,7 +307,7 @@ export const SocialPostEnhancements = memo(function SocialPostEnhancements({ pos
   };
 
   return (
-    <div className="flex flex-nowrap items-center gap-1.5 w-full">
+    <div className="flex flex-wrap items-center gap-1.5 w-full">
       {post?.author_id && post.author_id !== user_id && (
         <button type="button" onClick={follow} disabled={busy} className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-[11px] font-bold border transition-all active:scale-95" style={{ borderColor: following ? COLORS.borderTeal : COLORS.border, color: following ? COLORS.teal : COLORS.muted }}>
           {following ? <Check size={13} /> : <UserPlus size={13} />}{following ? "Abonné" : "Suivre"}
@@ -327,10 +327,10 @@ export const SocialPostEnhancements = memo(function SocialPostEnhancements({ pos
           </div>
         )}
       </div>
-      <button type="button" onClick={bookmark} disabled={busy} className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs transition-all active:scale-95 disabled:opacity-50" style={{ color: saved ? COLORS.gold : COLORS.muted }}>
+      <button type="button" onClick={bookmark} disabled={busy} className="flex shrink-0 items-center gap-1.5 rounded-lg border border-transparent px-2.5 py-1.5 text-xs transition-all active:scale-95 disabled:opacity-50" style={{ color: saved ? COLORS.gold : COLORS.muted }}>
         <Bookmark size={15} fill={saved ? "currentColor" : "none"} /><span className="hidden sm:inline">{saved ? "Enregistré" : "Enregistrer"}</span>
       </button>
-      <button type="button" onClick={share} disabled={busy} className="flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs ml-auto transition-all active:scale-95 disabled:opacity-50" style={{ color: COLORS.muted }}>
+      <button type="button" onClick={share} disabled={busy} className="flex shrink-0 items-center gap-1.5 rounded-lg border border-transparent px-2.5 py-1.5 text-xs ml-auto transition-all active:scale-95 disabled:opacity-50" style={{ color: COLORS.muted }}>
         <Share2 size={15} />{shareCount ? shareCount : <span className="hidden sm:inline">Partager</span>}
       </button>
     </div>
