@@ -797,7 +797,15 @@ function uiLang(code: string): string {
 function applyDocumentLang(lang: string) {
   try {
     document.documentElement.lang = lang;
-    document.documentElement.dir = RTL.has(lang) ? "rtl" : "ltr";
+    if (RTL.has(lang)) {
+      document.documentElement.setAttribute("data-rtl", "1");
+      document.documentElement.dir = "ltr";
+      document.body?.classList?.add("baaro-rtl-text");
+    } else {
+      document.documentElement.removeAttribute("data-rtl");
+      document.documentElement.dir = "ltr";
+      document.body?.classList?.remove("baaro-rtl-text");
+    }
   } catch {
     /* ignore */
   }

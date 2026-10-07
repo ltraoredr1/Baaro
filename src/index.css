@@ -352,3 +352,17 @@ html.baaro-reduce-motion *::after {
     animation: none;
   }
 }
+
+/* Arabe / N'Ko : texte RTL sans inverser toute la mise en page (évite écran noir) */
+html[data-rtl="1"] .baaro-rtl-text,
+body.baaro-rtl-text p,
+body.baaro-rtl-text h1,
+body.baaro-rtl-text h2,
+body.baaro-rtl-text h3,
+body.baaro-rtl-text span,
+body.baaro-rtl-text label,
+body.baaro-rtl-text input,
+body.baaro-rtl-text textarea {
+  direction: rtl;
+  unicode-bidi: plaintext;
+}

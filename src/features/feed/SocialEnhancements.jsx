@@ -275,13 +275,35 @@ export const SocialPostEnhancements = memo(function SocialPostEnhancements({ pos
     if (!isValidAuthUserId(user_id)) { showToast("Connectez-vous pour suivre", "info"); return; }
     if (!post?.author_id || user_id === post.author_id || busy) return;
     setBusy(true);
+    const prev = following;
+    setFollowing(!prev);
     try {
       const { data, error } = await supabase.rpc("toggle_follow", { p_target: post.author_id });
-      if (error) throw error;
-      setFollowing(!!data);
-      showToast(data ? "Vous suivez maintenant ce compte" : "Vous ne suivez plus ce compte", "success");
-    } catch (error) { console.error("[BAARO] Erreur abonnement:", error); showToast(`Abonnement impossible : ${error?.message || "erreur inconnue"}`, "error"); }
-    finally { setBusy(false); }
+      if (!error) {
+        const next = typeof data === "boolean" ? data : !prev;
+        setFollowing(!!next);
+        showToast(next ? "Vous suivez maintenant ce compte" : "Vous ne suivez plus ce compte", "success");
+        return;
+      }
+      if (prev) {
+        const { error: delErr } = await supabase.from("follows").delete().eq("follower_id", user_id).eq("followed_id", post.author_id);
+        if (delErr) throw delErr;
+        setFollowing(false);
+        showToast("Vous ne suivez plus ce compte", "success");
+      } else {
+        const { error: upErr } = await supabase.from("follows").upsert(
+          { follower_id: user_id, followed_id: post.author_id, status: "accepted", is_friend: false },
+          { onConflict: "follower_id,followed_id" }
+        );
+        if (upErr) throw upErr;
+        setFollowing(true);
+        showToast("Vous suivez maintenant ce compte", "success");
+      }
+    } catch (error) {
+      console.error("[BAARO] Erreur abonnement:", error);
+      setFollowing(prev);
+      showToast(`Abonnement impossible : ${error?.message || "erreur inconnue"}`, "error");
+    } finally { setBusy(false); }
   };
 
   return (
@@ -330,14 +352,25 @@ export const SocialSuggestions = memo(function SocialSuggestions({ user_id, onOp
 
   const follow = async (item) => {
     const target = item?.id;
-    if (!target) return;
+    if (!target || !isValidAuthUserId(user_id)) return;
     setBusyId(target);
     try {
       const { data, error } = await supabase.rpc("toggle_follow", { p_target: target });
-      if (error) throw error;
-      if (data) { setItems((prev) => prev.filter((x) => x.id !== target)); showToast("Abonnement ajouté", "success"); }
-    } catch (error) { console.error("[BAARO] Erreur suggestion follow:", error); showToast(`Abonnement impossible : ${error?.message || "erreur inconnue"}`, "error"); }
-    finally { setBusyId(null); }
+      if (!error) {
+        if (data) { setItems((prev) => prev.filter((x) => x.id !== target)); showToast("Abonnement ajouté", "success"); }
+        return;
+      }
+      const { error: upErr } = await supabase.from("follows").upsert(
+        { follower_id: user_id, followed_id: target, status: "accepted", is_friend: false },
+        { onConflict: "follower_id,followed_id" }
+      );
+      if (upErr) throw upErr;
+      setItems((prev) => prev.filter((x) => x.id !== target));
+      showToast("Abonnement ajouté", "success");
+    } catch (error) {
+      console.error("[BAARO] Erreur suggestion follow:", error);
+      showToast(`Abonnement impossible : ${error?.message || "erreur inconnue"}`, "error");
+    } finally { setBusyId(null); }
   };
 
   if (!items.length) return null;

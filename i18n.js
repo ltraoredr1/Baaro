@@ -59,8 +59,16 @@ function guessDefaultLanguage() {
 function applyDocumentDirection(lng) {
   try {
     const lang = (lng || "fr").split("-")[0];
-    document.documentElement.dir = RTL_LANGUAGES.includes(lang) ? "rtl" : "ltr";
     document.documentElement.lang = lang;
+    if (RTL_LANGUAGES.includes(lang)) {
+      document.documentElement.setAttribute("data-rtl", "1");
+      document.documentElement.dir = "ltr";
+      document.body?.classList?.add("baaro-rtl-text");
+    } else {
+      document.documentElement.removeAttribute("data-rtl");
+      document.documentElement.dir = "ltr";
+      document.body?.classList?.remove("baaro-rtl-text");
+    }
   } catch {
     /* ignore */
   }
