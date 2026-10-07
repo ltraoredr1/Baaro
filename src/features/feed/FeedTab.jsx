@@ -13,7 +13,6 @@ import {
   Trash2,
   MoreHorizontal,
   Check,
-  Bell, // 🆕 Ajout de l'icône Bell
 } from "lucide-react";
 import { COLORS } from "../../theme.js";
 import { randomId } from "../../lib/id.js";
@@ -27,7 +26,6 @@ import { PollCard, SocialPostEnhancements, SocialSuggestions } from "./SocialEnh
 import { PollComposer } from "../../components/PollComposer.jsx";
 import { RichTextComposer } from "../../components/RichTextComposer.jsx";
 import { RichTextRenderer } from "../../components/RichTextRenderer.jsx";
-import { NotificationDrawer } from "../../components/NotificationDrawer.jsx"; // 🆕 Import du Drawer
 import { EngagementList } from "../../components/EngagementList.jsx";
 import { TipButton } from "../../components/TipButton.jsx";
 
@@ -72,7 +70,6 @@ export function FeedTab({ user_id, onOpenProfile, onRewardPoints }) {
   const [savingEdit, setSavingEdit] = useState(false);
   
   // 🆕 État pour le drawer de notifications
-  const [notifOpen, setNotifOpen] = useState(false);
   const [engagement, setEngagement] = useState(null);
 
   // Média en cours de composition
@@ -617,20 +614,6 @@ export function FeedTab({ user_id, onOpenProfile, onRewardPoints }) {
 
   return (
     <div className="flex flex-col gap-4 max-w-2xl mx-auto w-full pb-20">
-      {/* 🔔 Notifications (visible uniquement si connecté) */}
-      {meId && (
-        <div className="flex justify-end">
-          <button
-            onClick={() => setNotifOpen(true)}
-            className="relative p-2 rounded-xl border transition hover:bg-white/5"
-            style={{ borderColor: COLORS.border, color: COLORS.ivory }}
-            aria-label="Notifications"
-          >
-            <Bell size={20} />
-          </button>
-          <NotificationDrawer isOpen={notifOpen} onClose={() => setNotifOpen(false)} user_id={meId} />
-        </div>
-      )}
 
       {/* Suggestions de comptes (visible uniquement si connecté) */}
       {meId && <SocialSuggestions user_id={meId} onOpenProfile={onOpenProfile} />}
