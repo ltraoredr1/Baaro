@@ -170,7 +170,7 @@ export async function createCallRecord({ conversation_id, caller_id, callee_id, 
     
   if (error) {
     console.error("Erreur création enregistrement appel:", error);
-    return { id: null }; 
+    throw new Error("calls : " + error.message);
   }
   return data;
 }
