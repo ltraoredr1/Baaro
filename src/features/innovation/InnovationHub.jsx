@@ -40,7 +40,7 @@ export function InnovationHub({ user_id }) {
     const title = goal.trim();
     if (!title || !user_id || busy) return;
     setBusy(true);
-    const { data } = await supabase.from("nexus_goals").insert({ user_id: user_id, title }).select("id,title,status,progress").single();
+    const { data } = await supabase.from("nexus_goals").insert({ user_id: user_id, title, status: 'active', progress: 0 }).select("id,title,status,progress").single();
     if (data) setGoals(current => [data, ...current].slice(0, 6));
     setGoal("");
     setBusy(false);

@@ -12,7 +12,7 @@ export async function createAgentTask(user_id, goal) {
     goal: clean,
     status: 'awaiting_confirmation',
     requires_confirmation: true,
-    plan: [{ step: 'analyze_goal', status: 'pending' }],
+    plan: [{ step: 'analyze_goal', status: 'pending', attempts: 0 }],
   }).select('*').single();
 }
 
@@ -34,7 +34,7 @@ export async function enqueueOfflineOperation({ user_id, clientId, operation, pa
     client_id: clientId,
     operation,
     payload: payload || {},
-    status: 'pending',
+    status: 'pending', attempts: 0,
     next_attempt_at: new Date().toISOString(),
   }, { onConflict: 'user_id,client_id' });
 }
