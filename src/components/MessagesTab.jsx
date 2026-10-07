@@ -6,6 +6,7 @@ import { supabase } from "../supabaseClient.js";
 import { uploadChatFile, uploadVoiceBlob, mimeToMessageType, formatDuration, getBestAudioMime } from "../lib/chatMedia.js";
 import { createCallRoom, getCallToken, createCallRecord } from "../lib/chatCalls.js"; // ✅ IMPORT MIS À JOUR
 import { ChatCallModal } from "./ChatCallModal.jsx";
+import { deserializePayload } from "../lib/crypto.js";
 import { CHAT_REACTIONS, toggleMessageReaction, toggleMessageStar, markMessageRead, updateConversationSettings, makeClientMessageId } from "../lib/chatFeatures.js";
 
 /** auth.users.id (UUID) uniquement */
@@ -49,6 +50,8 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
   const [typing, setTyping] = useState(false);
   const [reactionFor, setReactionFor] = useState(null);
   const [starred, setStarred] = useState(new Set());
+  const [actionsFor, setActionsFor] = useState(null);
+  const closeCall = useCallback(() => setCallState(null), []);
 
   const messagesEndRef = useRef(null);
   const profilesCache = useRef({});
@@ -56,6 +59,10 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
   const mediaRecorderRef = useRef(null);
   const recordChunksRef = useRef([]);
   const recordTimerRef = useRef(null);
+  const recordSecondsRef = useRef(0);
+  const typingChRef = useRef(null);
+  const lastTypingSent = useRef(0);
+  const markedRef = useRef(new Set());
 
   useEffect(() => {
     if (propId) {
@@ -122,7 +129,7 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
   useEffect(() => {
     setMessages(messaging.messages || []);
     const incoming = (messaging.messages || []).filter((m) => m.recipient_id === id && !m.read_at);
-    incoming.forEach((m) => markMessageRead(m.id));
+    incoming.forEach((m) => { if (markedRef.current.has(m.id)) return; markedRef.current.add(m.id); markMessageRead(m.id); });
   }, [messaging.messages, id]);
 
   useEffect(() => {
@@ -135,7 +142,8 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
           window.__baaroTypingTimer = window.setTimeout(() => setTyping(false), 2200);
         }
       }).subscribe();
-    return () => { supabase.removeChannel(channel); window.clearTimeout(window.__baaroTypingTimer); };
+    typingChRef.current = channel;
+    return () => { typingChRef.current = null; supabase.removeChannel(channel); window.clearTimeout(window.__baaroTypingTimer); };
   }, [activeChat?.id, id]);
 
   useEffect(() => {
@@ -160,23 +168,38 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
     }
   };
 
+  useEffect(() => {
+    if (!id) return;
+    let target = null;
+    try {
+      target = sessionStorage.getItem("baaro:open_chat_with");
+      sessionStorage.removeItem("baaro:open_chat_with");
+    } catch {}
+    if (!target || !isValidAuthUserId(target)) return;
+    (async () => {
+      await fetchProfiles([target]);
+      const pr = profilesCache.current[target] || {};
+      openConversation(target, pr.display_name || "Membre", pr.avatar_url, pr.flag || "🌍");
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
+
   const handleSend = async (e) => {
     e.preventDefault();
     if (!newMessage.trim() || !activeChat || !id) return;
     const text = newMessage.trim();
+    if (!isValidAuthUserId(id) || !isValidAuthUserId(activeChat.otherUserId)) { alert("Conversation invalide"); return; }
     setNewMessage("");
-    if (!isValidAuthUserId(id) || !isValidAuthUserId(activeChat.otherUserId)) return;
     const result = await messaging.sendMessage(text, { replyToId: replyTo?.id || null, clientMessageId: makeClientMessageId() });
     if (!result?.ok) { setNewMessage(text); alert(result?.error || "Impossible d'envoyer le message"); return; }
     setReplyTo(null);
   };
 
-  const broadcastTyping = async (value) => {
-    if (!activeChat?.id) return;
-    const ch = supabase.channel(`typing:${activeChat.id}`);
-    await ch.subscribe();
-    await ch.send({ type: "broadcast", event: "typing", payload: { user_id: id, typing: value } });
-    window.setTimeout(() => supabase.removeChannel(ch), 500);
+  const broadcastTyping = (value) => {
+    const now = Date.now();
+    if (!typingChRef.current || now - lastTypingSent.current < 1500) return;
+    lastTypingSent.current = now;
+    typingChRef.current.send({ type: "broadcast", event: "typing", payload: { userId: id, typing: value } });
   };
 
   const handleFileSelect = async (e) => {
@@ -187,7 +210,8 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
     try {
       const up = await uploadChatFile(file, id);
       if (!isValidAuthUserId(id) || !isValidAuthUserId(activeChat.otherUserId)) return;
-      await supabase.from("messages").insert({ conversation_id: activeChat.id, sender_id: id, recipient_id: activeChat.otherUserId, text: up.fileName, type: mimeToMessageType(up.mime), media_url: up.url, media_mime: up.mime, media_size: up.size, file_name: up.fileName });
+      const { error: insErr } = await supabase.from("messages").insert({ conversation_id: activeChat.id, sender_id: id, recipient_id: activeChat.otherUserId, text: up.fileName, type: mimeToMessageType(up.mime), media_url: up.url, media_mime: up.mime, media_size: up.size, file_name: up.fileName });
+      if (insErr) throw insErr;
     } catch (err) {
       alert(err.message);
     } finally {
@@ -209,92 +233,64 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
   };
 
   const startRecording = async () => {
+    if (mediaRecorderRef.current) return;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mime = getBestAudioMime();
-      const rec = new MediaRecorder(stream, { mimeType: mime });
+      const rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
       recordChunksRef.current = [];
+      recordSecondsRef.current = 0;
       rec.ondataavailable = (ev) => { if (ev.data.size > 0) recordChunksRef.current.push(ev.data); };
       rec.onstop = async () => {
         stream.getTracks().forEach((t) => t.stop());
-        if (recordTimerRef.current) clearInterval(recordTimerRef.current);
-        const blob = new Blob(recordChunksRef.current, { type: mime });
-        if (blob.size < 500) { setRecording(false); return; }
+        clearInterval(recordTimerRef.current);
+        mediaRecorderRef.current = null;
+        const seconds = recordSecondsRef.current;
+        const blob = new Blob(recordChunksRef.current, { type: rec.mimeType || mime });
+        if (blob.size < 500 || seconds < 1) { setRecording(false); setRecordSeconds(0); return; }
         setUploading(true);
         try {
-          const up = await uploadVoiceBlob(blob, id, recordSeconds);
-          if (!isValidAuthUserId(id) || !isValidAuthUserId(activeChat.otherUserId)) return;
-          await supabase.from("messages").insert({ conversation_id: activeChat.id, sender_id: id, recipient_id: activeChat.otherUserId, text: "Vocal", type: "voice", media_url: up.url, media_mime: up.mime, media_size: up.size, media_duration: up.duration });
-        } catch (err) {
-          alert(err.message);
-        } finally {
-          setUploading(false);
-          setRecording(false);
-          setRecordSeconds(0);
-        }
+          const up = await uploadVoiceBlob(blob, id, seconds);
+          const { error } = await supabase.from("messages").insert({
+            conversation_id: activeChat.id, sender_id: id, recipient_id: activeChat.otherUserId,
+            text: "Vocal", type: "voice", media_url: up.url, media_mime: up.mime,
+            media_size: up.size, media_duration: up.duration,
+          });
+          if (error) throw error;
+        } catch (err) { alert(err.message); }
+        finally { setUploading(false); setRecording(false); setRecordSeconds(0); }
       };
       mediaRecorderRef.current = rec;
       rec.start();
       setRecording(true);
-      recordTimerRef.current = setInterval(() => setRecordSeconds((s) => s + 1), 1000);
-    } catch {
-      alert("Micro non autorisé");
-    }
+      recordTimerRef.current = setInterval(() => {
+        recordSecondsRef.current += 1;
+        setRecordSeconds(recordSecondsRef.current);
+      }, 1000);
+    } catch { alert("Micro non autorisé"); }
   };
 
   const stopRecording = () => {
-    if (mediaRecorderRef.current && recording) mediaRecorderRef.current.stop();
+    const r = mediaRecorderRef.current;
+    if (r && r.state !== "inactive") r.stop();
   };
 
-  // ✅ FONCTION startCall CORRIGÉE ET COMPLÈTE
   const startCall = async (type) => {
     if (!activeChat || !id) return;
     try {
-      // 1. Créer la room
-      const roomRes = await createCallRoom({ 
-        userName: activeChat.otherUserName, 
-        mode: type 
-      });
-      
+      const roomRes = await createCallRoom({ userName: "Moi", mode: type });
       const roomName = roomRes.roomName || roomRes.daily_room_name;
-      
-      // 2. Obtenir le token (C'était l'étape manquante !)
-      const tokenRes = await getCallToken({ 
-        roomName: roomName, 
-        userName: "Moi", 
-        isOwner: true 
-      });
-
-      // 3. Enregistrer en BDD (non-bloquant)
-      let rec = null;
-      try {
-        rec = await createCallRecord({ 
-          conversationId: activeChat.id, 
-          callerId: id, 
-          calleeId: activeChat.otherUserId, 
-          type: type, 
-          dailyRoomName: roomName 
-        });
-      } catch (err) {
-        console.warn("Échec de l'enregistrement de l'appel en BDD, mais on continue:", err);
-        rec = { id: null };
-      }
-      
-      // 4. Lancer l'interface d'appel avec le token valide
-      setCallState({ 
-        mode: "outgoing", 
-        callType: type, 
-        callRecord: rec, 
-        roomUrl: roomRes.url, 
-        token: tokenRes.token, // ✅ Le token est maintenant bien défini
-        otherUser: { 
-          name: activeChat.otherUserName, 
-          avatar: activeChat.otherUserAvatar, 
-          flag: activeChat.otherUserFlag 
-        } 
+      if (!roomName || !roomRes.url) throw new Error("Salle non créée : vérifie DAILY_API_KEY et DAILY_DOMAIN sur Vercel");
+      const rec = await createCallRecord({ conversationId: activeChat.id, callerId: id, calleeId: activeChat.otherUserId, type, dailyRoomName: roomName });
+      if (!rec?.id) throw new Error("Appel non enregistré (table calls ou RLS)");
+      const tokenRes = await getCallToken({ roomName, userName: "Moi", isOwner: true });
+      setCallState({
+        mode: "outgoing", callType: type, callRecord: rec,
+        roomUrl: roomRes.url, token: tokenRes.token,
+        otherUser: { name: activeChat.otherUserName, avatar: activeChat.otherUserAvatar, flag: activeChat.otherUserFlag },
       });
     } catch (e) {
-      console.error("🔴 ERREUR DÉTAILLÉE DE L'APPEL :", e);
+      console.error(e);
       alert(e.message || "Impossible de démarrer l'appel");
     }
   };
@@ -304,7 +300,7 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
     const q = searchQuery.trim();
     if (q.length < 2) { setSearchResults([]); return; }
     const t = setTimeout(async () => {
-      const { data } = await supabase.from("profiles").select("id, display_name, avatar_url, flag").ilike("display_name", "%" + q + "%").neq("id", id).limit(20);
+      const { data } = await supabase.from("profiles").select("id, display_name, avatar_url, flag").not("public_key", "is", null).ilike("display_name", "%" + q + "%").neq("id", id).limit(20);
       setSearchResults(data || []);
     }, 300);
     return () => clearTimeout(t);
@@ -336,7 +332,7 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
   if (activeChat) {
     return (
       <>
-        {callState && <ChatCallModal mode={callState.mode} callType={callState.callType} callRecord={callState.callRecord} roomUrl={callState.roomUrl} token={callState.token} otherUser={callState.otherUser} onClose={() => setCallState(null)} />}
+        {callState && <ChatCallModal mode={callState.mode} callType={callState.callType} callRecord={callState.callRecord} roomUrl={callState.roomUrl} token={callState.token} otherUser={callState.otherUser} onClose={closeCall} />}
         <div className="flex flex-col max-w-2xl mx-auto w-full" style={{ height: "calc(100dvh - 130px)" }}>
           <div className="flex items-center gap-2 p-3 border-b" style={{ borderColor: C.border }}>
             <button onClick={() => { setActiveChat(null); fetchConversations(); }} className="p-2 rounded-full" style={{ color: C.ivory }}><ArrowLeft size={20} /></button>
@@ -363,14 +359,14 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
                 <div key={m.id} className={`flex ${isMe ? "justify-end" : "justify-start"}`}>
                   <div className="group relative max-w-[82%]">
                     {m.reply_to_id && <div className="text-[11px] px-2 py-1 mb-1 rounded-lg opacity-70" style={{background:C.surface2,color:C.muted}}>Réponse à un message</div>}
-                    <div className="px-3 py-2 rounded-2xl text-sm" style={{ background: isMe ? C.gold : C.surface2, color: isMe ? "#000" : C.ivory }}>
+                    <div onClick={() => setActionsFor(actionsFor === m.id ? null : m.id)} className="px-3 py-2 rounded-2xl text-sm" style={{ background: isMe ? C.gold : C.surface2, color: isMe ? "#000" : C.ivory }}>
                       {m.type === "image" && m.media_url ? <img src={m.media_url} alt={m.file_name || "image"} className="rounded-xl max-h-72 max-w-full object-cover mb-1" loading="lazy" /> : null}
                       {m.type === "video" && m.media_url ? <video src={m.media_url} controls className="rounded-xl max-h-72 max-w-full mb-1" preload="metadata" /> : null}
                       {m.type === "voice" && m.media_url ? <audio src={m.media_url} controls className="max-w-full" /> : null}
                       <p className="break-words">{body}</p>
                       <div className="flex items-center justify-end gap-1 mt-1 opacity-60 text-[10px]">{m.encrypted && <span>🔒</span>}{isMe && <CheckCheck size={12}/>}</div>
                     </div>
-                    <div className="hidden group-hover:flex absolute -top-8 right-0 gap-1 rounded-xl p-1" style={{background:C.surface,border:`1px solid ${C.border}`}}>
+                    <div className={`${actionsFor === m.id ? "flex" : "hidden"} absolute -top-8 right-0 gap-1 rounded-xl p-1 z-20`} style={{background:C.surface,border:`1px solid ${C.border}`}}>
                       <button type="button" onClick={()=>setReactionFor(reactionFor===m.id?null:m.id)} title="Réagir"><Smile size={14}/></button>
                       <button type="button" onClick={()=>setReplyTo(m)} title="Répondre"><Reply size={14}/></button>
                       <button type="button" onClick={()=>handleStar(m.id)} title="Favori"><Star size={14} fill={starred.has(m.id)?"currentColor":"none"}/></button>
@@ -387,7 +383,7 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
             {replyTo && <div className="w-full text-xs px-3 py-2 rounded-xl" style={{background:C.surface2,color:C.muted}}>Réponse à : {replyTo.plaintext || replyTo.text}<button type="button" onClick={()=>setReplyTo(null)} className="float-right">✕</button></div>}
             <input ref={fileInputRef} type="file" className="hidden" onChange={handleFileSelect} />
             <button type="button" onClick={() => fileInputRef.current && fileInputRef.current.click()} className="p-2.5 rounded-xl border" style={{ borderColor: C.border, color: C.muted }}><Paperclip size={18} /></button>
-            <button type="button" onMouseDown={startRecording} onMouseUp={stopRecording} onTouchStart={startRecording} onTouchEnd={stopRecording} className="p-2.5 rounded-xl border" style={{ borderColor: recording ? "#EF4444" : C.border, color: recording ? "#EF4444" : C.muted }}><Mic size={18} /></button>
+            <button type="button" onClick={recording ? stopRecording : startRecording} className="p-2.5 rounded-xl border" style={{ borderColor: recording ? "#EF4444" : C.border, color: recording ? "#EF4444" : C.muted }}><Mic size={18} /></button>
             <input value={newMessage} onChange={(e) => { setNewMessage(e.target.value); broadcastTyping(true); }} placeholder="Message..." className="flex-1 px-4 py-3 rounded-xl border text-sm outline-none" style={{ background: C.surface2, borderColor: C.border, color: C.ivory }} />
             <button type="submit" className="p-3 rounded-xl" style={{ background: C.gold, color: "#000" }}><Send size={18} /></button>
           </form>
@@ -407,7 +403,7 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
           <div className="w-12 h-12 rounded-full bg-white/10 flex items-center justify-center">{c.otherUserFlag}</div>
           <div className="flex-1 min-w-0">
             <p className="font-semibold text-sm truncate" style={{ color: C.ivory }}>{c.otherUserName}</p>
-            <p className="text-xs truncate" style={{ color: C.muted }}>{c.lastMsg ? c.lastMsg.text : "Nouvelle conversation"}</p>
+            <p className="text-xs truncate" style={{ color: C.muted }}>{!c.lastMsg ? "Nouvelle conversation" : c.lastMsg.type === "voice" ? "🎤 Vocal" : c.lastMsg.type === "image" ? "📷 Photo" : c.lastMsg.type === "video" ? "🎬 Vidéo" : deserializePayload(c.lastMsg.text) ? "🔒 Message chiffré" : c.lastMsg.text}</p>
           </div>
         </button>
       ))}

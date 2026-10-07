@@ -123,7 +123,7 @@ if p:
     write(p, t)
 
 # ---------- MessagesTab.jsx ----------
-p = find("MessagesTab.jsx")
+p = "src/components/MessagesTab.jsx"
 print("MessagesTab:", p)
 if p:
     t = read(p)
