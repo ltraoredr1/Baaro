@@ -1,0 +1,40 @@
+create or replace function public.create_video_remix(p_video_id uuid, p_source_video_id uuid, p_mode text)
+returns void language plpgsql security definer set search_path = public as $$
+declare uid uuid := auth.uid();
+begin
+  if uid is null then raise exception 'AUTH_REQUIRED'; end if;
+  if p_mode not in ('remix','duet','react','quote','green_screen','reply') then raise exception 'MODE_INVALID'; end if;
+  if p_video_id = p_source_video_id then raise exception 'SAME_VIDEO'; end if;
+  if not exists (select 1 from public.videos where id = p_video_id and author_id = uid) then raise exception 'VIDEO_NOT_YOURS'; end if;
+  if not exists (
+    select 1 from public.videos s
+    where s.id = p_source_video_id
+      and coalesce(s.visibility,'public') = 'public'
+      and (case when p_mode = 'duet' then s.allow_duet else s.allow_remix end)
+      and not exists (select 1 from public.blocks b where b.blocker_id = s.author_id and b.blocked_id = uid)
+  ) then raise exception 'REMIX_NOT_ALLOWED'; end if;
+  insert into public.video_remixes(video_id, source_video_id, creator_id, mode)
+  values (p_video_id, p_source_video_id, uid, p_mode) on conflict (video_id) do nothing;
+  update public.videos
+     set content_mode = case when p_mode in ('duet','react','reply') then p_mode else 'remix' end
+   where id = p_video_id and author_id = uid;
+end $$;
+
+create or replace function public.join_video_challenge(p_challenge_id uuid, p_video_id uuid)
+returns void language plpgsql security definer set search_path = public as $$
+declare uid uuid := auth.uid();
+begin
+  if uid is null then raise exception 'AUTH_REQUIRED'; end if;
+  if not exists (select 1 from public.videos where id = p_video_id and author_id = uid) then raise exception 'VIDEO_NOT_YOURS'; end if;
+  if not exists (select 1 from public.video_challenges where id = p_challenge_id and status = 'active'
+                 and starts_at <= now() and (ends_at is null or ends_at > now())) then raise exception 'CHALLENGE_NOT_ACTIVE'; end if;
+  insert into public.video_challenge_entries(challenge_id, video_id, creator_id)
+  values (p_challenge_id, p_video_id, uid) on conflict do nothing;
+  update public.videos set challenge_id = p_challenge_id, content_mode = 'challenge'
+   where id = p_video_id and author_id = uid;
+end $$;
+
+revoke all on function public.create_video_remix(uuid,uuid,text) from public, anon;
+revoke all on function public.join_video_challenge(uuid,uuid) from public, anon;
+grant execute on function public.create_video_remix(uuid,uuid,text) to authenticated;
+grant execute on function public.join_video_challenge(uuid,uuid) to authenticated;
