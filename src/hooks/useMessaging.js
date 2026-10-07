@@ -169,10 +169,11 @@ export function useMessaging(conversation_id, current_user_id, recipient_id) {
 
         if (error) throw error;
 
-        setMessages((prev) => [
-         ...prev,
-          {...data, plaintext: text.trim(), encrypted: true, decryptFailed: false },
-        ]);
+        setMessages((prev) =>
+          prev.some((m) => m.id === data.id)
+            ? prev
+            : [...prev, { ...data, plaintext: text.trim(), encrypted: true, decryptFailed: false }]
+        );
         return { ok: true };
       } catch (err) {
         const msg = err.message || "Échec envoi";

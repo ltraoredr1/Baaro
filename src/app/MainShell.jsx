@@ -15,6 +15,9 @@ import { TabFallback } from "./TabFallback.jsx";
 import { OfflineBanner } from "../components/OfflineBanner.jsx";
 import { FutureModulePanel } from "../components/FutureModulePanel.jsx";
 import { saveLastTab, loadLastTab } from "../lib/perf.js";
+import { useCryptoKeys } from "../hooks/useCryptoKeys.js";
+import { useIncomingCalls } from "../hooks/useIncomingCalls.js";
+import { ChatCallModal } from "../components/ChatCallModal.jsx";
 
 const THEME_BG_MAP = {
   midnight: "#0B1220",
@@ -27,6 +30,23 @@ const FALLBACK_COLORS = {
   ivory: "#F5F3EF",
 };
 
+function LockedMessages({ onCreateAccount }) {
+  return (
+    <div className="max-w-md mx-auto text-center p-8 mt-10 rounded-3xl border"
+         style={{ borderColor: "rgba(217,174,82,0.2)", background: "rgba(255,255,255,0.04)" }}>
+      <div className="text-4xl mb-3">🔒</div>
+      <h2 className="font-bold text-lg mb-2" style={{ color: "#F5F3EF" }}>Messagerie réservée aux comptes</h2>
+      <p className="text-sm mb-5" style={{ color: "rgba(245,243,239,0.6)" }}>
+        Crée un compte pour discuter en privé et passer des appels.
+      </p>
+      <button onClick={onCreateAccount} className="px-5 py-3 rounded-xl font-bold text-sm"
+              style={{ background: "#D9AE52", color: "#000" }}>
+        Créer un compte
+      </button>
+    </div>
+  );
+}
+
 export function MainShell() {
   const {
     user,
@@ -37,6 +57,8 @@ export function MainShell() {
 
   const { showToast } = useToast();
   const id = user?.id;
+  useCryptoKeys(isAnonymous ? null : id);
+  const { incoming, clear: clearIncoming } = useIncomingCalls(isAnonymous ? null : id);
 
   useApplyPendingReferral({ showToast });
 
@@ -239,7 +261,9 @@ export function MainShell() {
 
   const isImmersive = activeTab === "videos";
 
-  const Tab = tabs[activeTab] || null;
+  const Tab = activeTab === "messages" && isAnonymous
+    ? LockedMessages
+    : (tabs[activeTab] || null);
 
   /* =========================================================
      TAB PROPS
@@ -289,6 +313,7 @@ export function MainShell() {
     messages: {
       id,
       onOpenProfile: setInspectingProfileId,
+      onCreateAccount: () => setActiveTab("settings"),
     },
 
     debates: {
@@ -337,6 +362,7 @@ export function MainShell() {
         paddingTop: "env(safe-area-inset-top)",
       }}
     >
+      {incoming && <ChatCallModal mode="incoming" {...incoming} onClose={clearIncoming} />}
       <OfflineBanner />
 
       <OnboardingModal
@@ -456,9 +482,12 @@ export function MainShell() {
             setInspectingProfileId(null);
             setProfileReadOnly(false);
           }}
-          onNavigateToMessages={() =>
-            setActiveTab("messages")
-          }
+          onNavigateToMessages={() => {
+            if (!isAnonymous) { try { sessionStorage.setItem("baaro:open_chat_with", inspectingProfileId); } catch {} }
+            setInspectingProfileId(null);
+            setProfileReadOnly(false);
+            setActiveTab("messages");
+          }}
           onOpenSettings={() => {
             setInspectingProfileId(null);
             setProfileReadOnly(false);

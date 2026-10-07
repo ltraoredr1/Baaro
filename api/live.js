@@ -281,6 +281,16 @@ async function handleToken(req, res, user, admin) {
   const body = req.body || {};
   const liveId = String(body.liveId || body.roomName || body.inviteCode || "").trim();
   if (!liveId) return res.status(400).json({ error: "liveId requis" });
+  // Appels 1-1 : autorisation via la table calls
+  if (liveId.startsWith("call-")) {
+    const { data: call } = await admin.from("calls").select("caller_id, callee_id, daily_room_name").eq("daily_room_name", liveId).maybeSingle();
+    if (!call) return res.status(404).json({ error: "Appel introuvable" });
+    if (call.caller_id !== user.id && call.callee_id !== user.id) return res.status(403).json({ error: "Tu ne fais pas partie de cet appel" });
+    try { await createDailyRoom(liveId, { maxParticipants: 2 }); } catch (e) { logWarn("live", "ensure call room", { message: e.message }); }
+    const isCaller = call.caller_id === user.id;
+    const callToken = await createMeetingToken(liveId, { userId: user.id, userName: body.userName || "BAARO", isOwner: isCaller });
+    return res.status(200).json({ ok: true, token: callToken, roomName: liveId, url: roomUrl(liveId), isOwner: isCaller });
+  }
   const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(liveId);
   const filters = ["invite_code.eq." + liveId.toLowerCase(), "daily_room_name.eq." + liveId];
   if (isUuid) filters.push("id.eq." + liveId);
