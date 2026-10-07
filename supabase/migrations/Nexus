@@ -38,3 +38,6 @@ revoke all on function public.create_video_remix(uuid,uuid,text) from public, an
 revoke all on function public.join_video_challenge(uuid,uuid) from public, anon;
 grant execute on function public.create_video_remix(uuid,uuid,text) to authenticated;
 grant execute on function public.join_video_challenge(uuid,uuid) to authenticated;
+
+drop policy if exists video_remixes_insert on public.video_remixes;
+drop policy if exists video_challenge_entries_insert on public.video_challenge_entries;
