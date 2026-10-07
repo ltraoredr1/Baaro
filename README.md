@@ -9,7 +9,8 @@ Le projet est conçu autour de quatre priorités :
 3. **Internationalisation** — interface multilingue, support du N'Ko et des langues ouest-africaines, contenu et recommandations adaptés aux régions.
 4. **Innovation** — IA, recommandation, traitement vidéo, traduction, mode hors-ligne, économie créateur et fonctions futures extensibles.
 
-> **Statut important :** ce dépôt contient le socle applicatif et les intégrations préparées pour la production. Avant une mise en production publique, exécuter les migrations sur un environnement de staging, les tests E2E/RLS et les vérifications des secrets. Aucun projet logiciel ne peut être déclaré « 100 % sécurisé » sans tests et audit indépendants.
+> **Conditions :
+> N'appliquer pas les migrations à n'importe comment ça maîtriser le projet
 
 ---
 
