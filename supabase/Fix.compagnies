@@ -1,0 +1,286 @@
+-- =====================================================================
+-- BAARO : tables Entreprises + avis + abonnements + activation securisee
+-- A executer UNE SEULE FOIS dans Supabase > SQL Editor.
+-- Le script se termine par ROLLBACK (essai a blanc, rien n'est garde).
+-- Si "Success" sans erreur : remplacer la derniere ligne par COMMIT
+-- et relancer. Ne touche a aucune table existante (aucun drop/delete).
+-- =====================================================================
+begin;
+
+-- Securite : s'arrete net si la table des tarifs manque
+do $$
+begin
+  if to_regclass('public.shop_pricing') is null then
+    raise exception 'La table shop_pricing est absente : ne pas continuer.';
+  end if;
+end $$;
+
+-- ---------- Tables ----------
+create table if not exists public.companies (
+  id uuid primary key default gen_random_uuid(),
+  owner_id uuid not null references auth.users(id) on delete cascade,
+  name text not null,
+  description text,
+  company_type text not null default 'transport',
+  category text,
+  country text not null default 'ML',
+  city text,
+  phone text, email text, website text, logo_url text,
+  currency text not null default 'XOF',
+  is_active boolean not null default false,
+  subscription_status text not null default 'none'
+    check (subscription_status in ('none','trial','active','expired')),
+  trial_ends_at timestamptz,
+  subscription_ends_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists companies_owner_idx on public.companies(owner_id);
+
+create table if not exists public.company_programs (
+  id uuid primary key default gen_random_uuid(),
+  company_id uuid not null references public.companies(id) on delete cascade,
+  title text not null,
+  description text,
+  program_type text not null default 'schedule',
+  origin text, destination text,
+  start_time time, end_time time,
+  days_of_week smallint[] not null default '{}',
+  frequency text,
+  price numeric(14,2), currency text,
+  sort_order int not null default 0,
+  is_active boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists company_programs_co_idx on public.company_programs(company_id);
+
+create table if not exists public.company_tariffs (
+  id uuid primary key default gen_random_uuid(),
+  company_id uuid not null references public.companies(id) on delete cascade,
+  name text not null,
+  description text,
+  price numeric(14,2) not null,
+  currency text,
+  unit text,
+  is_active boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists company_tariffs_co_idx on public.company_tariffs(company_id);
+
+create table if not exists public.company_infos (
+  id uuid primary key default gen_random_uuid(),
+  company_id uuid not null references public.companies(id) on delete cascade,
+  title text not null,
+  content text not null,
+  is_public boolean not null default true,
+  sort_order int not null default 0,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists company_infos_co_idx on public.company_infos(company_id);
+
+create table if not exists public.company_subscriptions (
+  id uuid primary key default gen_random_uuid(),
+  company_id uuid not null references public.companies(id) on delete cascade,
+  amount numeric(14,2) not null default 0,
+  currency text,
+  was_premium_rate boolean not null default false,
+  provider text,
+  payment_ref text unique,
+  status text not null default 'pending',
+  period_start timestamptz,
+  period_end timestamptz,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.company_reviews (
+  id uuid primary key default gen_random_uuid(),
+  company_id uuid not null references public.companies(id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  rating smallint not null check (rating between 1 and 5),
+  comment text check (comment is null or char_length(comment) <= 1000),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (company_id, user_id)
+);
+create index if not exists company_reviews_co_idx
+  on public.company_reviews(company_id, created_at desc);
+
+-- ---------- Fonctions d'aide ----------
+create or replace function public.company_is_mine(cid uuid) returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (select 1 from companies where id = cid and owner_id = auth.uid());
+$$;
+
+create or replace function public.company_is_visible(cid uuid) returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (
+    select 1 from companies c where c.id = cid and c.is_active and (
+      (c.subscription_status = 'active'
+        and (c.subscription_ends_at is null or c.subscription_ends_at > now()))
+      or (c.subscription_status = 'trial' and c.trial_ends_at > now())
+    )
+  );
+$$;
+
+-- Un seul essai gratuit par compte, impose cote base
+create or replace function public.companies_guard_trial() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if new.subscription_status = 'trial'
+     and exists (select 1 from companies where owner_id = new.owner_id) then
+    raise exception 'Offre d''essai deja utilisee';
+  end if;
+  return new;
+end $$;
+drop trigger if exists companies_guard_trial on public.companies;
+create trigger companies_guard_trial before insert on public.companies
+  for each row execute function public.companies_guard_trial();
+
+-- ---------- Activation apres paiement (appelee par le webhook) ----------
+create or replace function public.activate_company_subscription(
+  p_company_id uuid, p_payment_ref text, p_amount numeric,
+  p_currency text, p_provider text, p_was_premium boolean default false
+) returns void
+language plpgsql security definer set search_path = public as $$
+declare
+  v_sub company_subscriptions%rowtype;
+  v_base timestamptz;
+  v_end timestamptz;
+begin
+  select * into v_sub from company_subscriptions
+   where payment_ref = p_payment_ref and company_id = p_company_id
+   for update;
+  if not found then raise exception 'SUBSCRIPTION_NOT_FOUND'; end if;
+  if v_sub.status = 'active' then return; end if;   -- rejeu du webhook : sans effet
+  if v_sub.status <> 'pending' then raise exception 'SUBSCRIPTION_NOT_PAYABLE'; end if;
+  if v_sub.amount <> p_amount or v_sub.currency is distinct from p_currency then
+    raise exception 'AMOUNT_MISMATCH';
+  end if;
+
+  select greatest(now(), coalesce(subscription_ends_at, now())) into v_base
+    from companies where id = p_company_id;
+  v_end := v_base + interval '1 year';
+
+  update company_subscriptions
+     set status = 'active', provider = p_provider,
+         was_premium_rate = coalesce(p_was_premium, false),
+         period_start = v_base, period_end = v_end
+   where id = v_sub.id;
+
+  update companies
+     set is_active = true, subscription_status = 'active',
+         subscription_ends_at = v_end, updated_at = now()
+   where id = p_company_id;
+end $$;
+
+revoke all on function public.activate_company_subscription(uuid,text,numeric,text,text,boolean)
+  from public, anon, authenticated;
+grant execute on function public.activate_company_subscription(uuid,text,numeric,text,text,boolean)
+  to service_role;
+
+-- ---------- Securite (RLS) ----------
+alter table public.companies enable row level security;
+alter table public.company_programs enable row level security;
+alter table public.company_tariffs enable row level security;
+alter table public.company_infos enable row level security;
+alter table public.company_subscriptions enable row level security;
+alter table public.company_reviews enable row level security;
+
+-- companies
+drop policy if exists companies_select on public.companies;
+create policy companies_select on public.companies for select to authenticated
+  using (owner_id = auth.uid() or public.company_is_visible(id));
+
+drop policy if exists companies_insert on public.companies;
+create policy companies_insert on public.companies for insert to authenticated
+  with check (
+    owner_id = auth.uid() and (
+      (subscription_status = 'none' and is_active = false)
+      or (subscription_status = 'trial' and is_active = true
+          and trial_ends_at <= now() + interval '31 days')
+    )
+  );
+
+drop policy if exists companies_update on public.companies;
+create policy companies_update on public.companies for update to authenticated
+  using (owner_id = auth.uid()) with check (owner_id = auth.uid());
+
+drop policy if exists companies_delete on public.companies;
+create policy companies_delete on public.companies for delete to authenticated
+  using (owner_id = auth.uid());
+
+-- Le proprietaire ne modifie que le profil, jamais is_active ni l'abonnement
+revoke update on public.companies from authenticated, anon;
+grant update (name, description, company_type, category, country, city,
+              phone, email, website, logo_url, updated_at)
+  on public.companies to authenticated;
+
+-- programs / tariffs : lecture si entreprise visible, ecriture proprietaire
+do $$
+declare t text;
+begin
+  foreach t in array array['company_programs','company_tariffs'] loop
+    execute format('drop policy if exists %I on public.%I', t||'_select', t);
+    execute format('create policy %I on public.%I for select to authenticated using (company_is_mine(company_id) or (is_active and company_is_visible(company_id)))', t||'_select', t);
+  end loop;
+  foreach t in array array['company_programs','company_tariffs','company_infos'] loop
+    execute format('drop policy if exists %I on public.%I', t||'_write', t);
+    execute format('create policy %I on public.%I for all to authenticated using (company_is_mine(company_id)) with check (company_is_mine(company_id))', t||'_write', t);
+  end loop;
+end $$;
+
+drop policy if exists company_infos_select on public.company_infos;
+create policy company_infos_select on public.company_infos for select to authenticated
+  using (company_is_mine(company_id) or (is_public and company_is_visible(company_id)));
+
+-- subscriptions : le montant payant DOIT etre le tarif officiel
+drop policy if exists company_subs_select on public.company_subscriptions;
+create policy company_subs_select on public.company_subscriptions for select to authenticated
+  using (company_is_mine(company_id));
+
+drop policy if exists company_subs_insert on public.company_subscriptions;
+create policy company_subs_insert on public.company_subscriptions
+  for insert to authenticated
+  with check (
+    public.company_is_mine(company_id) and (
+      (status = 'trial' and amount = 0 and provider = 'trial')
+      or (status = 'pending' and amount = (
+            select p.amount_normal from public.shop_pricing p
+            where p.currency = company_subscriptions.currency))
+    )
+  );
+revoke update, delete on public.company_subscriptions from authenticated, anon;
+
+-- reviews
+drop policy if exists company_reviews_select on public.company_reviews;
+create policy company_reviews_select on public.company_reviews
+  for select to authenticated
+  using (public.company_is_visible(company_id) or public.company_is_mine(company_id));
+
+drop policy if exists company_reviews_insert on public.company_reviews;
+create policy company_reviews_insert on public.company_reviews
+  for insert to authenticated
+  with check (
+    user_id = auth.uid()
+    and public.company_is_visible(company_id)
+    and not public.company_is_mine(company_id)
+  );
+
+drop policy if exists company_reviews_update on public.company_reviews;
+create policy company_reviews_update on public.company_reviews
+  for update to authenticated
+  using (user_id = auth.uid()) with check (user_id = auth.uid());
+
+drop policy if exists company_reviews_delete on public.company_reviews;
+create policy company_reviews_delete on public.company_reviews
+  for delete to authenticated using (user_id = auth.uid());
+
+revoke update on public.company_reviews from authenticated, anon;
+grant update (rating, comment, updated_at) on public.company_reviews to authenticated;
+
+notify pgrst, 'reload schema';
+
+rollback;   -- <<< remplacer par : commit;   une fois que tout passe sans erreur
