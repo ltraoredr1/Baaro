@@ -503,7 +503,7 @@ export function MainShell() {
       <NotificationDrawer
         isOpen={notifDrawerOpen}
         onClose={() => setNotifDrawerOpen(false)}
-        id={id}
+        user_id={id}
       />
 
       {/* =====================================================

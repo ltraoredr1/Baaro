@@ -54,8 +54,8 @@ function GlobalSearchModal({ isOpen, onClose, onSelectUser, onSelectTab, onSelec
   const flatItems = useMemo(() => [
     ...results.users.map((u) => ({ type: 'user', data: u })),
     ...results.groups.map((g) => ({ type: 'group', data: g })),
-    ...results.debates.map((d) => ({ type: 'debate', data: d })),
     ...results.posts.map((p) => ({ type: 'post', data: p })),
+    ...results.debates.map((d) => ({ type: 'debate', data: d })),
   ], [results]);
 
   useEffect(() => {
@@ -227,14 +227,14 @@ function GlobalSearchModal({ isOpen, onClose, onSelectUser, onSelectTab, onSelec
           )}
 
           {showResults && !error && results.posts.length > 0 && (
-            <div className="pt-1"><p className="px-3 pb-1 pt-2 text-xs" style={{color:COLORS.mutedLight}}>Publications</p>{results.posts.map(p=><button key={p.id} type="button" onClick={()=>selectItem({type:'post',data:p})} className="block w-full rounded-xl px-3 py-2 text-left"><span className="text-sm line-clamp-2">{p.content||'Publication média'}</span></button>)}</div>
+            <div className="pt-1"><p className="px-3 pb-1 pt-2 text-xs" style={{color:COLORS.mutedLight}}>Publications</p>{results.posts.map(p=><button key={p.id} type="button" onClick={()=>selectItem({type:'post',data:p})} className="block w-full rounded-xl px-3 py-2 text-left"><span className="text-sm line-clamp-2">{p.text||'Publication média'}</span></button>)}</div>
           )}
 
           {showResults && !error && results.debates.length > 0 && (
             <div className="pt-1" style={{ borderTop: results.users.length > 0 ? `1px solid ${COLORS.border}` : 'none' }}>
               <p className="px-3 pb-1 pt-2 text-xs" style={{ color: COLORS.mutedLight }}>Débats</p>
               {results.debates.map((debate, i) => {
-                const index = results.users.length + i;
+                const index = results.users.length + results.groups.length + results.posts.length + i;
                 return (
                   <button
                     key={debate.id}
