@@ -261,6 +261,7 @@ Le module de messagerie comprend le socle suivant :
 - fonctions IA : résumé, réponse intelligente, traduction, reformulation et extraction de tâches.
 
 Les clés privées ne doivent pas être exposées au serveur lorsque le mécanisme E2E du client est utilisé.
+Les comptes anonymes ne peuvent pas utiliser la messagerie. 
 
 ---
 
