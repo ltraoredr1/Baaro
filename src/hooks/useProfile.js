@@ -125,29 +125,28 @@ export function useProfile(user_id, showToast) {
       if (!assert_user_id(user_id)) return { ok: false };
       setSaving(true);
       try {
-        // Clé primaire = auth.users.id — handle/bio ne sont que des attributs
-        const payload = {
-          id: user_id,
-          display_name: updates.display_name?.trim() || "Nouveau membre",
-          handle:
-            updates.handle?.trim() && updates.handle.trim() !== "@membre"
-              ? updates.handle.trim()
-              : null,
-          flag: updates.flag || "🌍",
-          bio: updates.bio?.trim() || "",
-          avatar_url: updates.avatar_url ?? null,
-          cover_url: updates.cover_url ?? null,
-          first_name: updates.first_name?.trim() || null,
-          last_name: updates.last_name?.trim() || null,
-          birth_date: updates.birth_date || null,
-          location: updates.location?.trim() || null,
-          country: updates.country || null,
-          updated_at: new Date().toISOString(),
-        };
+        // Seuls les champs fournis sont modifiés : jamais d'écrasement par null
+        const payload = { updated_at: new Date().toISOString() };
+        const has = (k) => Object.prototype.hasOwnProperty.call(updates, k);
+        if (has("display_name")) payload.display_name = updates.display_name?.trim() || "Nouveau membre";
+        if (has("handle")) {
+          const h = updates.handle?.trim();
+          if (h && h !== "@membre") payload.handle = h;
+        }
+        if (has("flag")) payload.flag = updates.flag || "🌍";
+        if (has("bio")) payload.bio = updates.bio?.trim() || "";
+        if (has("avatar_url")) payload.avatar_url = updates.avatar_url ?? null;
+        if (has("cover_url")) payload.cover_url = updates.cover_url ?? null;
+        if (has("first_name")) payload.first_name = updates.first_name?.trim() || null;
+        if (has("last_name")) payload.last_name = updates.last_name?.trim() || null;
+        if (has("birth_date")) payload.birth_date = updates.birth_date || null;
+        if (has("location")) payload.location = updates.location?.trim() || null;
+        if (has("country")) payload.country = updates.country || null;
 
         const { data, error } = await supabase
           .from("profiles")
-          .upsert(payload, { onConflict: "id" })
+          .update(payload)
+          .eq("id", user_id)
           .select(PROFILE_SELECT)
           .single();
 

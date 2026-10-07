@@ -44,15 +44,13 @@ export default function ProfilePhotosEditor({ user_id, profile, onUpdated }) {
     if (!isAuthUserId(user_id)) {
       throw new Error("Identité invalide : auth.users.id requis");
     }
-    const { error } = await supabase.from("profiles").upsert(
-      {
-        id: user_id, // = auth.users.id
-        ...patch,
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: "id" }
-    );
+    const { data, error } = await supabase
+      .from("profiles")
+      .update({ ...patch, updated_at: new Date().toISOString() })
+      .eq("id", user_id)
+      .select("id");
     if (error) throw error;
+    if (!data || data.length === 0) throw new Error("Profil introuvable");
     onUpdated?.(patch);
   }
 
