@@ -466,6 +466,10 @@ export function VideosTab({ onRewardPoints, onExit }) {
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [nextGenOpen, setNextGenOpen] = useState(false);
+  const [nexusTools, setNexusTools] = useState([]);
+  const [remixSource, setRemixSource] = useState(null);
+  const [challenges, setChallenges] = useState([]);
+  const [challengeId, setChallengeId] = useState("");
   const [engagement, setEngagement] = useState(null);
 
   // Créateur caméra : aucun plafond de durée imposé par BAARO.
@@ -1388,6 +1392,16 @@ export function VideosTab({ onRewardPoints, onExit }) {
     setPreviewUrl(URL.createObjectURL(file));
   };
 
+  const loadChallenges = async () => {
+    const { data } = await supabase
+      .from("video_challenges")
+      .select("id,name,hashtag")
+      .eq("status", "active")
+      .order("created_at", { ascending: false })
+      .limit(20);
+    setChallenges(data || []);
+  };
+
   const handleUpload = async () => {
     if (!selectedFile) {
       showToast("Sélectionne une vidéo.", "error");
@@ -1449,10 +1463,36 @@ export function VideosTab({ onRewardPoints, onExit }) {
 
       if (dbError) throw dbError;
 
+      if (created?.id && remixSource) {
+        const { error: remixError } = await supabase.rpc("create_video_remix", {
+          p_video_id: created.id,
+          p_source_video_id: remixSource.id,
+          p_mode: remixSource.mode,
+        });
+        if (remixError) {
+          showToast(
+            remixError.message === "REMIX_NOT_ALLOWED"
+              ? "L'auteur n'autorise pas ce remix."
+              : "Vidéo publiée, mais le lien de remix n'a pas été enregistré.",
+            "error"
+          );
+        }
+      }
+      if (created?.id && challengeId) {
+        const { error: challengeError } = await supabase.rpc("join_video_challenge", {
+          p_challenge_id: challengeId,
+          p_video_id: created.id,
+        });
+        if (challengeError) showToast("Vidéo publiée, mais l'inscription au défi a échoué.", "error");
+      }
+
       setUploadProgress(100);
       onRewardPoints?.("publish_video", "Vidéo publiée", created?.id);
       showPointsReward?.(25, "Vidéo publiée");
       showToast("Vidéo publiée avec succès 🎉", "success");
+      setRemixSource(null);
+      setNexusTools([]);
+      setChallengeId("");
       if (degraded && soundUrl) {
         showToast("Son non enregistré : applique la migration 053_video_sounds.sql.", "error");
       }
@@ -1797,6 +1837,19 @@ export function VideosTab({ onRewardPoints, onExit }) {
                     <Repeat2 size={21} />
                   </button>
 
+                  {video.author_id !== user?.id && (
+                    <button
+                      onClick={() => {
+                        setRemixSource({ id: video.id, mode: "remix", handle: profile.handle || "membre" });
+                        setShowUpload(true);
+                      }}
+                      className="h-11 w-11 rounded-full bg-white/10 backdrop-blur-md flex items-center justify-center"
+                      aria-label="Remixer"
+                    >
+                      <span className="text-lg">🔀</span>
+                    </button>
+                  )}
+
                   {video.author_id !== user?.id && <TipButton recipientId={video.author_id} compact />}
 
                   <button
@@ -1945,7 +1998,9 @@ export function VideosTab({ onRewardPoints, onExit }) {
       <VideoNextGenStudio
         open={nextGenOpen}
         onClose={() => setNextGenOpen(false)}
-        onCreate={() => {
+        onCreate={(tools) => {
+          setNexusTools(Array.isArray(tools) ? tools : []);
+          if (Array.isArray(tools) && tools.includes("challenge")) loadChallenges();
           setNextGenOpen(false);
           setShowUpload(true);
         }}
@@ -2037,6 +2092,9 @@ export function VideosTab({ onRewardPoints, onExit }) {
                 onClick={() => {
                   if (!uploading) {
                     closeCamera();
+                    setRemixSource(null);
+                    setNexusTools([]);
+                    setChallengeId("");
                     setShowUpload(false);
                     resetUpload();
                   }
@@ -2050,11 +2108,12 @@ export function VideosTab({ onRewardPoints, onExit }) {
             <div className="p-4 space-y-4">
               {!selectedFile ? (
                 <div className="space-y-3">
-                  <div className="grid grid-cols-3 gap-1 p-1 rounded-2xl bg-white/5">
+                  <div className="grid grid-cols-4 gap-1 p-1 rounded-2xl bg-white/5">
                     {[
                       ["video", "🎬 Vidéo"],
                       ["photo", "🖼️ Photos"],
                       ["text", "✍️ Texte"],
+                      ["mix", "🎞️ Mix"],
                     ].map(([key, label]) => (
                       <button
                         key={key}
@@ -2471,6 +2530,61 @@ export function VideosTab({ onRewardPoints, onExit }) {
                     className="h-5 w-5"
                   />
                 </label>
+              )}
+
+              {(remixSource || nexusTools.length > 0) && (
+                <div className="rounded-2xl border border-yellow-400/30 bg-yellow-400/[0.06] p-3 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-black flex items-center gap-1.5">
+                      <Sparkles size={13} /> Options Nexus
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRemixSource(null);
+                        setNexusTools([]);
+                        setChallengeId("");
+                      }}
+                      className="text-[10px] text-white/50"
+                    >
+                      Effacer
+                    </button>
+                  </div>
+
+                  {remixSource ? (
+                    <div className="flex items-center justify-between gap-2 text-xs">
+                      <span className="truncate">Basé sur @{remixSource.handle}</span>
+                      <select
+                        value={remixSource.mode}
+                        onChange={(event) => setRemixSource((prev) => ({ ...prev, mode: event.target.value }))}
+                        className="bg-transparent outline-none font-bold"
+                      >
+                        <option value="remix" className="text-black">Remix</option>
+                        <option value="duet" className="text-black">Duo</option>
+                        <option value="react" className="text-black">Réaction</option>
+                        <option value="reply" className="text-black">Réponse</option>
+                      </select>
+                    </div>
+                  ) : (nexusTools.includes("remix") || nexusTools.includes("duet")) && (
+                    <p className="text-[11px] text-white/50">
+                      Pour remixer ou faire un duo, ferme cet écran, ouvre la vidéo d'un autre créateur et touche 🔀.
+                    </p>
+                  )}
+
+                  {nexusTools.includes("challenge") && (
+                    <select
+                      value={challengeId}
+                      onChange={(event) => setChallengeId(event.target.value)}
+                      className="w-full rounded-xl bg-white/10 px-3 py-2 text-xs outline-none"
+                    >
+                      <option value="" className="text-black">Participer à un défi…</option>
+                      {challenges.length === 0 && <option disabled className="text-black">Aucun défi actif</option>}
+                      {challenges.map((c) => (
+                        <option key={c.id} value={c.id} className="text-black">#{c.hashtag} — {c.name}</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
               )}
 
               {uploading && (
