@@ -43,6 +43,27 @@ function applyCursor(query, cursor) {
   );
 }
 
+function ExpandableText({ text, children }) {
+  const [open, setOpen] = useState(false);
+  const raw = String(text || "");
+  const isLong = raw.length > 280 || (raw.match(/\n/g) || []).length >= 5;
+  const clamp = isLong && !open
+    ? { display: "-webkit-box", WebkitLineClamp: 6, WebkitBoxOrient: "vertical", overflow: "hidden" }
+    : {};
+  return (
+    <div className="min-w-0">
+      <div className="text-sm leading-relaxed whitespace-pre-wrap break-words" style={{ color: COLORS.ivory, ...clamp }}>
+        {children}
+      </div>
+      {isLong && (
+        <button type="button" onClick={() => setOpen((v) => !v)} className="mt-1 text-xs font-bold hover:underline" style={{ color: COLORS.teal }}>
+          {open ? "Voir moins" : "Voir plus"}
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function FeedTab({ user_id, onOpenProfile, onRewardPoints }) {
   const { showToast, showPointsReward } = useToast();
   const [posts, setPosts] = useState([]);
@@ -705,7 +726,7 @@ export function FeedTab({ user_id, onOpenProfile, onRewardPoints }) {
             const comments = commentsMap[post.id] || [];
 
             return (
-              <article key={post.id} data-post-id={post.id} ref={(el) => { if (el) postViewRefs.current[post.id] = el; else delete postViewRefs.current[post.id]; }} className="glass-card rounded-2xl p-5 shadow-xl border flex flex-col gap-3" style={{ borderColor: COLORS.border }}>
+              <article key={post.id} data-post-id={post.id} ref={(el) => { if (el) postViewRefs.current[post.id] = el; else delete postViewRefs.current[post.id]; }} className="glass-card rounded-2xl p-5 shadow-xl border flex flex-col gap-3 min-w-0 break-words" style={{ borderColor: COLORS.border }}>
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3 cursor-pointer group" onClick={() => onOpenProfile?.(post.author_id)}>
                     <div className="w-10 h-10 rounded-full overflow-hidden border flex items-center justify-center font-bold text-sm" style={{ borderColor: COLORS.borderGold, background: COLORS.surface }}>
@@ -753,9 +774,9 @@ export function FeedTab({ user_id, onOpenProfile, onRewardPoints }) {
                     </div>
                   </div>
                 ) : (
-                  <p className="text-sm leading-relaxed whitespace-pre-wrap" style={{ color: COLORS.ivory }}>
+                  <ExpandableText text={isTranslated ? translatedMap[post.id] : post.text}>
                     {isTranslated ? translatedMap[post.id] : <RichTextRenderer content={post.text} />}
-                  </p>
+                  </ExpandableText>
                 )}
                 
                 {isTranslated && <p className="text-[10px]" style={{ color: COLORS.muted }}>Traduit par BAARO</p>}
@@ -777,11 +798,8 @@ export function FeedTab({ user_id, onOpenProfile, onRewardPoints }) {
 
                   {/* 2. Actions sociales avancées (Réactions, Favoris, Partage, Suivi) */}
                   <SocialPostEnhancements post={post} user_id={meId} />
-                  {post.author_id !== meId && <TipButton recipientId={post.author_id} postId={post.id} />}
-                  <div className="flex items-center gap-2 text-[10px]" style={{ color: COLORS.muted }}>
+                  <div className="flex flex-wrap items-center gap-2 text-[10px]" style={{ color: COLORS.muted }}>
                     <span>👁 {Number(post.views_count || 0)} vues</span>
-                    <span>·</span>
-                    <span>❤️ {Number(post.likes || 0)} likes</span>
                     {post.author_id === meId && (
                       <>
                         <button type="button" onClick={() => setEngagement({ type: "postViews", id: post.id })} className="ml-auto rounded-lg border px-2 py-1 hover:text-white" style={{ borderColor: COLORS.border }}>Voir les vues</button>
@@ -791,7 +809,7 @@ export function FeedTab({ user_id, onOpenProfile, onRewardPoints }) {
                   </div>
 
                   {/* 3. Commentaires et Traduction (conservés) */}
-                  <div className="flex items-center gap-4">
+                  <div className="flex items-center gap-4 w-full">
                     <button
                       onClick={() => {
                         const next = !commentOpen[post.id];
@@ -812,6 +830,9 @@ export function FeedTab({ user_id, onOpenProfile, onRewardPoints }) {
                       onTranslated={(translated) => setTranslatedMap((prev) => ({ ...prev, [post.id]: translated }))}
                       onClear={() => setTranslatedMap((prev) => ({ ...prev, [post.id]: null }))}
                     />
+                    <div className="ml-auto">
+                      {post.author_id !== meId && <TipButton recipientId={post.author_id} postId={post.id} />}
+                    </div>
                   </div>
                 </div>
 

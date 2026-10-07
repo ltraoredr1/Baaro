@@ -279,20 +279,20 @@ export const SocialPostEnhancements = memo(function SocialPostEnhancements({ pos
       const { data, error } = await supabase.rpc("toggle_follow", { p_target: post.author_id });
       if (error) throw error;
       setFollowing(!!data);
-      if (data) showToast("Vous suivez maintenant ce compte", "success");
-    } catch (error) { console.error("[BAARO] Erreur abonnement:", error); showToast("Impossible de modifier l’abonnement", "error"); }
+      showToast(data ? "Vous suivez maintenant ce compte" : "Vous ne suivez plus ce compte", "success");
+    } catch (error) { console.error("[BAARO] Erreur abonnement:", error); showToast(`Abonnement impossible : ${error?.message || "erreur inconnue"}`, "error"); }
     finally { setBusy(false); }
   };
 
   return (
-    <div className="flex flex-wrap items-center gap-2">
+    <div className="flex flex-nowrap items-center gap-1.5 w-full">
       {post?.author_id && post.author_id !== user_id && (
-        <button type="button" onClick={follow} disabled={busy} className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[11px] font-bold border transition-all active:scale-95" style={{ borderColor: following ? COLORS.borderTeal : COLORS.border, color: following ? COLORS.teal : COLORS.muted }}>
+        <button type="button" onClick={follow} disabled={busy} className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-[11px] font-bold border transition-all active:scale-95" style={{ borderColor: following ? COLORS.borderTeal : COLORS.border, color: following ? COLORS.teal : COLORS.muted }}>
           {following ? <Check size={13} /> : <UserPlus size={13} />}{following ? "Abonné" : "Suivre"}
         </button>
       )}
       <div className="relative">
-        <button type="button" onClick={() => setPicker((value) => !value)} disabled={busy} className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs border transition-all duration-200 active:scale-95" style={{ borderColor: COLORS.border, color: current ? COLORS.ivory : COLORS.muted }}>
+        <button type="button" onClick={() => setPicker((value) => !value)} disabled={busy} className="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-xs border transition-all duration-200 active:scale-95" style={{ borderColor: COLORS.border, color: current ? COLORS.ivory : COLORS.muted }}>
           <span className={`inline-block transition-transform duration-300 ${pop ? "scale-150" : "scale-100"}`}>{current?.label || "👍"}</span>
           <span className={`transition-all duration-300 ${pop ? "scale-110 font-bold" : "scale-100"}`}>{reactionCount || "J’aime"}</span>
         </button>
@@ -306,10 +306,10 @@ export const SocialPostEnhancements = memo(function SocialPostEnhancements({ pos
         )}
       </div>
       <button type="button" onClick={bookmark} disabled={busy} className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs transition-all active:scale-95 disabled:opacity-50" style={{ color: saved ? COLORS.gold : COLORS.muted }}>
-        <Bookmark size={15} fill={saved ? "currentColor" : "none"} />{saved ? "Enregistré" : "Enregistrer"}
+        <Bookmark size={15} fill={saved ? "currentColor" : "none"} /><span className="hidden sm:inline">{saved ? "Enregistré" : "Enregistrer"}</span>
       </button>
-      <button type="button" onClick={share} disabled={busy} className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs ml-auto transition-all active:scale-95 disabled:opacity-50" style={{ color: COLORS.muted }}>
-        <Share2 size={15} />{shareCount || "Partager"}
+      <button type="button" onClick={share} disabled={busy} className="flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs ml-auto transition-all active:scale-95 disabled:opacity-50" style={{ color: COLORS.muted }}>
+        <Share2 size={15} />{shareCount ? shareCount : <span className="hidden sm:inline">Partager</span>}
       </button>
     </div>
   );
@@ -336,7 +336,7 @@ export const SocialSuggestions = memo(function SocialSuggestions({ user_id, onOp
       const { data, error } = await supabase.rpc("toggle_follow", { p_target: target });
       if (error) throw error;
       if (data) { setItems((prev) => prev.filter((x) => x.id !== target)); showToast("Abonnement ajouté", "success"); }
-    } catch (error) { console.error("[BAARO] Erreur suggestion follow:", error); showToast("Impossible de suivre ce compte", "error"); }
+    } catch (error) { console.error("[BAARO] Erreur suggestion follow:", error); showToast(`Abonnement impossible : ${error?.message || "erreur inconnue"}`, "error"); }
     finally { setBusyId(null); }
   };
 
