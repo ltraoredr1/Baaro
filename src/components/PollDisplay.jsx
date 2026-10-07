@@ -11,9 +11,9 @@ import { useToast } from "./ToastContext.jsx";
  *  - question
  *  - options: string[]
  *  - endsAt: string | null
- *  - userId: current user id
+ *  - user_id: current user id
  */
-export function PollDisplay({ postId, question, options = [], endsAt, userId }) {
+export function PollDisplay({ postId, question, options = [], endsAt, user_id }) {
   const { showToast } = useToast();
   const [votes, setVotes] = useState([]); // [{ option_index, count }]
   const [myVote, setMyVote] = useState(null);
@@ -41,7 +41,7 @@ export function PollDisplay({ postId, question, options = [], endsAt, userId }) 
 
         (data || []).forEach((row) => {
           counts[row.option_index] = (counts[row.option_index] || 0) + 1;
-          if (userId && row.user_id === userId) mine = row.option_index;
+          if (user_id && row.user_id === user_id) mine = row.option_index;
         });
 
         setVotes(
@@ -56,10 +56,10 @@ export function PollDisplay({ postId, question, options = [], endsAt, userId }) 
     };
     load();
     return () => { cancelled = true; };
-  }, [postId, options, userId, showToast]);
+  }, [postId, options, user_id, showToast]);
 
   const handleVote = async (optionIndex) => {
-    if (!userId) {
+    if (!user_id) {
       showToast("Connecte-toi pour voter", "error");
       return;
     }
@@ -77,7 +77,7 @@ export function PollDisplay({ postId, question, options = [], endsAt, userId }) 
     try {
       const { error } = await supabase.from("post_poll_votes").insert({
         post_id: postId,
-        user_id: userId,
+        user_id: user_id,
         option_index: optionIndex,
       });
       if (error) throw error;

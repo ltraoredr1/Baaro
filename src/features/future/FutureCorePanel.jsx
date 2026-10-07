@@ -13,32 +13,32 @@ const MODULES = [
   { key: "observability", title: "Observabilité", desc: "Santé, performances, sécurité et jobs suivis sans données sensibles.", icon: Activity },
 ];
 
-export function FutureCorePanel({ userId }) {
+export function FutureCorePanel({ user_id }) {
   const [prefs, setPrefs] = useState({});
   const [busy, setBusy] = useState(null);
   const [notice, setNotice] = useState("");
 
   useEffect(() => {
-    if (!userId) return;
-    supabase.from("future_preferences").select("module_key,enabled").eq("user_id", userId).then(({ data }) => {
+    if (!user_id) return;
+    supabase.from("future_preferences").select("module_key,enabled").eq("user_id", user_id).then(({ data }) => {
       const next = {};
       for (const row of data || []) next[row.module_key] = row.enabled;
       setPrefs(next);
     });
-  }, [userId]);
+  }, [user_id]);
 
   async function toggle(moduleKey) {
-    if (!userId || busy) return;
+    if (!user_id || busy) return;
     setBusy(moduleKey); setNotice("");
     const enabled = prefs[moduleKey] === false ? true : !(prefs[moduleKey] ?? true);
-    const { error } = await supabase.from("future_preferences").upsert({ user_id: userId, module_key: moduleKey, enabled }, { onConflict: "user_id,module_key" });
+    const { error } = await supabase.from("future_preferences").upsert({ user_id: user_id, module_key: moduleKey, enabled }, { onConflict: "user_id,module_key" });
     if (error) setNotice("Impossible d'enregistrer cette préférence pour le moment.");
     else setPrefs(p => ({ ...p, [moduleKey]: enabled }));
     setBusy(null);
   }
 
   async function exportData() {
-    if (!userId) return;
+    if (!user_id) return;
     setBusy("export"); setNotice("");
     const { data, error } = await supabase.rpc("future_export_user_data");
     if (error) setNotice("L'export est temporairement indisponible.");

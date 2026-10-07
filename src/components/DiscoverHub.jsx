@@ -4,7 +4,7 @@ import { supabase } from "../supabaseClient.js";
 import { COLORS } from "../theme.js";
 import FollowButton from "../features/friends/FollowButton.jsx";
 
-export function DiscoverHub({ userId, onOpenPost }) {
+export function DiscoverHub({ user_id, onOpenPost }) {
   const [videos, setVideos] = useState([]);
   const [suggestions, setSuggestions] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -37,9 +37,9 @@ export function DiscoverHub({ userId, onOpenPost }) {
 
       // 3. Suggestions - avec fallback si RPC n'existe pas
       let suggs = [];
-      if (userId) {
+      if (user_id) {
         try {
-          const { data, error } = await supabase.rpc("get_social_suggestions", { p_user_id: userId, p_limit: 8 });
+          const { data, error } = await supabase.rpc("get_social_suggestions", { p_user_id: user_id, p_limit: 8 });
           if (!error && data) suggs = data;
         } catch {
           // RPC n'existe pas -> fallback
@@ -49,7 +49,7 @@ export function DiscoverHub({ userId, onOpenPost }) {
         const { data: fallback } = await supabase
         .from("profiles")
         .select("id, display_name, handle, avatar_url")
-        .neq("id", userId || "")
+        .neq("id", user_id || "")
         .order("created_at", { ascending: false })
         .limit(8);
         suggs = fallback || [];
@@ -62,7 +62,7 @@ export function DiscoverHub({ userId, onOpenPost }) {
     } finally {
       setLoading(false);
     }
-  }, [userId]);
+  }, [user_id]);
 
   useEffect(() => { load(); }, [load]);
 

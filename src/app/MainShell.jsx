@@ -245,10 +245,10 @@ export function MainShell() {
      TAB PROPS
      ========================================================= */
   const tabProps = {
-    innovation: { userId: id },
+    innovation: { user_id: id },
     feed: {
       id,
-      userId: id,
+      user_id: id,
       onOpenProfile: setInspectingProfileId,
     },
 
@@ -261,7 +261,7 @@ export function MainShell() {
 
     community: {
       id,
-      userId: id,
+      user_id: id,
       onOpenProfile: setInspectingProfileId,
     },
 
@@ -271,7 +271,7 @@ export function MainShell() {
     },
 
     discover: {
-      userId: id,
+      user_id: id,
       onOpenPost: () => setActiveTab("feed"),
       onOpenLive: () => setActiveTab("debates"),
       onOpenProfile: setInspectingProfileId,
@@ -319,7 +319,7 @@ export function MainShell() {
 
     shop: {
       id,
-      userId: id,
+      user_id: id,
     },
 
     economy: { id },

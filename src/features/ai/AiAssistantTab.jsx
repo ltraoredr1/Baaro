@@ -13,7 +13,7 @@ const PRESETS = [
 ];
 
 export function AiAssistantTab({
-  userId,
+  user_id,
   userProfile,
   onRewardPoints,
 }) {

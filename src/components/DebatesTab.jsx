@@ -174,8 +174,8 @@ function SkeletonCard() {
 }
 
 export default function DebatesTab({ id, currentUserId, onRewardPoints, onOpenProfile }) {
-  const userId = currentUserId || id || null;
-  const { rooms: myRooms, loadingRooms, createRoom, joinByCode, loadRooms } = useDebates(userId);
+  const user_id = currentUserId || id || null;
+  const { rooms: myRooms, loadingRooms, createRoom, joinByCode, loadRooms } = useDebates(user_id);
   const [debates, setDebates] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);

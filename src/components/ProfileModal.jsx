@@ -306,7 +306,7 @@ export function ProfileModal({
                       Photos de profil
                     </p>
                     <ProfilePhotosEditor
-                      userId={currentUserId}
+                      user_id={currentUserId}
                       profile={profile}
                       onUpdated={() => reload?.()}
                     />
@@ -315,7 +315,7 @@ export function ProfileModal({
                     <p className="text-xs font-bold uppercase tracking-widest mb-3" style={{ color: COLORS.gold }}>
                       Contacts & réseaux
                     </p>
-                    <ProfileContactsLinks userId={currentUserId} />
+                    <ProfileContactsLinks user_id={currentUserId} />
                   </div>
                 </div>
               )}

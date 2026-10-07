@@ -91,7 +91,7 @@ export function StoriesTab({ id, onOpenProfile }) {
       if (mediaFile) {
         const result = await uploadExternalMedia(mediaFile, {
           folder: 'posts',
-          userId: id,
+          user_id: id,
           maxBytes: 100 * 1024 * 1024,
         });
         mediaUrl = result.url;

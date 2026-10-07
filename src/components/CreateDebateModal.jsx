@@ -90,8 +90,8 @@ export function CreateDebateModal(props) {
     try {
       var sessionRes = await supabase.auth.getSession();
       var session = sessionRes.data && sessionRes.data.session;
-      var userId = session && session.user && session.user.id;
-      if (!userId) {
+      var user_id = session && session.user && session.user.id;
+      if (!user_id) {
         throw new Error(
           "Tu dois etre connecte pour creer un live. Reconnecte-toi."
         );
@@ -109,7 +109,7 @@ export function CreateDebateModal(props) {
           topic: finalTopic,
           mode: finalMode,
           invite_code: inviteCode,
-          host_id: userId,
+          host_id: user_id,
           status: "active",
           max_participants: 12,
         })
@@ -136,7 +136,7 @@ export function CreateDebateModal(props) {
 
       var partRes = await supabase.from("debate_participants").insert({
         room_id: room.id,
-        user_id: userId,
+        user_id: user_id,
         role: "host",
       });
       if (partRes.error) {

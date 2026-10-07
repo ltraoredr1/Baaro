@@ -14,7 +14,7 @@ import {
 } from "../lib/crypto.js";
 import { useCryptoKeys } from "./useCryptoKeys.js";
 
-export function useMessaging(conversationId, currentUserId, recipientId) {
+export function useMessaging(conversation_id, current_user_id, recipient_id) {
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(true);
   const [sendError, setSendError] = useState(null);
@@ -24,14 +24,14 @@ export function useMessaging(conversationId, currentUserId, recipientId) {
     publicKeyJwk: myPublicKeyJwk,
     ready: keysReady,
     fetchRecipientPublicKey,
-  } = useCryptoKeys(currentUserId);
+  } = useCryptoKeys(current_user_id);
 
   const recipientKeyCache = useRef(null);
 
   // Reset cache si on change de conversation
   useEffect(() => {
     recipientKeyCache.current = null;
-  }, [recipientId]);
+  }, [recipient_id]);
 
   const decryptOne = useCallback(
     async (rawMsg) => {
@@ -48,7 +48,7 @@ export function useMessaging(conversationId, currentUserId, recipientId) {
             decryptFailed: true,
           };
         }
-        const plain = await decryptMessage(payload, privateKey, currentUserId);
+        const plain = await decryptMessage(payload, privateKey, current_user_id);
         return {
          ...rawMsg,
           plaintext: plain?? "[Impossible de déchiffrer]",
@@ -59,11 +59,11 @@ export function useMessaging(conversationId, currentUserId, recipientId) {
         return {...rawMsg, plaintext: rawMsg.text, encrypted: false };
       }
     },
-    [privateKey, currentUserId]
+    [privateKey, current_user_id]
   );
 
   useEffect(() => {
-    if (!conversationId ||!currentUserId ||!keysReady) return;
+    if (!conversation_id ||!current_user_id ||!keysReady) return;
     let cancelled = false;
 
     const load = async () => {
@@ -71,7 +71,7 @@ export function useMessaging(conversationId, currentUserId, recipientId) {
       let { data, error } = await supabase
        .from("messages")
        .select("*, sender:sender_id(display_name, flag, avatar_url)")
-       .eq("conversation_id", conversationId)
+       .eq("conversation_id", conversation_id)
        .order("created_at", { ascending: true })
        .limit(100);
 
@@ -79,7 +79,7 @@ export function useMessaging(conversationId, currentUserId, recipientId) {
         const plain = await supabase
          .from("messages")
          .select("*")
-         .eq("conversation_id", conversationId)
+         .eq("conversation_id", conversation_id)
          .order("created_at", { ascending: true })
          .limit(100);
         data = plain.data;
@@ -101,14 +101,14 @@ export function useMessaging(conversationId, currentUserId, recipientId) {
     load();
 
     const channel = supabase
-     .channel(`e2e-room:${conversationId}`)
+     .channel(`e2e-room:${conversation_id}`)
      .on(
         "postgres_changes",
         {
           event: "INSERT",
           schema: "public",
           table: "messages",
-          filter: `conversation_id=eq.${conversationId}`,
+          filter: `conversation_id=eq.${conversation_id}`,
         },
         async (payload) => {
           const decrypted = await decryptOne(payload.new);
@@ -125,11 +125,11 @@ export function useMessaging(conversationId, currentUserId, recipientId) {
       cancelled = true;
       supabase.removeChannel(channel);
     };
-  }, [conversationId, currentUserId, keysReady, decryptOne]);
+  }, [conversation_id, current_user_id, keysReady, decryptOne]);
 
   const sendMessage = useCallback(
     async (text, options = {}) => {
-      if (!text?.trim() ||!conversationId ||!currentUserId ||!recipientId) {
+      if (!text?.trim() ||!conversation_id ||!current_user_id ||!recipient_id) {
         return { ok: false, error: "Paramètres manquants" };
       }
       if (!keysReady) return { ok: false, error: "Clés pas prêtes" };
@@ -138,7 +138,7 @@ export function useMessaging(conversationId, currentUserId, recipientId) {
       try {
         let recipientPub = recipientKeyCache.current;
         if (!recipientPub) {
-          recipientPub = await fetchRecipientPublicKey(recipientId);
+          recipientPub = await fetchRecipientPublicKey(recipient_id);
           if (!recipientPub) {
             const err = "Contact sans clé publique — il doit ouvrir l'app une fois.";
             setSendError(err);
@@ -149,16 +149,16 @@ export function useMessaging(conversationId, currentUserId, recipientId) {
         if (!myPublicKeyJwk) return { ok: false, error: "Clé locale manquante" };
 
         const payload = await encryptMessage(text.trim(), [
-          { userId: recipientId, publicKeyJwk: recipientPub },
-          { userId: currentUserId, publicKeyJwk: myPublicKeyJwk },
+          { user_id: recipient_id, publicKeyJwk: recipientPub },
+          { user_id: current_user_id, publicKeyJwk: myPublicKeyJwk },
         ]);
 
         const { data, error } = await supabase
          .from("messages")
          .insert({
-            conversation_id: conversationId,
-            sender_id: currentUserId, // = profiles.id
-            recipient_id: recipientId,
+            conversation_id: conversation_id,
+            sender_id: current_user_id, // = profiles.id
+            recipient_id: recipient_id,
             client_message_id: options.clientMessageId || (crypto?.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`),
             reply_to_id: options.replyToId || null,
             expires_at: options.expiresAt || null,
@@ -180,7 +180,7 @@ export function useMessaging(conversationId, currentUserId, recipientId) {
         return { ok: false, error: msg };
       }
     },
-    [conversationId, currentUserId, recipientId, keysReady, myPublicKeyJwk, fetchRecipientPublicKey]
+    [conversation_id, current_user_id, recipient_id, keysReady, myPublicKeyJwk, fetchRecipientPublicKey]
   );
 
   return { messages, loading: loading ||!keysReady, sendMessage, sendError, keysReady };

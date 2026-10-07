@@ -42,7 +42,7 @@ const validUrl = (value) => {
   }
 };
 
-export default function ProfileContactsLinks({ userId }) {
+export default function ProfileContactsLinks({ user_id }) {
   const { showToast } = useToast();
   const [phones, setPhones] = useState([]);
   const [emails, setEmails] = useState([]);
@@ -52,13 +52,13 @@ export default function ProfileContactsLinks({ userId }) {
   const [loading, setLoading] = useState(true);
 
   const load = async () => {
-    if (!userId) return;
+    if (!user_id) return;
     setLoading(true);
     try {
       const [c, l, s] = await Promise.all([
-        supabase.from("profile_contacts").select("*").eq("user_id", userId).order("position"),
-        supabase.from("profile_links").select("*").eq("user_id", userId).order("position"),
-        supabase.from("profile_social_links").select("*").eq("user_id", userId).order("platform"),
+        supabase.from("profile_contacts").select("*").eq("user_id", user_id).order("position"),
+        supabase.from("profile_links").select("*").eq("user_id", user_id).order("position"),
+        supabase.from("profile_social_links").select("*").eq("user_id", user_id).order("platform"),
       ]);
       if (c.error) throw c.error;
       if (l.error) throw l.error;
@@ -75,7 +75,7 @@ export default function ProfileContactsLinks({ userId }) {
     }
   };
 
-  useEffect(() => { load(); }, [userId]);
+  useEffect(() => { load(); }, [user_id]);
 
   const addContact = (type) => {
     const setter = type === "phone" ? setPhones : setEmails;
@@ -95,7 +95,7 @@ export default function ProfileContactsLinks({ userId }) {
   };
 
   const save = async () => {
-    if (!userId || saving) return;
+    if (!user_id || saving) return;
     setSaving(true);
     try {
       if (phones.length > 3 || emails.length > 3) {
@@ -107,7 +107,7 @@ export default function ProfileContactsLinks({ userId }) {
         ...emails.map((x, i) => ({ ...x, contact_type: "email", position: i + 1, is_primary: i === 0 })),
       ].map(({ id, ...x }) => ({
         ...x,
-        user_id: userId,
+        user_id: user_id,
         value: x.value.trim(),
         label: x.label?.trim() || "",
       }));
@@ -119,7 +119,7 @@ export default function ProfileContactsLinks({ userId }) {
 
       const linkRows = links.map((x, i) => ({
         ...(x.id && !String(x.id).startsWith("new-") ? { id: x.id } : {}),
-        user_id: userId,
+        user_id: user_id,
         link_type: x.link_type || "link",
         label: x.label?.trim() || "Lien",
         url: cleanUrl(x.url),
@@ -129,7 +129,7 @@ export default function ProfileContactsLinks({ userId }) {
 
       const socialRows = socials.map((x) => ({
         ...(x.id && !String(x.id).startsWith("new-") ? { id: x.id } : {}),
-        user_id: userId,
+        user_id: user_id,
         platform: x.platform,
         username: x.username?.trim() || "",
         url: cleanUrl(x.url),
@@ -138,9 +138,9 @@ export default function ProfileContactsLinks({ userId }) {
       if (socialRows.some((x) => !validUrl(x.url))) throw new Error("Un réseau social contient un lien invalide.");
 
       const deletes = await Promise.all([
-        supabase.from("profile_contacts").delete().eq("user_id", userId),
-        supabase.from("profile_links").delete().eq("user_id", userId),
-        supabase.from("profile_social_links").delete().eq("user_id", userId),
+        supabase.from("profile_contacts").delete().eq("user_id", user_id),
+        supabase.from("profile_links").delete().eq("user_id", user_id),
+        supabase.from("profile_social_links").delete().eq("user_id", user_id),
       ]);
       const deleteError = deletes.find((result) => result.error)?.error;
       if (deleteError) throw deleteError;
@@ -207,7 +207,7 @@ export default function ProfileContactsLinks({ userId }) {
   );
 
 
-  if (!userId) return null;
+  if (!user_id) return null;
   if (loading) return <div className="text-sm" style={{ color: COLORS.muted }}>Chargement...</div>;
 
   return (

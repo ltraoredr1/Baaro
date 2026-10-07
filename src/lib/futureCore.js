@@ -4,11 +4,11 @@ export const FUTURE_CORE_MODULES = Object.freeze([
   'ai_agent','trust','anti_scam','translator','offline','commerce','creator','observability'
 ]);
 
-export async function createAgentTask(userId, goal) {
+export async function createAgentTask(user_id, goal) {
   const clean = String(goal || '').trim().slice(0, 2000);
-  if (!userId || !clean) throw new Error('goal_required');
+  if (!user_id || !clean) throw new Error('goal_required');
   return supabase.from('ai_agent_tasks').insert({
-    user_id: userId,
+    user_id: user_id,
     goal: clean,
     status: 'awaiting_confirmation',
     requires_confirmation: true,
@@ -16,9 +16,9 @@ export async function createAgentTask(userId, goal) {
   }).select('*').single();
 }
 
-export async function recordSafetySignal({ userId, targetType, targetId, riskLevel, reasons = [], action = 'review' }) {
+export async function recordSafetySignal({ user_id, targetType, targetId, riskLevel, reasons = [], action = 'review' }) {
   return supabase.from('safety_signals').insert({
-    user_id: userId || null,
+    user_id: user_id || null,
     target_type: targetType,
     target_id: String(targetId),
     risk_level: riskLevel,
@@ -27,10 +27,10 @@ export async function recordSafetySignal({ userId, targetType, targetId, riskLev
   });
 }
 
-export async function enqueueOfflineOperation({ userId, clientId, operation, payload }) {
-  if (!userId || !clientId || !operation) throw new Error('invalid_offline_operation');
+export async function enqueueOfflineOperation({ user_id, clientId, operation, payload }) {
+  if (!user_id || !clientId || !operation) throw new Error('invalid_offline_operation');
   return supabase.from('offline_sync_queue').upsert({
-    user_id: userId,
+    user_id: user_id,
     client_id: clientId,
     operation,
     payload: payload || {},
@@ -39,9 +39,9 @@ export async function enqueueOfflineOperation({ userId, clientId, operation, pay
   }, { onConflict: 'user_id,client_id' });
 }
 
-export async function getFuturePreferences(userId) {
-  if (!userId) return {};
-  const { data, error } = await supabase.from('future_preferences').select('module_key,enabled').eq('user_id', userId);
+export async function getFuturePreferences(user_id) {
+  if (!user_id) return {};
+  const { data, error } = await supabase.from('future_preferences').select('module_key,enabled').eq('user_id', user_id);
   if (error) throw error;
   return Object.fromEntries((data || []).map(row => [row.module_key, row.enabled]));
 }

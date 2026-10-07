@@ -237,7 +237,7 @@ export default function ShopRegistrationForm({ onRegistered }) {
       <div className="mb-4">
         <p className="text-xs mb-2 font-bold" style={{ color: COLORS.muted }}>Logo boutique</p>
         <ImageUpload
-          userId={ownerId}
+          user_id={ownerId}
           folder="shops"
           value={logoUrl}
           onChange={setLogoUrl}

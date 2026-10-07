@@ -13,7 +13,7 @@ import { useToast } from "./ToastContext.jsx";
  * Migration minimale requise (voir en bas du fichier ou 025).
  * Toujours 0 nouvel endpoint API.
  */
-export default function CompanyReviews({ companyId, userId }) {
+export default function CompanyReviews({ companyId, user_id }) {
   const { showToast } = useToast();
   const [reviews, setReviews] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -36,8 +36,8 @@ export default function CompanyReviews({ companyId, userId }) {
       if (error) throw error;
       setReviews(data || []);
 
-      if (userId) {
-        const mine = (data || []).find((r) => r.user_id === userId);
+      if (user_id) {
+        const mine = (data || []).find((r) => r.user_id === user_id);
         setMyReview(mine || null);
         if (mine) {
           setRating(mine.rating);
@@ -54,11 +54,11 @@ export default function CompanyReviews({ companyId, userId }) {
 
   useEffect(() => {
     if (companyId) load();
-  }, [companyId, userId]);
+  }, [companyId, user_id]);
 
   async function handleSubmit(e) {
     e.preventDefault();
-    if (!userId) {
+    if (!user_id) {
       showToast("Connecte-toi pour laisser un avis", "error");
       return;
     }
@@ -78,7 +78,7 @@ export default function CompanyReviews({ companyId, userId }) {
       } else {
         const { error } = await supabase.from("company_reviews").insert({
           company_id: companyId,
-          user_id: userId,
+          user_id: user_id,
           rating,
           comment: comment.trim() || null,
         });
@@ -124,7 +124,7 @@ export default function CompanyReviews({ companyId, userId }) {
       </div>
 
       {/* Formulaire (création ou édition de mon avis) */}
-      {userId && (
+      {user_id && (
         <form
           onSubmit={handleSubmit}
           className="rounded-xl border p-3 flex flex-col gap-2"
@@ -190,7 +190,7 @@ export default function CompanyReviews({ companyId, userId }) {
                 ))}
                 <span className="text-[11px] ml-2" style={{ color: COLORS.muted }}>
                   {new Date(r.created_at).toLocaleDateString("fr-FR")}
-                  {r.user_id === userId ? " · (toi)" : ""}
+                  {r.user_id === user_id ? " · (toi)" : ""}
                 </span>
               </div>
               {r.comment && (

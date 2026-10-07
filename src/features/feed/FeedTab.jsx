@@ -45,7 +45,7 @@ function applyCursor(query, cursor) {
   );
 }
 
-export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
+export function FeedTab({ user_id, onOpenProfile, onRewardPoints }) {
   const { showToast, showPointsReward } = useToast();
   const [posts, setPosts] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -87,7 +87,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
   const postViewedRef = useRef(new Set());
 
   // 🆕 Identifiant utilisateur unifié (disponible tôt pour le rendu)
-  const meId = user?.id || userId;
+  const meId = user?.id || user_id;
 
   useEffect(() => {
     const getUser = async () => {
@@ -364,7 +364,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
   const uploadMedia = async (file, authorId) => {
     const result = await uploadExternalMedia(file, {
       folder: "posts",
-      userId: authorId,
+      user_id: authorId,
       maxBytes: file.type.startsWith("video/") ? MAX_VIDEO_SIZE : MAX_IMAGE_SIZE,
     });
     return { media_url: result.url, media_type: file.type.startsWith("video") ? "video" : "image" };
@@ -628,12 +628,12 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
           >
             <Bell size={20} />
           </button>
-          <NotificationDrawer isOpen={notifOpen} onClose={() => setNotifOpen(false)} userId={meId} />
+          <NotificationDrawer isOpen={notifOpen} onClose={() => setNotifOpen(false)} user_id={meId} />
         </div>
       )}
 
       {/* Suggestions de comptes (visible uniquement si connecté) */}
-      {meId && <SocialSuggestions userId={meId} onOpenProfile={onOpenProfile} />}
+      {meId && <SocialSuggestions user_id={meId} onOpenProfile={onOpenProfile} />}
 
       <form onSubmit={handleCreatePost} className="glass-card rounded-2xl p-4 shadow-xl border" style={{ borderColor: COLORS.borderGold }}>
         <div className="flex gap-3 mb-3">
@@ -790,10 +790,10 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
                 {/* Barre d'actions unifiée avec Sondage, Réactions, Commentaires et Traduction */}
                 <div className="flex flex-col gap-3 pt-2 border-t" style={{ borderColor: COLORS.border }}>
                   {/* 1. Sondage (s'affiche uniquement si le post en a un) */}
-                  <PollCard postId={post.id} userId={meId} />
+                  <PollCard postId={post.id} user_id={meId} />
 
                   {/* 2. Actions sociales avancées (Réactions, Favoris, Partage, Suivi) */}
-                  <SocialPostEnhancements post={post} userId={meId} />
+                  <SocialPostEnhancements post={post} user_id={meId} />
                   {post.author_id !== meId && <TipButton recipientId={post.author_id} postId={post.id} />}
                   <div className="flex items-center gap-2 text-[10px]" style={{ color: COLORS.muted }}>
                     <span>👁 {Number(post.views_count || 0)} vues</span>

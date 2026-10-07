@@ -19,12 +19,12 @@ function apiUrl(path) {
   return base + p;
 }
 
-export function useDebates(userId) {
+export function useDebates(user_id) {
   const [rooms, setRooms] = useState([]);
   const [loadingRooms, setLoadingRooms] = useState(true);
 
   const loadRooms = useCallback(async () => {
-    if (!userId) {
+    if (!user_id) {
       setRooms([]);
       setLoadingRooms(false);
       return;
@@ -34,7 +34,7 @@ export function useDebates(userId) {
       const { data: parts } = await supabase
         .from("debate_participants")
         .select("room_id")
-        .eq("user_id", userId)
+        .eq("user_id", user_id)
         .is("left_at", null);
       if (!parts?.length) {
         setRooms([]);
@@ -54,30 +54,30 @@ export function useDebates(userId) {
     } finally {
       setLoadingRooms(false);
     }
-  }, [userId]);
+  }, [user_id]);
 
   useEffect(() => {
     loadRooms();
-    if (!userId) return;
+    if (!user_id) return;
     const ch = supabase
-      .channel("debate-rooms:" + userId)
+      .channel("debate-rooms:" + user_id)
       .on(
         "postgres_changes",
         {
           event: "*",
           schema: "public",
           table: "debate_participants",
-          filter: "user_id=eq." + userId,
+          filter: "user_id=eq." + user_id,
         },
         loadRooms
       )
       .subscribe();
     return () => supabase.removeChannel(ch);
-  }, [loadRooms, userId]);
+  }, [loadRooms, user_id]);
 
   const createRoom = useCallback(
     async ({ title, topic, mode, maxParticipants, aiEnabled }) => {
-      if (!userId) return { ok: false, reason: "Non authentifié" };
+      if (!user_id) return { ok: false, reason: "Non authentifié" };
       try {
         const code = Math.random().toString(36).substring(2, 8).toLowerCase();
         const { data: room, error: e1 } = await supabase
@@ -88,7 +88,7 @@ export function useDebates(userId) {
             mode: mode || "text",
             max_participants: Math.min(Math.max(maxParticipants || 8, 2), 100),
             ai_enabled: !!aiEnabled,
-            host_id: userId,
+            host_id: user_id,
             invite_code: code,
             status: "active",
           })
@@ -98,7 +98,7 @@ export function useDebates(userId) {
 
         const { error: e2 } = await supabase.from("debate_participants").insert({
           room_id: room.id,
-          user_id: userId,
+          user_id: user_id,
           role: "host",
         });
         if (e2) throw e2;
@@ -109,7 +109,7 @@ export function useDebates(userId) {
         return { ok: false, reason: e.message };
       }
     },
-    [userId, loadRooms]
+    [user_id, loadRooms]
   );
 
   const joinByCode = useCallback(
@@ -128,7 +128,7 @@ export function useDebates(userId) {
         await supabase.from("debate_participants").upsert(
           {
             room_id: room.id,
-            user_id: userId,
+            user_id: user_id,
             role: "member",
             left_at: null,
           },
@@ -140,7 +140,7 @@ export function useDebates(userId) {
         return { ok: false, reason: e.message };
       }
     },
-    [userId, loadRooms]
+    [user_id, loadRooms]
   );
 
   const leaveRoom = useCallback(
@@ -149,10 +149,10 @@ export function useDebates(userId) {
         .from("debate_participants")
         .update({ left_at: new Date().toISOString() })
         .eq("room_id", roomId)
-        .eq("user_id", userId);
+        .eq("user_id", user_id);
       setRooms((r) => r.filter((x) => x.id !== roomId));
     },
-    [userId]
+    [user_id]
   );
 
   const endRoom = useCallback(
@@ -161,10 +161,10 @@ export function useDebates(userId) {
         .from("debate_rooms")
         .update({ status: "ended" })
         .eq("id", roomId)
-        .eq("host_id", userId);
+        .eq("host_id", user_id);
       setRooms((r) => r.filter((x) => x.id !== roomId));
     },
-    [userId]
+    [user_id]
   );
 
   return {
@@ -179,7 +179,7 @@ export function useDebates(userId) {
   };
 }
 
-export function useRoomChat(roomId, userId) {
+export function useRoomChat(roomId, user_id) {
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(true);
   const [aiThinking, setAiThinking] = useState(false);
@@ -225,7 +225,7 @@ export function useRoomChat(roomId, userId) {
   const sendText = useCallback(
     async (text) => {
       const content = (text ?? inputText).trim().slice(0, 1000);
-      if (!content || !roomId || !userId || !canSend()) return;
+      if (!content || !roomId || !user_id || !canSend()) return;
       setInputText("");
       const tmpId = "tmp_" + Date.now();
       setMessages((p) => [
@@ -233,7 +233,7 @@ export function useRoomChat(roomId, userId) {
         {
           id: tmpId,
           room_id: roomId,
-          sender_id: userId,
+          sender_id: user_id,
           sender_type: "user",
           text: content,
           created_at: new Date().toISOString(),
@@ -241,13 +241,13 @@ export function useRoomChat(roomId, userId) {
       ]);
       const { error } = await supabase.from("debate_messages").insert({
         room_id: roomId,
-        sender_id: userId,
+        sender_id: user_id,
         sender_type: "user",
         text: content,
       });
       if (error) setMessages((p) => p.filter((m) => m.id !== tmpId));
     },
-    [roomId, userId, inputText]
+    [roomId, user_id, inputText]
   );
 
   const askAI = useCallback(
@@ -261,7 +261,7 @@ export function useRoomChat(roomId, userId) {
             var who =
               m.sender_type === "ai"
                 ? "IA"
-                : m.sender_id === userId
+                : m.sender_id === user_id
                   ? "Moi"
                   : "Autre";
             return who + ": " + m.text;
@@ -302,7 +302,7 @@ export function useRoomChat(roomId, userId) {
         setAiThinking(false);
       }
     },
-    [roomId, userId, aiThinking]
+    [roomId, user_id, aiThinking]
   );
 
   return {
@@ -316,7 +316,7 @@ export function useRoomChat(roomId, userId) {
   };
 }
 
-export function useDebateLive(room, userId, isHost) {
+export function useDebateLive(room, user_id, isHost) {
   const callRef = useRef(null);
   const containerRef = useRef(null);
   const [camOn, setCamOn] = useState(room?.mode !== "audio");
@@ -327,7 +327,7 @@ export function useDebateLive(room, userId, isHost) {
 
   const joinLive = useCallback(
     async function () {
-      if (!room?.id || !userId || joining) return;
+      if (!room?.id || !user_id || joining) return;
       setJoining(true);
       setError(null);
       try {
@@ -413,7 +413,7 @@ export function useDebateLive(room, userId, isHost) {
         setJoining(false);
       }
     },
-    [room, userId, isHost, camOn, micOn, joining]
+    [room, user_id, isHost, camOn, micOn, joining]
   );
 
   const toggleCam = useCallback(function () {

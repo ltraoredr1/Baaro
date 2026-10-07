@@ -25,7 +25,7 @@ const REACTIONS = [
 /* =========================================================
    POLL CARD (Optimisé avec memo)
    ========================================================= */
-export const PollCard = memo(function PollCard({ postId, userId }) {
+export const PollCard = memo(function PollCard({ postId, user_id }) {
   const { showToast } = useToast();
   const [poll, setPoll] = useState(null);
   const [rows, setRows] = useState([]);
@@ -42,13 +42,13 @@ export const PollCard = memo(function PollCard({ postId, userId }) {
 
     const [{ data: resultRows }, { data: mine }] = await Promise.all([
       supabase.from("poll_results").select("option_id,option_text,position,vote_count").eq("poll_id", pollRow.id).order("position"),
-      userId ? supabase.from("poll_votes").select("option_id").eq("poll_id", pollRow.id).eq("user_id", userId).maybeSingle() : Promise.resolve({ data: null }),
+      user_id ? supabase.from("poll_votes").select("option_id").eq("poll_id", pollRow.id).eq("user_id", user_id).maybeSingle() : Promise.resolve({ data: null }),
     ]);
 
     setPoll(pollRow);
     setRows(resultRows || []);
     setMyVote(mine?.option_id || null);
-  }, [postId, userId]);
+  }, [postId, user_id]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -62,7 +62,7 @@ export const PollCard = memo(function PollCard({ postId, userId }) {
   const total = rows.reduce((n, r) => n + Number(r.vote_count || 0), 0);
 
   const vote = async (optionId) => {
-    if (!isValidAuthUserId(userId)) return showToast("Connectez-vous pour voter", "info");
+    if (!isValidAuthUserId(user_id)) return showToast("Connectez-vous pour voter", "info");
     if (busy) return;
     setBusy(true);
     try {
@@ -77,7 +77,7 @@ export const PollCard = memo(function PollCard({ postId, userId }) {
   };
 
   const openVoters = async () => {
-    if (!isValidAuthUserId(userId)) return showToast("Connectez-vous pour voir les votants", "info");
+    if (!isValidAuthUserId(user_id)) return showToast("Connectez-vous pour voir les votants", "info");
     setShowVoters(true);
     setLoadingVoters(true);
     try {
@@ -113,7 +113,7 @@ export const PollCard = memo(function PollCard({ postId, userId }) {
         </div>
         <div className="flex items-center justify-between mt-2">
           <p className="text-[10px]" style={{ color: COLORS.muted }}>{total} vote{total > 1 ? "s" : ""} · Vous pouvez changer votre vote</p>
-          {total > 0 && userId && (
+          {total > 0 && user_id && (
             <button type="button" onClick={openVoters} className="text-[10px] font-bold hover:underline transition-colors" style={{ color: COLORS.teal }}>Voir les votants 👥</button>
           )}
         </div>
@@ -160,7 +160,7 @@ export const PollCard = memo(function PollCard({ postId, userId }) {
 /* =========================================================
    SOCIAL POST ENHANCEMENTS (Optimisé avec memo)
    ========================================================= */
-export const SocialPostEnhancements = memo(function SocialPostEnhancements({ post, userId }) {
+export const SocialPostEnhancements = memo(function SocialPostEnhancements({ post, user_id }) {
   const { showToast } = useToast();
   const [reaction, setReaction] = useState(null);
   const [reactionCount, setReactionCount] = useState(0);
@@ -177,18 +177,18 @@ export const SocialPostEnhancements = memo(function SocialPostEnhancements({ pos
       const [likesResult, sharesResult, bookmarkResult, followResult] = await Promise.all([
         supabase.from("post_likes").select("user_id").eq("post_id", post.id),
         supabase.from("post_shares").select("post_id", { count: "exact", head: true }).eq("post_id", post.id),
-        userId ? supabase.from("post_bookmarks").select("post_id").eq("post_id", post.id).eq("id", userId).maybeSingle() : Promise.resolve({ data: null, error: null }),
-        userId && post.author_id !== userId ? supabase.from("follows").select("followed_id").eq("follower_id", userId).eq("followed_id", post.author_id).maybeSingle() : Promise.resolve({ data: null, error: null }),
+        user_id ? supabase.from("post_bookmarks").select("post_id").eq("post_id", post.id).eq("id", user_id).maybeSingle() : Promise.resolve({ data: null, error: null }),
+        user_id && post.author_id !== user_id ? supabase.from("follows").select("followed_id").eq("follower_id", user_id).eq("followed_id", post.author_id).maybeSingle() : Promise.resolve({ data: null, error: null }),
       ]);
 
       const likeRows = likesResult.data || [];
       setReactionCount(likeRows.length);
-      setReaction(userId && likeRows.some((row) => row.user_id === userId) ? "like" : null);
+      setReaction(user_id && likeRows.some((row) => row.user_id === user_id) ? "like" : null);
       setSaved(!!bookmarkResult.data);
       setShareCount(sharesResult.count || 0);
       setFollowing(!!followResult.data);
     } catch (error) { console.error("[BAARO] Erreur chargement interactions:", error); }
-  }, [post?.id, post?.author_id, userId]);
+  }, [post?.id, post?.author_id, user_id]);
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
@@ -200,18 +200,18 @@ export const SocialPostEnhancements = memo(function SocialPostEnhancements({ pos
   const current = useMemo(() => REACTIONS.find((item) => item.id === reaction), [reaction]);
 
   const chooseReaction = async (value) => {
-    if (!isValidAuthUserId(userId)) { showToast("Connectez-vous pour réagir", "info"); return; }
+    if (!isValidAuthUserId(user_id)) { showToast("Connectez-vous pour réagir", "info"); return; }
     if (!post?.id || busy) return;
     setBusy(true); setPop(true);
     setTimeout(() => setPop(false), 300);
     try {
       if (reaction === "like" && value === "like") {
-        const { error } = await supabase.from("post_likes").delete().eq("post_id", post.id).eq("user_id", userId);
+        const { error } = await supabase.from("post_likes").delete().eq("post_id", post.id).eq("user_id", user_id);
         if (error) throw error;
         setReaction(null); setReactionCount((count) => Math.max(0, count - 1));
         await load(); setPicker(false); return;
       }
-      const { error } = await supabase.from("post_likes").upsert({ post_id: post.id, user_id: userId }, { onConflict: "post_id,user_id" });
+      const { error } = await supabase.from("post_likes").upsert({ post_id: post.id, user_id: user_id }, { onConflict: "post_id,user_id" });
       if (error) throw error;
       if (reaction !== "like") setReactionCount((count) => count + 1);
       setReaction("like"); await load(); setPicker(false);
@@ -220,16 +220,16 @@ export const SocialPostEnhancements = memo(function SocialPostEnhancements({ pos
   };
 
   const bookmark = async () => {
-    if (!isValidAuthUserId(userId)) { showToast("Connectez-vous pour enregistrer", "info"); return; }
+    if (!isValidAuthUserId(user_id)) { showToast("Connectez-vous pour enregistrer", "info"); return; }
     if (!post?.id || busy) return;
     setBusy(true);
     try {
       if (saved) {
-        const { error } = await supabase.from("post_bookmarks").delete().eq("post_id", post.id).eq("id", userId);
+        const { error } = await supabase.from("post_bookmarks").delete().eq("post_id", post.id).eq("id", user_id);
         if (error) throw error;
         setSaved(false);
       } else {
-        const { error } = await supabase.from("post_bookmarks").upsert({ post_id: post.id, id: userId }, { onConflict: "post_id,id" });
+        const { error } = await supabase.from("post_bookmarks").upsert({ post_id: post.id, id: user_id }, { onConflict: "post_id,id" });
         if (error) throw error;
         setSaved(true);
       }
@@ -260,8 +260,8 @@ export const SocialPostEnhancements = memo(function SocialPostEnhancements({ pos
         showToast("Lien copié dans le presse-papiers !", "success");
       }
 
-      if (userId) {
-        const { error } = await supabase.from("post_shares").insert({ post_id: post.id, id: userId, channel: channelName });
+      if (user_id) {
+        const { error } = await supabase.from("post_shares").insert({ post_id: post.id, id: user_id, channel: channelName });
         if (error) console.warn("Share tracking failed:", error); // Non-bloquant
       }
       setShareCount((count) => count + 1);
@@ -272,8 +272,8 @@ export const SocialPostEnhancements = memo(function SocialPostEnhancements({ pos
   };
 
   const follow = async () => {
-    if (!isValidAuthUserId(userId)) { showToast("Connectez-vous pour suivre", "info"); return; }
-    if (!post?.author_id || userId === post.author_id || busy) return;
+    if (!isValidAuthUserId(user_id)) { showToast("Connectez-vous pour suivre", "info"); return; }
+    if (!post?.author_id || user_id === post.author_id || busy) return;
     setBusy(true);
     try {
       const { data, error } = await supabase.rpc("toggle_follow", { p_target: post.author_id });
@@ -286,7 +286,7 @@ export const SocialPostEnhancements = memo(function SocialPostEnhancements({ pos
 
   return (
     <div className="flex flex-wrap items-center gap-2">
-      {post?.author_id && post.author_id !== userId && (
+      {post?.author_id && post.author_id !== user_id && (
         <button type="button" onClick={follow} disabled={busy} className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[11px] font-bold border transition-all active:scale-95" style={{ borderColor: following ? COLORS.borderTeal : COLORS.border, color: following ? COLORS.teal : COLORS.muted }}>
           {following ? <Check size={13} /> : <UserPlus size={13} />}{following ? "Abonné" : "Suivre"}
         </button>
@@ -318,15 +318,15 @@ export const SocialPostEnhancements = memo(function SocialPostEnhancements({ pos
 /* =========================================================
    SOCIAL SUGGESTIONS (Optimisé avec memo)
    ========================================================= */
-export const SocialSuggestions = memo(function SocialSuggestions({ userId, onOpenProfile }) {
+export const SocialSuggestions = memo(function SocialSuggestions({ user_id, onOpenProfile }) {
   const { showToast } = useToast();
   const [items, setItems] = useState([]);
   const [busyId, setBusyId] = useState(null);
 
   useEffect(() => {
-    if (!isValidAuthUserId(userId)) return;
+    if (!isValidAuthUserId(user_id)) return;
     supabase.rpc("get_social_suggestions", { p_limit: 6 }).then(({ data }) => { setItems(data || []); });
-  }, [userId]);
+  }, [user_id]);
 
   const follow = async (item) => {
     const target = item?.id;

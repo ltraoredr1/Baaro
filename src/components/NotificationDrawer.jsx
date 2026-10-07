@@ -17,13 +17,13 @@ const COLORS = {
   border: "#2A2A2A",
 };
 
-export function NotificationDrawer({ userId, isOpen, onClose }) {
+export function NotificationDrawer({ user_id, isOpen, onClose }) {
   const [notifs, setNotifs] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
   const load = useCallback(async () => {
-    if (!userId) {
+    if (!user_id) {
       setNotifs([]);
       return;
     }
@@ -32,7 +32,7 @@ export function NotificationDrawer({ userId, isOpen, onClose }) {
     const { data, error: fetchError } = await supabase
      .from("notifications")
      .select("notification_id,user_id,type,message,source_id,actor_id,read,read_at,created_at")
-     .eq("user_id", userId)
+     .eq("user_id", user_id)
      .order("created_at", { ascending: false })
      .limit(30);
 
@@ -44,31 +44,31 @@ export function NotificationDrawer({ userId, isOpen, onClose }) {
       setNotifs(data || []);
     }
     setLoading(false);
-  }, [userId]);
+  }, [user_id]);
 
   useEffect(() => {
-    if (!isOpen || !isValidAuthUserId(userId)) return;
+    if (!isOpen || !isValidAuthUserId(user_id)) return;
     load();
-  }, [isOpen, userId, load]);
+  }, [isOpen, user_id, load]);
 
   // Realtime uniquement quand le panneau est ouvert pour éviter une connexion permanente.
   useEffect(() => {
-    if (!isOpen || !isValidAuthUserId(userId)) return;
+    if (!isOpen || !isValidAuthUserId(user_id)) return;
     const channel = supabase
-     .channel(`notif-drawer-${userId}`)
-     .on("postgres_changes", { event: "INSERT", schema: "public", table: "notifications", filter: `user_id=eq.${userId}` },
+     .channel(`notif-drawer-${user_id}`)
+     .on("postgres_changes", { event: "INSERT", schema: "public", table: "notifications", filter: `user_id=eq.${user_id}` },
         (payload) => {
           const n = payload.new;
           setNotifs((prev) => prev.some(i => i.notification_id === n.notification_id)? prev : [n,...prev].slice(0, 30));
         }
       )
-     .on("postgres_changes", { event: "UPDATE", schema: "public", table: "notifications", filter: `user_id=eq.${userId}` },
+     .on("postgres_changes", { event: "UPDATE", schema: "public", table: "notifications", filter: `user_id=eq.${user_id}` },
         (payload) => {
           const upd = payload.new;
           setNotifs((prev) => prev.map(i => i.notification_id === upd.notification_id? upd : i));
         }
       )
-     .on("postgres_changes", { event: "DELETE", schema: "public", table: "notifications", filter: `user_id=eq.${userId}` },
+     .on("postgres_changes", { event: "DELETE", schema: "public", table: "notifications", filter: `user_id=eq.${user_id}` },
         (payload) => {
           const deletedId = payload.old?.notification_id;
           if (!deletedId) { load(); return; }
@@ -80,7 +80,7 @@ export function NotificationDrawer({ userId, isOpen, onClose }) {
       });
 
     return () => { supabase.removeChannel(channel); };
-  }, [isOpen, userId, load]);
+  }, [isOpen, user_id, load]);
 
   // Lock scroll + Escape
   useEffect(() => {
@@ -98,32 +98,32 @@ export function NotificationDrawer({ userId, isOpen, onClose }) {
   const unreadCount = useMemo(() => notifs.filter(n =>!n.read).length, [notifs]);
 
   const markAsRead = async (notificationId) => {
-    if (!notificationId ||!userId) return;
+    if (!notificationId ||!user_id) return;
     const now = new Date().toISOString();
     setNotifs((prev) => prev.map(n => n.notification_id === notificationId? {...n, read: true, read_at: now} : n));
-    const { error: updateError } = await supabase.from("notifications").update({ read: true, read_at: now }).eq("notification_id", notificationId).eq("user_id", userId);
+    const { error: updateError } = await supabase.from("notifications").update({ read: true, read_at: now }).eq("notification_id", notificationId).eq("user_id", user_id);
     if (updateError) console.error("Erreur marquage notification:", updateError);
   };
 
   const markAllAsRead = async () => {
-    if (!userId || unreadCount === 0) return;
+    if (!user_id || unreadCount === 0) return;
     const now = new Date().toISOString();
     setNotifs((prev) => prev.map(n => ({...n, read: true, read_at: n.read_at || now})));
-    const { error: updateError } = await supabase.from("notifications").update({ read: true, read_at: now }).eq("user_id", userId).eq("read", false);
+    const { error: updateError } = await supabase.from("notifications").update({ read: true, read_at: now }).eq("user_id", user_id).eq("read", false);
     if (updateError) console.error("Erreur marquage toutes notifications:", updateError);
   };
 
   const deleteNotification = async (notificationId) => {
-    if (!notificationId ||!userId) return;
+    if (!notificationId ||!user_id) return;
     setNotifs((prev) => prev.filter(n => n.notification_id!== notificationId));
-    const { error: deleteError } = await supabase.from("notifications").delete().eq("notification_id", notificationId).eq("user_id", userId);
+    const { error: deleteError } = await supabase.from("notifications").delete().eq("notification_id", notificationId).eq("user_id", user_id);
     if (deleteError) console.error("Erreur suppression notification:", deleteError);
   };
 
   const deleteAllNotifications = async () => {
-    if (!userId || notifs.length === 0) return;
+    if (!user_id || notifs.length === 0) return;
     setNotifs([]);
-    const { error: deleteError } = await supabase.from("notifications").delete().eq("user_id", userId);
+    const { error: deleteError } = await supabase.from("notifications").delete().eq("user_id", user_id);
     if (deleteError) console.error("Erreur suppression toutes notifications:", deleteError);
   };
 

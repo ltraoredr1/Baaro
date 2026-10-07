@@ -58,7 +58,7 @@ export default function EnterprisesTab({ id, onOpenProfile }) {
     return (
       <CompanyDetail
         companyId={selectedId}
-        userId={id}
+        user_id={id}
         onBack={() => {
           setMode("directory");
           setSelectedId(null);

@@ -35,11 +35,11 @@ export default function GroupModerationPanel({ groupId, onClose, C }) {
     if (tab === "reports") loadReports();
   }, [tab, loadReports]);
 
-  const handleBan = async (userId) => {
+  const handleBan = async (user_id) => {
     if (!window.confirm("Bannir ce membre ?")) return;
-    setActionLoading(userId);
+    setActionLoading(user_id);
     try {
-      await banMember(groupId, userId, "Banni par un modérateur");
+      await banMember(groupId, user_id, "Banni par un modérateur");
       await loadAll?.(true);
     } catch (e) {
       alert("Erreur : " + e.message);
@@ -48,10 +48,10 @@ export default function GroupModerationPanel({ groupId, onClose, C }) {
     }
   };
 
-  const handlePromote = async (userId, newRole) => {
-    setActionLoading(userId);
+  const handlePromote = async (user_id, newRole) => {
+    setActionLoading(user_id);
     try {
-      await setMemberRole(groupId, userId, newRole);
+      await setMemberRole(groupId, user_id, newRole);
       await loadAll?.(true);
     } catch (e) {
       alert("Erreur : " + e.message);

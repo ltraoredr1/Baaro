@@ -1404,7 +1404,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
 
     try {
       const result = await uploadLargeVideo(selectedFile, {
-        userId: user.id,
+        user_id: user.id,
         onProgress: (progress) => setUploadProgress(Math.max(10, Math.min(65, 10 + Math.round(progress * 0.55)))),
       });
       setUploadProgress(65);
@@ -1420,7 +1420,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
         if (selectedSound.file) {
           const audioResult = await uploadExternalMedia(selectedSound.file, {
             folder: "videos",
-            userId: user.id,
+            user_id: user.id,
             maxBytes: 100 * 1024 * 1024,
           });
           soundUrl = audioResult.url;

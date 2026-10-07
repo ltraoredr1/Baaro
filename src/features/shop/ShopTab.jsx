@@ -77,7 +77,7 @@ export default function ShopTab({ id }) {
       case "directory": return <LocalShopDirectory onSelectShop={handleShopSelect} />;
       case "detail": return selectedShopId ? <ShopDetail shopId={selectedShopId} id={id} onBack={handleDetailBack} /> : null;
       case "register": return <ShopRegistrationForm onRegistered={handleRegistrationComplete} />;
-      case "manage": return myShop ? <ShopProductManager shopId={myShop.id} shopCurrency={myShop.currency} userId={id} /> : <p className="text-sm" style={{ color: COLORS.muted }}>Aucune boutique trouvée. Créez-en une d'abord.</p>;
+      case "manage": return myShop ? <ShopProductManager shopId={myShop.id} shopCurrency={myShop.currency} user_id={id} /> : <p className="text-sm" style={{ color: COLORS.muted }}>Aucune boutique trouvée. Créez-en une d'abord.</p>;
       case "orders-seller": return myShop ? <OrdersSeller shopId={myShop.id} /> : null;
       case "orders-buyer": return id ? <OrdersBuyer id={id} /> : null;
       default: return null;

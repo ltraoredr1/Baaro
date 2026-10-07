@@ -16,11 +16,11 @@ export { getCurrentUserId } from "../supabaseClient.js";
 /**
  * Vérifie qu'un ID fourni est bien l'utilisateur courant.
  */
-export function assertUserId(userId, currentUserId) {
-  if (!userId || !currentUserId || String(userId) !== String(currentUserId)) {
+export function assert_user_id(user_id, current_user_id) {
+  if (!user_id || !current_user_id || String(user_id) !== String(current_user_id)) {
     throw new Error("Identifiant utilisateur invalide");
   }
-  return currentUserId;
+  return current_user_id;
 }
 
 /**

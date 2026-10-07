@@ -7,16 +7,16 @@ export function useApplyPendingReferral({ showToast } = {}) {
   const tried = useRef(new Set()); // évite re-apply même si ?ref= change
 
   useEffect(() => {
-    const userId = session?.user?.id;
-    if (!userId || isAnonymous) return;
+    const user_id = session?.user?.id;
+    if (!user_id || isAnonymous) return;
 
     const pending = getPendingRef()?.trim().toUpperCase();
-    if (!pending || tried.current.has(`${userId}:${pending}`)) return;
+    if (!pending || tried.current.has(`${user_id}:${pending}`)) return;
 
     // pending peut être BAARO-XXXX ou invite groupe/live
     if (!/^BAARO-|^GRP-/.test(pending)) return;
 
-    tried.current.add(`${userId}:${pending}`);
+    tried.current.add(`${user_id}:${pending}`);
 
     (async () => {
       try {

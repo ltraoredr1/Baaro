@@ -12,14 +12,14 @@ import {
   getLocalPublicKeyJwk,
 } from "../lib/crypto";
 
-export function useCryptoKeys(userId) {
+export function useCryptoKeys(user_id) {
   const [privateKey, setPrivateKey] = useState(null);
   const [publicKeyJwk, setPublicKeyJwk] = useState(null);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    if (!userId) return;
+    if (!user_id) return;
 
     let cancelled = false;
 
@@ -36,7 +36,7 @@ export function useCryptoKeys(userId) {
         const { data: profile } = await supabase
           .from("profiles")
           .select("public_key")
-          .eq("id", userId)
+          .eq("id", user_id)
           .maybeSingle();
 
         const serverKey = profile?.public_key
@@ -53,7 +53,7 @@ export function useCryptoKeys(userId) {
           const { error: upErr } = await supabase
             .from("profiles")
             .update({ public_key: localPub })
-            .eq("id", userId);
+            .eq("id", user_id);
 
           if (upErr) {
             console.warn("[useCryptoKeys] Upload clé publique échoué:", upErr);
@@ -70,13 +70,13 @@ export function useCryptoKeys(userId) {
     return () => {
       cancelled = true;
     };
-  }, [userId]);
+  }, [user_id]);
 
-  const fetchRecipientPublicKey = useCallback(async (recipientId) => {
+  const fetchRecipientPublicKey = useCallback(async (recipient_id) => {
     const { data, error } = await supabase
       .from("profiles")
       .select("public_key")
-      .eq("id", recipientId)
+      .eq("id", recipient_id)
       .maybeSingle();
 
     if (error || !data?.public_key) return null;

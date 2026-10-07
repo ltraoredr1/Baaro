@@ -1,11 +1,11 @@
 /**
  * Édition photo de profil + couverture
- * Identité : userId = auth.users.id = profiles.id (jamais handle / email)
+ * Identité : user_id = auth.users.id = profiles.id (jamais handle / email)
  * Place : src/components/ProfilePhotosEditor.jsx
  *
  * Usage :
  *   <ProfilePhotosEditor
- *     userId={session.user.id}
+ *     user_id={session.user.id}
  *     profile={userProfile}
  *     onUpdated={(patch) => { /* merge dans le state parent *\/ }}
  *   />
@@ -26,7 +26,7 @@ function isAuthUserId(id) {
   return id.length >= 32;
 }
 
-export default function ProfilePhotosEditor({ userId, profile, onUpdated }) {
+export default function ProfilePhotosEditor({ user_id, profile, onUpdated }) {
   const { showToast } = useToast();
   const avatarRef = useRef(null);
   const coverRef = useRef(null);
@@ -41,12 +41,12 @@ export default function ProfilePhotosEditor({ userId, profile, onUpdated }) {
   }, [profile?.avatar_url, profile?.cover_url]);
 
   async function persist(patch) {
-    if (!isAuthUserId(userId)) {
+    if (!isAuthUserId(user_id)) {
       throw new Error("Identité invalide : auth.users.id requis");
     }
     const { error } = await supabase.from("profiles").upsert(
       {
-        id: userId, // = auth.users.id
+        id: user_id, // = auth.users.id
         ...patch,
         updated_at: new Date().toISOString(),
       },
@@ -58,13 +58,13 @@ export default function ProfilePhotosEditor({ userId, profile, onUpdated }) {
 
   async function onPick(kind, file) {
     if (!file) return;
-    if (!isAuthUserId(userId)) {
+    if (!isAuthUserId(user_id)) {
       showToast?.("Connexion requise", "error");
       return;
     }
     setBusy(kind);
     try {
-      const url = await uploadProfileMedia(file, { userId, kind });
+      const url = await uploadProfileMedia(file, { user_id, kind });
       if (kind === "avatar") {
         setAvatarUrl(url);
         await persist({ avatar_url: url });
@@ -87,7 +87,7 @@ export default function ProfilePhotosEditor({ userId, profile, onUpdated }) {
   }
 
   async function clear(kind) {
-    if (!isAuthUserId(userId)) return;
+    if (!isAuthUserId(user_id)) return;
     setBusy(kind);
     try {
       if (kind === "avatar") {

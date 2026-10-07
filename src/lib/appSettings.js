@@ -120,10 +120,10 @@ export function isAutoplayOn() {
   return !!getSetting("autoplay_video");
 }
 
-function pickCloudPayload(settings, userId) {
+function pickCloudPayload(settings, user_id) {
   var payload = {
-    user_id: userId,
-    id: userId,
+    user_id: user_id,
+    id: user_id,
     updated_at: new Date().toISOString(),
   };
   for (var i = 0; i < CLOUD_KEYS.length; i++) {
@@ -133,20 +133,20 @@ function pickCloudPayload(settings, userId) {
   return payload;
 }
 
-export async function loadCloudSettings(userId) {
-  if (!userId) return { ok: false, data: null };
+export async function loadCloudSettings(user_id) {
+  if (!user_id) return { ok: false, data: null };
 
   var res = await supabase
     .from("user_settings")
     .select("*")
-    .eq("user_id", userId)
+    .eq("user_id", user_id)
     .maybeSingle();
 
   if (res.error || !res.data) {
     res = await supabase
       .from("user_settings")
       .select("*")
-      .eq("id", userId)
+      .eq("id", user_id)
       .maybeSingle();
   }
 
@@ -167,10 +167,10 @@ export async function loadCloudSettings(userId) {
   return { ok: true, data: merged };
 }
 
-export async function saveCloudSettings(userId, settings) {
-  if (!userId) return { ok: false, error: "Non authentifie" };
+export async function saveCloudSettings(user_id, settings) {
+  if (!user_id) return { ok: false, error: "Non authentifie" };
 
-  var payload = pickCloudPayload(settings, userId);
+  var payload = pickCloudPayload(settings, user_id);
 
   var res = await supabase
     .from("user_settings")
@@ -189,8 +189,8 @@ export async function saveCloudSettings(userId, settings) {
   return { ok: true };
 }
 
-export async function syncPrivateProfile(userId, isPrivate) {
-  if (!userId) return;
+export async function syncPrivateProfile(user_id, isPrivate) {
+  if (!user_id) return;
   try {
     await supabase
       .from("profiles")
@@ -198,6 +198,6 @@ export async function syncPrivateProfile(userId, isPrivate) {
         is_private: !!isPrivate,
         updated_at: new Date().toISOString(),
       })
-      .eq("id", userId);
+      .eq("id", user_id);
   } catch (_) {}
 }

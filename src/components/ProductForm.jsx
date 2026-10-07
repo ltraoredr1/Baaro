@@ -7,7 +7,7 @@ import { X, Upload, Loader2, Plus, Trash2, Package } from "lucide-react";
 
 const CATEGORIES = ["Électronique", "Mode & Vêtements", "Maison & Décoration", "Alimentation", "Beauté & Santé", "Sports & Loisirs", "Autre"];
 
-export default function ProductForm({ shopId, shopCurrency = "XOF", userId, product = null, onSaved, onCancel }) {
+export default function ProductForm({ shopId, shopCurrency = "XOF", user_id, product = null, onSaved, onCancel }) {
   const { showToast } = useToast();
   const [name, setName] = useState(product?.name || "");
   const [description, setDescription] = useState(product?.description || "");
@@ -41,7 +41,7 @@ export default function ProductForm({ shopId, shopCurrency = "XOF", userId, prod
         if (file.size > 5 * 1024 * 1024) throw new Error(`Image trop lourde : ${file.name} (max 5Mo)`);
         const result = await uploadExternalMedia(file, {
           folder: "shop",
-          userId,
+          user_id,
           maxBytes: 5 * 1024 * 1024,
         });
         newUrls.push(result.url);

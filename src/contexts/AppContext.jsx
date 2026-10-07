@@ -62,20 +62,20 @@ export function AppProvider({ children }) {
     setIsAnonymous(false);
   }, []);
 
-  const loadProfile = useCallback(async (userId) => {
-    if (!userId) {
+  const loadProfile = useCallback(async (user_id) => {
+    if (!user_id) {
       setProfile(null);
       setUserProfile(DEFAULT_PROFILE);
       return null;
     }
     try {
-      let { data, error } = await supabase.from("profiles").select("*").eq("id", userId).maybeSingle();
+      let { data, error } = await supabase.from("profiles").select("*").eq("id", user_id).maybeSingle();
       if (error) throw error;
 
       if (!data) {
-        const short = String(userId).replace(/-/g, "").slice(0, 12);
+        const short = String(user_id).replace(/-/g, "").slice(0, 12);
         const fallback = {
-          id: userId,
+          id: user_id,
           display_name: "Membre BAARO",
           handle: `@user_${short}`,
           flag: "🌍",
@@ -97,7 +97,7 @@ export function AppProvider({ children }) {
           const reread = await supabase
             .from("profiles")
             .select("*")
-            .eq("id", userId)
+            .eq("id", user_id)
             .maybeSingle();
 
           if (reread.error) throw reread.error;
@@ -109,7 +109,7 @@ export function AppProvider({ children }) {
         }
       }
       if (data) {
-        const normalized = {...data, id: data.id || userId };
+        const normalized = {...data, id: data.id || user_id };
         setProfile(normalized);
         setUserProfile({
           display_name: normalized.display_name || DEFAULT_PROFILE.display_name,
@@ -287,7 +287,7 @@ export function AppProvider({ children }) {
 
   const value = {
     id, user, session, profile, userProfile,
-    userId: id, setProfile, setUserProfile,
+    user_id: id, setProfile, setUserProfile,
     isGuest, isAnonymous, loading, enableGuestMode, logout,
     updateProfile,
   };

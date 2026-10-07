@@ -3,8 +3,8 @@
  */
 export {
   getCurrentUserId,
-  assertUserId,
+  assert_user_id,
   isValidAuthUserId,
-} from "./currentUserId.js";
+} from "./current_user_id.js";
 
 export { supabase } from "../supabaseClient.js";

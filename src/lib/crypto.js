@@ -161,15 +161,15 @@ export async function encryptMessage(plaintext, recipients) {
   const rawAes = await crypto.subtle.exportKey("raw", aesKey);
 
   const keys = {};
-  for (const { userId, publicKeyJwk } of recipients) {
-    if (!userId || !publicKeyJwk) continue;
+  for (const { user_id, publicKeyJwk } of recipients) {
+    if (!user_id || !publicKeyJwk) continue;
     const pubKey = await importPublicKey(publicKeyJwk);
     const encryptedKey = await crypto.subtle.encrypt(
       { name: "RSA-OAEP" },
       pubKey,
       rawAes
     );
-    keys[userId] = bufToBase64(encryptedKey);
+    keys[user_id] = bufToBase64(encryptedKey);
   }
 
   if (Object.keys(keys).length === 0) {
@@ -188,7 +188,7 @@ export async function encryptMessage(plaintext, recipients) {
 /**
  * Déchiffre un payload (v1 ou v2).
  */
-export async function decryptMessage(payload, privateKey, myUserId = null) {
+export async function decryptMessage(payload, privateKey, my_user_id = null) {
   if (!payload || !payload.alg || payload.alg !== "RSA-OAEP+AES-GCM") {
     return null;
   }
@@ -198,8 +198,8 @@ export async function decryptMessage(payload, privateKey, myUserId = null) {
     let encryptedKeyBuf;
 
     if (payload.v === 2 && payload.keys) {
-      if (!myUserId || !payload.keys[myUserId]) return null;
-      encryptedKeyBuf = base64ToBuf(payload.keys[myUserId]);
+      if (!my_user_id || !payload.keys[my_user_id]) return null;
+      encryptedKeyBuf = base64ToBuf(payload.keys[my_user_id]);
     } else if (payload.v === 1 && payload.ek) {
       encryptedKeyBuf = base64ToBuf(payload.ek);
     } else {

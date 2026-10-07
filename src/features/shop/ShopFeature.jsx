@@ -55,7 +55,7 @@ export function LocalShopDirectory({ onSelectShop }) {
   );
 }
 
-export function ShopProductManager({ shopId, shopCurrency, userId }) {
+export function ShopProductManager({ shopId, shopCurrency, user_id }) {
   const { showToast } = useToast();
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -167,7 +167,7 @@ export function ShopProductManager({ shopId, shopCurrency, userId }) {
       {showForm && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-end sm:items-center justify-center z-50 p-0 sm:p-4" onClick={closeForm}>
           <div className="w-full sm:max-w-lg max-h-[90vh] overflow-y-auto rounded-t-3xl sm:rounded-2xl border shadow-2xl p-4 sm:p-6" style={{ background: COLORS.surface, borderColor: COLORS.borderGold }} onClick={(e) => e.stopPropagation()}>
-            <ProductForm shopId={shopId} shopCurrency={shopCurrency} userId={userId} product={editingProduct} onSaved={handleSaved} onCancel={closeForm} />
+            <ProductForm shopId={shopId} shopCurrency={shopCurrency} user_id={user_id} product={editingProduct} onSaved={handleSaved} onCancel={closeForm} />
           </div>
         </div>
       )}

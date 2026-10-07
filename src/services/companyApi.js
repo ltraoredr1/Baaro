@@ -80,12 +80,12 @@ export async function fetchCompanyById(id) {
   return data;
 }
 
-export async function fetchMyCompany(userId) {
-  assertId(userId, "Utilisateur");
+export async function fetchMyCompany(user_id) {
+  assertId(user_id, "Utilisateur");
   const { data, error } = await supabase
     .from("companies")
     .select("*")
-    .eq("owner_id", userId)
+    .eq("owner_id", user_id)
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();

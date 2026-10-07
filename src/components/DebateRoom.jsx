@@ -44,7 +44,7 @@ const ChatMessage = memo(function ChatMessage({ msg, currentId }) {
 });
 
 export function DebateRoom({ inviteCode, onBack }) {
-  const [userId, setUserId] = useState(null);
+  const [user_id, setUserId] = useState(null);
   const [room, setRoom] = useState(null);
   const [messages, setMessages] = useState([]);
   const [newMessage, setNewMessage] = useState("");
@@ -52,8 +52,8 @@ export function DebateRoom({ inviteCode, onBack }) {
   const [error, setError] = useState(null);
   const [codeCopied, setCodeCopied] = useState(false);
   const messagesEndRef = useRef(null);
-  const isHost = room?.host_id === userId;
-  const live = useDebateLive(room, userId, isHost);
+  const isHost = room?.host_id === user_id;
+  const live = useDebateLive(room, user_id, isHost);
 
   useEffect(() => {
     let mounted = true;
@@ -202,12 +202,12 @@ export function DebateRoom({ inviteCode, onBack }) {
 
   const handleSendMessage = async (e) => {
     e.preventDefault();
-    if (!newMessage.trim() || !room || !userId) return;
+    if (!newMessage.trim() || !room || !user_id) return;
     const text = newMessage.trim();
     setNewMessage("");
     const { error: sendErr } = await supabase.from("debate_messages").insert({
       room_id: room.id,
-      sender_id: userId,
+      sender_id: user_id,
       sender_type: "user",
       text,
     });
@@ -220,7 +220,7 @@ export function DebateRoom({ inviteCode, onBack }) {
   const handleBack = async () => {
     try { await live.leaveLive(); } catch (_) {}
     if (isHost && room && room.mode !== "text") {
-      await supabase.from("debate_rooms").update({ status: "ended" }).eq("id", room.id).eq("host_id", userId);
+      await supabase.from("debate_rooms").update({ status: "ended" }).eq("id", room.id).eq("host_id", user_id);
     }
     onBack();
   };
@@ -326,7 +326,7 @@ export function DebateRoom({ inviteCode, onBack }) {
 
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
         {messages.map((m) => (
-          <ChatMessage key={m.id} msg={m} currentId={userId} />
+          <ChatMessage key={m.id} msg={m} currentId={user_id} />
         ))}
         <div ref={messagesEndRef} />
       </div>

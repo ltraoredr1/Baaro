@@ -49,18 +49,18 @@ async function compressImage(
 
 export async function uploadProfileMedia(
   file,
-  { userId, kind = "avatar" } = {}
+  { user_id, kind = "avatar" } = {}
 ) {
   if (!file) throw new Error("Fichier manquant");
 
-  if (!userId || typeof userId !== "string") {
-    throw new Error("userId requis (auth.users.id)");
+  if (!user_id || typeof user_id !== "string") {
+    throw new Error("user_id requis (auth.users.id)");
   }
 
   if (
-    userId.startsWith("@") ||
-    userId.includes("@") ||
-    userId.length < 32
+    user_id.startsWith("@") ||
+    user_id.includes("@") ||
+    user_id.length < 32
   ) {
     throw new Error(
       "Identité invalide : utiliser auth.users.id uniquement"
@@ -93,7 +93,7 @@ export async function uploadProfileMedia(
 
   const result = await uploadExternalMedia(compressed, {
     folder: "profiles",
-    userId,
+    user_id,
     maxBytes: MAX_SIZE,
   });
 

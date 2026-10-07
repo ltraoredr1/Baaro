@@ -6,7 +6,7 @@ import { Mic, MicOff, Phone, PhoneOff, Users, Loader2 } from "lucide-react";
  * Utilise l'API WebRTC native pour un canal vocal basique.
  * Pour Daily.co, remplacez la logique par le SDK DailyIframe.
  */
-export default function VoiceChannelUI({ channelId, userId, C }) {
+export default function VoiceChannelUI({ channelId, user_id, C }) {
   const [joined, setJoined] = useState(false);
   const [muted, setMuted] = useState(false);
   const [connecting, setConnecting] = useState(false);
@@ -24,13 +24,13 @@ export default function VoiceChannelUI({ channelId, userId, C }) {
       stream.getAudioTracks().forEach((t) => (t.enabled = false));
       setMuted(true);
       setJoined(true);
-      setParticipants([{ id: userId, name: "Vous", isLocal: true }]);
+      setParticipants([{ id: user_id, name: "Vous", isLocal: true }]);
 
       /*
        * NOTE PRODUCTION : Remplacez ce bloc par :
        *   import DailyIframe from '@daily-co/daily-js';
        *   const callFrame = DailyIframe.createFrame({ iframeStyle: { display: 'none' } });
-       *   await callFrame.join({ url: `https://baaro.daily.co/${channelId}`, userName: userId });
+       *   await callFrame.join({ url: `https://baaro.daily.co/${channelId}`, userName: user_id });
        *   callFrame.on('participant-joined', ...)
        */
     } catch (e) {

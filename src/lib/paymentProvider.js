@@ -30,7 +30,7 @@ export async function createPayment({
   channel,
   amount,
   currency,
-  userId,
+  user_id,
   companyId,
   orderId,
   paymentType,
@@ -39,7 +39,7 @@ export async function createPayment({
   const session = await getAuthenticatedSession();
   const authenticatedUserId = session.user?.id;
 
-  if (!authenticatedUserId && !userId) {
+  if (!authenticatedUserId && !user_id) {
     throw new Error("Utilisateur authentifié introuvable.");
   }
 
@@ -52,7 +52,7 @@ export async function createPayment({
     channel,
     amount,
     currency,
-    user_id: userId || authenticatedUserId,
+    user_id: user_id || authenticatedUserId,
     company_id: companyId,
     order_id: orderId,
     payment_type: paymentType,

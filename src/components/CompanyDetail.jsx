@@ -22,7 +22,7 @@ function formatDays(days) {
   return days.map((d) => DAYS_LABELS[d] || d).join(", ");
 }
 
-export default function CompanyDetail({ companyId, userId, onBack }) {
+export default function CompanyDetail({ companyId, user_id, onBack }) {
   const [company, setCompany] = useState(null);
   const [programs, setPrograms] = useState([]);
   const [tariffs, setTariffs] = useState([]);
@@ -263,7 +263,7 @@ export default function CompanyDetail({ companyId, userId, onBack }) {
       )}
 
       {tab === "reviews" && (
-        <CompanyReviews companyId={companyId} userId={userId} />
+        <CompanyReviews companyId={companyId} user_id={user_id} />
       )}
     </div>
   );

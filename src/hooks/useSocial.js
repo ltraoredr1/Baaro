@@ -10,15 +10,15 @@ function isValidAuthUserId(value) {
 
 /**
  * Liste les amis d'un utilisateur.
- * userId = auth.users.id uniquement.
+ * user_id = auth.users.id uniquement.
  */
-export const useSocial = (userId) => {
+export const useSocial = (user_id) => {
   const [friends, setFriends] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
   const fetchFriends = useCallback(async () => {
-    if (!isValidAuthUserId(userId)) {
+    if (!isValidAuthUserId(user_id)) {
       setFriends([]);
       return;
     }
@@ -26,7 +26,7 @@ export const useSocial = (userId) => {
     setError(null);
     try {
       const { data, error: rpcError } = await supabase.rpc("get_user_friends", {
-        p_user_id: userId,
+        p_user_id: user_id,
       });
       if (rpcError) throw rpcError;
 
@@ -56,7 +56,7 @@ export const useSocial = (userId) => {
     } finally {
       setLoading(false);
     }
-  }, [userId]);
+  }, [user_id]);
 
   useEffect(() => {
     fetchFriends();

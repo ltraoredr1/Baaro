@@ -129,7 +129,7 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
     if (!activeChat?.id) return;
     const channel = supabase.channel(`typing:${activeChat.id}`)
       .on("broadcast", { event: "typing" }, ({ payload }) => {
-        if (payload?.userId !== id) {
+        if (payload?.user_id !== id) {
           setTyping(Boolean(payload?.typing));
           window.clearTimeout(window.__baaroTypingTimer);
           window.__baaroTypingTimer = window.setTimeout(() => setTyping(false), 2200);
@@ -175,7 +175,7 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
     if (!activeChat?.id) return;
     const ch = supabase.channel(`typing:${activeChat.id}`);
     await ch.subscribe();
-    await ch.send({ type: "broadcast", event: "typing", payload: { userId: id, typing: value } });
+    await ch.send({ type: "broadcast", event: "typing", payload: { user_id: id, typing: value } });
     window.setTimeout(() => supabase.removeChannel(ch), 500);
   };
 

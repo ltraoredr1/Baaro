@@ -154,13 +154,13 @@ export function getParticipants() { return callObject?.participants() || {}; }
 /**
  * 4. Enregistrement BDD
  */
-export async function createCallRecord({ conversationId, callerId, calleeId, type, dailyRoomName }) {
+export async function createCallRecord({ conversation_id, caller_id, callee_id, type, dailyRoomName }) {
   const { data, error } = await supabase
     .from("calls")
     .insert({
-      conversation_id: conversationId,
-      caller_id: callerId,
-      callee_id: calleeId,
+      conversation_id: conversation_id,
+      caller_id: caller_id,
+      callee_id: callee_id,
       type: type === "video" ? "video" : "voice",
       status: "ringing",
       daily_room_name: dailyRoomName,
@@ -175,12 +175,12 @@ export async function createCallRecord({ conversationId, callerId, calleeId, typ
   return data;
 }
 
-export async function updateCallStatus(callId, updates) {
-  if (!callId) return null;
+export async function updateCallStatus(call_id, updates) {
+  if (!call_id) return null;
   const { data, error } = await supabase
     .from("calls")
     .update(updates)
-    .eq("id", callId)
+    .eq("id", call_id)
     .select()
     .single();
   if (error) throw error;

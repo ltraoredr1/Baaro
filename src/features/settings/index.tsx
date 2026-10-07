@@ -981,7 +981,7 @@ const inputStyle = {
 } as const;
 
 type Props = {
-  userId?: string | null;
+  user_id?: string | null;
   userProfile?: {
     display_name?: string;
     handle?: string;
@@ -1757,7 +1757,7 @@ export default function SettingsTab({
         >
           {user?.id && (
             <ProfilePhotosEditor
-              userId={user.id}
+              user_id={user.id}
               profile={userProfile}
               onUpdated={(patch: Record<string, unknown>) => {
                 setUserProfile?.({
@@ -1987,7 +1987,7 @@ export default function SettingsTab({
               <p className="text-xs font-semibold mb-2" style={{ color: COLORS.muted }}>
                 {t("contacts_links")}
               </p>
-              <ProfileContactsLinks userId={user.id} />
+              <ProfileContactsLinks user_id={user.id} />
             </div>
           )}
         </CollapsibleSection>

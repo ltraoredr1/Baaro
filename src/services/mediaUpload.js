@@ -36,10 +36,10 @@ export async function compressImage(file, { maxWidth = 1200, quality = 0.8 } = {
 
 export async function uploadShopMedia(
   file,
-  { folder = "products", userId } = {}
+  { folder = "products", user_id } = {}
 ) {
   if (!file) throw new Error("Fichier manquant");
-  if (!userId) throw new Error("userId requis");
+  if (!user_id) throw new Error("user_id requis");
 
   if (!ALLOWED.includes(file.type) && !file.type.startsWith("image/")) {
     throw new Error("Format non supporté (JPEG, PNG, WebP, GIF)");
@@ -57,7 +57,7 @@ export async function uploadShopMedia(
 
   const result = await uploadExternalMedia(compressed, {
     folder: "shop",
-    userId,
+    user_id,
     maxBytes: MAX_SIZE,
   });
 

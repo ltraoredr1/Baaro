@@ -3,9 +3,9 @@ import { Capacitor } from "@capacitor/core";
 import { PushNotifications } from "@capacitor/push-notifications";
 import { supabase } from "../supabaseClient.js";
 
-export function usePushNotifications(userId) {
+export function usePushNotifications(user_id) {
   useEffect(() => {
-    if (!userId) return;
+    if (!user_id) return;
     let mounted = true;
 
     const setup = async () => {
@@ -19,7 +19,7 @@ export function usePushNotifications(userId) {
         PushNotifications.addListener("registration", async (token) => {
           if (!mounted) return;
           await supabase.from("push_subscriptions").upsert(
-            { user_id: userId, token: token.value, platform: Capacitor.getPlatform() },
+            { user_id: user_id, token: token.value, platform: Capacitor.getPlatform() },
             { onConflict: "user_id,token" }
           );
         });
@@ -51,5 +51,5 @@ export function usePushNotifications(userId) {
       mounted = false;
       PushNotifications.removeAllListeners();
     };
-  }, [userId]);
+  }, [user_id]);
 }

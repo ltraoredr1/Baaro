@@ -6,16 +6,16 @@ const PROFILE_SELECT =
   "id, display_name, handle, flag, bio, avatar_url, cover_url, first_name, last_name, birth_date, location, country, updated_at, created_at";
 
 /**
- * userId = auth.users.id (UUID) uniquement.
+ * user_id = auth.users.id (UUID) uniquement.
  * Rejette email, handle (@xxx) et toute valeur non-UUID.
  */
-function assertUserId(userId) {
-  if (!userId || typeof userId !== "string") return false;
-  if (userId.startsWith("@") || (userId.includes("@") && userId.includes("."))) return false;
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId);
+function assert_user_id(user_id) {
+  if (!user_id || typeof user_id !== "string") return false;
+  if (user_id.startsWith("@") || (user_id.includes("@") && user_id.includes("."))) return false;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(user_id);
 }
 
-export function useProfile(userId, showToast) {
+export function useProfile(user_id, showToast) {
   const [profile, setProfile] = useState(null);
   const [contacts, setContacts] = useState({ phones: [], emails: [] });
   const [links, setLinks] = useState([]);
@@ -24,7 +24,7 @@ export function useProfile(userId, showToast) {
   const [saving, setSaving] = useState(false);
 
   const load = useCallback(async () => {
-    if (!assertUserId(userId)) {
+    if (!assert_user_id(user_id)) {
       setProfile(null);
       setContacts({ phones: [], emails: [] });
       setLinks([]);
@@ -38,7 +38,7 @@ export function useProfile(userId, showToast) {
       let profileRes = await supabase
         .from("profiles")
         .select(PROFILE_SELECT)
-        .eq("id", userId)
+        .eq("id", user_id)
         .maybeSingle();
 
       // FK user_id des tables satellites = auth.users.id
@@ -46,17 +46,17 @@ export function useProfile(userId, showToast) {
         supabase
           .from("profile_contacts")
           .select("id,contact_type,value,label,position,is_primary")
-          .eq("user_id", userId)
+          .eq("user_id", user_id)
           .order("position"),
         supabase
           .from("profile_links")
           .select("id,link_type,label,url,position")
-          .eq("user_id", userId)
+          .eq("user_id", user_id)
           .order("position"),
         supabase
           .from("profile_social_links")
           .select("id,platform,username,url,position")
-          .eq("user_id", userId)
+          .eq("user_id", user_id)
           .order("platform"),
       ]);
 
@@ -68,7 +68,7 @@ export function useProfile(userId, showToast) {
       let profileData = profileRes.data;
       if (!profileData) {
         const fallback = {
-          id: userId, // = auth.users.id
+          id: user_id, // = auth.users.id
           display_name: "Nouveau membre",
           handle: null, // handle ≠ identité
           flag: "🌍",
@@ -91,7 +91,7 @@ export function useProfile(userId, showToast) {
 
       setProfile(
         profileData || {
-          id: userId,
+          id: user_id,
           display_name: "Nouveau membre",
           handle: null,
           flag: "🌍",
@@ -114,7 +114,7 @@ export function useProfile(userId, showToast) {
     } finally {
       setLoading(false);
     }
-  }, [userId, showToast]);
+  }, [user_id, showToast]);
 
   useEffect(() => {
     load();
@@ -122,12 +122,12 @@ export function useProfile(userId, showToast) {
 
   const updateProfile = useCallback(
     async (updates) => {
-      if (!assertUserId(userId)) return { ok: false };
+      if (!assert_user_id(user_id)) return { ok: false };
       setSaving(true);
       try {
         // Clé primaire = auth.users.id — handle/bio ne sont que des attributs
         const payload = {
-          id: userId,
+          id: user_id,
           display_name: updates.display_name?.trim() || "Nouveau membre",
           handle:
             updates.handle?.trim() && updates.handle.trim() !== "@membre"
@@ -162,7 +162,7 @@ export function useProfile(userId, showToast) {
         setSaving(false);
       }
     },
-    [userId, showToast]
+    [user_id, showToast]
   );
 
   return {
@@ -177,7 +177,7 @@ export function useProfile(userId, showToast) {
   };
 }
 
-export function useProfileStats(userId) {
+export function useProfileStats(user_id) {
   const [stats, setStats] = useState({
     followers: 0,
     following: 0,
@@ -187,24 +187,24 @@ export function useProfileStats(userId) {
   });
 
   useEffect(() => {
-    if (!assertUserId(userId)) {
+    if (!assert_user_id(user_id)) {
       setStats({ followers: 0, following: 0, friends: 0, posts: 0, likes: 0 });
       return;
     }
     (async () => {
       try {
-        const { data, error } = await supabase.rpc("get_profile_stats", { p_user_id: userId });
+        const { data, error } = await supabase.rpc("get_profile_stats", { p_user_id: user_id });
         if (error) throw error;
         const row = Array.isArray(data) ? data[0] : data;
         setStats({ followers: Number(row?.followers || 0), following: Number(row?.following || 0), friends: Number(row?.friends || 0), posts: Number(row?.posts || 0), likes: Number(row?.likes || 0) });
       } catch {
         try {
           const [fol, wing, friends, posts, postRows] = await Promise.all([
-            supabase.from("follows").select("follower_id", { count: "exact", head: true }).eq("followed_id", userId).eq("status", "accepted"),
-            supabase.from("follows").select("followed_id", { count: "exact", head: true }).eq("follower_id", userId).eq("status", "accepted"),
-            supabase.from("follows").select("follower_id", { count: "exact", head: true }).eq("followed_id", userId).eq("status", "accepted").eq("is_friend", true),
-            supabase.from("posts").select("id", { count: "exact", head: true }).eq("author_id", userId),
-            supabase.from("posts").select("id").eq("author_id", userId),
+            supabase.from("follows").select("follower_id", { count: "exact", head: true }).eq("followed_id", user_id).eq("status", "accepted"),
+            supabase.from("follows").select("followed_id", { count: "exact", head: true }).eq("follower_id", user_id).eq("status", "accepted"),
+            supabase.from("follows").select("follower_id", { count: "exact", head: true }).eq("followed_id", user_id).eq("status", "accepted").eq("is_friend", true),
+            supabase.from("posts").select("id", { count: "exact", head: true }).eq("author_id", user_id),
+            supabase.from("posts").select("id").eq("author_id", user_id),
           ]);
           const ids = (postRows.data || []).map((x) => x.id);
           let likesCount = 0;
@@ -213,7 +213,7 @@ export function useProfileStats(userId) {
         } catch {}
       }
     })();
-  }, [userId]);
+  }, [user_id]);
 
   return stats;
 }

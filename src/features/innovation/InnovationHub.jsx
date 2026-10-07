@@ -14,33 +14,33 @@ const PILLARS = [
   ["Data Vault", "Séparation stricte entre identité, médias, données applicatives et mémoire IA, avec export et contrôle utilisateur.", Database],
 ];
 
-export function InnovationHub({ userId }) {
+export function InnovationHub({ user_id }) {
   const [boot, setBoot] = useState(null);
   const [goal, setGoal] = useState("");
   const [goals, setGoals] = useState([]);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (!userId) return;
+    if (!user_id) return;
     let active = true;
     (async () => {
       const [{ data: bootData }, { data: goalData }] = await Promise.all([
         supabase.rpc("nexus_bootstrap"),
-        supabase.from("nexus_goals").select("id,title,status,progress").eq("user_id", userId).eq("status", "active").order("updated_at", { ascending: false }).limit(6),
+        supabase.from("nexus_goals").select("id,title,status,progress").eq("user_id", user_id).eq("status", "active").order("updated_at", { ascending: false }).limit(6),
       ]);
       if (active) { setBoot(bootData || null); setGoals(goalData || []); }
     })();
     return () => { active = false; };
-  }, [userId]);
+  }, [user_id]);
 
   const activeGoals = useMemo(() => goals.length, [goals]);
 
   async function addGoal(event) {
     event.preventDefault();
     const title = goal.trim();
-    if (!title || !userId || busy) return;
+    if (!title || !user_id || busy) return;
     setBusy(true);
-    const { data } = await supabase.from("nexus_goals").insert({ user_id: userId, title }).select("id,title,status,progress").single();
+    const { data } = await supabase.from("nexus_goals").insert({ user_id: user_id, title }).select("id,title,status,progress").single();
     if (data) setGoals(current => [data, ...current].slice(0, 6));
     setGoal("");
     setBusy(false);
@@ -85,7 +85,7 @@ export function InnovationHub({ userId }) {
         ))}
       </div>
 
-      <FutureCorePanel userId={userId} />
+      <FutureCorePanel user_id={user_id} />
 
       <div className="grid gap-3 sm:grid-cols-3">
         <Principle icon={LockKeyhole} title="Privacy by design" text="Mémoire et personnalisation sont des options contrôlables, pas des obligations." />

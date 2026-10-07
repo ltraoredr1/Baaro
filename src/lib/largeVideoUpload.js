@@ -36,15 +36,15 @@ function looksLikeVideo(file) {
   return /\.(mp4|webm|mov|m4v|mkv|3gp|avi)$/i.test(String(file.name || ""));
 }
 
-async function uploadDirect(file, onProgress, userId) {
+async function uploadDirect(file, onProgress, user_id) {
   onProgress?.(20);
   const { data: { session } } = await supabase.auth.getSession();
-  const uid = userId || session?.user?.id;
+  const uid = user_id || session?.user?.id;
   if (!uid) throw new Error("Session expiree");
   onProgress?.(40);
   const result = await uploadExternalMedia(file, {
     folder: "videos",
-    userId: uid,
+    user_id: uid,
     maxBytes: DIRECT_MAX_BYTES,
   });
   onProgress?.(100);
@@ -105,12 +105,12 @@ async function uploadViaWorker(file, onProgress) {
 }
 
 /** Onglet Vidéos : <=500Mo R2 direct, >500Mo worker Render */
-export async function uploadLargeVideo(file, { onProgress, userId } = {}) {
+export async function uploadLargeVideo(file, { onProgress, user_id } = {}) {
   if (!file?.size) throw new Error("Video invalide");
   if (!looksLikeVideo(file)) throw new Error("Video invalide");
 
   if (file.size <= DIRECT_MAX_BYTES) {
-    return uploadDirect(file, onProgress, userId);
+    return uploadDirect(file, onProgress, user_id);
   }
   if (!DEFAULT_WORKER) {
     throw new Error("Fichier > 500 Mo : configure VITE_BAARO_MEDIA_WORKER_URL");

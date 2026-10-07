@@ -61,7 +61,7 @@ export function getBestAudioMime() {
  * Upload d'un fichier de chat (image, vidéo, audio, document…).
  *
  * @param {File} file
- * @param {string} userId - auth.users.id
+ * @param {string} user_id - auth.users.id
  * @returns {Promise<{
  *   url: string,
  *   provider: string,
@@ -71,15 +71,15 @@ export function getBestAudioMime() {
  *   fileName?: string
  * }>}
  */
-export async function uploadChatFile(file, userId) {
+export async function uploadChatFile(file, user_id) {
   if (!file) throw new Error("Fichier manquant");
-  if (!userId || typeof userId !== "string") {
+  if (!user_id || typeof user_id !== "string") {
     throw new Error("Utilisateur non connecté");
   }
 
   const result = await uploadExternalMedia(file, {
     folder: "chat",
-    userId,
+    user_id,
     maxBytes: MAX_CHAT_BYTES,
   });
 
@@ -97,7 +97,7 @@ export async function uploadChatFile(file, userId) {
  * Upload d'un message vocal (Blob MediaRecorder).
  *
  * @param {Blob} blob
- * @param {string} userId
+ * @param {string} user_id
  * @param {number} [durationSeconds=0]
  * @returns {Promise<{
  *   url: string,
@@ -109,9 +109,9 @@ export async function uploadChatFile(file, userId) {
  *   duration: number
  * }>}
  */
-export async function uploadVoiceBlob(blob, userId, durationSeconds = 0) {
+export async function uploadVoiceBlob(blob, user_id, durationSeconds = 0) {
   if (!blob) throw new Error("Enregistrement vocal manquant");
-  if (!userId || typeof userId !== "string") {
+  if (!user_id || typeof user_id !== "string") {
     throw new Error("Utilisateur non connecté");
   }
 
@@ -128,7 +128,7 @@ export async function uploadVoiceBlob(blob, userId, durationSeconds = 0) {
     type: mime,
   });
 
-  const result = await uploadChatFile(file, userId);
+  const result = await uploadChatFile(file, user_id);
 
   return {
     ...result,

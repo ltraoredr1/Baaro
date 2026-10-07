@@ -12,7 +12,7 @@ const FALLBACK = {
 };
 
 export default function ImageUpload({
-  userId,
+  user_id,
   folder = "products",
   value,
   onChange,
@@ -51,7 +51,7 @@ export default function ImageUpload({
     setUploading(true);
 
     try {
-      const url = await uploadShopMedia(file, { folder, userId });
+      const url = await uploadShopMedia(file, { folder, user_id });
       if (objectUrlRef.current) {
         URL.revokeObjectURL(objectUrlRef.current);
         objectUrlRef.current = null;
@@ -90,7 +90,7 @@ export default function ImageUpload({
         <button
           type="button"
           onClick={() => inputRef.current?.click()}
-          disabled={uploading ||!userId}
+          disabled={uploading ||!user_id}
           className={`${size} rounded-xl border flex items-center justify-center overflow-hidden shrink-0 relative disabled:opacity-50 hover:border-amber-400/30 transition`}
           style={{ background: C.surface2, borderColor: C.border }}
         >
@@ -99,7 +99,7 @@ export default function ImageUpload({
         </button>
 
         <div className="flex flex-col gap-1">
-          <button type="button" onClick={() => inputRef.current?.click()} disabled={uploading ||!userId} className="text-xs font-bold px-2.5 py-1 rounded-lg border disabled:opacity-50" style={{ borderColor: C.border, color: C.gold }}>
+          <button type="button" onClick={() => inputRef.current?.click()} disabled={uploading ||!user_id} className="text-xs font-bold px-2.5 py-1 rounded-lg border disabled:opacity-50" style={{ borderColor: C.border, color: C.gold }}>
             {preview? "Changer" : "Ajouter"}
           </button>
           {preview && <button type="button" onClick={clear} disabled={uploading} className="text-xs px-2.5 py-1 rounded-lg border flex items-center gap-1 hover:bg-white/5" style={{ borderColor: C.border, color: "#f87171" }}><X size={12} /> Retirer</button>}

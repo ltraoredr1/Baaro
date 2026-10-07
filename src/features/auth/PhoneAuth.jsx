@@ -26,8 +26,8 @@ function phoneToEmail(phone) {
   return `phone_${cleanPhone}@baaro.app`;
 }
 
-function buildFallbackHandle(userId) {
-  const cleanId = String(userId).replace(/-/g, '').slice(0, 12);
+function buildFallbackHandle(user_id) {
+  const cleanId = String(user_id).replace(/-/g, '').slice(0, 12);
   return `@user_${cleanId}`;
 }
 
@@ -98,33 +98,33 @@ export default function PhoneAuth({ onAuthSuccess }) {
 
   async function ensureProfile(user) {
     if (!user || !user.id) return;
-    const userId = user.id;
+    const user_id = user.id;
     const normalizedPhone = normalizePhone(phone);
 
     try {
       const { data: existingProfile } = await supabase
         .from('profiles')
         .select('id, display_name, handle, flag, phone')
-        .eq('id', userId)
+        .eq('id', user_id)
         .maybeSingle();
 
       if (existingProfile) {
         const updates = {};
         if (!existingProfile.phone && normalizedPhone) updates.phone = normalizedPhone;
         if (!existingProfile.display_name) updates.display_name = normalizedPhone || 'Membre BAARO';
-        if (!existingProfile.handle) updates.handle = buildFallbackHandle(userId);
+        if (!existingProfile.handle) updates.handle = buildFallbackHandle(user_id);
         if (!existingProfile.flag) updates.flag = '🌍';
 
         if (Object.keys(updates).length > 0) {
-          await supabase.from('profiles').update(updates).eq('id', userId);
+          await supabase.from('profiles').update(updates).eq('id', user_id);
         }
         return;
       }
 
       await supabase.from('profiles').insert({
-        id: userId,
+        id: user_id,
         display_name: normalizedPhone || 'Membre BAARO',
-        handle: buildFallbackHandle(userId),
+        handle: buildFallbackHandle(user_id),
         flag: '🌍',
         phone: normalizedPhone || null,
         created_at: new Date().toISOString(),

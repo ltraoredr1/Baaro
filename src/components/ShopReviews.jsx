@@ -10,7 +10,7 @@ import { useToast } from "./ToastContext.jsx";
  * - Formulaire d'avis (uniquement si l'utilisateur a une commande "delivered" sans avis)
  * 100 % Supabase + RLS — aucun nouvel endpoint API.
  */
-export default function ShopReviews({ shopId, userId }) {
+export default function ShopReviews({ shopId, user_id }) {
   const { showToast } = useToast();
   const [reviews, setReviews] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -38,7 +38,7 @@ export default function ShopReviews({ shopId, userId }) {
   }
 
   async function checkCanReview() {
-    if (!userId || !shopId) {
+    if (!user_id || !shopId) {
       setCanReview(false);
       return;
     }
@@ -48,7 +48,7 @@ export default function ShopReviews({ shopId, userId }) {
       .from("orders")
       .select("id")
       .eq("shop_id", shopId)
-      .eq("buyer_id", userId)
+      .eq("buyer_id", user_id)
       .eq("status", "delivered");
 
     if (!orders || orders.length === 0) {
@@ -81,18 +81,18 @@ export default function ShopReviews({ shopId, userId }) {
       await Promise.all([loadReviews(), checkCanReview()]);
       setLoading(false);
     })();
-  }, [shopId, userId]);
+  }, [shopId, user_id]);
 
   async function handleSubmit(e) {
     e.preventDefault();
-    if (!eligibleOrderId || !userId) return;
+    if (!eligibleOrderId || !user_id) return;
 
     setSubmitting(true);
     try {
       const { error } = await supabase.from("shop_reviews").insert({
         shop_id: shopId,
         order_id: eligibleOrderId,
-        buyer_id: userId,
+        buyer_id: user_id,
         rating,
         comment: comment.trim() || null,
       });

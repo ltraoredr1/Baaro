@@ -633,7 +633,7 @@ export default function CommunityTab({ onOpenProfile }) {
 
                 {/* ── Canal vocal ── */}
                 {selectedChannel.type === "voice" ? (
-                  <VoiceChannelUI channelId={selectedChannel.id} userId={id} C={C} />
+                  <VoiceChannelUI channelId={selectedChannel.id} user_id={id} C={C} />
                 ) : (
                   /* ── Canal texte / annonce ── */
                   <>

@@ -9,13 +9,13 @@ import { supabase } from "../supabaseClient.js";
 // id unique : profiles.id = auth.uid() = author_id = user_id
 // [STRIPPED 69 bytes]
 
-async function uploadPostMedia(userId, file) {
+async function uploadPostMedia(user_id, file) {
   try {
-    if (!file || !userId) return { url: null, type: null };
+    if (!file || !user_id) return { url: null, type: null };
     const { uploadExternalMedia } = await import("../lib/externalMedia.js");
     const result = await uploadExternalMedia(file, {
       folder: "posts",
-      userId,
+      user_id,
       maxBytes: 500 * 1024 * 1024,
     });
     return { url: result.url, type: file.type.startsWith("video") ? "video" : "image" };
@@ -26,18 +26,18 @@ async function uploadPostMedia(userId, file) {
 }
 
 // Renvoie les author_id pour un scope. null = pas de restriction (all)
-async function resolveScopeAuthorIds(userId, scope) {
-  if (!userId || scope === "all") return null;
+async function resolveScopeAuthorIds(user_id, scope) {
+  if (!user_id || scope === "all") return null;
 
   const { data: rows, error } = await supabase
   .from("follows")
   .select("followed_id, is_friend")
-  .eq("follower_id", userId)
+  .eq("follower_id", user_id)
   .eq("status", "accepted");
 
   if (error) {
     console.warn("resolveScopeAuthorIds:", error.message);
-    return [userId]; // fallback: au moins moi
+    return [user_id]; // fallback: au moins moi
   }
 
   const ids = (rows || [])
@@ -46,24 +46,24 @@ async function resolveScopeAuthorIds(userId, scope) {
   .filter(Boolean);
 
   // IMPORTANT: toujours inclure mes propres posts dans following/friends
-  return [...new Set([...ids, userId])];
+  return [...new Set([...ids, user_id])];
 }
 
-export function usePosts(userId, scope = "all") {
+export function usePosts(user_id, scope = "all") {
   const [posts, setPosts] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
-    if (!userId && scope!== "all") {
+    if (!user_id && scope!== "all") {
       setPosts([]);
       setLoading(false);
       return;
     }
     setLoading(true);
     try {
-      const scopeIds = await resolveScopeAuthorIds(userId, scope);
+      const scopeIds = await resolveScopeAuthorIds(user_id, scope);
 
-      // Cas following/friends sans personne (ne devrait plus arriver car on inclut userId)
+      // Cas following/friends sans personne (ne devrait plus arriver car on inclut user_id)
       if (scopeIds!== null && scopeIds.length === 0) {
         setPosts([]);
         return;
@@ -106,7 +106,7 @@ export function usePosts(userId, scope = "all") {
           text: p.text,
           mediaUrl: p.media_url,
           mediaType: p.media_type,
-          liked: likeRows.some((l) => l.post_id === p.id && l.user_id === userId),
+          liked: likeRows.some((l) => l.post_id === p.id && l.user_id === user_id),
           likes: likeRows.filter((l) => l.post_id === p.id).length,
           comments: commentRows.filter((c) => c.post_id === p.id).length,
           earned: 0,
@@ -117,7 +117,7 @@ export function usePosts(userId, scope = "all") {
     } finally {
       setLoading(false);
     }
-  }, [userId, scope]);
+  }, [user_id, scope]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -131,7 +131,7 @@ export function usePosts(userId, scope = "all") {
   }, [load]);
 
   const likePost = useCallback(async (postId) => {
-    if (!userId) return;
+    if (!user_id) return;
     let alreadyLiked = false;
 
     // Optimistic update sans dépendance à `posts`
@@ -145,9 +145,9 @@ export function usePosts(userId, scope = "all") {
 
     try {
       if (alreadyLiked) {
-        await supabase.from("post_likes").delete().eq("post_id", postId).eq("user_id", userId);
+        await supabase.from("post_likes").delete().eq("post_id", postId).eq("user_id", user_id);
       } else {
-        await supabase.from("post_likes").insert({ post_id: postId, user_id: userId });
+        await supabase.from("post_likes").insert({ post_id: postId, user_id: user_id });
       }
     } catch (e) {
       // Rollback si erreur
@@ -157,21 +157,21 @@ export function usePosts(userId, scope = "all") {
         )
       );
     }
-  }, [userId]);
+  }, [user_id]);
 
   const createPost = useCallback(async (text, file) => {
-    if (!userId) return;
+    if (!user_id) return;
     let media = { url: null, type: null };
-    if (file) media = await uploadPostMedia(userId, file);
+    if (file) media = await uploadPostMedia(user_id, file);
     const { error } = await supabase.from("posts").insert({
-      author_id: userId,
+      author_id: user_id,
       text: text || "",
       media_url: media.url,
       media_type: media.type,
     });
     if (error) throw error;
     await load();
-  }, [userId, load]);
+  }, [user_id, load]);
 
   return { posts, loading, likePost, createPost, reload: load };
 }

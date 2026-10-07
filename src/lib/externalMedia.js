@@ -34,11 +34,11 @@ async function stepFetch(step, url, init, hint) {
 
 export async function uploadExternalMedia(file, {
   folder = "misc",
-  userId,
+  user_id,
   maxBytes = MAX_DEFAULT,
 } = {}) {
   if (!file) throw new Error("Fichier manquant");
-  if (!userId) throw new Error("Utilisateur non authentifié");
+  if (!user_id) throw new Error("Utilisateur non authentifié");
   if (!Number.isFinite(file.size) || file.size <= 0) throw new Error("Fichier invalide");
   if (file.size > maxBytes) throw new Error(`Fichier trop volumineux (max ${Math.ceil(maxBytes / 1024 / 1024)} Mo)`);
 
