@@ -64,7 +64,18 @@ const THEMES = [
   { id: "midnight", labelKey: "theme_midnight", bg: "#0B1220" },
   { id: "oled", labelKey: "theme_oled", bg: "#000000" },
   { id: "emerald", labelKey: "theme_emerald", bg: "#061A14" },
+  { id: "light", labelKey: "theme_light", bg: "#F8FAFC" },
+  { id: "sunset", labelKey: "theme_sunset", bg: "#2A1215" },
+  { id: "ocean", labelKey: "theme_ocean", bg: "#0A1628" },
+  { id: "forest", labelKey: "theme_forest", bg: "#0E1F14" },
+  { id: "desert", labelKey: "theme_desert", bg: "#1F1A14" },
+  { id: "custom", labelKey: "theme_custom", bg: "custom" },
 ] as const;
+
+type CustomTheme = { bgImage?: string; bgColor: string; accent: string };
+
+type CustomTheme = { bgImage?: string; bgColor: string; accent: string };
+
 
 /** UI complète : fr / en / ar / bm. Autres = préférence contenu. */
 const LANGUAGES = [
@@ -287,6 +298,17 @@ const STRINGS: Record<string, Record<string, string>> = {
     choose_country: "Choisir un pays",
     contacts_links: "Coordonnées et réseaux",
     lang_beta_hint: "Bêta : ces traductions sont en cours de validation par des locuteurs. Certains textes peuvent être inexacts.",
+    theme_light: "Clair",
+    theme_sunset: "Coucher",
+    theme_ocean: "Océan",
+    theme_forest: "Forêt",
+    theme_desert: "Désert",
+    theme_custom: "Perso + image",
+    custom_bg: "Couleur de fond",
+    custom_accent: "Couleur accent",
+    custom_image: "Image de fond",
+    custom_upload: "Choisir une image",
+    custom_remove: "Retirer l'image",
   },
   en: {
     title: "Settings",
@@ -444,6 +466,17 @@ const STRINGS: Record<string, Record<string, string>> = {
     choose_country: "Choose a country",
     contacts_links: "Contacts & links",
     lang_beta_hint: "Beta: these translations are being validated by native speakers. Some texts may be inaccurate.",
+    theme_light: "Light",
+    theme_sunset: "Sunset",
+    theme_ocean: "Ocean",
+    theme_forest: "Forest",
+    theme_desert: "Desert",
+    theme_custom: "Custom + image",
+    custom_bg: "Background",
+    custom_accent: "Accent color",
+    custom_image: "Background image",
+    custom_upload: "Pick image",
+    custom_remove: "Remove image",
   },
   ar: {
     title: "الإعدادات",
@@ -747,6 +780,7 @@ type SettingsState = {
   low_bandwidth_mode: boolean;
   local_cache: boolean;
   privacy_ai: boolean;
+ customTheme?: CustomTheme;
 };
 
 const DEFAULT_SETTINGS: SettingsState = {
@@ -774,6 +808,7 @@ const DEFAULT_SETTINGS: SettingsState = {
   low_bandwidth_mode: false,
   local_cache: true,
   privacy_ai: true,
+  customTheme: { bgColor: "#0B1220", accent: "#2DBFA6" },
 };
 
 function loadLocal(): SettingsState {

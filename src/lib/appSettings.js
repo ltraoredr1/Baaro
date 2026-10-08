@@ -30,6 +30,7 @@ export const DEFAULT_SETTINGS = {
   low_bandwidth_mode: false,
   local_cache: true,
   privacy_ai: true,
+ customTheme: { bgColor: "#0B1220", accent: "#2DBFA6", bgImage: null },
 };
 
 var CLOUD_KEYS = [
@@ -57,6 +58,7 @@ var CLOUD_KEYS = [
   "low_bandwidth_mode",
   "local_cache",
   "privacy_ai",
+ "customTheme",
 ];
 
 export function loadLocalSettings() {
