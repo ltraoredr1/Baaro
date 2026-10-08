@@ -1,9 +1,15 @@
-// Palette de couleurs de BAARO : fond marine sombre, accents or et teal, texte ivoire.
+// Palette BAARO : les neutres suivent le thème actif (variables CSS),
+// les accents restent en hex car le code fait `${accent}1A`.
 export const COLORS = {
-  bg: "#0B1220",
-  surface: "#111A2C",
-  surface2: "#1A2740",
-  surfaceHover: "#203152",
+  bg: "var(--bg)",
+  surface: "var(--surface)",
+  surface2: "var(--surface2)",
+  surfaceHover: "var(--surface-hover)",
+  ivory: "var(--fg)",
+  muted: "var(--muted)",
+  mutedLight: "var(--muted-light)",
+  border: "var(--border)",
+
   gold: "#D9AE52",
   goldLight: "#F5C86B",
   goldGlow: "rgba(217, 174, 82, 0.25)",
@@ -12,10 +18,6 @@ export const COLORS = {
   tealGlow: "rgba(45, 191, 166, 0.25)",
   purple: "#8B5CF6",
   rose: "#EC4899",
-  ivory: "#F4EFE3",
-  muted: "#8A93A6",
-  mutedLight: "#A0ABC0",
-  border: "rgba(255, 255, 255, 0.08)",
   borderGold: "rgba(217, 174, 82, 0.3)",
   borderTeal: "rgba(45, 191, 166, 0.3)",
 };

@@ -128,7 +128,7 @@ const AI_REGIONS = [
 const RTL = new Set(["ar", "nqo"]);
 
 // Traductions en cours de validation par des locuteurs
-const BETA_LANGS = new Set(["nqo", "boz", "dog", "snk"]);
+
 
 // Traductions de l'écran Réglages lues dans locales/<langue>.json (section "settings").
 // Toute clé absente retombe sur le dictionnaire interne, puis sur le français.
@@ -1123,11 +1123,14 @@ export default function SettingsTab({
 
   const lang = uiLang(settings.lang);
   const t = useCallback(
-    (key: string) =>
-      localeSettings(settings.lang)?.[key] ??
-      STRINGS[lang]?.[key] ??
-      STRINGS.fr[key] ??
-      key,
+    (key: string) => {
+      const a = localeSettings(settings.lang)?.[key];
+      if (typeof a === "string") return a;
+      const b = STRINGS[lang]?.[key];
+      if (typeof b === "string") return b;
+      const c = STRINGS.fr[key];
+      return typeof c === "string" ? c : key;
+    },
     [lang, settings.lang]
   );
 
@@ -1236,7 +1239,7 @@ export default function SettingsTab({
       patch.lang &&
       SUPPORTED_LANGUAGES.includes(String(patch.lang).split("-")[0])
     ) {
-      void setAppLanguage(patch.lang);
+      void Promise.resolve(setAppLanguage(patch.lang)).catch(console.warn);
     }
 
     if (!user?.id) return;
@@ -1622,7 +1625,7 @@ export default function SettingsTab({
   const avatarUrl =
     userProfile?.avatar_url ||
     `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(displayName)}&backgroundColor=1A2740`;
-  const activeTheme = currentTheme || settings.theme;
+  const activeTheme = settings.theme;
   const countryMeta =
     COUNTRIES.find((c) => c.code === settings.country) ||
     COUNTRIES[COUNTRIES.length - 1];
@@ -2245,32 +2248,12 @@ export default function SettingsTab({
                   }}
                 >
                   {l.label}
-                  {BETA_LANGS.has(l.code) && (
-                    <span
-                      className="block text-[9px] font-bold mt-0.5"
-                      style={{ color: COLORS.gold }}
-                    >
-                      bêta
-                    </span>
-                  )}
-                  {!l.fullUi && (
-                    <span
-                      className="block text-[9px] font-normal mt-0.5 opacity-70"
-                      style={{ color: COLORS.muted }}
-                    >
-                      contenu
-                    </span>
-                  )}
+                  
+                  
                 </button>
               );
             })}
           </div>
-          <p className="text-[11px] leading-relaxed" style={{ color: COLORS.muted }}>
-            {t("lang_partial_hint")}
-          </p>
-          <p className="text-[11px] leading-relaxed" style={{ color: COLORS.gold }}>
-            {t("lang_beta_hint")}
-          </p>
         </CollapsibleSection>
       )}
 

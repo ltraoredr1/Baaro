@@ -356,17 +356,18 @@ html.baaro-reduce-motion *::after {
 
 
 
-/* FIX ECRAN NOIR ARABE/N'KO - safe */
-html[data-rtl="1"] { direction: rtl; }
-html[data-rtl="1"] body { direction: rtl; }
-html[data-rtl="1"] .baaro-rtl-text { 
-  font-family: 'Noto Naskh Arabic','Noto Sans NKo','Plus Jakarta Sans',sans-serif;
-  direction: rtl;
-  text-align: right;
+/* Valeurs par défaut des variables de thème (le JS les remplace) */
+:root {
+  --surface: #111A2C; --surface2: #1A2740; --surface-hover: #203152;
+  --muted: #8A93A6; --muted-light: #A0ABC0; --border: rgba(255,255,255,0.08);
 }
-html[data-theme="midnight"]{--bg:#0B1220;--fg:#F4EFE3;--accent:#D9AE52}
-html[data-theme="oled"]{--bg:#000000;--fg:#ffffff;--accent:#D9AE52}
-html[data-theme="emerald"]{--bg:#022c22;--fg:#d1fae5;--accent:#2DBFA6}
-html[data-theme="light"]{--bg:#ffffff;--fg:#111827;--accent:#7c3aed}
-html[data-theme="dark"]{--bg:#18181b;--fg:#e5e7eb;--accent:#8b5cf6}
-html[data-theme="blue"]{--bg:#0f172a;--fg:#e0f2fe;--accent:#0ea5e9}
+/* RTL : police + sens du texte, sans toucher à la mise en page */
+html[data-rtl="1"] .baaro-rtl-text {
+  font-family: 'Noto Naskh Arabic','Noto Sans NKo','Plus Jakarta Sans',sans-serif;
+}
+html[data-rtl="1"] :is(p, h1, h2, h3, h4, label, li, input, textarea) {
+  unicode-bidi: plaintext;
+}
+html[data-theme="custom"] body {
+  background-size: cover; background-position: center; background-attachment: fixed;
+}

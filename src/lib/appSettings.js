@@ -45,6 +45,7 @@ var CLOUD_KEYS = [
 export function loadLocalSettings() {
   try {
     var raw = localStorage.getItem(STORAGE_KEY) ||
+      localStorage.getItem("baaro_settings_v22") ||
       localStorage.getItem("baaro_settings_v21") ||
       localStorage.getItem("baaro_settings_v20");
     if (!raw) return Object.assign({}, DEFAULT_SETTINGS);
@@ -61,17 +62,43 @@ export function saveLocalSettings(settings) {
   } catch (_) {}
 }
 
-// THEME MAP - 9 themes
+// THEMES : 8 thèmes fixes + custom calculé
+function mix(hex, amt) {
+  var h = String(hex).replace("#", "");
+  if (h.length === 3) h = h.split("").map(function (c) { return c + c; }).join("");
+  var n = parseInt(h, 16);
+  if (isNaN(n)) return hex;
+  var f = function (v) { return Math.max(0, Math.min(255, Math.round(v + (amt > 0 ? (255 - v) : v) * amt))); };
+  var r = f((n >> 16) & 255), g = f((n >> 8) & 255), b = f(n & 255);
+  return "#" + ((1 << 24) | (r << 16) | (g << 8) | b).toString(16).slice(1);
+}
+
 var THEME_MAP = {
-  midnight: { bg: "#0B1220", fg: "#F4EFE3", accent: "#D9AE52" },
-  oled: { bg: "#000000", fg: "#ffffff", accent: "#D9AE52" },
-  emerald: { bg: "#061A14", fg: "#d1fae5", accent: "#2DBFA6" },
-  light: { bg: "#F8FAFC", fg: "#111827", accent: "#7c3aed" },
-  sunset: { bg: "#2A1215", fg: "#ffe4e6", accent: "#f43f5e" },
-  ocean: { bg: "#0A1628", fg: "#e0f2fe", accent: "#0ea5e9" },
-  forest: { bg: "#0E1F14", fg: "#dcfce7", accent: "#22c55e" },
-  desert: { bg: "#1F1A14", fg: "#fef3c7", accent: "#f59e0b" },
+  midnight: { bg: "#0B1220", surface: "#111A2C", surface2: "#1A2740", hover: "#203152", fg: "#F4EFE3", muted: "#8A93A6", border: "rgba(255,255,255,0.08)" },
+  oled:     { bg: "#000000", surface: "#0A0A0A", surface2: "#151515", hover: "#1F1F1F", fg: "#FFFFFF", muted: "#8A8A8A", border: "rgba(255,255,255,0.10)" },
+  emerald:  { bg: "#061A14", surface: "#0B2820", surface2: "#12382D", hover: "#184A3B", fg: "#D1FAE5", muted: "#7FA896", border: "rgba(255,255,255,0.08)" },
+  light:    { bg: "#F8FAFC", surface: "#FFFFFF", surface2: "#EEF2F7", hover: "#E2E8F0", fg: "#0F172A", muted: "#64748B", border: "rgba(15,23,42,0.12)" },
+  sunset:   { bg: "#2A1215", surface: "#38191D", surface2: "#4A2227", hover: "#5C2C32", fg: "#FFE4E6", muted: "#C79AA0", border: "rgba(255,255,255,0.08)" },
+  ocean:    { bg: "#0A1628", surface: "#102240", surface2: "#173158", hover: "#1E4070", fg: "#E0F2FE", muted: "#8FB0CC", border: "rgba(255,255,255,0.08)" },
+  forest:   { bg: "#0E1F14", surface: "#15301F", surface2: "#1D4029", hover: "#265234", fg: "#DCFCE7", muted: "#86AE93", border: "rgba(255,255,255,0.08)" },
+  desert:   { bg: "#1F1A14", surface: "#2C251C", surface2: "#3A3125", hover: "#4A3E2F", fg: "#FEF3C7", muted: "#B5A585", border: "rgba(255,255,255,0.08)" },
 };
+
+function buildTheme(themeId, s) {
+  if (themeId === "custom" && s.customTheme) {
+    var c = s.customTheme, bg = c.bgColor || "#0B1220";
+    var dark = parseInt(bg.replace("#", "").slice(0, 2), 16) < 140;
+    return {
+      bg: bg, fg: c.fg || (dark ? "#F4EFE3" : "#0F172A"),
+      surface: mix(bg, dark ? 0.08 : -0.04), surface2: mix(bg, dark ? 0.16 : -0.09),
+      hover: mix(bg, dark ? 0.24 : -0.14),
+      muted: dark ? "#9AA3B5" : "#64748B",
+      border: dark ? "rgba(255,255,255,0.10)" : "rgba(15,23,42,0.12)",
+      bgImage: c.bgImage || null,
+    };
+  }
+  return THEME_MAP[themeId] || THEME_MAP.midnight;
+}
 
 export function applySettingsToDom(settings) {
   try {
@@ -96,21 +123,18 @@ export function applySettingsToDom(settings) {
     root.dataset.theme = themeId;
     if (body) body.dataset.theme = themeId;
 
-    var t = THEME_MAP[themeId];
-    if (themeId === "custom" && s.customTheme) {
-      t = {
-        bg: s.customTheme.bgColor || "#0B1220",
-        fg: s.customTheme.fg || "#F4EFE3",
-        accent: s.customTheme.accent || "#2DBFA6",
-        bgImage: s.customTheme.bgImage || null,
-      };
-    }
-    if (!t) t = THEME_MAP.midnight;
-
-    root.style.setProperty("--bg", t.bg);
-    root.style.setProperty("--fg", t.fg);
-    root.style.setProperty("--accent", t.accent);
-    root.style.setProperty("--surface", t.bg);
+    var t = buildTheme(themeId, s);
+    var set = function (k, v) { root.style.setProperty(k, v); };
+    set("--bg", t.bg);
+    set("--fg", t.fg);
+    set("--surface", t.surface);
+    set("--surface2", t.surface2);
+    set("--surface-hover", t.hover);
+    set("--muted", t.muted);
+    set("--muted-light", t.muted);
+    set("--border", t.border);
+    set("--accent", (themeId === "custom" && s.customTheme && s.customTheme.accent) || "#D9AE52");
+    root.style.colorScheme = themeId === "light" ? "light" : "dark";
     if (t.bgImage) {
       root.style.setProperty("--bg-image", `url(${t.bgImage})`);
       if (body) body.style.backgroundImage = `url(${t.bgImage})`;
