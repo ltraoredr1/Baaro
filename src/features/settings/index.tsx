@@ -1081,6 +1081,9 @@ export default function SettingsTab({
     sessions: false,
     danger: false,
     notifications: true,
+    notif_push: true,
+    notif_sound: false,
+    notif_prefs: false,
     performance: false,
   });
 
@@ -2127,9 +2130,15 @@ export default function SettingsTab({
           open={openSections.notifications}
           onToggle={() => toggleSection("notifications")}
         >
-          <PushSettings />
-          <NotificationSoundSettings C={COLORS} />
-          <NotificationPrefsPanel />
+          <CollapsibleSection id="notif_push" icon={Smartphone} title="Push" accent={COLORS.teal} open={openSections.notif_push} onToggle={() => toggleSection("notif_push")}>
+            <PushSettings />
+          </CollapsibleSection>
+          <CollapsibleSection id="notif_sound" icon={Volume2} title={t("sound_settings")} desc={t("sound_settings_desc")} accent={COLORS.gold} open={openSections.notif_sound} onToggle={() => toggleSection("notif_sound")}>
+            <NotificationSoundSettings C={COLORS} />
+          </CollapsibleSection>
+          <CollapsibleSection id="notif_prefs" icon={Bot} title="Préférences" accent={COLORS.teal} open={openSections.notif_prefs} onToggle={() => toggleSection("notif_prefs")}>
+            <NotificationPrefsPanel />
+          </CollapsibleSection>
         </CollapsibleSection>
       )}
 
