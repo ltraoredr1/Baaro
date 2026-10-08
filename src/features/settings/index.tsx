@@ -1066,6 +1066,7 @@ export default function SettingsTab({
 
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
     profile: true,
+    contacts: false,
     secure: true,
     appearance: true,
     language: false,
@@ -1991,12 +1992,17 @@ export default function SettingsTab({
             </form>
           )}
           {user?.id && !isAnonymous && (
-            <div className="mt-3 pt-3 border-t" style={{ borderColor: COLORS.border }}>
-              <p className="text-xs font-semibold mb-2" style={{ color: COLORS.muted }}>
-                {t("contacts_links")}
-              </p>
+            <CollapsibleSection
+              id="contacts"
+              icon={Globe2}
+              title={t("contacts_links")}
+              desc="WhatsApp, liens, téléphone"
+              accent={COLORS.teal}
+              open={openSections.contacts || !!q}
+              onToggle={() => toggleSection("contacts")}
+            >
               <ProfileContactsLinks user_id={user.id} />
-            </div>
+            </CollapsibleSection>
           )}
         </CollapsibleSection>
       )}
