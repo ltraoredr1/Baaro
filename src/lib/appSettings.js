@@ -5,6 +5,7 @@
  * Si la colonne n'existe pas encore, les autres réglages sont quand même enregistrés.
  */
 import { supabase } from "../supabaseClient.js";
+import { applyNativeSettings } from "./nativeSettings.js";
 
 export const STORAGE_KEY = "baaro_settings_v23";
 
@@ -152,6 +153,8 @@ export function applySettingsToDom(settings) {
       body.style.color = t.fg;
     }
 
+    applyNativeSettings(s);
+
     // 4. LANGUE + RTL SANS ECRAN NOIR
     root.lang = s.lang || "fr";
     var isRTL = s.lang === "ar" || s.lang === "nqo";
@@ -218,3 +221,9 @@ export async function syncPrivateProfile(user_id, isPrivate) {
   if (!user_id) return;
   return;
 }
+
+export function shouldPrefetch() {
+  var s = loadLocalSettings();
+  return !!s.smart_prefetch && !s.data_saver && !s.low_bandwidth_mode && !s.battery_saver;
+}
+export function isLocalCacheOn() { return !!getSetting("local_cache"); }
