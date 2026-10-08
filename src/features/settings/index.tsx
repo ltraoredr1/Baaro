@@ -76,7 +76,6 @@ type CustomTheme = { bgImage?: string; bgColor: string; accent: string };
 
 
 
-
 /** UI complète : fr / en / ar / bm. Autres = préférence contenu. */
 const LANGUAGES = [
   { code: "fr", label: "Français", fullUi: true },
@@ -84,7 +83,7 @@ const LANGUAGES = [
   { code: "ar", label: "العربية", fullUi: true },
   { code: "bm", label: "Bamanankan", fullUi: true },
   { code: "nqo", label: "ߒߞߏ", fullUi: true },
-  { code: "boz", label: "Bozo", fullUi: false },
+  { code: "boz", label: "Bozo", fullUi: true },
   { code: "dog", label: "Dogon", fullUi: false },
   { code: "snk", label: "Soninké", fullUi: false },
   { code: "wo", label: "Wolof", fullUi: false },
@@ -834,11 +833,11 @@ function applyDocumentLang(lang: string) {
     document.documentElement.lang = lang;
     if (RTL.has(lang)) {
       document.documentElement.setAttribute("data-rtl", "1");
-      try { document.documentElement.dir = "ltr"; } catch {}
+      document.documentElement.dir = "ltr";
       document.body?.classList?.add("baaro-rtl-text");
     } else {
       document.documentElement.removeAttribute("data-rtl");
-      try { document.documentElement.dir = "ltr"; } catch {}
+      document.documentElement.dir = "ltr";
       document.body?.classList?.remove("baaro-rtl-text");
     }
   } catch {
