@@ -86,7 +86,7 @@ export function applySettingsToDom(settings) {
     var s = settings || DEFAULT_SETTINGS;
 
     root.lang = s.lang || "fr";
-    root.dir = (s.lang === "ar" || s.lang === "nqo") ? "rtl" : "ltr";
+    try { root.dir = (s.lang === "ar" || s.lang === "nqo") ? "rtl" : "ltr"; } catch {}
 
     root.classList.toggle("baaro-large-text", !!s.large_text);
     root.classList.toggle("baaro-reduce-motion", !!s.reduce_motion);

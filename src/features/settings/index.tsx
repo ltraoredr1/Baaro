@@ -834,11 +834,11 @@ function applyDocumentLang(lang: string) {
     document.documentElement.lang = lang;
     if (RTL.has(lang)) {
       document.documentElement.setAttribute("data-rtl", "1");
-      document.documentElement.dir = "ltr";
+      try { document.documentElement.dir = "ltr"; } catch {}
       document.body?.classList?.add("baaro-rtl-text");
     } else {
       document.documentElement.removeAttribute("data-rtl");
-      document.documentElement.dir = "ltr";
+      try { document.documentElement.dir = "ltr"; } catch {}
       document.body?.classList?.remove("baaro-rtl-text");
     }
   } catch {
