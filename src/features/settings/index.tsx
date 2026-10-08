@@ -1,7 +1,6 @@
 /// <reference types="vite/client" />
 import { NotificationPrefsPanel } from "./NotificationPrefsPanel.jsx";
 import NotificationSoundSettings from "./NotificationSoundSettings.jsx";
-import { getNotificationPreferences, saveNotificationPreferences } from "../../lib/notificationPreferences.js";
 // src/features/settings/index.tsx
 // Réglages BAARO — différenciation marchés émergents + profil + compte + recherche
 import { useState, useEffect, useCallback, useMemo } from "react";
@@ -34,10 +33,13 @@ import {
   Smartphone,
   Trash2,
   Volume2,
+  ImagePlus,
+  X,
 } from "lucide-react";
 import { COLORS } from "../../theme.js";
 import { setAppLanguage, SUPPORTED_LANGUAGES } from "../../../i18n.js";
 import { supabase } from "../../supabaseClient.js";
+import { uploadExternalMedia } from "../../lib/externalMedia.js";
 import { PushSettings } from "../../components/PushSettings.jsx";
 import ProfilePhotosEditor from "../../components/ProfilePhotosEditor.jsx";
 import ProfileContactsLinks from "../../components/ProfileContactsLinks.jsx";
@@ -72,9 +74,12 @@ const THEMES = [
   { id: "custom", labelKey: "theme_custom", bg: "custom" },
 ] as const;
 
-type CustomTheme = { bgImage?: string; bgColor: string; accent: string };
+type CustomTheme = { bgImage?: string | null; bgColor: string; accent: string; fg?: string };
 
 
+
+/** Taille max de l'image de fond perso (envoyée sur R2, seule l'URL est gardée dans les réglages). */
+const MAX_CUSTOM_IMAGE_BYTES = 10 * 1024 * 1024;
 
 /** UI complète : fr / en / ar / bm. Autres = préférence contenu. */
 const LANGUAGES = [
@@ -93,6 +98,9 @@ const LANGUAGES = [
   { code: "pt", label: "Português", fullUi: false },
   { code: "es", label: "Español", fullUi: false },
 ] as const;
+
+/** Traductions provisoires en attente de validation par des locuteurs. */
+const BETA_LANGS = new Set<string>(["nqo", "boz", "dog", "snk"]);
 
 const ALL_COUNTRY_CODES = "AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ BR BS BT BV BW BY BZ CA CC CD CF CG CH CI CK CL CM CN CO CR CU CV CW CX CY CZ DE DJ DK DM DO DZ EC EE EG EH ER ES ET FI FJ FK FM FO FR GA GB GD GE GF GG GH GI GL GM GN GP GQ GR GS GT GU GW GY HK HM HN HR HT HU ID IE IL IM IN IO IQ IR IS IT JE JM JO JP KE KG KH KI KM KN KP KR KW KY KZ LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MF MG MH MK ML MM MN MO MP MQ MR MS MT MU MV MW MX MY MZ NA NC NE NF NG NI NL NO NP NR NU NZ OM PA PE PF PG PH PK PL PM PN PR PS PT PW PY QA RE RO RS RU RW SA SB SC SD SE SG SH SI SJ SK SL SM SN SO SR SS ST SV SX SY SZ TC TD TF TG TH TJ TK TL TM TN TO TR TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW".split(" ");
 const PRIORITY_COUNTRIES = ["ML","SN","CI","BF","GN","NE","TG","BJ","CM","NG","GH","MA"];
@@ -294,6 +302,7 @@ const STRINGS: Record<string, Record<string, string>> = {
     choose_country: "Choisir un pays",
     contacts_links: "Coordonnées et réseaux",
     lang_beta_hint: "Bêta : ces traductions sont en cours de validation par des locuteurs. Certains textes peuvent être inexacts.",
+    beta_badge: "bêta",
     theme_light: "Clair",
     theme_sunset: "Coucher",
     theme_ocean: "Océan",
@@ -305,6 +314,11 @@ const STRINGS: Record<string, Record<string, string>> = {
     custom_image: "Image de fond",
     custom_upload: "Choisir une image",
     custom_remove: "Retirer l'image",
+    custom_image_too_big: "❌ Image trop lourde (10 Mo maximum).",
+    custom_image_login: "❌ Connecte-toi pour envoyer une image.",
+    custom_image_invalid: "❌ Fichier image invalide.",
+    push_title: "Push",
+    prefs_title: "Préférences",
   },
   en: {
     title: "Settings",
@@ -462,6 +476,7 @@ const STRINGS: Record<string, Record<string, string>> = {
     choose_country: "Choose a country",
     contacts_links: "Contacts & links",
     lang_beta_hint: "Beta: these translations are being validated by native speakers. Some texts may be inaccurate.",
+    beta_badge: "beta",
     theme_light: "Light",
     theme_sunset: "Sunset",
     theme_ocean: "Ocean",
@@ -473,6 +488,11 @@ const STRINGS: Record<string, Record<string, string>> = {
     custom_image: "Background image",
     custom_upload: "Pick image",
     custom_remove: "Remove image",
+    custom_image_too_big: "❌ Image too large (10 MB max).",
+    custom_image_login: "❌ Sign in to upload an image.",
+    custom_image_invalid: "❌ Invalid image file.",
+    push_title: "Push",
+    prefs_title: "Preferences",
   },
   ar: {
     title: "الإعدادات",
@@ -624,6 +644,7 @@ const STRINGS: Record<string, Record<string, string>> = {
     choose_country: "اختر بلدًا",
     contacts_links: "جهات الاتصال والروابط",
     lang_beta_hint: "تجريبي: هذه الترجمات قيد المراجعة من قبل متحدثين أصليين، وقد تحتوي بعض النصوص على أخطاء.",
+    beta_badge: "تجريبي",
   },
   bm: {
     title: "Sɛbɛnniw",
@@ -748,6 +769,7 @@ const STRINGS: Record<string, Record<string, string>> = {
     notifications_desc: "Kibaru ci, kan ani push sago.",
     sound_settings: "Kibaru ci kan",
     sound_settings_desc: "Kan bonye, sigi, ani kan lajɛ.",
+    beta_badge: "bêta",
   },
 };
 
@@ -779,6 +801,8 @@ type SettingsState = {
  customTheme?: CustomTheme;
 };
 
+const DEFAULT_CUSTOM_THEME: CustomTheme = { bgColor: "#0B1220", accent: "#2DBFA6", bgImage: null };
+
 const DEFAULT_SETTINGS: SettingsState = {
   theme: "midnight",
   lang: "fr",
@@ -804,7 +828,7 @@ const DEFAULT_SETTINGS: SettingsState = {
   low_bandwidth_mode: false,
   local_cache: true,
   privacy_ai: true,
-  customTheme: { bgColor: "#0B1220", accent: "#2DBFA6" },
+  customTheme: DEFAULT_CUSTOM_THEME,
 };
 
 function loadLocal(): SettingsState {
@@ -1088,6 +1112,9 @@ export default function SettingsTab({
   const [mfaLoading, setMfaLoading] = useState(false);
   const [mfaFactorCount, setMfaFactorCount] = useState<number | null>(null);
   const [fileInputEl, setFileInputEl] = useState<HTMLInputElement | null>(null);
+  const [customImageInputEl, setCustomImageInputEl] =
+    useState<HTMLInputElement | null>(null);
+  const [customUploading, setCustomUploading] = useState(false);
   const [sessionInfo, setSessionInfo] = useState<{
     expiresAt?: string | null;
     email?: string | null;
@@ -1250,6 +1277,49 @@ export default function SettingsTab({
       console.warn("[settings] cloud save:", res.error);
     }
   }
+
+  // ---- Thème personnalisé (couleurs + image de fond) ----
+  const customTheme: CustomTheme = {
+    ...DEFAULT_CUSTOM_THEME,
+    ...(settings.customTheme || {}),
+  };
+
+  const updateCustomTheme = (patch: Partial<CustomTheme>) => {
+    void save({ theme: "custom", customTheme: { ...customTheme, ...patch } });
+  };
+
+  const handleCustomImage = async (file: File | null) => {
+    if (!file || customUploading) return;
+    if (!file.type.startsWith("image/")) {
+      setMessage(t("custom_image_invalid"));
+      return;
+    }
+    if (file.size > MAX_CUSTOM_IMAGE_BYTES) {
+      setMessage(t("custom_image_too_big"));
+      return;
+    }
+    if (!user?.id) {
+      setMessage(t("custom_image_login"));
+      return;
+    }
+    setCustomUploading(true);
+    setMessage("");
+    try {
+      const up = await uploadExternalMedia(file, {
+        folder: "theme",
+        maxBytes: MAX_CUSTOM_IMAGE_BYTES,
+      });
+      updateCustomTheme({ bgImage: up.url });
+    } catch (err) {
+      setMessage("❌ " + (err instanceof Error ? err.message : t("custom_image_invalid")));
+    } finally {
+      setCustomUploading(false);
+    }
+  };
+
+  const removeCustomImage = () => {
+    void save({ theme: "custom", customTheme: { ...customTheme, bgImage: null } });
+  };
 
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1575,7 +1645,8 @@ export default function SettingsTab({
     setMessage("");
     try {
       const { error: rpcError } = await supabase.rpc("delete_own_account");
-      if (rpcError) {
+      if (rpcError) { throw rpcError; }
+      if (false) {
         try {
           const {
             data: { session },
@@ -1627,6 +1698,7 @@ export default function SettingsTab({
     COUNTRIES.find((c) => c.code === settings.country) ||
     COUNTRIES[COUNTRIES.length - 1];
   const isAnonymous = user?.is_anonymous === true;
+  const selectedLangMeta = LANGUAGES.find((l) => l.code === settings.lang);
 
   const q = query.trim().toLowerCase();
   const match = useCallback(
@@ -1642,10 +1714,17 @@ export default function SettingsTab({
 
   const visible = useMemo(
     () => ({
-      profile: match("profile_section", "display_name", "bio"),
+      profile: match("profile_section", "display_name", "bio", "contacts_links"),
       secure: isAnonymous && match("secure_account", "email", "password"),
-      appearance: match("appearance", "theme"),
-      language: match("language"),
+      appearance: match(
+        "appearance",
+        "theme",
+        "theme_custom",
+        "custom_bg",
+        "custom_accent",
+        "custom_image"
+      ),
+      language: match("language", "lang_beta_hint"),
       region: match("region", "country", "currency"),
       data: match(
         "data_network",
@@ -1681,12 +1760,10 @@ export default function SettingsTab({
       danger: match("delete_account", "delete_account_desc"),
       notifications: match(
         "notifications_section",
+        "notifications_desc",
         "sound_settings",
-        "push_enabled",
-        "messages",
-        "social",
-        "live",
-        "marketing"
+        "push_title",
+        "prefs_title"
       ),
     }),
     [match, isAnonymous, q]
@@ -2164,13 +2241,13 @@ export default function SettingsTab({
           open={openSections.notifications}
           onToggle={() => toggleSection("notifications")}
         >
-          <CollapsibleSection id="notif_push" icon={Smartphone} title="Push" accent={COLORS.teal} open={openSections.notif_push} onToggle={() => toggleSection("notif_push")}>
+          <CollapsibleSection id="notif_push" icon={Smartphone} title={t("push_title")} accent={COLORS.teal} open={openSections.notif_push} onToggle={() => toggleSection("notif_push")}>
             <PushSettings />
           </CollapsibleSection>
           <CollapsibleSection id="notif_sound" icon={Volume2} title={t("sound_settings")} desc={t("sound_settings_desc")} accent={COLORS.gold} open={openSections.notif_sound} onToggle={() => toggleSection("notif_sound")}>
             <NotificationSoundSettings C={COLORS} />
           </CollapsibleSection>
-          <CollapsibleSection id="notif_prefs" icon={Bot} title="Préférences" accent={COLORS.teal} open={openSections.notif_prefs} onToggle={() => toggleSection("notif_prefs")}>
+          <CollapsibleSection id="notif_prefs" icon={Bot} title={t("prefs_title")} accent={COLORS.teal} open={openSections.notif_prefs} onToggle={() => toggleSection("notif_prefs")}>
             <NotificationPrefsPanel />
           </CollapsibleSection>
         </CollapsibleSection>
@@ -2192,6 +2269,7 @@ export default function SettingsTab({
           <div className="grid grid-cols-3 gap-2">
             {THEMES.map((th) => {
               const selected = activeTheme === th.id;
+              const isCustom = th.id === "custom";
               return (
                 <button
                   key={th.id}
@@ -2199,9 +2277,15 @@ export default function SettingsTab({
                   onClick={() => save({ theme: th.id })}
                   className="p-3 rounded-xl border text-center text-xs font-bold"
                   style={{
-                    background: th.bg,
+                    background: isCustom ? customTheme.bgColor : th.bg,
+                    backgroundImage:
+                      isCustom && customTheme.bgImage
+                        ? `url("${customTheme.bgImage}")`
+                        : undefined,
+                    backgroundSize: "cover",
+                    backgroundPosition: "center",
                     borderColor: selected ? COLORS.gold : COLORS.border,
-                    color: COLORS.ivory,
+                    color: th.id === "light" ? "#0B1220" : COLORS.ivory,
                   }}
                 >
                   {t(th.labelKey)}
@@ -2216,6 +2300,98 @@ export default function SettingsTab({
               );
             })}
           </div>
+
+          {activeTheme === "custom" && (
+            <div
+              className="rounded-xl border p-3 flex flex-col gap-3"
+              style={{ borderColor: COLORS.border, background: COLORS.surface2 }}
+            >
+              <div className="flex items-center justify-between gap-3">
+                <label
+                  htmlFor="baaro-custom-bg"
+                  className="text-xs font-semibold"
+                  style={{ color: COLORS.muted }}
+                >
+                  {t("custom_bg")}
+                </label>
+                <input
+                  id="baaro-custom-bg"
+                  type="color"
+                  value={customTheme.bgColor}
+                  onChange={(e) => updateCustomTheme({ bgColor: e.target.value })}
+                  className="h-9 w-14 rounded-lg border cursor-pointer bg-transparent"
+                  style={{ borderColor: COLORS.border }}
+                />
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <label
+                  htmlFor="baaro-custom-accent"
+                  className="text-xs font-semibold"
+                  style={{ color: COLORS.muted }}
+                >
+                  {t("custom_accent")}
+                </label>
+                <input
+                  id="baaro-custom-accent"
+                  type="color"
+                  value={customTheme.accent}
+                  onChange={(e) => updateCustomTheme({ accent: e.target.value })}
+                  className="h-9 w-14 rounded-lg border cursor-pointer bg-transparent"
+                  style={{ borderColor: COLORS.border }}
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <p className="text-xs font-semibold" style={{ color: COLORS.muted }}>
+                  {t("custom_image")}
+                </p>
+                {customTheme.bgImage && (
+                  <div
+                    className="h-20 w-full rounded-xl border"
+                    style={{
+                      borderColor: COLORS.border,
+                      backgroundImage: `url("${customTheme.bgImage}")`,
+                      backgroundSize: "cover",
+                      backgroundPosition: "center",
+                    }}
+                  />
+                )}
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => customImageInputEl?.click()}
+                    disabled={customUploading}
+                    className="disabled:opacity-50 flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-bold border"
+                    style={{ borderColor: COLORS.borderTeal, color: COLORS.teal }}
+                  >
+                    <ImagePlus size={14} />
+                    {customUploading ? "…" : t("custom_upload")}
+                  </button>
+                  {customTheme.bgImage && (
+                    <button
+                      type="button"
+                      onClick={removeCustomImage}
+                      className="flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl text-xs font-bold border"
+                      style={{ borderColor: COLORS.border, color: "#F87171" }}
+                    >
+                      <X size={14} />
+                      {t("custom_remove")}
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+          <input
+            ref={setCustomImageInputEl}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0] || null;
+              handleCustomImage(f);
+              e.target.value = "";
+            }}
+          />
         </CollapsibleSection>
       )}
 
@@ -2232,25 +2408,47 @@ export default function SettingsTab({
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
             {LANGUAGES.map((l) => {
               const selected = settings.lang === l.code;
+              const isBeta = BETA_LANGS.has(l.code);
               return (
                 <button
                   key={l.code}
                   type="button"
                   onClick={() => save({ lang: l.code })}
-                  className="py-2.5 rounded-xl border text-xs font-bold"
+                  className="py-2.5 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5"
                   style={{
                     background: selected ? COLORS.goldGlow : COLORS.surface2,
                     borderColor: selected ? COLORS.borderGold : COLORS.border,
                     color: selected ? COLORS.gold : COLORS.ivory,
                   }}
                 >
-                  {l.label}
+                  <span>{l.label}</span>
+                  {isBeta && (
+                    <span
+                      className="text-[9px] font-semibold uppercase px-1.5 py-0.5 rounded-full"
+                      style={{
+                        background: "rgba(217,174,82,0.18)",
+                        color: COLORS.gold,
+                      }}
+                    >
+                      {t("beta_badge")}
+                    </span>
+                  )}
                   
                   
                 </button>
               );
             })}
           </div>
+          {BETA_LANGS.has(settings.lang) && (
+            <p className="text-[11px] leading-relaxed" style={{ color: COLORS.gold }}>
+              {t("lang_beta_hint")}
+            </p>
+          )}
+          {selectedLangMeta && !selectedLangMeta.fullUi && (
+            <p className="text-[11px] leading-relaxed" style={{ color: COLORS.muted }}>
+              {t("lang_partial_hint")}
+            </p>
+          )}
         </CollapsibleSection>
       )}
 

@@ -10,6 +10,7 @@ import { OnboardingModal } from "../features/profile/index.js";
 import { useApplyPendingReferral } from "../hooks/useApplyPendingReferral.js";
 import { useToast } from "../components/ToastContext.jsx";
 import { COLORS as THEME_COLORS } from "../theme.js";
+import { applySettingsToDom, loadLocalSettings } from "../lib/appSettings.js";
 import { tabs } from "./tabs.jsx";
 import { TabFallback } from "./TabFallback.jsx";
 import { OfflineBanner } from "../components/OfflineBanner.jsx";
@@ -23,6 +24,12 @@ const THEME_BG_MAP = {
   midnight: "#0B1220",
   oled: "#000000",
   emerald: "#061A14",
+  light: "#F8FAFC",
+  sunset: "#2A1215",
+  ocean: "#0A1628",
+  forest: "#0E1F14",
+  desert: "#1F1A14",
+  custom: "#0B1220",
 };
 
 const WELCOME_TOAST_KEY = "baaro:welcome_toast_shown";
@@ -67,7 +74,11 @@ export function MainShell() {
   );
 
   const [lang, setLang] = useState("fr");
-  const [currentTheme, setCurrentTheme] = useState("midnight");
+  const [currentTheme, setCurrentTheme] = useState(() => {
+    try { return localStorage.getItem("baaro_theme") || "midnight"; } catch { return "midnight"; }
+  });
+
+  useEffect(() => { applySettingsToDom(loadLocalSettings()); }, []);
   const [inspectingProfileId, setInspectingProfileId] = useState(null);
   const [profileReadOnly, setProfileReadOnly] = useState(false);
   const [notifDrawerOpen, setNotifDrawerOpen] = useState(false);
@@ -110,11 +121,7 @@ export function MainShell() {
           });
 
           await StatusBar.setStyle({
-            style:
-              currentTheme === "midnight" ||
-              currentTheme === "oled"
-                ? Style.Dark
-                : Style.Light,
+            style: currentTheme === "light" ? Style.Light : Style.Dark,
           });
 
           await StatusBar.setBackgroundColor({
@@ -274,6 +281,7 @@ export function MainShell() {
       id,
       user_id: id,
       onOpenProfile: setInspectingProfileId,
+      onOpenDebates: () => setActiveTab("debates"),
     },
 
     friends: {
@@ -357,7 +365,7 @@ export function MainShell() {
     <div
       className="min-h-screen min-h-[100dvh] flex flex-col transition-colors duration-500"
       style={{
-        background: isImmersive ? "#000" : themeBg,
+        background: isImmersive ? "#000" : "transparent",
         color: COLORS.ivory,
         paddingTop: "env(safe-area-inset-top)",
       }}

@@ -371,3 +371,8 @@ html[data-rtl="1"] :is(p, h1, h2, h3, h4, label, li, input, textarea) {
 html[data-theme="custom"] body {
   background-size: cover; background-position: center; background-attachment: fixed;
 }
+
+.baaro-battery-saver *, .baaro-reduce-motion * {
+  animation-duration: 0.01ms !important;
+  transition-duration: 0.01ms !important;
+}

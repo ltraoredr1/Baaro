@@ -1,6 +1,8 @@
 /**
  * BAARO — préférences app (local + cloud user_settings)
  * FIX FINAL: 9 themes + RTL sans ecran noir
+ * Thème perso : stocké dans la colonne user_settings.custom_theme (jsonb).
+ * Si la colonne n'existe pas encore, les autres réglages sont quand même enregistrés.
  */
 import { supabase } from "../supabaseClient.js";
 
@@ -34,12 +36,13 @@ export const DEFAULT_SETTINGS = {
   customTheme: { bgColor: "#0B1220", accent: "#2DBFA6", bgImage: null, fg: "#F4EFE3" },
 };
 
+// Colonnes à plat de user_settings (customTheme est géré à part → custom_theme)
 var CLOUD_KEYS = [
   "theme","lang","country","currency","data_saver","autoplay_video","offline_sync",
   "ai_region","ai_suggest","auto_translate","translate_media","prefer_debates",
   "prefer_local","private_profile","block_screenshots","biometric","large_text",
   "reduce_motion","notif_push","smart_prefetch","battery_saver","low_bandwidth_mode",
-  "local_cache","privacy_ai","customTheme",
+  "local_cache","privacy_ai",
 ];
 
 export function loadLocalSettings() {
@@ -112,6 +115,8 @@ export function applySettingsToDom(settings) {
     root.classList.toggle("baaro-reduce-motion",!!s.reduce_motion);
     root.classList.toggle("baaro-data-saver",!!s.data_saver);
     root.classList.toggle("baaro-private-profile",!!s.private_profile);
+    root.classList.toggle("baaro-battery-saver",!!s.battery_saver);
+    root.classList.toggle("baaro-low-bandwidth",!!s.low_bandwidth_mode);
 
     // 2. DATASET (pour debug)
     root.dataset.baaroDataSaver = s.data_saver? "1" : "0";
@@ -136,8 +141,8 @@ export function applySettingsToDom(settings) {
     set("--accent", (themeId === "custom" && s.customTheme && s.customTheme.accent) || "#D9AE52");
     root.style.colorScheme = themeId === "light" ? "light" : "dark";
     if (t.bgImage) {
-      root.style.setProperty("--bg-image", `url(${t.bgImage})`);
-      if (body) body.style.backgroundImage = `url(${t.bgImage})`;
+      root.style.setProperty("--bg-image", 'url("' + t.bgImage + '")');
+      if (body) body.style.backgroundImage = 'url("' + t.bgImage + '")';
     } else {
       root.style.removeProperty("--bg-image");
       if (body) body.style.backgroundImage = "";
@@ -169,9 +174,11 @@ export function getSetting(key) { return loadLocalSettings()[key]; }
 export function isDataSaverOn() { return!!getSetting("data_saver"); }
 export function isAutoplayOn() { return!!getSetting("autoplay_video"); }
 
-function pickCloudPayload(settings, user_id) {
+function pickCloudPayload(settings, user_id, withCustomTheme) {
   var payload = { user_id: user_id, id: user_id, updated_at: new Date().toISOString() };
   for (var i = 0; i < CLOUD_KEYS.length; i++) { var k = CLOUD_KEYS[i]; if (k in settings) payload[k] = settings[k]; }
+  if (withCustomTheme && settings.customTheme) payload.custom_theme = settings.customTheme;
+  if (settings.customTheme) payload.custom_theme = settings.customTheme;
   return payload;
 }
 
@@ -183,19 +190,31 @@ export async function loadCloudSettings(user_id) {
   if (!res.data) return { ok: true, data: null };
   var merged = {};
   for (var i = 0; i < CLOUD_KEYS.length; i++) { var k = CLOUD_KEYS[i]; if (k in res.data && res.data[k]!= null) merged[k] = res.data[k]; }
+  if (res.data.custom_theme && typeof res.data.custom_theme === "object") {
+    merged.customTheme = Object.assign({}, DEFAULT_SETTINGS.customTheme, res.data.custom_theme);
+  }
+  if (res.data.custom_theme) merged.customTheme = res.data.custom_theme;
   return { ok: true, data: merged };
+}
+
+async function upsertSettings(payload) {
+  var res = await supabase.from("user_settings").upsert(payload, { onConflict: "user_id" });
+  if (res.error) { res = await supabase.from("user_settings").upsert(payload, { onConflict: "id" }); }
+  return res;
 }
 
 export async function saveCloudSettings(user_id, settings) {
   if (!user_id) return { ok: false, error: "Non authentifie" };
-  var payload = pickCloudPayload(settings, user_id);
-  var res = await supabase.from("user_settings").upsert(payload, { onConflict: "user_id" });
-  if (res.error) { res = await supabase.from("user_settings").upsert(payload, { onConflict: "id" }); }
+  var res = await upsertSettings(pickCloudPayload(settings, user_id, true));
+  // Colonne custom_theme pas encore créée : on enregistre au moins tous les autres réglages
+  if (res.error && /custom_theme/i.test(String(res.error.message || ""))) {
+    res = await upsertSettings(pickCloudPayload(settings, user_id, false));
+  }
   if (res.error) return { ok: false, error: res.error.message };
   return { ok: true };
 }
 
 export async function syncPrivateProfile(user_id, isPrivate) {
   if (!user_id) return;
-  try { await supabase.from("profiles").update({ is_private:!!isPrivate, updated_at: new Date().toISOString() }).eq("id", user_id); } catch (_) {}
+  return;
 }

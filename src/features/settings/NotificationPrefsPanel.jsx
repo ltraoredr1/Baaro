@@ -6,19 +6,52 @@ import {
   DEFAULT_NOTIFICATION_PREFERENCES,
 } from "../../lib/notificationPreferences.js";
 
-const LABELS = {
-  push_enabled: "Notifications push",
-  messages: "Messages",
-  social: "Social (follows, likes)",
-  live: "Lives & debats",
-  marketing: "Marketing",
+// Le titre de la section est déjà affiché par l'écran Réglages :
+// ce panneau n'affiche donc que les options.
+const TEXTS = {
+  fr: {
+    loading: "Chargement des préférences…",
+    saved: "Enregistré",
+    error: "Erreur",
+    labels: {
+      push_enabled: "Notifications push",
+      messages: "Messages",
+      social: "Social (follows, likes)",
+      live: "Lives & débats",
+      marketing: "Marketing",
+    },
+  },
+  en: {
+    loading: "Loading preferences…",
+    saved: "Saved",
+    error: "Error",
+    labels: {
+      push_enabled: "Push notifications",
+      messages: "Messages",
+      social: "Social (follows, likes)",
+      live: "Lives & debates",
+      marketing: "Marketing",
+    },
+  },
 };
+
+const KEYS = Object.keys(TEXTS.fr.labels);
+
+function currentTexts() {
+  try {
+    const code = (document.documentElement.lang || "fr").split("-")[0];
+    return TEXTS[code] || TEXTS.fr;
+  } catch {
+    return TEXTS.fr;
+  }
+}
 
 export function NotificationPrefsPanel() {
   const [prefs, setPrefs] = useState(DEFAULT_NOTIFICATION_PREFERENCES);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState("");
+  const tx = currentTexts();
 
   useEffect(() => {
     let cancelled = false;
@@ -35,37 +68,37 @@ export function NotificationPrefsPanel() {
   }, []);
 
   const toggle = async (key) => {
+    const previous = prefs;
     const next = { ...prefs, [key]: !prefs[key] };
     setPrefs(next);
     setSaving(true);
     setMsg("");
     const res = await saveNotificationPreferences(next);
     setSaving(false);
-    setMsg(res.ok ? "Enregistre" : res.error || "Erreur");
+    if (res.ok) {
+      setMsg(tx.saved);
+    } else {
+      setPrefs(previous);
+      setMsg(res.error || tx.error);
+    }
   };
 
   if (loading) {
     return (
       <p className="text-sm" style={{ color: COLORS.muted }}>
-        Chargement preferences…
+        {tx.loading}
       </p>
     );
   }
 
   return (
-    <div
-      className="rounded-2xl border p-4 space-y-3"
-      style={{ borderColor: COLORS.border, background: COLORS.surface2 }}
-    >
-      <h3 className="text-sm font-bold" style={{ color: COLORS.gold }}>
-        Preferences de notification
-      </h3>
-      {Object.keys(LABELS).map((key) => (
+    <div className="space-y-3">
+      {KEYS.map((key) => (
         <label
           key={key}
           className="flex items-center justify-between gap-3 text-sm cursor-pointer"
         >
-          <span style={{ color: COLORS.ivory }}>{LABELS[key]}</span>
+          <span style={{ color: COLORS.ivory }}>{tx.labels[key]}</span>
           <input
             type="checkbox"
             checked={!!prefs[key]}
