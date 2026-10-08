@@ -92,7 +92,7 @@ export function VideoTranslateControls({
     }
   };
 
-  const applyVtt = (vttUrl, vttText) => {
+  const applyVtt = (vttUrl, vttText, lang) => {
     const video = videoRef?.current;
     if (!video) return;
 
@@ -109,7 +109,7 @@ export function VideoTranslateControls({
     const track = document.createElement("track");
     track.kind = "subtitles";
     track.label = "BAARO";
-    track.srclang = active?.targetLang || preferredLang;
+    track.srclang = lang || preferredLang;
     track.src = src;
     track.default = true;
     track.setAttribute("data-baaro-translate", "1");
@@ -145,7 +145,7 @@ export function VideoTranslateControls({
       });
       if (data.mode === "subtitles" || data.vttText || data.vttUrl) {
         // Léger délai pour que active soit posé
-        setTimeout(() => applyVtt(data.vttUrl, data.vttText), 50);
+        setTimeout(() => applyVtt(data.vttUrl, data.vttText, data.targetLang), 50);
       }
       showToast(
         data.mode === "dub"

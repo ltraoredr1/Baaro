@@ -485,6 +485,8 @@ export function VideosTab({ onRewardPoints, onExit }) {
   const cameraTimerRef = useRef(null);
 
   const videoRefs = useRef({});
+  const refProxies = useRef({});
+  const getVideoRef = (id) => (refProxies.current[id] ||= { get current() { return videoRefs.current[id]; } });
   const audioRefs = useRef({});
   const mutedRef = useRef(true);
   const soundPreviewRef = useRef(null);
@@ -1779,10 +1781,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
                   </button>
 
                   <div className="mt-2">
-                    <VideoTranslateControls
-                      mediaUrl={video.media_url || video.video_url}
-                      videoId={video.id}
-                    />
+                    <VideoTranslateControls mediaUrl={video.media_url || video.video_url} videoId={video.id} videoRef={getVideoRef(video.id)} />
                   </div>
                   <div className="mt-2 flex items-center gap-1.5 text-[11px] text-white/65 min-w-0">
                     <Music2 size={13} className="shrink-0" />
