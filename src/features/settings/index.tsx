@@ -74,7 +74,7 @@ const THEMES = [
 
 type CustomTheme = { bgImage?: string; bgColor: string; accent: string };
 
-type CustomTheme = { bgImage?: string; bgColor: string; accent: string };
+
 
 
 /** UI complète : fr / en / ar / bm. Autres = préférence contenu. */
