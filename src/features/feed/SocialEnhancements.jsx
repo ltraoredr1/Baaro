@@ -5,6 +5,7 @@ import { Bookmark, Check, Share2, UserPlus, X, Zap } from "lucide-react";
 import { COLORS } from "../../theme.js";
 import { supabase } from "../../supabaseClient.js";
 import { useToast } from "../../components/ToastContext.jsx";
+import TranslatedText from "../../components/TranslatedText.jsx";
 
 function isValidAuthUserId(value) {
   if (!value || typeof value !== "string") return false;
@@ -93,7 +94,7 @@ export const PollCard = memo(function PollCard({ postId, user_id }) {
   return (
     <>
       <div className="rounded-xl border p-3" style={{ borderColor: COLORS.borderTeal, background: COLORS.surface }}>
-        <p className="font-semibold text-sm mb-3" style={{ color: COLORS.ivory }}>{poll.question}</p>
+        <TranslatedText text={poll.question} className="font-semibold text-sm mb-3" style={{ color: COLORS.ivory }} />
         <div className="space-y-2">
           {rows.map((row) => {
             const active = myVote === row.option_id;
