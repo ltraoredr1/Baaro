@@ -83,7 +83,7 @@ const LANGUAGES = [
   { code: "en", label: "English", fullUi: true },
   { code: "ar", label: "العربية", fullUi: true },
   { code: "bm", label: "Bamanankan", fullUi: true },
-  { code: "nqo", label: "ߒߞߏ", fullUi: false },
+  { code: "nqo", label: "ߒߞߏ", fullUi: true },
   { code: "boz", label: "Bozo", fullUi: false },
   { code: "dog", label: "Dogon", fullUi: false },
   { code: "snk", label: "Soninké", fullUi: false },
