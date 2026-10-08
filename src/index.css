@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Noto+Naskh+Arabic:wght@400;700&family=Noto+Sans+NKo&display=swap');
 
 @import "tailwindcss";
 
@@ -9,8 +9,8 @@ body,
   height: 100%;
   margin: 0;
   padding: 0;
-  background-color: #0b1220;
-  color: #f4efe3;
+  background-color: var(--bg, #0b1220);
+  color: var(--fg, #f4efe3);
   font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   overflow-x: hidden;
   -webkit-font-smoothing: antialiased;
@@ -296,7 +296,7 @@ html.baaro-reduce-motion *::after {
 
 ::selection {
   background: rgba(217, 174, 82, 0.35);
-  color: #f4efe3;
+  color: var(--fg, #f4efe3);
 }
 
 .baaro-feed-item {
@@ -353,16 +353,20 @@ html.baaro-reduce-motion *::after {
   }
 }
 
-/* Arabe / N'Ko : texte RTL sans inverser toute la mise en page (évite écran noir) */
-html[data-rtl="1"] .baaro-rtl-text,
-body.baaro-rtl-text p,
-body.baaro-rtl-text h1,
-body.baaro-rtl-text h2,
-body.baaro-rtl-text h3,
-body.baaro-rtl-text span,
-body.baaro-rtl-text label,
-body.baaro-rtl-text input,
-body.baaro-rtl-text textarea {
+
+
+
+/* FIX ECRAN NOIR ARABE/N'KO - safe */
+html[data-rtl="1"] { direction: rtl; }
+html[data-rtl="1"] body { direction: rtl; }
+html[data-rtl="1"] .baaro-rtl-text { 
+  font-family: 'Noto Naskh Arabic','Noto Sans NKo','Plus Jakarta Sans',sans-serif;
   direction: rtl;
-  unicode-bidi: plaintext;
+  text-align: right;
 }
+html[data-theme="midnight"]{--bg:#0B1220;--fg:#F4EFE3;--accent:#D9AE52}
+html[data-theme="oled"]{--bg:#000000;--fg:#ffffff;--accent:#D9AE52}
+html[data-theme="emerald"]{--bg:#022c22;--fg:#d1fae5;--accent:#2DBFA6}
+html[data-theme="light"]{--bg:#ffffff;--fg:#111827;--accent:#7c3aed}
+html[data-theme="dark"]{--bg:#18181b;--fg:#e5e7eb;--accent:#8b5cf6}
+html[data-theme="blue"]{--bg:#0f172a;--fg:#e0f2fe;--accent:#0ea5e9}
