@@ -10,7 +10,7 @@ Le projet est conçu autour de quatre priorités :
 4. **Innovation** — IA, recommandation, traitement vidéo, traduction, mode hors-ligne, économie créateur et fonctions futures extensibles.
 
 > **Conditions :
-> N'appliquer pas les migrations à n'importe comment ça maîtriser le projet
+> N'appliquer pas les migrations à n'importe comment sans maîtriser le projet
 
 ---
 
