@@ -4,17 +4,40 @@ export const CHAT_REACTIONS = ["❤️", "😂", "😮", "😢", "😡", "👍",
 
 export async function toggleMessageReaction(messageId, user_id, reaction) {
   if (!messageId || !user_id || !CHAT_REACTIONS.includes(reaction)) throw new Error("Réaction invalide");
+
   const { data: existing, error: readError } = await supabase
-    .from("message_reactions").select("id,reaction").eq("message_id", messageId).eq("user_id", user_id).maybeSingle();
+    .from("message_reactions")
+    .select("id,emoji")
+    .eq("message_id", messageId)
+    .eq("user_id", user_id)
+    .maybeSingle();
   if (readError) throw readError;
-  if (existing?.reaction === reaction) {
-    const { error } = await supabase.from("message_reactions").delete().eq("id", existing.id);
+
+  if (existing?.emoji === reaction) {
+    const { error } = await supabase.from("message_reactions").delete()
+      .eq("id", existing.id).eq("user_id", user_id);
     if (error) throw error;
     return null;
   }
-  const { data, error } = await supabase.from("message_reactions").upsert(
-    { message_id: messageId, user_id: user_id, reaction }, { onConflict: "message_id,user_id" }
-  ).select().single();
+
+  if (existing) {
+    const { data, error } = await supabase.from("message_reactions")
+      .update({ emoji: reaction }).eq("id", existing.id)
+      .eq("user_id", user_id).select().single();
+    if (error) throw error;
+    return data;
+  }
+
+  const { data: message, error: messageError } = await supabase
+    .from("messages").select("conversation_id").eq("id", messageId).single();
+  if (messageError) throw messageError;
+
+  const { data, error } = await supabase.from("message_reactions").insert({
+    message_id: messageId,
+    conversation_id: message.conversation_id,
+    user_id,
+    emoji: reaction,
+  }).select().single();
   if (error) throw error;
   return data;
 }
@@ -44,18 +67,30 @@ export async function updateConversationSettings(conversation_id, patch) {
 }
 
 export function makeClientMessageId() {
-  if (crypto?.randomUUID) return crypto.randomUUID();
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 export async function toggleMessagePin(messageId, user_id) {
-  const { data: existing } = await supabase.from("message_pins").select("message_id").eq("message_id", messageId).maybeSingle();
+  if (!messageId || !user_id) throw new Error("Message ou utilisateur invalide");
+
+  const { data: existing, error: readError } = await supabase
+    .from("message_pins").select("message_id,pinned_by")
+    .eq("message_id", messageId).maybeSingle();
+  if (readError) throw readError;
+
   if (existing) {
-    const { error } = await supabase.from("message_pins").delete().eq("message_id", messageId);
+    if (existing.pinned_by !== user_id) {
+      throw new Error("Ce message est déjà épinglé par un autre utilisateur");
+    }
+    const { error } = await supabase.from("message_pins").delete()
+      .eq("message_id", messageId).eq("pinned_by", user_id);
     if (error) throw error;
     return false;
   }
-  const { error } = await supabase.from("message_pins").insert({ message_id: messageId, pinned_by: user_id });
+
+  const { error } = await supabase.from("message_pins")
+    .insert({ message_id: messageId, pinned_by: user_id });
   if (error) throw error;
   return true;
 }

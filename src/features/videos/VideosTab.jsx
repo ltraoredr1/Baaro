@@ -29,6 +29,7 @@ import { COLORS } from "../../theme.js";
 import { useToast } from "../../components/ToastContext.jsx";
 import { EngagementList } from "../../components/EngagementList.jsx";
 import { TipButton } from "../../components/TipButton.jsx";
+import { shouldPrefetch } from "../../lib/appSettings.js";
 
 const formatCount = (value = 0) => {
   const n = Number(value) || 0;
@@ -1655,7 +1656,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
                   loop
                   muted={muted || !!video.mute_original}
                   data-mute-original={video.mute_original ? "1" : "0"}
-                  preload="metadata"
+                  preload={shouldPrefetch() ? "metadata" : "none"}
                   onPlay={(event) => {
                     setPlayingId(id);
                     playAudioFor(video.id, event.currentTarget);
@@ -1682,7 +1683,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
                     }}
                     src={sound.url}
                     loop
-                    preload="auto"
+                    preload={shouldPrefetch() ? "auto" : "none"}
                     muted={muted}
                   />
                 )}
