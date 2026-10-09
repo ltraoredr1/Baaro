@@ -199,7 +199,7 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
     const now = Date.now();
     if (!typingChRef.current || now - lastTypingSent.current < 1500) return;
     lastTypingSent.current = now;
-    typingChRef.current.send({ type: "broadcast", event: "typing", payload: { userId: id, typing: value } });
+    typingChRef.current.send({ type: "broadcast", event: "typing", payload: { user_id: id, typing: value } });
   };
 
   const handleFileSelect = async (e) => {
@@ -281,7 +281,7 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
       const roomRes = await createCallRoom({ userName: "Moi", mode: type });
       const roomName = roomRes.roomName || roomRes.daily_room_name;
       if (!roomName || !roomRes.url) throw new Error("Salle non créée : vérifie DAILY_API_KEY et DAILY_DOMAIN sur Vercel");
-      const rec = await createCallRecord({ conversationId: activeChat.id, callerId: id, calleeId: activeChat.otherUserId, type, dailyRoomName: roomName });
+      const rec = await createCallRecord({ conversation_id: activeChat.id, caller_id: id, callee_id: activeChat.otherUserId, type, dailyRoomName: roomName });
       if (!rec?.id) throw new Error("Appel non enregistré (table calls ou RLS)");
       const tokenRes = await getCallToken({ roomName, userName: "Moi", isOwner: true });
       setCallState({
