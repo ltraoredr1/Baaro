@@ -63,6 +63,7 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
   const typingChRef = useRef(null);
   const lastTypingSent = useRef(0);
   const markedRef = useRef(new Set());
+  const incomingCallIdsRef = useRef(new Set());
 
   useEffect(() => {
     if (propId) {
@@ -149,6 +150,76 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
   useEffect(() => {
     if (messagesEndRef.current) messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  // Réception des appels, même depuis la liste des conversations.
+  useEffect(() => {
+    if (!id) return;
+    let cancelled = false;
+    let channel;
+
+    const showIncomingCall = async (call) => {
+      if (!call?.id || call.callee_id !== id || call.status !== "ringing" ||
+          incomingCallIdsRef.current.has(call.id)) return;
+
+      incomingCallIdsRef.current.add(call.id);
+      try {
+        await fetchProfiles([call.caller_id]);
+        const caller = profilesCache.current[call.caller_id] || {};
+        const tokenRes = await getCallToken({
+          roomName: call.daily_room_name,
+          userName: caller.display_name || "Membre",
+          isOwner: false,
+        });
+
+        if (cancelled) return;
+        if (!tokenRes?.url || !tokenRes?.token) {
+          throw new Error("Informations de connexion à l'appel manquantes.");
+        }
+
+        setCallState({
+          mode: "incoming",
+          callType: call.type === "video" ? "video" : "voice",
+          callRecord: call,
+          roomUrl: tokenRes.url,
+          token: tokenRes.token,
+          otherUser: {
+            name: caller.display_name || "Membre",
+            avatar: caller.avatar_url,
+            flag: caller.flag || "🌍",
+          },
+        });
+      } catch (error) {
+        incomingCallIdsRef.current.delete(call.id);
+        console.error("Appel entrant :", error);
+      }
+    };
+
+    const listen = async () => {
+      const { data, error } = await supabase
+        .from("calls").select("*")
+        .eq("callee_id", id).eq("status", "ringing")
+        .order("created_at", { ascending: false }).limit(1);
+
+      if (error) console.error("Lecture des appels :", error);
+      if (data?.[0]) await showIncomingCall(data[0]);
+      if (cancelled) return;
+
+      channel = supabase.channel("incoming-calls:" + id)
+        .on("postgres_changes", {
+          event: "INSERT",
+          schema: "public",
+          table: "calls",
+          filter: "callee_id=eq." + id,
+        }, ({ new: call }) => { showIncomingCall(call); })
+        .subscribe();
+    };
+
+    listen();
+    return () => {
+      cancelled = true;
+      if (channel) supabase.removeChannel(channel);
+    };
+  }, [id, fetchProfiles]);
 
   const openConversation = async (otherId, name, avatar, flag) => {
     if (!id || !otherId || otherId === id) return;
@@ -308,7 +379,9 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
 
   if (showNewChat) {
     return (
-      <div className="max-w-2xl mx-auto w-full p-4">
+      <>
+        {callState && <ChatCallModal mode={callState.mode} callType={callState.callType} callRecord={callState.callRecord} roomUrl={callState.roomUrl} token={callState.token} otherUser={callState.otherUser} onClose={closeCall} />}
+        <div className="max-w-2xl mx-auto w-full p-4">
         <div className="flex items-center justify-between mb-4">
           <h2 className="font-bold" style={{ color: C.ivory }}>Nouvelle conversation</h2>
           <button onClick={() => setShowNewChat(false)} className="p-2 rounded-full" style={{ color: C.muted }}><X size={20} /></button>
@@ -325,7 +398,8 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
             </button>
           ))}
         </div>
-      </div>
+        </div>
+      </>
     );
   }
 
@@ -393,7 +467,9 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
   }
 
   return (
-    <div className="max-w-2xl mx-auto w-full p-4" style={{ paddingBottom: "calc(6rem + env(safe-area-inset-bottom))" }}>
+    <>
+      {callState && <ChatCallModal mode={callState.mode} callType={callState.callType} callRecord={callState.callRecord} roomUrl={callState.roomUrl} token={callState.token} otherUser={callState.otherUser} onClose={closeCall} />}
+      <div className="max-w-2xl mx-auto w-full p-4" style={{ paddingBottom: "calc(6rem + env(safe-area-inset-bottom))" }}>
       <div className="flex items-center justify-between mb-5">
         <h2 className="text-xl font-bold flex items-center gap-2" style={{ color: C.ivory }}><MessageCircle size={24} style={{ color: C.gold }} />Messages</h2>
         <button onClick={() => setShowNewChat(true)} className="px-3 py-2 rounded-full text-sm font-bold" style={{ background: "rgba(217,174,82,0.2)", color: C.gold }}><Plus size={16} className="inline mr-1" />Nouveau</button>
@@ -407,6 +483,7 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
           </div>
         </button>
       ))}
-    </div>
+      </div>
+    </>
   );
 }
