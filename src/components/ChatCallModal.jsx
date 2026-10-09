@@ -29,22 +29,48 @@ export function ChatCallModal({ mode = "outgoing", callType = "voice", callRecor
   const attachTracks = useCallback(() => {
     try {
       const parts = getParticipants();
-      Object.values(parts).forEach((p) => {
-        if (p.local) {
-          const v = p.tracks?.video?.persistentTrack || p.tracks?.video?.track;
-          if (v && localVideoRef.current) localVideoRef.current.srcObject = new MediaStream([v]);
-        } else {
-          const v = p.tracks?.video?.persistentTrack || p.tracks?.video?.track;
-          const a = p.tracks?.audio?.persistentTrack || p.tracks?.audio?.track;
-          if (v && remoteVideoRef.current) remoteVideoRef.current.srcObject = new MediaStream([v, a].filter(Boolean));
-          else if (a) {
-            let audio = document.getElementById("baaro-call-remote-audio");
-            if (!audio) { audio = document.createElement("audio"); audio.id = "baaro-call-remote-audio"; audio.autoplay = true; audio.playsInline = true; document.body.appendChild(audio); }
-            audio.srcObject = new MediaStream([a]);
+
+      Object.values(parts).forEach((participant) => {
+        const tracks = participant.tracks || {};
+        const videoTrack =
+          tracks.video?.persistentTrack || tracks.video?.track;
+        const audioTrack =
+          tracks.audio?.persistentTrack || tracks.audio?.track;
+
+        if (participant.local) {
+          if (videoTrack && localVideoRef.current) {
+            localVideoRef.current.srcObject = new MediaStream([videoTrack]);
+            localVideoRef.current.play().catch(() => {});
           }
+          return;
+        }
+
+        if (videoTrack && remoteVideoRef.current) {
+          remoteVideoRef.current.srcObject = new MediaStream(
+            [videoTrack, audioTrack].filter(Boolean)
+          );
+          remoteVideoRef.current.play().catch(() => {});
+        } else if (audioTrack) {
+          let audio = document.getElementById("baaro-call-remote-audio");
+
+          if (!audio) {
+            audio = document.createElement("audio");
+            audio.id = "baaro-call-remote-audio";
+            audio.autoplay = true;
+            audio.playsInline = true;
+            audio.setAttribute("playsinline", "");
+            document.body.appendChild(audio);
+          }
+
+          audio.srcObject = new MediaStream([audioTrack]);
+          audio.play().catch((error) => {
+            console.warn("Lecture audio distant impossible :", error);
+          });
         }
       });
-    } catch {}
+    } catch (error) {
+      console.error("Erreur d'attachement des pistes d'appel :", error);
+    }
   }, []);
 
   const endCall = useCallback(async (finalStatus = "ended") => {
