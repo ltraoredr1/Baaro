@@ -1,6 +1,6 @@
-import * as webrtc from "../lib/webrtc.js";
 import { useEffect, useRef, useState, useCallback } from "react";
 import { Phone, PhoneOff, Video, VideoOff, Mic, MicOff, X } from "lucide-react";
+import baaroLogo from "../assets/baaro-logo.png";
 import { COLORS as THEME_COLORS } from "../theme.js";
 import { startCall, joinCall, leaveCall, enableMic, enableCamera, subscribeCallEvents, getParticipants, updateCallStatus } from "../lib/chatCalls.js";
 
@@ -17,18 +17,20 @@ export function ChatCallModal({ mode = "outgoing", callType = "voice", callRecor
   const timerRef = useRef(null);
   const startedAtRef = useRef(null);
   const mountedRef = useRef(true);
+  const unsubscribeRef = useRef(null);
 
   const cleanupMedia = useCallback(() => {
     clearInterval(timerRef.current);
+    timerRef.current = null;
     const el = document.getElementById("baaro-call-remote-audio");
-    if (el) { el.srcObject = null; el.remove(); }
-    if (localVideoRef.current) localVideoRef.current.srcObject = null;
-    if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
+    if (el) { try{ el.srcObject?.getTracks()?.forEach(t=>t.stop()); }catch{} el.srcObject = null; el.remove(); }
+    [localVideoRef, remoteVideoRef].forEach(r=>{ if(r.current){ try{ r.current.srcObject?.getTracks()?.forEach(t=>t.stop()); }catch{} r.current.srcObject = null; } });
+    if(unsubscribeRef.current){ try{ unsubscribeRef.current(); }catch{} unsubscribeRef.current = null; }
   }, []);
 
   const attachTracks = useCallback(() => {
     try {
-      const parts = getParticipants();
+      const parts = getParticipants() || {};
 
       Object.values(parts).forEach((participant) => {
         const tracks = participant.tracks || {};
@@ -40,6 +42,8 @@ export function ChatCallModal({ mode = "outgoing", callType = "voice", callRecor
         if (participant.local) {
           if (videoTrack && localVideoRef.current) {
             localVideoRef.current.srcObject = new MediaStream([videoTrack]);
+            localVideoRef.current.muted = true;
+            localVideoRef.current.playsInline = true;
             localVideoRef.current.play().catch(() => {});
           }
           return;
@@ -91,7 +95,7 @@ export function ChatCallModal({ mode = "outgoing", callType = "voice", callRecor
       try {
         await startCall({ roomUrl, token, video: callType === "video" });
         if (cancelled || !mountedRef.current) return;
-        subscribeCallEvents({ onParticipantJoined: () => { if (!mountedRef.current) return; setStatus("active"); startedAtRef.current = Date.now(); if (callRecord?.id) updateCallStatus(callRecord.id, { status: "accepted", started_at: new Date().toISOString() }).catch(() => {}); onAccepted?.(); }, onParticipantLeft: () => endCall("ended"), onTrackStarted: () => attachTracks(), onLeft: () => endCall("ended") });
+        unsubscribeRef.current = subscribeCallEvents({ onParticipantJoined: () => { if (!mountedRef.current) return; setStatus("active"); startedAtRef.current = Date.now(); if (callRecord?.id) updateCallStatus(callRecord.id, { status: "accepted", started_at: new Date().toISOString() }).catch(() => {}); onAccepted?.(); }, onParticipantLeft: () => endCall("ended"), onTrackStarted: () => attachTracks(), onLeft: () => endCall("ended") });
         setTimeout(attachTracks, 500);
       } catch (e) { console.error(e); if (mountedRef.current) onClose?.(); }
     })();
@@ -107,7 +111,7 @@ export function ChatCallModal({ mode = "outgoing", callType = "voice", callRecor
       await joinCall({ roomUrl, token, video: callType === "video" });
       setStatus("active"); startedAtRef.current = Date.now();
       if (callRecord?.id) await updateCallStatus(callRecord.id, { status: "accepted", started_at: new Date().toISOString() });
-      subscribeCallEvents({ onParticipantLeft: () => endCall("ended"), onTrackStarted: () => attachTracks(), onLeft: () => endCall("ended") });
+      unsubscribeRef.current = subscribeCallEvents({ onParticipantLeft: () => endCall("ended"), onTrackStarted: () => attachTracks(), onLeft: () => endCall("ended") });
       setTimeout(attachTracks, 400); onAccepted?.();
     } catch (e) { console.error(e); onClose?.(); }
   };
@@ -121,13 +125,13 @@ export function ChatCallModal({ mode = "outgoing", callType = "voice", callRecor
       <div className="w-full max-w-md rounded-3xl border overflow-hidden shadow-2xl flex flex-col" style={{ background: C.surface, borderColor: C.borderGold, minHeight: callType === "video" ? 480 : 360 }}>
         <div className="flex items-center justify-between p-4 border-b" style={{ borderColor: C.border }}>
           <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-full bg-white/10 flex items-center justify-center text-xl overflow-hidden">{otherUser.avatar ? <img src={otherUser.avatar} alt="" className="w-full h-full object-cover" /> : otherUser.flag || "🌍"}</div>
+            <div className="w-12 h-12 rounded-full bg-white/10 flex items-center justify-center text-xl overflow-hidden">{otherUser.avatar ? <img src={otherUser.avatar} alt="" className="w-full h-full object-cover" onError={(e)=>e.target.src=baaroLogo} /> : <img src={baaroLogo} alt="" className="w-full h-full object-cover" />}</div>
             <div><p className="font-bold text-sm" style={{ color: C.ivory }}>{otherUser.name || "Membre"}</p><p className="text-xs" style={{ color: C.muted }}>{status === "outgoing" && "Appel en cours..."}{status === "incoming" && (callType === "video" ? "Appel video entrant" : "Appel vocal entrant")}{status === "active" && formatTime(duration)}{status === "ended" && "Termine"}</p></div>
           </div>
           <button onClick={() => endCall("ended")} className="p-2 rounded-full hover:bg-white/10" style={{ color: C.muted }}><X size={20} /></button>
         </div>
         <div className="flex-1 relative flex items-center justify-center bg-black/40 min-h-[200px]">
-          {callType === "video" ? <><video ref={remoteVideoRef} autoPlay playsInline className="absolute inset-0 w-full h-full object-cover" /><video ref={localVideoRef} autoPlay playsInline muted className="absolute bottom-3 right-3 w-28 h-40 rounded-xl object-cover border-2" style={{ borderColor: C.gold }} /></> : <div className="text-center py-10"><div className="w-24 h-24 rounded-full bg-white/10 flex items-center justify-center text-4xl mx-auto mb-4 overflow-hidden">{otherUser.avatar ? <img src={otherUser.avatar} alt="" className="w-full h-full object-cover" /> : otherUser.flag || "🌍"}</div><p className="text-sm font-semibold" style={{ color: C.ivory }}>{otherUser.name || "Membre"}</p>{status === "outgoing" && <p className="text-xs mt-2 animate-pulse" style={{ color: C.gold }}>Sonnerie...</p>}</div>}
+          {callType === "video" ? <><video ref={remoteVideoRef} autoPlay playsInline className="absolute inset-0 w-full h-full object-cover" /><video ref={localVideoRef} autoPlay playsInline muted className="absolute bottom-3 right-3 w-28 h-40 rounded-xl object-cover border-2" style={{ borderColor: C.gold }} /></> : <div className="text-center py-10"><div className="w-24 h-24 rounded-full bg-white/10 flex items-center justify-center text-4xl mx-auto mb-4 overflow-hidden">{otherUser.avatar ? <img src={otherUser.avatar} alt="" className="w-full h-full object-cover" onError={(e)=>e.target.src=baaroLogo} /> : <img src={baaroLogo} alt="" className="w-full h-full object-cover" />}</div><p className="text-sm font-semibold" style={{ color: C.ivory }}>{otherUser.name || "Membre"}</p>{status === "outgoing" && <p className="text-xs mt-2 animate-pulse" style={{ color: C.gold }}>Sonnerie...</p>}</div>}
         </div>
         <div className="p-5 flex items-center justify-center gap-4">
           {status === "incoming" ? <><button onClick={rejectIncoming} className="w-14 h-14 rounded-full flex items-center justify-center" style={{ background: "#EF4444", color: "#fff" }}><PhoneOff size={24} /></button><button onClick={acceptIncoming} className="w-14 h-14 rounded-full flex items-center justify-center" style={{ background: "#22C55E", color: "#fff" }}><Phone size={24} /></button></> : <><button onClick={toggleMic} className="w-12 h-12 rounded-full flex items-center justify-center border" style={{ background: micOn ? C.surface2 : "rgba(239,68,68,0.3)", borderColor: C.border, color: micOn ? C.ivory : "#EF4444" }}>{micOn ? <Mic size={20} /> : <MicOff size={20} />}</button>{callType === "video" && <button onClick={toggleCam} className="w-12 h-12 rounded-full flex items-center justify-center border" style={{ background: camOn ? C.surface2 : "rgba(239,68,68,0.3)", borderColor: C.border, color: camOn ? C.ivory : "#EF4444" }}>{camOn ? <Video size={20} /> : <VideoOff size={20} />}</button>}<button onClick={() => endCall("ended")} className="w-14 h-14 rounded-full flex items-center justify-center" style={{ background: "#EF4444", color: "#fff" }}><PhoneOff size={24} /></button></>}
