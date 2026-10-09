@@ -28,6 +28,7 @@ import { RichTextComposer } from "../../components/RichTextComposer.jsx";
 import { RichTextRenderer } from "../../components/RichTextRenderer.jsx";
 import { EngagementList } from "../../components/EngagementList.jsx";
 import { TipButton } from "../../components/TipButton.jsx";
+import { LazyImage, LazyVideo } from "../../components/LazyMedia.jsx";
 
 // Taille de page pour le fil. Pagination par CURSEUR (created_at + id)
 const PAGE_SIZE = 20;
@@ -784,9 +785,9 @@ export function FeedTab({ user_id, onOpenProfile, onRewardPoints }) {
                 {post.media_url && (
                   <div className="rounded-xl overflow-hidden">
                     {post.media_type?.startsWith("video") ? (
-                      <video src={post.media_url} controls className="w-full max-h-80 object-cover bg-black" />
+                      <LazyVideo src={post.media_url} fit="contain" className="w-full" />
                     ) : (
-                      <img src={post.media_url} alt="" className="w-full max-h-80 object-cover" />
+                      <LazyImage src={post.media_url} alt="" fit="contain" className="w-full" />
                     )}
                   </div>
                 )}

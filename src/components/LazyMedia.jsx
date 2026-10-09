@@ -16,6 +16,7 @@ export function LazyImage({
   onClick,
   variant = "feed",
   width,
+  fit = "cover",
 }) {
   const C = { ...FALLBACK, ...(THEME_COLORS || {}) };
   const [loaded, setLoaded] = useState(false);
@@ -50,7 +51,7 @@ export function LazyImage({
   return (
     <div
       className={`relative overflow-hidden bg-black/20 lazy-media-box ${className}`}
-      style={{ aspectRatio: aspectRatio || undefined, ...style }}
+      style={{ aspectRatio: aspectRatio || undefined, minHeight: fit === "contain" && !loaded ? 220 : undefined, ...style }}
       onClick={onClick}
     >
       {!loaded && (
@@ -65,11 +66,10 @@ export function LazyImage({
         alt={alt}
         loading="lazy"
         decoding="async"
+        style={fit === "contain" ? { maxHeight: "80vh" } : undefined}
         onLoad={() => setLoaded(true)}
         onError={() => setFailed(true)}
-        className={`w-full h-full object-cover transition-opacity duration-300 ${
-          loaded ? "opacity-100" : "opacity-0"
-        }`}
+        className={`w-full ${fit === "contain" ? "h-auto object-contain" : "h-full object-cover"} transition-opacity duration-300 ${loaded ? "opacity-100" : "opacity-0"}`}
       />
     </div>
   );
@@ -78,6 +78,7 @@ export function LazyImage({
 /** Vidéo lazy + pause hors viewport (moins de conso). */
 export function LazyVideo({
   src,
+  fit = "cover",
   className = "",
   poster,
   muted = true,
@@ -151,7 +152,7 @@ export function LazyVideo({
         ref={videoRef}
         src={inView ? src : undefined}
         poster={poster}
-        className="w-full h-full object-cover"
+        className={fit === "contain" ? "w-full h-auto max-h-[80vh] object-contain bg-black" : "w-full h-full object-cover"}
         controls={controls}
         muted={muted}
         playsInline

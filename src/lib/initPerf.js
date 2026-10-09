@@ -9,6 +9,7 @@
 
 import { reportVitals } from "./vitals.js";
 import { prefetchTabs } from "./prefetchTab.js";
+import { shouldPrefetch } from "./appSettings.js";
 
 let initialized = false;
 
@@ -20,5 +21,5 @@ export function initPerf({
   initialized = true;
 
   reportVitals();
-  prefetchTabs(tabs);
+  if (shouldPrefetch()) prefetchTabs(tabs);
 }
