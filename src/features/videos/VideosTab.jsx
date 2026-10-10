@@ -24,6 +24,8 @@ import { supabase } from "../../supabaseClient.js";
 import { COLORS } from "../../theme.js";
 import { useToast } from "../../components/ToastContext.jsx";
 
+const baaroLogo = "/brand/baaro-logo.png";
+
 const formatCount = (value = 0) => {
   const n = Number(value) || 0;
   if (n >= 1000000) return `${(n / 1000000).toFixed(1).replace(".0", "")}M`;
@@ -829,7 +831,6 @@ export function VideosTab({ onRewardPoints, onExit }) {
     }
   };
 
-
   const stopCameraStream = useCallback(() => {
     if (cameraTimerRef.current) {
       clearInterval(cameraTimerRef.current);
@@ -902,7 +903,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
     if (!cameraOpen || cameraRecording) return;
     startCamera();
     return () => stopCameraStream();
-  }, [cameraOpen, cameraFacing]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [cameraOpen, cameraFacing, startCamera, stopCameraStream]);
 
   useEffect(() => {
     return () => stopCameraStream();
@@ -1502,16 +1503,9 @@ export function VideosTab({ onRewardPoints, onExit }) {
                           className="h-full w-full object-cover"
                         />
                       ) : (
-<<<<<<< Updated upstream
                         <div className="h-full w-full flex items-center justify-center text-lg">
-=======
-                        <>
-                          <img src={baaroLogo} alt="" className="h-full w-full object-cover" data-fallback="true" style={{display:"none"}} />
-                          <div className="h-full w-full flex items-center justify-center text-lg" style={{display:"none"}}>
->>>>>>> Stashed changes
                           {profile.flag || "🌍"}
-                          </div>
-                        </>
+                        </div>
                       )}
                     </div>
                     <div className="min-w-0">
