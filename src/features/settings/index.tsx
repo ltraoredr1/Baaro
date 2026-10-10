@@ -1306,8 +1306,6 @@ export default function SettingsTab({
     setMessage("");
     try {
       const up = await uploadExternalMedia(file, "theme");
-        maxBytes: MAX_CUSTOM_IMAGE_BYTES,
-      });
       updateCustomTheme({ bgImage: up.url });
     } catch (err) {
       setMessage("❌ " + (err instanceof Error ? err.message : t("custom_image_invalid")));
