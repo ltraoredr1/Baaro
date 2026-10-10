@@ -1,9 +1,9 @@
 import { useState } from "react";
-import CommentsSheet from "./composent/CommentsSheet.jsx";
-import FeedHeader from "./composent/FeedHeader.jsx";
-import { FeedEmpty, FeedError, FeedLoading } from "./composent/FeedStatus.jsx";
-import UploadModal from "./composent/UploadModal.jsx";
-import VideoCard from "./composent/VideoCard.jsx";
+import CommentsSheet from "./components/CommentsSheet.jsx";
+import FeedHeader from "./components/FeedHeader.jsx";
+import { FeedEmpty, FeedError, FeedLoading } from "./components/FeedStatus.jsx";
+import UploadModal from "./components/UploadModal.jsx";
+import VideoCard from "./components/VideoCard.jsx";
 import { useCamera } from "./hooks/useCamera.js";
 import { useFeedPlayback } from "./hooks/useFeedPlayback.js";
 import { useSoundPicker } from "./hooks/useSoundPicker.js";
@@ -13,6 +13,7 @@ import { useVideoComments } from "./hooks/useVideoComments.js";
 import { useVideoCreator } from "./hooks/useVideoCreator.js";
 import { useVideoFeed } from "./hooks/useVideoFeed.js";
 import VideoNextGenStudio from "./VideoNextGenStudio.jsx";
+import { useToast } from "../../components/ToastContext.jsx";
 
 export function VideosTab({ onRewardPoints, onExit }) {
   const feed = useVideoFeed();
@@ -53,9 +54,30 @@ export function VideosTab({ onRewardPoints, onExit }) {
     onRewardPoints,
   });
   const commentsState = useVideoComments({ user, setVideos, onRewardPoints });
-  const actions = { ...videoActions, openComments: commentsState.openComments };
+  const { showToast } = useToast();
 
   const openUpload = () => creator.setShowUpload(true);
+
+  // « Utiliser ce son » : crée une vidéo avec le son de la vidéo vue.
+  // Son choisi de la vidéo si elle en a un, sinon l'audio de la vidéo elle-même.
+  const handleUseSound = (video, sound) => {
+    const handle = video.profiles?.handle?.replace(/^@/, "") || "membre";
+    const title = sound?.title || `Son original · @${handle}`;
+    soundPicker.chooseSound({
+      id: video.sound_id || null,
+      title,
+      artist: sound?.artist || `@${handle}`,
+      audio_url: sound?.url || video.video_url,
+    });
+    openUpload();
+    showToast(`Son « ${title} » sélectionné`, "success");
+  };
+
+  const actions = {
+    ...videoActions,
+    openComments: commentsState.openComments,
+    onUseSound: handleUseSound,
+  };
 
   // Studio NextGen : « Continuer » ferme le studio et ouvre la publication.
   // tools = clés des outils cochés (ex. ["ai", "remix"]) ; pas encore exploitées.
