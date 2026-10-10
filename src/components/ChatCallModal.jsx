@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { Phone, PhoneOff, Video, VideoOff, Mic, MicOff, X } from "lucide-react";
-import baaroLogo from "../assets/baaro-logo.png";
 import { COLORS as THEME_COLORS } from "../theme.js";
 import { startCall, joinCall, leaveCall, enableMic, enableCamera, subscribeCallEvents, getParticipants, updateCallStatus } from "../lib/chatCalls.js";
+
+const baaroLogo = "/brand/baaro-logo.png";
 
 const FALLBACK = { surface: "#12141F", surface2: "rgba(255,255,255,0.08)", border: "rgba(255,255,255,0.1)", borderGold: "rgba(217,174,82,0.2)", ivory: "#F5F3EF", muted: "rgba(245,243,239,0.55)", gold: "#D9AE52", bg: "#0B1220" };
 
