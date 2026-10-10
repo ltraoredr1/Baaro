@@ -1502,9 +1502,16 @@ export function VideosTab({ onRewardPoints, onExit }) {
                           className="h-full w-full object-cover"
                         />
                       ) : (
+<<<<<<< Updated upstream
                         <div className="h-full w-full flex items-center justify-center text-lg">
+=======
+                        <>
+                          <img src={baaroLogo} alt="" className="h-full w-full object-cover" data-fallback="true" style={{display:"none"}} />
+                          <div className="h-full w-full flex items-center justify-center text-lg" style={{display:"none"}}>
+>>>>>>> Stashed changes
                           {profile.flag || "🌍"}
-                        </div>
+                          </div>
+                        </>
                       )}
                     </div>
                     <div className="min-w-0">

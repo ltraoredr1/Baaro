@@ -1,0 +1,15 @@
+[33m0605c3d[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m fix: restore VideosTab + fix R2 upload without Content-Type
+[33med71474[m fix: remove ContentType to avoid CORS preflight for stories
+[33m7dbf4c0[m fix(call): patch minimal cleanup + logo fallback + unsubscribe + iOS
+[33m4c43baa[m perf: respect smart_prefetch/data_saver in videos and initPerf
+[33m053fbce[m Fix remote call media playback
+[33m86c27fd[m Fix incoming call reception
+[33mde2de72[m Fix messaging and incoming calls
+[33m1b35a70[m[33m ([m[1;32mfix/messaging-inconsistencies[m[33m, [m[1;32mfix/messaging[m[33m)[m sync github + fix themes 9 + rtl + tar audit
+[33mbdab9c5[m Update README.md
+[33m047797f[m fix: privacy-screen 5.2.1 (Capacitor 6 compatible)
+[33maeb1d9a[m native: privacy-screen + biometric lock, prefetch helpers
+[33mf2a8f1c[m settings: fix custom_theme cloud sync, remove is_private write, battery/low-bandwidth classes, safe account deletion
+[33mbc7c383[m fix: TranslatedText + videoRef traduction video
+[33mbd86a12[m fix: videoRef pour la traduction vidéo
+[33m120fc19[m feat: traduction automatique des posts et commentaires
