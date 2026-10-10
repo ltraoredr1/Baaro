@@ -1,3 +1,4 @@
+import { useState } from "react";
 import CommentsSheet from "./components/CommentsSheet.jsx";
 import FeedHeader from "./components/FeedHeader.jsx";
 import { FeedEmpty, FeedError, FeedLoading } from "./components/FeedStatus.jsx";
@@ -11,6 +12,7 @@ import { useVideoActions } from "./hooks/useVideoActions.js";
 import { useVideoComments } from "./hooks/useVideoComments.js";
 import { useVideoCreator } from "./hooks/useVideoCreator.js";
 import { useVideoFeed } from "./hooks/useVideoFeed.js";
+import VideoNextGenStudio from "./VideoNextGenStudio.jsx";
 
 export function VideosTab({ onRewardPoints, onExit }) {
   const feed = useVideoFeed();
@@ -55,6 +57,14 @@ export function VideosTab({ onRewardPoints, onExit }) {
 
   const openUpload = () => creator.setShowUpload(true);
 
+  // Studio NextGen : « Continuer » ferme le studio et ouvre la publication.
+  // tools = clés des outils cochés (ex. ["ai", "remix"]) ; pas encore exploitées.
+  const [studioOpen, setStudioOpen] = useState(false);
+  const handleStudioCreate = () => {
+    setStudioOpen(false);
+    openUpload();
+  };
+
   if (loading) return <FeedLoading />;
 
   return (
@@ -70,6 +80,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
           muted={playback.muted}
           onToggleMute={playback.toggleMute}
           onOpenUpload={openUpload}
+          onOpenStudio={() => setStudioOpen(true)}
           mode={mode}
           setMode={setMode}
         />
@@ -107,6 +118,12 @@ export function VideosTab({ onRewardPoints, onExit }) {
         creator={creator}
         soundPicker={soundPicker}
         camera={camera}
+      />
+
+      <VideoNextGenStudio
+        open={studioOpen}
+        onClose={() => setStudioOpen(false)}
+        onCreate={handleStudioCreate}
       />
     </>
   );
