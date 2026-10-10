@@ -1,6 +1,4 @@
-import baaroLogo from "../../assets/baaro-logo.png";
 import { VideoTranslateControls } from "../../components/VideoTranslateControls.jsx";
-import VideoNextGenStudio from "./VideoNextGenStudio.jsx";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Check,
@@ -17,20 +15,14 @@ import {
   Repeat2,
   Send,
   Share2,
-  Sparkles,
   Trash2,
   Volume2,
   VolumeX,
   X,
 } from "lucide-react";
 import { supabase } from "../../supabaseClient.js";
-import { uploadExternalMedia } from "../../lib/externalMedia.js";
-import { uploadLargeVideo } from "../../lib/largeVideoUpload.js";
 import { COLORS } from "../../theme.js";
 import { useToast } from "../../components/ToastContext.jsx";
-import { EngagementList } from "../../components/EngagementList.jsx";
-import { TipButton } from "../../components/TipButton.jsx";
-import { shouldPrefetch } from "../../lib/appSettings.js";
 
 const formatCount = (value = 0) => {
   const n = Number(value) || 0;
@@ -258,154 +250,6 @@ const renderToFile = async ({ drawFrame, totalMs, audioUrl, audioCtx, onProgress
   return new File([blob], `baaro-${Date.now()}.${ext}`, { type, lastModified: Date.now() });
 };
 
-const loadVideoMeta = (url) =>
-  new Promise((resolve, reject) => {
-    const video = document.createElement("video");
-    video.preload = "metadata";
-    video.onloadedmetadata = () => resolve(Number.isFinite(video.duration) ? video.duration : 0);
-    video.onerror = () => reject(new Error("Une vidéo est illisible."));
-    video.src = url;
-  });
-
-// Studio mixte : enchaîne photos + vidéos et ajoute un texte en surimpression.
-// Le rendu reste côté navigateur pour l'aperçu/création rapide; les gros fichiers
-// continuent ensuite par le pipeline R2/worker existant.
-const renderMixedToFile = async ({ assets, overlayText, audioUrl, audioCtx, onProgress }) => {
-  if (!window.MediaRecorder) throw new Error("L'enregistrement vidéo n'est pas supporté par ce navigateur.");
-  const canvas = document.createElement("canvas");
-  canvas.width = CANVAS_W;
-  canvas.height = CANVAS_H;
-  if (!canvas.captureStream) throw new Error("Ce navigateur ne peut pas créer de vidéo depuis le canvas.");
-  const ctx = canvas.getContext("2d");
-  const prepared = [];
-  for (const asset of assets) {
-    if (asset.type === "image") {
-      prepared.push({ ...asset, media: await loadImage(asset.url), duration: Number(asset.duration || 3) });
-    } else {
-      const video = document.createElement("video");
-      video.src = asset.url;
-      video.preload = "auto";
-      video.muted = true;
-      video.playsInline = true;
-      await new Promise((resolve, reject) => {
-        video.onloadedmetadata = resolve;
-        video.onerror = () => reject(new Error("Une vidéo est illisible."));
-      });
-      prepared.push({ ...asset, media: video, duration: Number.isFinite(video.duration) ? video.duration : 1 });
-    }
-  }
-  const totalMs = prepared.reduce((sum, asset) => sum + Math.max(0.25, asset.duration) * 1000, 0);
-  const stream = canvas.captureStream(30);
-  let audioSource = null;
-  let audioDest = null;
-  if (audioUrl && audioCtx) {
-    const response = await fetch(audioUrl);
-    const buffer = await audioCtx.decodeAudioData(await response.arrayBuffer());
-    audioDest = audioCtx.createMediaStreamDestination();
-    const gain = audioCtx.createGain();
-    audioSource = audioCtx.createBufferSource();
-    audioSource.buffer = buffer;
-    audioSource.loop = true;
-    audioSource.connect(gain);
-    gain.connect(audioDest);
-    audioDest.stream.getAudioTracks().forEach((track) => stream.addTrack(track));
-    audioSource.start();
-  }
-
-  const mimeType = pickRecorderMime();
-  const recorder = new MediaRecorder(stream, mimeType ? { mimeType, videoBitsPerSecond: 2500000 } : undefined);
-  const chunks = [];
-  recorder.ondataavailable = (event) => { if (event.data?.size) chunks.push(event.data); };
-  const stopped = new Promise((resolve, reject) => {
-    recorder.onstop = resolve;
-    recorder.onerror = (event) => reject(event.error || new Error("Erreur d'enregistrement."));
-  });
-  const draw = (elapsedMs) => {
-    let cursor = 0;
-    let active = prepared[prepared.length - 1];
-    let localMs = Math.max(0, elapsedMs);
-    for (const asset of prepared) {
-      const durationMs = Math.max(0.25, asset.duration) * 1000;
-      if (localMs <= durationMs) { active = asset; break; }
-      localMs -= durationMs;
-      cursor += durationMs;
-    }
-    ctx.globalAlpha = 1;
-    ctx.fillStyle = "#000";
-    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
-    if (active.type === "image") {
-      drawCover(ctx, active.media, 1 + 0.05 * Math.min(1, localMs / (active.duration * 1000)));
-    } else {
-      const video = active.media;
-      const localSec = Math.min(active.duration, localMs / 1000);
-      if (Math.abs((video.currentTime || 0) - localSec) > 0.15) {
-        try { video.currentTime = localSec; } catch {}
-      }
-      const scale = Math.max(CANVAS_W / (video.videoWidth || CANVAS_W), CANVAS_H / (video.videoHeight || CANVAS_H));
-      const w = (video.videoWidth || CANVAS_W) * scale;
-      const h = (video.videoHeight || CANVAS_H) * scale;
-      ctx.drawImage(video, (CANVAS_W - w) / 2, (CANVAS_H - h) / 2, w, h);
-    }
-    if (overlayText?.trim()) {
-      const text = overlayText.trim();
-      ctx.fillStyle = "rgba(0,0,0,.48)";
-      ctx.fillRect(35, CANVAS_H - 250, CANVAS_W - 70, 180);
-      ctx.fillStyle = "#fff";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      let size = 48;
-      let lines;
-      for (; size >= 24; size -= 2) {
-        ctx.font = `800 ${size}px system-ui, sans-serif`;
-        lines = wrapText(ctx, text, CANVAS_W - 120);
-        if (lines.length * size * 1.25 <= 150) break;
-      }
-      const lh = size * 1.25;
-      const top = CANVAS_H - 160 - ((lines.length - 1) * lh) / 2;
-      lines.forEach((line, i) => ctx.fillText(line, CANVAS_W / 2, top + i * lh));
-    }
-  };
-
-  recorder.start(500);
-  const startedAt = performance.now();
-  let lastAssetIndex = -1;
-  await new Promise((resolve) => {
-    const tick = () => {
-      const elapsed = Math.min(totalMs, performance.now() - startedAt);
-      let acc = 0;
-      let index = prepared.length - 1;
-      for (let i = 0; i < prepared.length; i += 1) {
-        const d = Math.max(0.25, prepared[i].duration) * 1000;
-        if (elapsed <= acc + d) { index = i; break; }
-        acc += d;
-      }
-      if (index !== lastAssetIndex) {
-        if (lastAssetIndex >= 0 && prepared[lastAssetIndex].type === "video") prepared[lastAssetIndex].media.pause();
-        lastAssetIndex = index;
-        if (prepared[index].type === "video") {
-          const v = prepared[index].media;
-          v.currentTime = 0;
-          v.play().catch(() => {});
-        }
-      }
-      draw(elapsed);
-      onProgress?.(Math.min(1, elapsed / totalMs));
-      if (elapsed >= totalMs) resolve(); else requestAnimationFrame(tick);
-    };
-    tick();
-  });
-  prepared.forEach((asset) => { if (asset.type === "video") asset.media.pause(); });
-  recorder.stop();
-  await stopped;
-  audioSource?.stop?.();
-  stream.getTracks().forEach((track) => track.stop());
-  const type = (recorder.mimeType || mimeType || "video/webm").split(";")[0];
-  const blob = new Blob(chunks, { type });
-  if (!blob.size) throw new Error("Aucune vidéo n'a été créée.");
-  const ext = type.includes("mp4") ? "mp4" : "webm";
-  return { file: new File([blob], `baaro-mix-${Date.now()}.${ext}`, { type, lastModified: Date.now() }), totalMs };
-};
-
 const readDuration = (file) =>
   new Promise((resolve) => {
     const url = URL.createObjectURL(file);
@@ -455,8 +299,6 @@ export function VideosTab({ onRewardPoints, onExit }) {
   const [previewingSoundId, setPreviewingSoundId] = useState(null);
   const [createMode, setCreateMode] = useState("video");
   const [photoFiles, setPhotoFiles] = useState([]);
-  const [mixAssets, setMixAssets] = useState([]);
-  const mixInputRef = useRef(null);
   const [photoSeconds, setPhotoSeconds] = useState(3);
   const [textContent, setTextContent] = useState("");
   const [textTheme, setTextTheme] = useState(0);
@@ -467,12 +309,6 @@ export function VideosTab({ onRewardPoints, onExit }) {
   const [generatedSeconds, setGeneratedSeconds] = useState(0);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
-  const [nextGenOpen, setNextGenOpen] = useState(false);
-  const [nexusTools, setNexusTools] = useState([]);
-  const [remixSource, setRemixSource] = useState(null);
-  const [challenges, setChallenges] = useState([]);
-  const [challengeId, setChallengeId] = useState("");
-  const [engagement, setEngagement] = useState(null);
 
   // Créateur caméra : aucun plafond de durée imposé par BAARO.
   const [cameraOpen, setCameraOpen] = useState(false);
@@ -487,8 +323,6 @@ export function VideosTab({ onRewardPoints, onExit }) {
   const cameraTimerRef = useRef(null);
 
   const videoRefs = useRef({});
-  const refProxies = useRef({});
-  const getVideoRef = (id) => (refProxies.current[id] ||= { get current() { return videoRefs.current[id]; } });
   const audioRefs = useRef({});
   const mutedRef = useRef(true);
   const soundPreviewRef = useRef(null);
@@ -1180,12 +1014,9 @@ export function VideosTab({ onRewardPoints, onExit }) {
     audio.play().catch(() => stopSoundPreview());
   };
 
-  const chooseSound = async (sound) => {
+  const chooseSound = (sound) => {
     stopSoundPreview();
     setSelectedSound(sound);
-    if (sound?.id) {
-      try { await supabase.rpc("record_sound_usage", { p_sound_id: String(sound.id) }); } catch {}
-    }
     if (!sound) setMuteOriginal(false);
     setShowSoundPicker(false);
   };
@@ -1230,38 +1061,6 @@ export function VideosTab({ onRewardPoints, onExit }) {
     });
   };
 
-  const handleMixSelected = async (fileList) => {
-    const incoming = Array.from(fileList || []).filter((f) => f.type.startsWith("image/") || f.type.startsWith("video/"));
-    if (!incoming.length) {
-      showToast("Ajoute une photo ou une vidéo.", "error");
-      return;
-    }
-    const room = Math.max(0, MAX_PHOTOS - mixAssets.length);
-    const selected = incoming.slice(0, room);
-    const added = [];
-    for (const file of selected) {
-      const url = URL.createObjectURL(file);
-      try {
-        const type = file.type.startsWith("image/") ? "image" : "video";
-        const duration = type === "image" ? photoSeconds : await loadVideoMeta(url);
-        added.push({ id: crypto.randomUUID(), file, url, type, duration: type === "video" ? Math.max(0.25, duration) : photoSeconds });
-      } catch (error) {
-        URL.revokeObjectURL(url);
-        showToast(error.message || "Fichier illisible.", "error");
-      }
-    }
-    setMixAssets((prev) => [...prev, ...added]);
-    if (incoming.length > room) showToast(`${MAX_PHOTOS} éléments maximum dans une création rapide.`, "error");
-  };
-
-  const removeMixAsset = (id) => {
-    setMixAssets((prev) => {
-      const target = prev.find((item) => item.id === id);
-      if (target) URL.revokeObjectURL(target.url);
-      return prev.filter((item) => item.id !== id);
-    });
-  };
-
   const removePhoto = (id) => {
     setPhotoFiles((prev) => {
       const target = prev.find((item) => item.id === id);
@@ -1290,25 +1089,6 @@ export function VideosTab({ onRewardPoints, onExit }) {
 
       let drawFrame;
       let totalMs;
-
-      if (createMode === "mix") {
-        if (!mixAssets.length) {
-          showToast("Ajoute au moins une photo ou une vidéo.", "error");
-          return;
-        }
-        const rendered = await renderMixedToFile({
-          assets: mixAssets,
-          overlayText: textContent,
-          audioUrl: wantSound ? selectedSound.audio_url : null,
-          audioCtx,
-          onProgress: setGenerateProgress,
-        });
-        handleFileSelected(rendered.file);
-        setGenerated(true);
-        setBakedAudio(wantSound);
-        setGeneratedSeconds(Math.round(rendered.totalMs / 1000));
-        return;
-      }
 
       if (createMode === "photo") {
         if (!photoFiles.length) {
@@ -1363,9 +1143,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
     stopSoundPreview();
     setMuteOriginal(false);
     photoFiles.forEach((item) => URL.revokeObjectURL(item.url));
-    mixAssets.forEach((item) => URL.revokeObjectURL(item.url));
     setPhotoFiles([]);
-    setMixAssets([]);
     setTextContent("");
     setGenerated(false);
     setBakedAudio(false);
@@ -1381,10 +1159,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
 
   const handleFileSelected = (file) => {
     if (!file) return;
-    const isVideo =
-      (file.type && file.type.startsWith("video/")) ||
-      /\.(mp4|webm|mov|m4v|mkv|3gp|avi)$/i.test(file.name || "");
-    if (!isVideo) {
+    if (!file.type.startsWith("video/")) {
       showToast("Sélectionne un fichier vidéo.", "error");
       return;
     }
@@ -1394,16 +1169,6 @@ export function VideosTab({ onRewardPoints, onExit }) {
     setBakedAudio(false);
     setSelectedFile(file);
     setPreviewUrl(URL.createObjectURL(file));
-  };
-
-  const loadChallenges = async () => {
-    const { data } = await supabase
-      .from("video_challenges")
-      .select("id,name,hashtag")
-      .eq("status", "active")
-      .order("created_at", { ascending: false })
-      .limit(20);
-    setChallenges(data || []);
   };
 
   const handleUpload = async () => {
@@ -1421,11 +1186,22 @@ export function VideosTab({ onRewardPoints, onExit }) {
     setUploadProgress(10);
 
     try {
-      const result = await uploadLargeVideo(selectedFile, {
-        user_id: user.id,
-        onProgress: (progress) => setUploadProgress(Math.max(10, Math.min(65, 10 + Math.round(progress * 0.55)))),
-      });
+      const ext = (selectedFile.name.split(".").pop() || "mp4").toLowerCase();
+      const path = `${user.id}/${crypto.randomUUID()}.${ext}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from("videos")
+        .upload(path, selectedFile, {
+          cacheControl: "3600",
+          upsert: false,
+        });
+
+      if (uploadError) throw uploadError;
       setUploadProgress(65);
+
+      const { data: publicData } = supabase.storage
+        .from("videos")
+        .getPublicUrl(path);
 
       const duration = generated
         ? formatTime(generatedSeconds)
@@ -1436,12 +1212,21 @@ export function VideosTab({ onRewardPoints, onExit }) {
       if (selectedSound?.audio_url && !bakedAudio) {
         soundUrl = selectedSound.audio_url;
         if (selectedSound.file) {
-          const audioResult = await uploadExternalMedia(selectedSound.file, {
-            folder: "videos",
-            user_id: user.id,
-            maxBytes: 100 * 1024 * 1024,
-          });
-          soundUrl = audioResult.url;
+          const audioExt = (selectedSound.file.name.split(".").pop() || "mp3").toLowerCase();
+          const audioPath = `${user.id}/sounds/${crypto.randomUUID()}.${audioExt}`;
+          const { error: audioError } = await supabase.storage
+            .from("videos")
+            .upload(audioPath, selectedSound.file, {
+              cacheControl: "3600",
+              upsert: false,
+              contentType: selectedSound.file.type,
+            });
+          if (audioError) {
+            throw new Error(
+              `${audioError.message} — applique la migration 053_video_sounds.sql (audio autorisé dans le bucket).`
+            );
+          }
+          soundUrl = supabase.storage.from("videos").getPublicUrl(audioPath).data.publicUrl;
         }
       }
       setUploadProgress(80);
@@ -1449,7 +1234,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
       const { data: created, error: dbError, degraded } = await insertVideo(
         {
           author_id: user.id,
-          video_url: result.url,
+          video_url: publicData.publicUrl,
           title: uploadTitle.trim() || "Vidéo BAARO",
           description: uploadDescription.trim() || null,
           duration,
@@ -1467,36 +1252,10 @@ export function VideosTab({ onRewardPoints, onExit }) {
 
       if (dbError) throw dbError;
 
-      if (created?.id && remixSource) {
-        const { error: remixError } = await supabase.rpc("create_video_remix", {
-          p_video_id: created.id,
-          p_source_video_id: remixSource.id,
-          p_mode: remixSource.mode,
-        });
-        if (remixError) {
-          showToast(
-            remixError.message === "REMIX_NOT_ALLOWED"
-              ? "L'auteur n'autorise pas ce remix."
-              : "Vidéo publiée, mais le lien de remix n'a pas été enregistré.",
-            "error"
-          );
-        }
-      }
-      if (created?.id && challengeId) {
-        const { error: challengeError } = await supabase.rpc("join_video_challenge", {
-          p_challenge_id: challengeId,
-          p_video_id: created.id,
-        });
-        if (challengeError) showToast("Vidéo publiée, mais l'inscription au défi a échoué.", "error");
-      }
-
       setUploadProgress(100);
       onRewardPoints?.("publish_video", "Vidéo publiée", created?.id);
       showPointsReward?.(25, "Vidéo publiée");
       showToast("Vidéo publiée avec succès 🎉", "success");
-      setRemixSource(null);
-      setNexusTools([]);
-      setChallengeId("");
       if (degraded && soundUrl) {
         showToast("Son non enregistré : applique la migration 053_video_sounds.sql.", "error");
       }
@@ -1557,13 +1316,6 @@ export function VideosTab({ onRewardPoints, onExit }) {
                 aria-label={muted ? "Activer le son" : "Couper le son"}
               >
                 {muted ? <VolumeX size={18} /> : <Volume2 size={18} />}
-              </button>
-              <button
-                onClick={() => setNextGenOpen(true)}
-                className="h-9 px-3 rounded-full bg-white/10 backdrop-blur-md flex items-center gap-1.5 text-[10px] font-black"
-                aria-label="Studio vidéo NextGen"
-              >
-                <Sparkles size={14} /> NextGen
               </button>
               <button
                 onClick={() => setShowUpload(true)}
@@ -1657,7 +1409,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
                   loop
                   muted={muted || !!video.mute_original}
                   data-mute-original={video.mute_original ? "1" : "0"}
-                  preload={shouldPrefetch() ? "metadata" : "none"}
+                  preload="metadata"
                   onPlay={(event) => {
                     setPlayingId(id);
                     playAudioFor(video.id, event.currentTarget);
@@ -1684,7 +1436,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
                     }}
                     src={sound.url}
                     loop
-                    preload={shouldPrefetch() ? "auto" : "none"}
+                    preload="auto"
                     muted={muted}
                   />
                 )}
@@ -1750,7 +1502,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
                           className="h-full w-full object-cover"
                         />
                       ) : (
-                        <img src={baaroLogo} alt="" className="h-full w-full object-cover" data-fallback="true" style={{display:"none"}} /><div className="h-full w-full flex items-center justify-center text-lg" style={{display:"none"}}>
+                        <div className="h-full w-full flex items-center justify-center text-lg">
                           {profile.flag || "🌍"}
                         </div>
                       )}
@@ -1783,7 +1535,10 @@ export function VideosTab({ onRewardPoints, onExit }) {
                   </button>
 
                   <div className="mt-2">
-                    <VideoTranslateControls mediaUrl={video.media_url || video.video_url} videoId={video.id} videoRef={getVideoRef(video.id)} />
+                    <VideoTranslateControls
+                      mediaUrl={video.media_url || video.video_url}
+                      videoId={video.id}
+                    />
                   </div>
                   <div className="mt-2 flex items-center gap-1.5 text-[11px] text-white/65 min-w-0">
                     <Music2 size={13} className="shrink-0" />
@@ -1838,21 +1593,6 @@ export function VideosTab({ onRewardPoints, onExit }) {
                     <Repeat2 size={21} />
                   </button>
 
-                  {video.author_id !== user?.id && (
-                    <button
-                      onClick={() => {
-                        setRemixSource({ id: video.id, mode: "remix", handle: profile.handle || "membre" });
-                        setShowUpload(true);
-                      }}
-                      className="h-11 w-11 rounded-full bg-white/10 backdrop-blur-md flex items-center justify-center"
-                      aria-label="Remixer"
-                    >
-                      <span className="text-lg">🔀</span>
-                    </button>
-                  )}
-
-                  {video.author_id !== user?.id && <TipButton recipientId={video.author_id} compact />}
-
                   <button
                     onClick={() => handleShare(video)}
                     className="h-11 w-11 rounded-full bg-white/10 backdrop-blur-md flex items-center justify-center"
@@ -1901,12 +1641,6 @@ export function VideosTab({ onRewardPoints, onExit }) {
                   </span>
 
                   <div className="flex items-center gap-2">
-                    {video.author_id === user?.id && (
-                      <>
-                        <button type="button" onClick={() => setEngagement({ type: "videoViews", id: video.id })} className="text-[9px] text-white/70 hover:text-white">👁 noms</button>
-                        <button type="button" onClick={() => setEngagement({ type: "videoLikes", id: video.id })} className="text-[9px] text-white/70 hover:text-white">❤️ noms</button>
-                      </>
-                    )}
                     <span>{formatCount(video.views)} vues</span>
                     <button
                       onClick={() => toggleMute()}
@@ -1921,8 +1655,6 @@ export function VideosTab({ onRewardPoints, onExit }) {
           })
         )}
       </div>
-
-      {engagement && <EngagementList type={engagement.type} targetId={engagement.id} ownerId={user?.id} viewerId={user?.id} onClose={() => setEngagement(null)} />}
 
       {showComments && (
         <div className="fixed inset-0 z-[70] bg-black/70 backdrop-blur-sm flex items-end justify-center">
@@ -1995,17 +1727,6 @@ export function VideosTab({ onRewardPoints, onExit }) {
           </div>
         </div>
       )}
-
-      <VideoNextGenStudio
-        open={nextGenOpen}
-        onClose={() => setNextGenOpen(false)}
-        onCreate={(tools) => {
-          setNexusTools(Array.isArray(tools) ? tools : []);
-          if (Array.isArray(tools) && tools.includes("challenge")) loadChallenges();
-          setNextGenOpen(false);
-          setShowUpload(true);
-        }}
-      />
 
       {showUpload && (
         <div className="fixed inset-0 z-[80] bg-black/80 backdrop-blur-md flex items-end sm:items-center justify-center p-0 sm:p-4">
@@ -2093,9 +1814,6 @@ export function VideosTab({ onRewardPoints, onExit }) {
                 onClick={() => {
                   if (!uploading) {
                     closeCamera();
-                    setRemixSource(null);
-                    setNexusTools([]);
-                    setChallengeId("");
                     setShowUpload(false);
                     resetUpload();
                   }
@@ -2109,12 +1827,11 @@ export function VideosTab({ onRewardPoints, onExit }) {
             <div className="p-4 space-y-4">
               {!selectedFile ? (
                 <div className="space-y-3">
-                  <div className="grid grid-cols-4 gap-1 p-1 rounded-2xl bg-white/5">
+                  <div className="grid grid-cols-3 gap-1 p-1 rounded-2xl bg-white/5">
                     {[
                       ["video", "🎬 Vidéo"],
                       ["photo", "🖼️ Photos"],
                       ["text", "✍️ Texte"],
-                      ["mix", "🎞️ Mix"],
                     ].map(([key, label]) => (
                       <button
                         key={key}
@@ -2154,77 +1871,6 @@ export function VideosTab({ onRewardPoints, onExit }) {
                     Choisir une vidéo dans la galerie
                   </button>
                 </div>
-                  )}
-
-                  {createMode === "mix" && (
-                    <div className="space-y-3">
-                      <input
-                        ref={mixInputRef}
-                        type="file"
-                        accept="image/*,video/*"
-                        multiple
-                        className="hidden"
-                        onChange={(event) => {
-                          handleMixSelected(event.target.files);
-                          event.target.value = "";
-                        }}
-                      />
-                      <button
-                        onClick={() => mixInputRef.current?.click()}
-                        className="w-full rounded-2xl border border-dashed border-white/20 bg-white/[0.04] py-8 flex flex-col items-center gap-2"
-                      >
-                        <Plus size={22} />
-                        <span className="text-sm font-bold">Ajouter photos + vidéos ({mixAssets.length}/{MAX_PHOTOS})</span>
-                        <span className="text-[10px] text-white/40">Une seule photo, plusieurs photos, une vidéo ou un mélange.</span>
-                      </button>
-
-                      {mixAssets.length > 0 && (
-                        <div className="space-y-2">
-                          {mixAssets.map((item, index) => (
-                            <div key={item.id} className="flex items-center gap-3 rounded-2xl bg-white/5 border border-white/10 p-2">
-                              <div className="h-14 w-14 rounded-xl overflow-hidden bg-black shrink-0">
-                                {item.type === "image" ? (
-                                  <img src={item.url} alt="" className="h-full w-full object-cover" />
-                                ) : (
-                                  <video src={item.url} muted playsInline preload="metadata" className="h-full w-full object-cover" />
-                                )}
-                              </div>
-                              <div className="min-w-0 flex-1">
-                                <div className="text-xs font-black">{index + 1}. {item.type === "image" ? "Photo" : "Vidéo"}</div>
-                                <div className="text-[10px] text-white/40">{item.type === "image" ? `${photoSeconds}s` : formatTime(item.duration)}</div>
-                              </div>
-                              <button onClick={() => removeMixAsset(item.id)} className="h-8 w-8 rounded-full bg-white/10 flex items-center justify-center"><X size={14} /></button>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-
-                      <textarea
-                        value={textContent}
-                        onChange={(event) => setTextContent(event.target.value)}
-                        placeholder="Texte à afficher sur toute la création (facultatif)…"
-                        rows={2}
-                        maxLength={280}
-                        className="w-full rounded-2xl bg-white/10 px-4 py-3 outline-none text-sm resize-none"
-                      />
-
-                      <div className="flex items-center justify-between rounded-2xl bg-white/10 px-4 py-3 text-sm">
-                        <span>Durée de chaque photo</span>
-                        <select value={photoSeconds} onChange={(event) => setPhotoSeconds(Number(event.target.value))} className="bg-transparent outline-none font-bold">
-                          {[2, 3, 5].map((n) => <option key={n} value={n} className="text-black">{n} s</option>)}
-                        </select>
-                      </div>
-
-                      <button
-                        onClick={handleGenerate}
-                        disabled={generating || !mixAssets.length}
-                        className="w-full py-3.5 rounded-2xl font-black disabled:opacity-40"
-                        style={{ background: COLORS.gold, color: "#000" }}
-                      >
-                        {generating ? `Création… ${Math.round(generateProgress * 100)}%` : "Créer le montage"}
-                      </button>
-                      <p className="text-[10px] text-white/40 text-center">Les photos et vidéos sont enchaînées dans l'ordre choisi. Le texte et la musique sont ajoutés au montage.</p>
-                    </div>
                   )}
 
                   {createMode === "photo" && (
@@ -2457,13 +2103,6 @@ export function VideosTab({ onRewardPoints, onExit }) {
                 }}
               />
 
-              {selectedSound?.license_name && !showSoundPicker && (
-                <div className="rounded-xl bg-emerald-500/10 border border-emerald-400/20 px-3 py-2 text-[11px] text-emerald-200">
-                  {selectedSound.license_name}{selectedSound.attribution_required ? " • attribution requise" : " • utilisation autorisée"}
-                  {selectedSound.rights_holder ? ` • ${selectedSound.rights_holder}` : ""}
-                </div>
-              )}
-
               {showSoundPicker && (
                 <div className="rounded-2xl bg-white/5 border border-white/10 overflow-hidden">
                   <button
@@ -2510,9 +2149,6 @@ export function VideosTab({ onRewardPoints, onExit }) {
                             <div className="text-[10px] text-white/40 truncate">
                               {item.artist || "Audio BAARO"}
                             </div>
-                            <div className="text-[10px] text-emerald-300/80 truncate">
-                              {item.license_name || "Licence BAARO"}{item.attribution_required ? " • attribution requise" : ""}
-                            </div>
                           </button>
                         </div>
                       );
@@ -2531,61 +2167,6 @@ export function VideosTab({ onRewardPoints, onExit }) {
                     className="h-5 w-5"
                   />
                 </label>
-              )}
-
-              {(remixSource || nexusTools.length > 0) && (
-                <div className="rounded-2xl border border-yellow-400/30 bg-yellow-400/[0.06] p-3 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-black flex items-center gap-1.5">
-                      <Sparkles size={13} /> Options Nexus
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setRemixSource(null);
-                        setNexusTools([]);
-                        setChallengeId("");
-                      }}
-                      className="text-[10px] text-white/50"
-                    >
-                      Effacer
-                    </button>
-                  </div>
-
-                  {remixSource ? (
-                    <div className="flex items-center justify-between gap-2 text-xs">
-                      <span className="truncate">Basé sur @{remixSource.handle}</span>
-                      <select
-                        value={remixSource.mode}
-                        onChange={(event) => setRemixSource((prev) => ({ ...prev, mode: event.target.value }))}
-                        className="bg-transparent outline-none font-bold"
-                      >
-                        <option value="remix" className="text-black">Remix</option>
-                        <option value="duet" className="text-black">Duo</option>
-                        <option value="react" className="text-black">Réaction</option>
-                        <option value="reply" className="text-black">Réponse</option>
-                      </select>
-                    </div>
-                  ) : (nexusTools.includes("remix") || nexusTools.includes("duet")) && (
-                    <p className="text-[11px] text-white/50">
-                      Pour remixer ou faire un duo, ferme cet écran, ouvre la vidéo d'un autre créateur et touche 🔀.
-                    </p>
-                  )}
-
-                  {nexusTools.includes("challenge") && (
-                    <select
-                      value={challengeId}
-                      onChange={(event) => setChallengeId(event.target.value)}
-                      className="w-full rounded-xl bg-white/10 px-3 py-2 text-xs outline-none"
-                    >
-                      <option value="" className="text-black">Participer à un défi…</option>
-                      {challenges.length === 0 && <option disabled className="text-black">Aucun défi actif</option>}
-                      {challenges.map((c) => (
-                        <option key={c.id} value={c.id} className="text-black">#{c.hashtag} — {c.name}</option>
-                      ))}
-                    </select>
-                  )}
-                </div>
               )}
 
               {uploading && (
