@@ -774,13 +774,15 @@ export function VideosTab({ onRewardPoints, onExit }) {
       return;
     }
 
+    const cleanHandle = video.profiles?.handle?.replace(/^@/, "") || "membre";
+
     try {
       const { data, error } = await insertVideo(
         {
           author_id: user.id,
           video_url: video.video_url,
           title: `🔁 ${video.title || "Vidéo BAARO"}`,
-          description: `Repost de @${video.profiles?.handle || "membre"}`,
+          description: `Repost de @${cleanHandle}`,
           duration: video.duration || "00:00",
           views: 0,
           likes: 0,
@@ -1392,6 +1394,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
             const captionOpen = expandedCaption === video.id;
             const caption = [video.title, video.description].filter(Boolean).join(" · ");
             const sound = getVideoSound(video);
+            const handleClean = profile.handle?.replace(/^@/, "") || "membre";
 
             return (
               <article
@@ -1503,14 +1506,16 @@ export function VideosTab({ onRewardPoints, onExit }) {
                           className="h-full w-full object-cover"
                         />
                       ) : (
-                        <div className="h-full w-full flex items-center justify-center text-lg">
-                          {profile.flag || "🌍"}
-                        </div>
+                        <img
+                          src={baaroLogo}
+                          alt="BAARO"
+                          className="h-full w-full object-cover"
+                        />
                       )}
                     </div>
                     <div className="min-w-0">
                       <div className="font-black text-sm truncate">
-                        @{profile.handle || "membre"} {profile.flag || ""}
+                        @{handleClean} {profile.flag || ""}
                       </div>
                       <div className="text-[10px] text-white/50 truncate">
                         {profile.display_name || "Membre BAARO"}
@@ -1681,29 +1686,34 @@ export function VideosTab({ onRewardPoints, onExit }) {
                   Aucun commentaire. Sois le premier !
                 </div>
               ) : (
-                (comments[showComments] || []).map((comment) => (
-                  <div key={comment.id} className="flex gap-2">
-                    <div className="h-8 w-8 rounded-full bg-zinc-800 overflow-hidden shrink-0">
-                      {comment.profiles?.avatar_url ? (
-                        <img
-                          src={comment.profiles.avatar_url}
-                          alt=""
-                          className="h-full w-full object-cover"
-                        />
-                      ) : (
-                        <div className="h-full w-full flex items-center justify-center text-xs">
-                          {comment.profiles?.flag || "🌍"}
-                        </div>
-                      )}
-                    </div>
-                    <div>
-                      <div className="text-xs font-black">
-                        @{comment.profiles?.handle || "membre"}
+                (comments[showComments] || []).map((comment) => {
+                  const commentHandle = comment.profiles?.handle?.replace(/^@/, "") || "membre";
+                  return (
+                    <div key={comment.id} className="flex gap-2">
+                      <div className="h-8 w-8 rounded-full bg-zinc-800 overflow-hidden shrink-0">
+                        {comment.profiles?.avatar_url ? (
+                          <img
+                            src={comment.profiles.avatar_url}
+                            alt=""
+                            className="h-full w-full object-cover"
+                          />
+                        ) : (
+                          <img
+                            src={baaroLogo}
+                            alt="BAARO"
+                            className="h-full w-full object-cover"
+                          />
+                        )}
                       </div>
-                      <p className="text-sm text-white/75">{comment.content}</p>
+                      <div>
+                        <div className="text-xs font-black">
+                          @{commentHandle}
+                        </div>
+                        <p className="text-sm text-white/75">{comment.content}</p>
+                      </div>
                     </div>
-                  </div>
-                ))
+                  );
+                })
               )}
             </div>
 
@@ -1847,31 +1857,31 @@ export function VideosTab({ onRewardPoints, onExit }) {
                   </div>
 
                   {createMode === "video" && (
-                <div className="space-y-3">
-                  <button
-                    onClick={openCamera}
-                    className="w-full aspect-[9/14] max-h-[52dvh] rounded-3xl border border-white/10 bg-white/[0.04] flex flex-col items-center justify-center active:scale-[0.99]"
-                    style={{ boxShadow: `inset 0 0 0 1px ${COLORS.gold}33` }}
-                  >
-                    <div
-                      className="h-20 w-20 rounded-full flex items-center justify-center mb-4"
-                      style={{ background: COLORS.gold, color: "#000" }}
-                    >
-                      <span className="text-3xl">📹</span>
+                    <div className="space-y-3">
+                      <button
+                        onClick={openCamera}
+                        className="w-full aspect-[9/14] max-h-[52dvh] rounded-3xl border border-white/10 bg-white/[0.04] flex flex-col items-center justify-center active:scale-[0.99]"
+                        style={{ boxShadow: `inset 0 0 0 1px ${COLORS.gold}33` }}
+                      >
+                        <div
+                          className="h-20 w-20 rounded-full flex items-center justify-center mb-4"
+                          style={{ background: COLORS.gold, color: "#000" }}
+                        >
+                          <span className="text-3xl">📹</span>
+                        </div>
+                        <p className="font-black text-lg">Filmer avec la caméra</p>
+                        <p className="text-xs text-white/40 mt-1 px-6 text-center">
+                          Caméra + micro · aucune limite de durée imposée par BAARO
+                        </p>
+                      </button>
+                      <button
+                        onClick={() => fileInputRef.current?.click()}
+                        className="w-full rounded-2xl border border-white/10 bg-white/[0.05] px-4 py-3 flex items-center justify-center gap-2 text-sm font-bold"
+                      >
+                        <Plus size={18} />
+                        Choisir une vidéo dans la galerie
+                      </button>
                     </div>
-                    <p className="font-black text-lg">Filmer avec la caméra</p>
-                    <p className="text-xs text-white/40 mt-1 px-6 text-center">
-                      Caméra + micro · aucune limite de durée imposée par BAARO
-                    </p>
-                  </button>
-                  <button
-                    onClick={() => fileInputRef.current?.click()}
-                    className="w-full rounded-2xl border border-white/10 bg-white/[0.05] px-4 py-3 flex items-center justify-center gap-2 text-sm font-bold"
-                  >
-                    <Plus size={18} />
-                    Choisir une vidéo dans la galerie
-                  </button>
-                </div>
                   )}
 
                   {createMode === "photo" && (
