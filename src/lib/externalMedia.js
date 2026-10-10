@@ -4,7 +4,6 @@ import { supabase } from "../supabaseClient.js";
  * Compatible avec les 2 signatures :
  *  uploadExternalMedia(file, "posts")
  *  uploadExternalMedia(file, { folder: "theme", maxBytes: ... })
- * Sans header Content-Type pour éviter le preflight CORS
  */
 export async function uploadExternalMedia(file, folderOrOptions = "posts") {
   let folder = "posts";
@@ -20,21 +19,31 @@ export async function uploadExternalMedia(file, folderOrOptions = "posts") {
 
   const { data: { session } } = await supabase.auth.getSession();
   const token = session?.access_token;
+
+  // 1. Étape "prepare" AVEC le token d'authentification
   const prepRes = await fetch("/api/media", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { 
+      "Content-Type": "application/json", 
+      ...(token ? { Authorization: `Bearer ${token}` } : {}) 
+    },
     body: JSON.stringify({ action: "prepare", folder, extension: ext, size, contentType, fileName }),
   });
   const prep = await prepRes.json();
   if (!prep.ok) throw new Error(prep.error || "prepare failed");
   const { uploadUrl, path, publicUrl } = prep;
 
+  // 2. Envoi direct sur R2 (pas d'en-tête d'authentification ici, l'URL signée suffit)
   const putRes = await fetch(uploadUrl, { method: "PUT", body: file });
   if (!putRes.ok) throw new Error(`PUT R2 failed ${putRes.status}`);
 
+  // 3. Étape "finalize" AVEC le token d'authentification
   const finRes = await fetch("/api/media", {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    headers: { 
+      "Content-Type": "application/json", 
+      ...(token ? { Authorization: `Bearer ${token}` } : {}) 
+    },
     body: JSON.stringify({ action: "finalize", folder, path, publicUrl, size, contentType, fileName }),
   });
   const fin = await finRes.json();
