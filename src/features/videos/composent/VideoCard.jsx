@@ -51,6 +51,7 @@ export default function VideoCard({
     handleShare,
     handleDelete,
     shareId,
+    onUseSound,
   } = actions;
 
   const [captionOpen, setCaptionOpen] = useState(false);
@@ -211,13 +212,24 @@ export default function VideoCard({
             videoId={video.id}
           />
         </div>
-        <div className="mt-2 flex items-center gap-1.5 text-[11px] text-white/65 min-w-0">
-          <Music2 size={13} className="shrink-0" />
-          <span className="truncate">
-            {sound
-              ? `${sound.title}${sound.artist ? ` · ${sound.artist}` : ""}`
-              : "Son original"}
-          </span>
+        <div className="mt-2 flex items-center gap-2 min-w-0">
+          <div className="flex items-center gap-1.5 text-[11px] text-white/65 min-w-0 flex-1">
+            <Music2 size={13} className="shrink-0" />
+            <span className="truncate">
+              {sound
+                ? `${sound.title}${sound.artist ? ` · ${sound.artist}` : ""}`
+                : "Son original"}
+            </span>
+          </div>
+          <button
+            onClick={() => onUseSound?.(video, sound)}
+            className="shrink-0 flex items-center gap-1 rounded-full px-3 py-1.5 text-[11px] font-black shadow-lg active:scale-95"
+            style={{ background: COLORS.gold, color: "#000" }}
+            aria-label="Utiliser ce son pour créer une vidéo"
+          >
+            <Music2 size={12} />
+            Utiliser ce son
+          </button>
         </div>
       </div>
 
