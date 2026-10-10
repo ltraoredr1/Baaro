@@ -1,5 +1,6 @@
 import { Volume2, VolumeX, Bell, Play } from "lucide-react";
 import { useNotificationSound } from "../../hooks/useNotificationSound.js";
+import SwitchButton from "./SwitchButton.jsx";
 
 export default function NotificationSoundSettings({ C }) {
   const {
@@ -34,20 +35,7 @@ export default function NotificationSoundSettings({ C }) {
         <span className="text-sm" style={{ color: C.ivory }}>
           Activer les sons
         </span>
-        <button
-          type="button"
-          onClick={() => setEnabled(!enabled)}
-          className="relative w-12 h-6 rounded-full transition-colors"
-          style={{ background: enabled ? C.teal : C.border }}
-        >
-          <div
-            className="absolute top-0.5 w-5 h-5 rounded-full transition-transform"
-            style={{
-              background: "#fff",
-              transform: enabled ? "translateX(26px)" : "translateX(2px)",
-            }}
-          />
-        </button>
+        <SwitchButton checked={enabled} onChange={setEnabled} C={C} />
       </div>
 
       <div className="flex items-center justify-between">
@@ -62,21 +50,13 @@ export default function NotificationSoundSettings({ C }) {
           )}
           Mode silencieux
         </span>
-        <button
-          type="button"
-          onClick={() => setMuted(!muted)}
+        <SwitchButton
+          checked={muted}
+          onChange={setMuted}
+          C={C}
+          onColor="#ef4444"
           disabled={!enabled}
-          className="relative w-12 h-6 rounded-full transition-colors disabled:opacity-40"
-          style={{ background: muted ? "#ef4444" : C.border }}
-        >
-          <div
-            className="absolute top-0.5 w-5 h-5 rounded-full transition-transform"
-            style={{
-              background: "#fff",
-              transform: muted ? "translateX(26px)" : "translateX(2px)",
-            }}
-          />
-        </button>
+        />
       </div>
 
       <div className="space-y-2">

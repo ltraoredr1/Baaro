@@ -5,52 +5,14 @@ import {
   saveNotificationPreferences,
   DEFAULT_NOTIFICATION_PREFERENCES,
 } from "../../lib/notificationPreferences.js";
-
-// Le titre de la section est déjà affiché par l'écran Réglages :
-// ce panneau n'affiche donc que les options.
-const TEXTS = {
-  fr: {
-    loading: "Chargement des préférences…",
-    saved: "Enregistré",
-    error: "Erreur",
-    labels: {
-      push_enabled: "Notifications push",
-      messages: "Messages",
-      social: "Social (follows, likes)",
-      live: "Lives & débats",
-      marketing: "Marketing",
-    },
-  },
-  en: {
-    loading: "Loading preferences…",
-    saved: "Saved",
-    error: "Error",
-    labels: {
-      push_enabled: "Push notifications",
-      messages: "Messages",
-      social: "Social (follows, likes)",
-      live: "Lives & debates",
-      marketing: "Marketing",
-    },
-  },
-};
-
-const KEYS = Object.keys(TEXTS.fr.labels);
-
-function currentTexts() {
-  try {
-    const code = (document.documentElement.lang || "fr").split("-")[0];
-    return TEXTS[code] || TEXTS.fr;
-  } catch {
-    return TEXTS.fr;
-  }
-}
+import { KEYS, currentTexts } from "./notificationPrefsTexts.js";
 
 export function NotificationPrefsPanel() {
   const [prefs, setPrefs] = useState(DEFAULT_NOTIFICATION_PREFERENCES);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState("");
+  const [msgWarn, setMsgWarn] = useState(false);
   const tx = currentTexts();
 
   useEffect(() => {
@@ -73,12 +35,17 @@ export function NotificationPrefsPanel() {
     setPrefs(next);
     setSaving(true);
     setMsg("");
+    setMsgWarn(false);
     const res = await saveNotificationPreferences(next);
     setSaving(false);
     if (res.ok) {
-      setMsg(tx.saved);
+      // Échec serveur : la valeur est gardée en local, mais on le dit clairement
+      const localOnly = !!res.local && !!res.error;
+      setMsgWarn(localOnly);
+      setMsg(localOnly ? tx.savedLocal : tx.saved);
     } else {
       setPrefs(previous);
+      setMsgWarn(true);
       setMsg(res.error || tx.error);
     }
   };
@@ -109,7 +76,10 @@ export function NotificationPrefsPanel() {
         </label>
       ))}
       {msg ? (
-        <p className="text-xs" style={{ color: COLORS.muted }}>
+        <p
+          className="text-xs"
+          style={{ color: msgWarn ? COLORS.gold : COLORS.muted }}
+        >
           {msg}
         </p>
       ) : null}
