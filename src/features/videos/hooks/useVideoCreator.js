@@ -1,3 +1,4 @@
+import { uploadExternalMedia } from "../../../lib/externalMedia.js";
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "../../../supabaseClient.js";
 import { useToast } from "../../../components/ToastContext.jsx";
