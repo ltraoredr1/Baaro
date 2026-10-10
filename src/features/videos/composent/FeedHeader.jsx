@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Plus, Volume2, VolumeX, X } from "lucide-react";
+import { Plus, Sparkles, Volume2, VolumeX, X } from "lucide-react";
 import { COLORS } from "../../../theme.js";
 import { baaroLogo } from "../constants.js";
 
@@ -8,6 +8,7 @@ export default function FeedHeader({
   muted,
   onToggleMute,
   onOpenUpload,
+  onOpenStudio,
   mode,
   setMode,
 }) {
@@ -41,6 +42,16 @@ export default function FeedHeader({
         </div>
 
         <div className="flex items-center gap-2">
+          {onOpenStudio && (
+            <button
+              onClick={onOpenStudio}
+              className="h-9 w-9 rounded-full bg-white/10 backdrop-blur-md flex items-center justify-center"
+              style={{ color: COLORS.gold }}
+              aria-label="Studio vidéo NextGen"
+            >
+              <Sparkles size={18} />
+            </button>
+          )}
           <button
             onClick={onToggleMute}
             className="h-9 w-9 rounded-full bg-white/10 backdrop-blur-md flex items-center justify-center"
