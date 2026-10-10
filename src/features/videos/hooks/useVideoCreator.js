@@ -5,8 +5,7 @@ import { useToast } from "../../../components/ToastContext.jsx";
 import { MAX_PHOTOS } from "../constants.js";
 import { formatTime } from "../utils/format.js";
 import { insertVideo } from "../utils/videosApi.js";
-import { uploadExternalMedia } from "../../../utils/uploadExternalMedia.js";
-import {
+import { 
   loadImage,
   makePhotoDrawer,
   makeTextDrawer,
