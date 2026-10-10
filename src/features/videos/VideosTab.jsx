@@ -1,3 +1,4 @@
+import baaroLogo from "../../assets/baaro-logo.png";
 import { VideoTranslateControls } from "../../components/VideoTranslateControls.jsx";
 import VideoNextGenStudio from "./VideoNextGenStudio.jsx";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -1749,7 +1750,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
                           className="h-full w-full object-cover"
                         />
                       ) : (
-                        <div className="h-full w-full flex items-center justify-center text-lg">
+                        <img src={baaroLogo} alt="" className="h-full w-full object-cover" data-fallback="true" style={{display:"none"}} /><div className="h-full w-full flex items-center justify-center text-lg" style={{display:"none"}}>
                           {profile.flag || "🌍"}
                         </div>
                       )}

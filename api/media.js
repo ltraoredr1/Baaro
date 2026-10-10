@@ -123,7 +123,6 @@ export default async function handler(req, res) {
     const command = new PutObjectCommand({
       Bucket: r2.bucket,
       Key: key,
-      ContentType: String(body.contentType || "application/octet-stream").slice(0, 150),
       Metadata: { "baaro-user-id": user.id },
     });
     const uploadUrl = await getSignedUrl(r2.client, command, { expiresIn: 900 });

@@ -55,9 +55,7 @@ export async function uploadExternalMedia(file, {
     apiUrl("/api/media"),
     {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
+      `,
       },
       body: JSON.stringify({
         action: "prepare",
@@ -85,9 +83,6 @@ export async function uploadExternalMedia(file, {
     prepared.uploadUrl,
     {
       method: "PUT",
-      headers: {
-        "Content-Type": file.type || "application/octet-stream",
-      },
       body: file,
     },
     "Probablement le CORS du bucket R2 (autoriser PUT depuis le site) ou un blocage réseau."
@@ -108,9 +103,7 @@ export async function uploadExternalMedia(file, {
     apiUrl("/api/media"),
     {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
+      `,
       },
       body: JSON.stringify({
         action: "finalize",
