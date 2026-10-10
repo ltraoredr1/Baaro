@@ -93,15 +93,27 @@ export default async function handler(req, res) {
         return res.status(404).json({ ok: false, error: "Fichier introuvable : envoi non terminé." });
       }
 
-      const { data, error } = await admin.from("media_assets").upsert({
+      const row = {
         owner_id: user.id, provider: "cloudflare-r2", bucket: r2.bucket, folder, object_key: objectKey,
-        public_url: expectedUrl, mime_type: mime, byte_size: realSize, original_name: fileName, status: "ready", updated_at: new Date().toISOString()
-      }, { onConflict: "bucket,object_key" }).select("id,owner_id,provider,bucket,folder,object_key,public_url,mime_type,byte_size,original_name,status,created_at,updated_at").single();
+        public_url: expectedUrl, mime_type: mime, byte_size: realSize, original_name: fileName,
+        status: "ready", updated_at: new Date().toISOString(),
+      };
+      const ASSET_COLUMNS = "id,owner_id,provider,bucket,folder,object_key,public_url,mime_type,byte_size,original_name,status,created_at,updated_at";
+      // insert (et non upsert) : ne dépend d'aucun index unique (bucket, object_key).
+      // Si finalize est rejoué et qu'une contrainte unique existe (23505), on relit la ligne.
+      let { data, error } = await admin.from("media_assets").insert(row).select(ASSET_COLUMNS).single();
+      if (error && error.code === "23505") {
+        const existing = await admin.from("media_assets").select(ASSET_COLUMNS)
+          .eq("bucket", r2.bucket).eq("object_key", objectKey).eq("owner_id", user.id).maybeSingle();
+        if (existing.error || !existing.data) throw error;
+        data = existing.data;
+        error = null;
+      }
       if (error) throw error;
       return res.status(200).json({ ok: true, asset: data });
     } catch (e) {
       console.error("[media:finalize]", e);
-      return res.status(500).json({ ok: false, error: "Impossible d'enregistrer les métadonnées média" });
+      return res.status(500).json({ ok: false, error: "Impossible d'enregistrer les métadonnées média", code: e?.code || null });
     }
   }
 
