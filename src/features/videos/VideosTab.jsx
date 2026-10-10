@@ -277,6 +277,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
+  const [logoFailed, setLogoFailed] = useState(false);
   const [mode, setMode] = useState("forYou");
 
   const [playingId, setPlayingId] = useState(null);
@@ -1305,6 +1306,14 @@ export function VideosTab({ onRewardPoints, onExit }) {
                 >
                   <X size={18} />
                 </button>
+              )}
+              {!logoFailed && (
+                <img
+                  src={baaroLogo}
+                  alt="BAARO"
+                  className="h-9 w-9 rounded-full object-cover border border-white/20 bg-zinc-900 shrink-0"
+                  onError={() => setLogoFailed(true)}
+                />
               )}
               <div>
                 <h1 className="text-base font-black tracking-tight">BAARO</h1>
