@@ -1,9 +1,9 @@
 import { useState } from "react";
-import CommentsSheet from "./components/CommentsSheet.jsx";
-import FeedHeader from "./components/FeedHeader.jsx";
-import { FeedEmpty, FeedError, FeedLoading } from "./components/FeedStatus.jsx";
-import UploadModal from "./components/UploadModal.jsx";
-import VideoCard from "./components/VideoCard.jsx";
+import CommentsSheet from "./composent/CommentsSheet.jsx";
+import FeedHeader from "./composent/FeedHeader.jsx";
+import { FeedEmpty, FeedError, FeedLoading } from "./composent/FeedStatus.jsx";
+import UploadModal from "./composent/UploadModal.jsx";
+import VideoCard from "./composent/VideoCard.jsx";
 import { useCamera } from "./hooks/useCamera.js";
 import { useFeedPlayback } from "./hooks/useFeedPlayback.js";
 import { useSoundPicker } from "./hooks/useSoundPicker.js";
