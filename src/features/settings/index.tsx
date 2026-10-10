@@ -1305,8 +1305,7 @@ export default function SettingsTab({
     setCustomUploading(true);
     setMessage("");
     try {
-      const up = await uploadExternalMedia(file, {
-        folder: "theme",
+      const up = await uploadExternalMedia(file, "theme");
         maxBytes: MAX_CUSTOM_IMAGE_BYTES,
       });
       updateCustomTheme({ bgImage: up.url });
