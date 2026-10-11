@@ -8,6 +8,7 @@ import {
   Instagram,
   Linkedin,
   MessageCircle,
+  LucideIcon,
 } from "lucide-react";
 import { COLORS } from "../theme.js";
 
@@ -39,7 +40,7 @@ interface ProfileContactLinksViewProps {
   socials?: SocialItem[];
 }
 
-const PLATFORM_META: Record<string, { label: string; Icon: React.ComponentType<{ size?: number; style?: React.CSSProperties; "aria-hidden"?: boolean }> }> = {
+const PLATFORM_META: Record<string, { label: string; Icon: LucideIcon }> = {
   facebook: { label: "Facebook", Icon: Facebook },
   youtube: { label: "YouTube", Icon: Youtube },
   tiktok: { label: "TikTok", Icon: MessageCircle },
@@ -53,11 +54,6 @@ const PLATFORM_META: Record<string, { label: string; Icon: React.ComponentType<{
   other: { label: "Autre", Icon: Globe },
 };
 
-/**
- * Sécurité : seules les adresses http(s) sont autorisées.
- * Une adresse sans protocole reçoit https:// ; tout le reste (javascript:, data:…)
- * est rejeté et le lien n'est pas affiché.
- */
 function safeWebUrl(value?: string | null): string | null {
   const raw = String(value || "").trim();
   if (!raw) return null;
@@ -80,10 +76,6 @@ function mailHref(value?: string | null): string | null {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? `mailto:${email}` : null;
 }
 
-/**
- * Affichage public des contacts, liens et réseaux d'un profil.
- * Props alignées sur useProfile / ProfileModal.
- */
 export default function ProfileContactLinksView({
   contacts = { phones: [], emails: [] },
   links = [],
@@ -125,7 +117,6 @@ export default function ProfileContactLinksView({
         Coordonnées & réseaux
       </h3>
 
-      {/* Téléphones & e-mails */}
       {(phones.length > 0 || emails.length > 0) && (
         <div className="flex flex-col gap-2">
           {phones.map((x) => (
@@ -159,7 +150,6 @@ export default function ProfileContactLinksView({
         </div>
       )}
 
-      {/* Liens web */}
       {safeLinks.length > 0 && (
         <div className="flex flex-col gap-2">
           {safeLinks.map((x) => (
@@ -179,7 +169,6 @@ export default function ProfileContactLinksView({
         </div>
       )}
 
-      {/* Réseaux sociaux — grille compacte */}
       {safeSocials.length > 0 && (
         <div className="grid grid-cols-2 gap-2">
           {safeSocials.map((x) => {
