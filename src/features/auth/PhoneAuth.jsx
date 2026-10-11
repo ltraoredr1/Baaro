@@ -4,6 +4,7 @@ import 'react-phone-number-input/style.css';
 import { supabase } from '../../supabaseClient.js';
 
 const RESEND_DELAY = 30;
+const LEGAL_VERSION = '2026-10-01';
 
 function guessDefaultCountry() {
   try {
@@ -29,6 +30,20 @@ function phoneToEmail(phone) {
 function buildFallbackHandle(user_id) {
   const cleanId = String(user_id).replace(/-/g, '').slice(0, 12);
   return `@user_${cleanId}`;
+}
+
+// Enregistre l'acceptation des documents légaux sans jamais bloquer la connexion
+async function recordConsents() {
+  for (const type of ['terms', 'privacy', 'community']) {
+    try {
+      await supabase.rpc('record_legal_consent', {
+        p_document_type: type,
+        p_version: LEGAL_VERSION,
+      });
+    } catch (e) {
+      console.error('[BAARO] Consentement ' + type + ':', e);
+    }
+  }
 }
 
 export default function PhoneAuth({ onAuthSuccess }) {
@@ -270,9 +285,7 @@ export default function PhoneAuth({ onAuthSuccess }) {
 
       await ensureProfile(data.user);
       if (!isRecovery) {
-        await supabase.rpc("record_legal_consent", { p_document_type: "terms", p_version: "2026-10-01" });
-        await supabase.rpc("record_legal_consent", { p_document_type: "privacy", p_version: "2026-10-01" });
-        await supabase.rpc("record_legal_consent", { p_document_type: "community", p_version: "2026-10-01" });
+        await recordConsents();
       }
       if (onAuthSuccess) onAuthSuccess(data.user);
     } catch (err) {
@@ -338,11 +351,6 @@ export default function PhoneAuth({ onAuthSuccess }) {
           </div>
 
           {error && <p className="text-rose-400 text-xs">{error}</p>}
-
-          <label className="flex items-start gap-2 text-xs text-slate-400 mb-3">
-            <input type="checkbox" checked={legalAccepted} onChange={(e) => setLegalAccepted(e.target.checked)} className="mt-0.5" />
-            <span>J'accepte les <a href="/terms" className="underline text-amber-400">conditions d'utilisation</a>, la <a href="/privacy" className="underline text-amber-400">confidentialité</a> et les <a href="/community-guidelines" className="underline text-amber-400">règles de la communauté</a>.</span>
-          </label>
 
           <button
             type="submit"
@@ -425,11 +433,25 @@ export default function PhoneAuth({ onAuthSuccess }) {
             />
           </div>
 
+          <label className="flex items-start gap-2 text-xs text-slate-400">
+            <input
+              type="checkbox"
+              checked={legalAccepted}
+              onChange={(e) => setLegalAccepted(e.target.checked)}
+              className="mt-0.5 accent-amber-500"
+            />
+            <span>
+              J'accepte les <a href="/terms" className="underline text-amber-400">conditions d'utilisation</a>, la{' '}
+              <a href="/privacy" className="underline text-amber-400">confidentialité</a> et les{' '}
+              <a href="/community-guidelines" className="underline text-amber-400">règles de la communauté</a>.
+            </span>
+          </label>
+
           {error && <p className="text-rose-400 text-xs">{error}</p>}
 
           <button
             type="submit"
-            disabled={loading}
+            disabled={loading || !legalAccepted}
             className="w-full py-3 rounded-xl font-bold text-xs shadow-lg transition disabled:opacity-50 bg-amber-500 text-slate-950 hover:bg-amber-400"
           >
             {loading ? 'Envoi du code...' : "S'inscrire (Recevoir le code SMS)"}
