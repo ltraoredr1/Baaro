@@ -15,14 +15,6 @@ function isValidAuthUserId(value) {
 
 const REACTIONS = [
   { id: "like", label: "👍", title: "J’aime" },
-  { id: "love", label: "❤️", title: "J’adore" },
-  { id: "laugh", label: "😂", title: "Drôle" },
-  { id: "wow", label: "😮", title: "Waouh" },
-  { id: "sad", label: "😢", title: "Triste" },
-  { id: "angry", label: "😡", title: "En colère" },
-  { id: "support", label: "🤝", title: "Soutien" },
-];
-
 /* =========================================================
    POLL CARD (Optimisé avec memo)
    ========================================================= */
