@@ -1,6 +1,8 @@
-// src/lib/chatCalls.js
-// Appels vocaux / vidéo 1-1 via Daily.co
-
+/**
+ * src/lib/chatCalls.js — VERSION COMPLÈTE CORRIGÉE
+ * Appels vocaux / vidéo 1-1 via Daily.co
+ * + push notify_call via /api/live (app fermée)
+ */
 import DailyIframe from "@daily-co/daily-js";
 import { supabase } from "../supabaseClient.js";
 
@@ -13,11 +15,10 @@ async function authHeaders() {
 }
 
 async function callApi(body) {
-  // ✅ FORCER l'URL vers baaro-xi (URL principale de production)
-  const base = "https://baaro-xi.vercel.app";
-  const endpoint = `${base}/api/create-room`;
-  
-  console.log("📞 Appel API vers :", endpoint);
+  const base =
+    (typeof window !== "undefined" && window.location?.origin) ||
+    "https://baaro-xi.vercel.app";
+  const endpoint = `${base}/api/live`;
 
   try {
     const res = await fetch(endpoint, {
@@ -35,7 +36,9 @@ async function callApi(body) {
       data = await res.json();
     } else {
       const text = await res.text();
-      throw new Error(`Réponse non-JSON du serveur (${res.status}): ${text.substring(0, 150)}`);
+      throw new Error(
+        `Réponse non-JSON du serveur (${res.status}): ${text.substring(0, 150)}`
+      );
     }
 
     if (!res.ok) {
@@ -43,44 +46,42 @@ async function callApi(body) {
     }
     return data;
   } catch (error) {
-    console.error("🔴 ERREUR RÉSEAU APPEL (chatCalls.js):", error);
-    if (error.message.includes("Failed to fetch") || error.message.includes("NetworkError")) {
-      throw new Error(`Impossible de contacter le serveur (${endpoint}). Vérifiez votre connexion.`);
+    console.error("[chatCalls]", error);
+    if (
+      error.message?.includes("Failed to fetch") ||
+      error.message?.includes("NetworkError")
+    ) {
+      throw new Error(
+        `Impossible de contacter le serveur (${endpoint}). Vérifiez votre connexion.`
+      );
     }
     throw error;
   }
 }
 
-/**
- * 1. Créer la room Daily (Correspond à handleCreateRoom dans api/live.js)
- */
+/** 1. Créer la room Daily */
 export async function createCallRoom({ userName, mode = "video" }) {
   const inviteCode = `call-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-  
-  return callApi({ 
-    action: "create-room", // ✅ CORRESPOND À api/live.js
-    mode: mode,
-    inviteCode: inviteCode,
-    userName: userName || "BAARO" 
+  return callApi({
+    action: "create-room",
+    mode,
+    inviteCode,
+    userName: userName || "BAARO",
   });
 }
 
-/**
- * 2. Obtenir le token pour la room (Correspond à handleToken dans api/live.js)
- */
+/** 2. Token Daily */
 export async function getCallToken({ roomName, userName, isOwner = true }) {
   return callApi({
-    action: "token", // ✅ DÉCLENCHE handleToken dans api/live.js
+    action: "token",
     liveId: roomName,
-    roomName: roomName,
+    roomName,
     userName: userName || "BAARO",
-    isOwner: isOwner
+    isOwner,
   });
 }
 
-/**
- * 3. Démarrer l'appel côté UI
- */
+/** 3. Démarrer / rejoindre l'appel */
 export async function startCall({ roomUrl, token, video = false }) {
   if (callObject) {
     try {
@@ -101,13 +102,11 @@ export async function startCall({ roomUrl, token, video = false }) {
     callObject.setSubscribeToTracksAutomatically(true);
   } catch (_) {}
 
-  // Le token est OBLIGATOIRE ici pour que Daily.co accepte la connexion
   await callObject.join({ url: roomUrl, token });
   await callObject.setLocalAudio(true);
   if (video) {
     await callObject.setLocalVideo(true);
   }
-
   return callObject;
 }
 
@@ -126,8 +125,15 @@ export function enableCamera(enabled) {
 }
 
 export function subscribeCallEvents(handlers = {}) {
-  if (!callObject) return;
-  const { onParticipantJoined, onParticipantLeft, onTrackStarted, onTrackStopped, onError, onLeft } = handlers;
+  if (!callObject) return () => {};
+  const {
+    onParticipantJoined,
+    onParticipantLeft,
+    onTrackStarted,
+    onTrackStopped,
+    onError,
+    onLeft,
+  } = handlers;
 
   if (onParticipantJoined) callObject.on("participant-joined", onParticipantJoined);
   if (onParticipantLeft) callObject.on("participant-left", onParticipantLeft);
@@ -135,6 +141,17 @@ export function subscribeCallEvents(handlers = {}) {
   if (onTrackStopped) callObject.on("track-stopped", onTrackStopped);
   if (onError) callObject.on("error", onError);
   if (onLeft) callObject.on("left-meeting", onLeft);
+
+  return () => {
+    try {
+      if (onParticipantJoined) callObject?.off?.("participant-joined", onParticipantJoined);
+      if (onParticipantLeft) callObject?.off?.("participant-left", onParticipantLeft);
+      if (onTrackStarted) callObject?.off?.("track-started", onTrackStarted);
+      if (onTrackStopped) callObject?.off?.("track-stopped", onTrackStopped);
+      if (onError) callObject?.off?.("error", onError);
+      if (onLeft) callObject?.off?.("left-meeting", onLeft);
+    } catch (_) {}
+  };
 }
 
 export async function leaveCall() {
@@ -148,30 +165,79 @@ export async function leaveCall() {
   callObject = null;
 }
 
-export function getCallObject() { return callObject; }
-export function getParticipants() { return callObject?.participants() || {}; }
+export function getCallObject() {
+  return callObject;
+}
+
+export function getParticipants() {
+  return callObject?.participants() || {};
+}
 
 /**
- * 4. Enregistrement BDD
+ * Push destinataire (app fermée) via /api/live action notify_call
+ * Fire-and-forget — ne bloque pas l'UI.
  */
-export async function createCallRecord({ conversation_id, caller_id, callee_id, type, dailyRoomName }) {
+export async function notifyCalleeOfIncomingCall({
+  callee_id,
+  caller_id,
+  call_id,
+  call_type,
+  daily_room_name,
+  caller_name,
+}) {
+  try {
+    const data = await callApi({
+      action: "notify_call",
+      callee_id,
+      caller_id,
+      call_id,
+      call_type: call_type === "video" ? "video" : "voice",
+      daily_room_name: daily_room_name || "",
+      caller_name: caller_name || "",
+    });
+    return data;
+  } catch (e) {
+    console.warn("[notify_call]", e?.message || e);
+    return { ok: false, error: e?.message };
+  }
+}
+
+/** 4. Enregistrement BDD + push */
+export async function createCallRecord({
+  conversation_id,
+  caller_id,
+  callee_id,
+  type,
+  dailyRoomName,
+  caller_name,
+}) {
   const { data, error } = await supabase
     .from("calls")
     .insert({
-      conversation_id: conversation_id,
-      caller_id: caller_id,
-      callee_id: callee_id,
+      conversation_id,
+      caller_id,
+      callee_id,
       type: type === "video" ? "video" : "voice",
       status: "ringing",
       daily_room_name: dailyRoomName,
     })
     .select()
     .single();
-    
+
   if (error) {
     console.error("Erreur création enregistrement appel:", error);
     throw new Error("calls : " + error.message);
   }
+
+  notifyCalleeOfIncomingCall({
+    callee_id,
+    caller_id,
+    call_id: data.id,
+    call_type: type,
+    daily_room_name: dailyRoomName,
+    caller_name,
+  }).catch(() => {});
+
   return data;
 }
 
