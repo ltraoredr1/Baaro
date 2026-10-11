@@ -15,6 +15,7 @@ function isValidAuthUserId(value) {
 
 const REACTIONS = [
   { id: "like", label: "👍", title: "J’aime" },
+  ]
 /* =========================================================
    POLL CARD (Optimisé avec memo)
    ========================================================= */
