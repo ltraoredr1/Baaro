@@ -26,6 +26,33 @@ const PLATFORM_META = {
 };
 
 /**
+ * Sécurité : seules les adresses http(s) sont autorisées.
+ * Une adresse sans protocole reçoit https:// ; tout le reste (javascript:, data:…)
+ * est rejeté et le lien n'est pas affiché.
+ */
+function safeWebUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  const withProtocol = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+  try {
+    const url = new URL(withProtocol);
+    return url.protocol === "https:" || url.protocol === "http:" ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
+function telHref(value) {
+  const digits = String(value || "").replace(/[^\d+]/g, "");
+  return digits ? `tel:${digits}` : null;
+}
+
+function mailHref(value) {
+  const email = String(value || "").trim();
+  return /^[^\s@]+@[^\s@]+$/.test(email) ? `mailto:${email}` : null;
+}
+
+/**
  * Affichage public des contacts, liens et réseaux d'un profil.
  * Props alignées sur useProfile / ProfileModal.
  */
@@ -34,10 +61,24 @@ export default function ProfileContactLinksView({
   links = [],
   socials = [],
 }) {
-  const phones = contacts.phones || [];
-  const emails = contacts.emails || [];
+  const phones = (contacts.phones || [])
+    .map((x) => ({ ...x, href: telHref(x.value) }))
+    .filter((x) => x.href);
+  const emails = (contacts.emails || [])
+    .map((x) => ({ ...x, href: mailHref(x.value) }))
+    .filter((x) => x.href);
+  const safeLinks = links
+    .map((x) => ({ ...x, href: safeWebUrl(x.url) }))
+    .filter((x) => x.href);
+  const safeSocials = socials
+    .map((x) => ({ ...x, href: safeWebUrl(x.url) }))
+    .filter((x) => x.href);
+
   const hasAnything =
-    phones.length > 0 || emails.length > 0 || links.length > 0 || socials.length > 0;
+    phones.length > 0 ||
+    emails.length > 0 ||
+    safeLinks.length > 0 ||
+    safeSocials.length > 0;
 
   if (!hasAnything) return null;
 
@@ -59,7 +100,7 @@ export default function ProfileContactLinksView({
           {phones.map((x) => (
             <a
               key={`phone-${x.id}`}
-              href={`tel:${x.value}`}
+              href={x.href}
               className="flex items-center gap-2 text-sm rounded-xl border px-3 py-2.5 baaro-tap"
               style={chip}
             >
@@ -73,7 +114,7 @@ export default function ProfileContactLinksView({
           {emails.map((x) => (
             <a
               key={`email-${x.id}`}
-              href={`mailto:${x.value}`}
+              href={x.href}
               className="flex items-center gap-2 text-sm rounded-xl border px-3 py-2.5 baaro-tap"
               style={chip}
             >
@@ -88,12 +129,12 @@ export default function ProfileContactLinksView({
       )}
 
       {/* Liens web */}
-      {links.length > 0 && (
+      {safeLinks.length > 0 && (
         <div className="flex flex-col gap-2">
-          {links.map((x) => (
+          {safeLinks.map((x) => (
             <a
               key={x.id}
-              href={x.url}
+              href={x.href}
               target="_blank"
               rel="noopener noreferrer"
               className="flex items-center gap-2 text-sm rounded-xl border px-3 py-2.5 baaro-tap"
@@ -108,15 +149,15 @@ export default function ProfileContactLinksView({
       )}
 
       {/* Réseaux sociaux — grille compacte */}
-      {socials.length > 0 && (
+      {safeSocials.length > 0 && (
         <div className="grid grid-cols-2 gap-2">
-          {socials.map((x) => {
+          {safeSocials.map((x) => {
             const meta = PLATFORM_META[x.platform] || PLATFORM_META.other;
             const Icon = meta.Icon;
             return (
               <a
                 key={x.id}
-                href={x.url}
+                href={x.href}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="flex items-center gap-2 text-xs rounded-xl border px-3 py-2.5 baaro-tap min-w-0"
