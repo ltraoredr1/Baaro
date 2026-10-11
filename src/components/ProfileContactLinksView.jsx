@@ -8,39 +8,10 @@ import {
   Instagram,
   Linkedin,
   MessageCircle,
-  LucideIcon,
 } from "lucide-react";
 import { COLORS } from "../theme.js";
 
-interface ContactItem {
-  id: string | number;
-  value: string;
-  label?: string | null;
-}
-
-interface LinkItem {
-  id: string | number;
-  url: string;
-  label?: string | null;
-}
-
-interface SocialItem {
-  id: string | number;
-  platform: string;
-  url: string;
-  username?: string | null;
-}
-
-interface ProfileContactLinksViewProps {
-  contacts?: {
-    phones?: ContactItem[];
-    emails?: ContactItem[];
-  };
-  links?: LinkItem[];
-  socials?: SocialItem[];
-}
-
-const PLATFORM_META: Record<string, { label: string; Icon: LucideIcon }> = {
+const PLATFORM_META = {
   facebook: { label: "Facebook", Icon: Facebook },
   youtube: { label: "YouTube", Icon: Youtube },
   tiktok: { label: "TikTok", Icon: MessageCircle },
@@ -54,7 +25,12 @@ const PLATFORM_META: Record<string, { label: string; Icon: LucideIcon }> = {
   other: { label: "Autre", Icon: Globe },
 };
 
-function safeWebUrl(value?: string | null): string | null {
+/**
+ * Sécurité : seules les adresses http(s) sont autorisées.
+ * Une adresse sans protocole reçoit https:// ; tout le reste (javascript:, data:…)
+ * est rejeté et le lien n'est pas affiché.
+ */
+function safeWebUrl(value) {
   const raw = String(value || "").trim();
   if (!raw) return null;
   const withProtocol = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
@@ -66,36 +42,37 @@ function safeWebUrl(value?: string | null): string | null {
   }
 }
 
-function telHref(value?: string | null): string | null {
+function telHref(value) {
   const digits = String(value || "").replace(/[^\d+]/g, "");
   return digits ? `tel:${digits}` : null;
 }
 
-function mailHref(value?: string | null): string | null {
+function mailHref(value) {
   const email = String(value || "").trim();
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? `mailto:${email}` : null;
+  return /^[^\s@]+@[^\s@]+$/.test(email) ? `mailto:${email}` : null;
 }
 
+/**
+ * Affichage public des contacts, liens et réseaux d'un profil.
+ * Props alignées sur useProfile / ProfileModal.
+ */
 export default function ProfileContactLinksView({
   contacts = { phones: [], emails: [] },
   links = [],
   socials = [],
-}: ProfileContactLinksViewProps) {
+}) {
   const phones = (contacts.phones || [])
     .map((x) => ({ ...x, href: telHref(x.value) }))
-    .filter((x): x is ContactItem & { href: string } => Boolean(x.href));
-    
+    .filter((x) => x.href);
   const emails = (contacts.emails || [])
     .map((x) => ({ ...x, href: mailHref(x.value) }))
-    .filter((x): x is ContactItem & { href: string } => Boolean(x.href));
-    
+    .filter((x) => x.href);
   const safeLinks = links
     .map((x) => ({ ...x, href: safeWebUrl(x.url) }))
-    .filter((x): x is LinkItem & { href: string } => Boolean(x.href));
-    
+    .filter((x) => x.href);
   const safeSocials = socials
     .map((x) => ({ ...x, href: safeWebUrl(x.url) }))
-    .filter((x): x is SocialItem & { href: string } => Boolean(x.href));
+    .filter((x) => x.href);
 
   const hasAnything =
     phones.length > 0 ||
@@ -117,6 +94,7 @@ export default function ProfileContactLinksView({
         Coordonnées & réseaux
       </h3>
 
+      {/* Téléphones & e-mails */}
       {(phones.length > 0 || emails.length > 0) && (
         <div className="flex flex-col gap-2">
           {phones.map((x) => (
@@ -150,6 +128,7 @@ export default function ProfileContactLinksView({
         </div>
       )}
 
+      {/* Liens web */}
       {safeLinks.length > 0 && (
         <div className="flex flex-col gap-2">
           {safeLinks.map((x) => (
@@ -169,6 +148,7 @@ export default function ProfileContactLinksView({
         </div>
       )}
 
+      {/* Réseaux sociaux — grille compacte */}
       {safeSocials.length > 0 && (
         <div className="grid grid-cols-2 gap-2">
           {safeSocials.map((x) => {
