@@ -1,475 +1,540 @@
-import { useEffect, useState } from "react";
-import {
-  Coins,
-  Radio,
-  Shield,
-  Phone,
-  Mail,
-  ArrowLeft,
-  Sparkles,
-} from "lucide-react";
-import { supabase } from "../../supabaseClient.js";
-import { TurnstileWidget } from "../../Turnstile.jsx";
-import {
-  captureRefFromUrl,
-  getPendingRef,
-} from "../../lib/referralApi.js";
-import PhoneAuth from "./PhoneAuth.jsx";
+import { useState, useEffect, useRef } from 'react';
+import PhoneInput, { isValidPhoneNumber } from 'react-phone-number-input';
+import 'react-phone-number-input/style.css';
+import { supabase } from '../../supabaseClient.js';
 
-const LEGAL_VERSION = "2026-10-01";
+const RESEND_DELAY = 30;
+const LEGAL_VERSION = '2026-10-01';
 
-/**
- * Écran d'authentification BAARO — « invité d'abord »
- *  1. Commencer (accès invité, sans inscription)
- *  2. J'ai déjà un compte : Téléphone ou Email (+ mot de passe)
- * Le compte invité peut être sécurisé plus tard depuis Réglages.
- */
-export default function AuthScreen() {
-  const [mode, setMode] = useState("choice"); // "choice" | "email" | "phone"
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [isLogin, setIsLogin] = useState(true);
+function guessDefaultCountry() {
+  try {
+    const locale = navigator.language || navigator.languages?.[0] || '';
+    const region = locale.split('-')[1];
+    if (region && region.length === 2) return region.toUpperCase();
+  } catch (e) {}
+  return 'ML';
+}
+
+function normalizePhone(value) {
+  if (!value) return '';
+  const normalized = value.replace(/[^\d+]/g, '');
+  return normalized.startsWith('+') ? normalized : '+' + normalized;
+}
+
+// Transforme un numéro de téléphone en e-mail technique pour Supabase
+function phoneToEmail(phone) {
+  const cleanPhone = phone.replace(/[^\d]/g, '');
+  return `phone_${cleanPhone}@baaro.app`;
+}
+
+function buildFallbackHandle(user_id) {
+  const cleanId = String(user_id).replace(/-/g, '').slice(0, 12);
+  return `@user_${cleanId}`;
+}
+
+// Enregistre l'acceptation des documents légaux sans jamais bloquer la connexion
+async function recordConsents() {
+  for (const type of ['terms', 'privacy', 'community']) {
+    try {
+      await supabase.rpc('record_legal_consent', {
+        p_document_type: type,
+        p_version: LEGAL_VERSION,
+      });
+    } catch (e) {
+      console.error('[BAARO] Consentement ' + type + ':', e);
+    }
+  }
+}
+
+// Le numéro est une donnée PRIVÉE : il va dans profile_private, jamais dans profiles
+async function savePrivatePhone(user_id, normalizedPhone) {
+  if (!user_id || !normalizedPhone) return;
+  try {
+    const { error } = await supabase.from('profile_private').upsert(
+      { id: user_id, phone: normalizedPhone, updated_at: new Date().toISOString() },
+      { onConflict: 'id' }
+    );
+    if (error) console.error('[BAARO] Numéro privé:', error);
+  } catch (e) {
+    console.error('[BAARO] Numéro privé:', e);
+  }
+}
+
+export default function PhoneAuth({ onAuthSuccess }) {
   const [legalAccepted, setLegalAccepted] = useState(false);
-
+  // Étapes : 'phone', 'login_password', 'register_password', 'otp_verify'
+  const [step, setStep] = useState('phone');
+  const [phone, setPhone] = useState('');
+  const [password, setPassword] = useState('');
+  const [defaultCountry] = useState(guessDefaultCountry);
+  const [otp, setOtp] = useState('');
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const [success, setSuccess] = useState(null);
+  const [error, setError] = useState('');
+  const [resendCooldown, setResendCooldown] = useState(0);
+  const [timeLeft, setTimeLeft] = useState(300);
+  const [isRecovery, setIsRecovery] = useState(false);
 
-  const [captchaToken, setCaptchaToken] = useState(null);
-  const [pendingRef, setPendingRef] = useState(null);
+  const timerRef = useRef(null);
+  const expiryTimerRef = useRef(null);
+  const otpInputRef = useRef(null);
 
   useEffect(() => {
-    captureRefFromUrl();
-    setPendingRef(getPendingRef());
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+      if (expiryTimerRef.current) clearInterval(expiryTimerRef.current);
+    };
   }, []);
 
-  const handlePhoneAuthSuccess = () => {
-    setSuccess("Connexion réussie ! Bienvenue sur BAARO.");
-  };
-
-  /**
-   * Enregistre l'acceptation des documents légaux (sans bloquer la connexion)
-   */
-  const recordConsents = async () => {
-    for (const type of ["terms", "privacy", "community"]) {
-      try {
-        await supabase.rpc("record_legal_consent", {
-          p_document_type: type,
-          p_version: LEGAL_VERSION,
-        });
-      } catch (e) {
-        console.error("[BAARO] Consentement " + type + ":", e);
-      }
+  // Auto-focus sur l'input OTP
+  useEffect(() => {
+    if (step === 'otp_verify') {
+      setTimeout(() => {
+        if (otpInputRef.current) otpInputRef.current.focus();
+      }, 100);
     }
-  };
+  }, [step]);
 
-  /**
-   * Connexion anonyme / invité (is_anonymous = true)
-   */
-  const handleAnonymous = async () => {
-    if (loading) return;
+  function startCooldown() {
+    if (timerRef.current) clearInterval(timerRef.current);
+    setResendCooldown(RESEND_DELAY);
+    timerRef.current = setInterval(() => {
+      setResendCooldown((seconds) => {
+        if (seconds <= 1) {
+          clearInterval(timerRef.current);
+          timerRef.current = null;
+          return 0;
+        }
+        return seconds - 1;
+      });
+    }, 1000);
+  }
 
-    if (!captchaToken) {
-      setError("Veuillez valider le test de sécurité ci-dessus.");
+  function startExpiryTimer() {
+    if (expiryTimerRef.current) clearInterval(expiryTimerRef.current);
+    setTimeLeft(300);
+    expiryTimerRef.current = setInterval(() => {
+      setTimeLeft((prev) => {
+        if (prev === 60) setError('⚠️ Le code expire dans moins d\'une minute');
+        if (prev <= 1) {
+          clearInterval(expiryTimerRef.current);
+          setError('Code expiré. Veuillez en demander un nouveau.');
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  }
+
+  async function ensureProfile(user) {
+    if (!user || !user.id) return;
+    const user_id = user.id;
+    const normalizedPhone = normalizePhone(phone);
+
+    try {
+      const { data: existingProfile } = await supabase
+        .from('profiles')
+        .select('id, display_name, handle, flag')
+        .eq('id', user_id)
+        .maybeSingle();
+
+      if (existingProfile) {
+        const updates = {};
+        // Jamais le numéro de téléphone comme nom affiché (public)
+        if (!existingProfile.display_name) updates.display_name = 'Membre BAARO';
+        if (!existingProfile.handle) updates.handle = buildFallbackHandle(user_id);
+        if (!existingProfile.flag) updates.flag = '🌍';
+
+        if (Object.keys(updates).length > 0) {
+          await supabase.from('profiles').update(updates).eq('id', user_id);
+        }
+      } else {
+        await supabase.from('profiles').insert({
+          id: user_id,
+          display_name: 'Membre BAARO',
+          handle: buildFallbackHandle(user_id),
+          flag: '🌍',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        });
+      }
+
+      // Après la création du profil (clé étrangère)
+      await savePrivatePhone(user_id, normalizedPhone);
+    } catch (err) {
+      console.error('Erreur mise à jour profil:', err);
+    }
+  }
+
+  // ÉTAPE 1 : Vérifier si le numéro existe déjà (réponse oui/non, sans lire la table)
+  async function handleCheckPhone(event) {
+    if (event) event.preventDefault();
+    setError('');
+
+    const normalizedPhone = normalizePhone(phone);
+    if (!normalizedPhone || !isValidPhoneNumber(normalizedPhone)) {
+      setError('Numéro de téléphone invalide.');
       return;
     }
 
     setLoading(true);
-    setError(null);
-    setSuccess(null);
-
     try {
-      try {
-        sessionStorage.setItem("baaro_guest_ok", "1");
-      } catch {}
+      const { data: exists, error: rpcError } = await supabase.rpc('phone_exists', {
+        p_phone: normalizedPhone,
+      });
+      if (rpcError) throw rpcError;
 
-      const useCaptcha = captchaToken && captchaToken !== "dev-bypass";
+      setPhone(normalizedPhone);
 
-      const { data, error: authError } = await supabase.auth.signInAnonymously(
-        useCaptcha ? { options: { captchaToken } } : undefined
-      );
-
-      if (authError) {
-        try {
-          sessionStorage.removeItem("baaro_guest_ok");
-        } catch {}
-        throw authError;
+      if (exists === true) {
+        // Compte existant -> Demander directement le mot de passe (Pas de SMS)
+        setStep('login_password');
+      } else {
+        // Nouveau compte -> Demander à créer un mot de passe avant l'envoi du SMS d'inscription
+        setStep('register_password');
       }
-
-      if (!data?.session) {
-        try {
-          sessionStorage.removeItem("baaro_guest_ok");
-        } catch {}
-        throw new Error("Impossible d'initialiser la session.");
-      }
-
-      const id = data?.user?.id;
-      if (id) {
-        try {
-          await supabase.from("profiles").upsert(
-            {
-              id,
-              display_name: "Invité BAARO",
-              handle: `@guest_${String(id).replace(/-/g, "").slice(0, 10)}`,
-              flag: "🌍",
-              updated_at: new Date().toISOString(),
-            },
-            { onConflict: "id" }
-          );
-        } catch (e) {
-          console.error("[BAARO] Profil invité:", e);
-        }
-        await recordConsents();
-      }
-
-      setSuccess("Connexion réussie ! Bienvenue sur BAARO.");
     } catch (err) {
-      console.error("Erreur connexion anonyme :", err);
-      setError(
-        err?.message ||
-          "Accès invité indisponible. Vérifiez la configuration Supabase."
-      );
+      console.error('Erreur vérification:', err);
+      setError("Une erreur est survenue.");
     } finally {
       setLoading(false);
     }
-  };
+  }
 
-  /**
-   * Connexion / Inscription par Email
-   */
-  const handleEmailSubmit = async (event) => {
-    event.preventDefault();
-    if (loading) return;
+  // ÉTAPE 2A : Connexion directe avec le mot de passe (Utilisateur existant)
+  async function handleLoginWithPassword(event) {
+    if (event) event.preventDefault();
+    setError('');
+    setLoading(true);
 
-    const cleanEmail = email.trim();
-    setError(null);
-    setSuccess(null);
+    try {
+      const emailTech = phoneToEmail(phone);
+      const { data, error: loginError } = await supabase.auth.signInWithPassword({
+        email: emailTech,
+        password: password,
+      });
 
-    if (!cleanEmail) {
-      setError("Veuillez indiquer une adresse email valide.");
-      return;
+      if (loginError) throw loginError;
+
+      if (!data || !data.user) throw new Error('Utilisateur introuvable.');
+
+      await ensureProfile(data.user);
+      if (onAuthSuccess) onAuthSuccess(data.user);
+    } catch (err) {
+      console.error('Erreur connexion:', err);
+      setError('Mot de passe incorrect ou compte introuvable.');
+    } finally {
+      setLoading(false);
     }
-    if (!password) {
-      setError("Veuillez saisir votre mot de passe.");
-      return;
-    }
-    if (!isLogin && !legalAccepted) {
+  }
+
+  // ÉTAPE 2B : Lancer l'inscription (Envoi du code SMS unique de vérification)
+  async function handleStartRegistration(event) {
+    if (event) event.preventDefault();
+    if (!legalAccepted && !isRecovery) {
       setError("Vous devez accepter les conditions d'utilisation et les règles de la communauté.");
       return;
     }
+    if (!password || password.length < 6) {
+      setError('Le mot de passe doit contenir au moins 6 caractères.');
+      return;
+    }
 
+    setError('');
     setLoading(true);
 
     try {
-      if (isLogin) {
-        const { error: authError } = await supabase.auth.signInWithPassword({
-          email: cleanEmail,
-          password,
-        });
-        if (authError) throw authError;
-        setSuccess("Ravi de vous revoir ! Connexion réussie.");
-        return;
-      }
+      const { error: otpError } = await supabase.auth.signInWithOtp({ phone });
+      if (otpError) throw otpError;
 
-      // Inscription
-      const { data, error: authError } = await supabase.auth.signUp({
-        email: cleanEmail,
-        password,
-      });
-      if (authError) throw authError;
-
-      const id = data?.user?.id;
-      if (!isLogin && id) {
-        await recordConsents();
-      }
-      if (data?.session && id) {
-        try {
-          await supabase.from("profiles").upsert(
-            {
-              id,
-              display_name: cleanEmail.split("@")[0] || "Membre BAARO",
-              handle: `@user_${String(id).replace(/-/g, "").slice(0, 10)}`,
-              flag: "🌍",
-              updated_at: new Date().toISOString(),
-            },
-            { onConflict: "id" }
-          );
-        } catch (e) {
-          console.error("[BAARO] Profil inscription:", e);
-        }
-        setSuccess("Votre compte a été créé avec succès !");
-        return;
-      }
-
-      setSuccess(
-        "Un email de vérification vous a été envoyé. Consultez votre boîte pour valider votre compte."
-      );
+      setIsRecovery(false);
+      setStep('otp_verify');
+      setOtp('');
+      startCooldown();
+      startExpiryTimer();
     } catch (err) {
-      console.error("Erreur authentification email :", err);
-      setError(
-        err?.message || "Une erreur s'est produite lors de l'authentification."
-      );
+      console.error('Erreur SMS:', err);
+      setError(err.message || "Impossible d'envoyer le code SMS.");
     } finally {
       setLoading(false);
     }
-  };
+  }
 
-  const switchMode = (newMode) => {
-    setMode(newMode);
-    setError(null);
-    setSuccess(null);
-  };
+  // ÉTAPE 3 : Vérification de l'OTP (Inscription finale ou Récupération)
+  async function verifyOtpAndProceed(event) {
+    if (event) event.preventDefault();
+    setError('');
 
-  const toggleAuthMode = () => {
-    setIsLogin((prev) => !prev);
-    setError(null);
-    setSuccess(null);
-    setPassword("");
-    setLegalAccepted(false);
-  };
+    const normalizedOtp = otp.replace(/\D/g, '');
+    if (normalizedOtp.length !== 6) {
+      setError('Le code doit contenir 6 chiffres.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const { data, error: verifyError } = await supabase.auth.verifyOtp({
+        phone: phone,
+        token: normalizedOtp,
+        type: 'sms',
+      });
+
+      if (verifyError) throw verifyError;
+      if (!data || !data.user) throw new Error('Validation échouée.');
+
+      const emailTech = phoneToEmail(phone);
+
+      if (isRecovery) {
+        // En mode récupération : mise à jour du mot de passe
+        const { error: updateError } = await supabase.auth.updateUser({ password: password });
+        if (updateError) throw updateError;
+      } else {
+        // En mode inscription : association de l'e-mail technique et du mot de passe
+        const { error: updateError } = await supabase.auth.updateUser({
+          email: emailTech,
+          password: password,
+        });
+        if (updateError) throw updateError;
+      }
+
+      await ensureProfile(data.user);
+      if (!isRecovery) {
+        await recordConsents();
+      }
+      if (onAuthSuccess) onAuthSuccess(data.user);
+    } catch (err) {
+      console.error('Erreur vérification OTP:', err);
+      setError(err.message || 'Code incorrect ou expiré.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // Mot de passe oublié : déclencher un SMS de réinitialisation
+  async function handleForgotPassword() {
+    setError('');
+    setLoading(true);
+    try {
+      const { error: otpError } = await supabase.auth.signInWithOtp({ phone });
+      if (otpError) throw otpError;
+
+      setIsRecovery(true);
+      setStep('otp_verify');
+      setOtp('');
+      setPassword('');
+      startCooldown();
+      startExpiryTimer();
+    } catch (err) {
+      setError("Impossible d'envoyer le code de récupération.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function resendOtp() {
+    if (resendCooldown > 0 || loading) return;
+    try {
+      const { error: otpError } = await supabase.auth.signInWithOtp({ phone });
+      if (otpError) throw otpError;
+      startCooldown();
+      startExpiryTimer();
+      setError('Nouveau code envoyé.');
+    } catch (err) {
+      setError("Impossible de renvoyer le code.");
+    }
+  }
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 bg-slate-950 text-slate-100 font-sans selection:bg-amber-500 selection:text-slate-950">
-      <div className="w-full max-w-md rounded-3xl p-8 border border-amber-500/30 bg-slate-900/90 backdrop-blur-xl shadow-2xl transition-all">
-        {/* Branding */}
-        <div className="text-center mb-8">
-          <div className="w-16 h-16 mx-auto mb-4 rounded-2xl flex items-center justify-center font-extrabold text-3xl shadow-lg bg-gradient-to-tr from-amber-500 to-teal-400 text-slate-950 tracking-wider">
-            B
+    <div className="w-full max-w-sm mx-auto space-y-4">
+      {/* 1. SAISIE DU NUMÉRO */}
+      {step === 'phone' && (
+        <form onSubmit={handleCheckPhone} className="space-y-4">
+          <div>
+            <label className="block text-xs font-semibold mb-1 text-slate-400">
+              Numéro de téléphone
+            </label>
+            <PhoneInput
+              international
+              defaultCountry={defaultCountry}
+              value={phone}
+              onChange={setPhone}
+              placeholder="Entre ton numéro"
+              autoComplete="username"
+              className="w-full border border-slate-700 rounded-xl px-3 py-2.5 text-xs outline-none bg-slate-950/60 text-slate-100"
+            />
           </div>
-          <h1 className="text-3xl font-black tracking-tight text-amber-400">
-            BAARO
-          </h1>
-          <p className="text-base font-semibold text-slate-200 mt-1">
-            Gagne. Échange. Convertis.
-          </p>
-          <p className="text-xs text-slate-400 mt-1">
-            La plateforme d'échange interactive et sécurisée.
-          </p>
-        </div>
 
-        {/* Arguments clés */}
-        <div className="grid grid-cols-3 gap-2 mb-6">
-          {[
-            { icon: Coins, label: "Points & Gains", color: "text-amber-400" },
-            { icon: Radio, label: "Lives & IA", color: "text-purple-400" },
-            { icon: Shield, label: "Sécurisé", color: "text-teal-400" },
-          ].map(({ icon: Icon, label, color }) => (
-            <div
-              key={label}
-              className="flex flex-col items-center gap-1.5 p-3 rounded-2xl border border-slate-800 bg-slate-950/40 text-center"
-            >
-              <Icon size={20} className={color} />
-              <span className="text-[10px] font-medium text-slate-300">
-                {label}
-              </span>
-            </div>
-          ))}
-        </div>
+          {error && <p className="text-rose-400 text-xs">{error}</p>}
 
-        {/* Referral badge */}
-        {pendingRef && (
-          <div className="mb-4 text-center text-xs text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-xl p-2">
-            Code parrain : <strong>{pendingRef}</strong>
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full py-3 rounded-xl font-bold text-xs shadow-lg transition disabled:opacity-50 bg-amber-500 text-slate-950 hover:bg-amber-400"
+          >
+            {loading ? 'Vérification...' : 'Continuer'}
+          </button>
+        </form>
+      )}
+
+      {/* 2A. CONNEXION AVEC MOT DE PASSE (Compte existant) */}
+      {step === 'login_password' && (
+        <form onSubmit={handleLoginWithPassword} className="space-y-4">
+          <div>
+            <p className="text-xs text-slate-400 mb-2">
+              Connexion pour : <span className="text-slate-200 font-semibold">{phone}</span>
+            </p>
+            <label className="block text-xs font-semibold mb-1 text-slate-400">
+              Mot de passe
+            </label>
+            <input
+              type="password"
+              placeholder="Ton mot de passe"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete="current-password"
+              className="w-full border border-slate-700 rounded-xl px-3 py-2.5 text-xs outline-none bg-slate-950/60 text-slate-100"
+              required
+            />
           </div>
-        )}
 
-        {/* Messages */}
-        {success && (
-          <div className="mb-4 text-center text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-3">
-            {success}
-          </div>
-        )}
-        {error && (
-          <div className="mb-4 text-center text-xs text-rose-400 bg-rose-500/10 border border-rose-500/20 rounded-xl p-3">
-            {error}
-          </div>
-        )}
+          {error && <p className="text-rose-400 text-xs">{error}</p>}
 
-        {/* ========== VUE ACCUEIL : INVITÉ D'ABORD ========== */}
-        {mode === "choice" && (
-          <div className="flex flex-col gap-4">
-            <div className="flex justify-center">
-              <TurnstileWidget
-                onVerify={(token) => {
-                  setCaptchaToken(token || null);
-                  setError(null);
-                  setSuccess(null);
-                }}
-              />
-            </div>
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full py-3 rounded-xl font-bold text-xs shadow-lg transition disabled:opacity-50 bg-teal-500 text-slate-950 hover:bg-teal-400"
+          >
+            {loading ? 'Connexion...' : 'Se connecter'}
+          </button>
 
+          <div className="flex justify-between text-xs pt-1">
             <button
               type="button"
-              onClick={handleAnonymous}
-              disabled={loading || !captchaToken}
-              className="w-full py-4 rounded-xl font-bold text-base flex items-center justify-center gap-2 bg-gradient-to-r from-amber-500 to-teal-400 text-slate-950 shadow-lg disabled:opacity-50 hover:opacity-95 transition-all active:scale-[0.98]"
+              onClick={() => { setStep('phone'); setPassword(''); }}
+              className="text-slate-400 hover:text-slate-200 hover:underline"
             >
-              <Sparkles size={18} />
-              <span>{loading ? "Connexion en cours..." : "Commencer"}</span>
+              Changer de numéro
             </button>
-            <p className="text-[11px] text-center text-slate-400 -mt-2">
-              Sans inscription. Tu pourras sauvegarder ton compte plus tard
-              depuis Réglages.
-            </p>
-
-            {/* Séparateur */}
-            <div className="flex items-center gap-3 my-1">
-              <div className="flex-1 h-px bg-slate-800" />
-              <span className="text-xs text-slate-500 uppercase tracking-widest font-semibold">
-                J'ai déjà un compte
-              </span>
-              <div className="flex-1 h-px bg-slate-800" />
-            </div>
-
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => switchMode("phone")}
-                className="py-3 px-3 rounded-xl font-semibold text-xs flex items-center justify-center gap-2 border border-slate-700 text-slate-200 hover:bg-slate-800 transition-all active:scale-[0.98]"
-              >
-                <Phone size={16} />
-                <span>Téléphone</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => switchMode("email")}
-                className="py-3 px-3 rounded-xl font-semibold text-xs flex items-center justify-center gap-2 border border-slate-700 text-slate-200 hover:bg-slate-800 transition-all active:scale-[0.98]"
-              >
-                <Mail size={16} />
-                <span>Email</span>
-              </button>
-            </div>
-
-            <p className="text-[10px] text-center text-slate-500 leading-relaxed">
-              En continuant, tu acceptes les{" "}
-              <a href="/terms" className="underline text-amber-400/80">
-                conditions
-              </a>
-              , la{" "}
-              <a href="/privacy" className="underline text-amber-400/80">
-                confidentialité
-              </a>{" "}
-              et les{" "}
-              <a href="/community-guidelines" className="underline text-amber-400/80">
-                règles de la communauté
-              </a>
-              .
-            </p>
-          </div>
-        )}
-
-        {/* ========== VUE TÉLÉPHONE ========== */}
-        {mode === "phone" && (
-          <div className="flex flex-col gap-4">
-            <PhoneAuth onAuthSuccess={handlePhoneAuthSuccess} />
             <button
               type="button"
-              onClick={() => switchMode("choice")}
-              className="text-xs text-slate-400 hover:text-slate-200 text-center flex items-center justify-center gap-1 mt-2 transition-colors"
+              onClick={handleForgotPassword}
+              className="text-amber-500 hover:underline"
             >
-              <ArrowLeft size={14} />
-              <span>Retour</span>
+              Mot de passe oublié ?
             </button>
           </div>
-        )}
+        </form>
+      )}
 
-        {/* ========== VUE EMAIL ========== */}
-        {mode === "email" && (
-          <form onSubmit={handleEmailSubmit} className="flex flex-col gap-4">
-            <div className="text-center">
-              <h2 className="text-lg font-bold text-slate-100">
-                {isLogin ? "Connexion" : "Inscription"}
-              </h2>
-              <p className="text-xs text-slate-400 mt-1">
-                {isLogin
-                  ? "Entrez vos identifiants pour accéder à votre espace."
-                  : "Remplissez les informations ci-dessous pour vous inscrire."}
-              </p>
+      {/* 2B. CRÉATION DU MOT DE PASSE (Nouvelle inscription) */}
+      {step === 'register_password' && (
+        <form onSubmit={handleStartRegistration} className="space-y-4">
+          <div>
+            <p className="text-xs text-slate-400 mb-2">
+              Première inscription pour : <span className="text-slate-200 font-semibold">{phone}</span>
+            </p>
+            <label className="block text-xs font-semibold mb-1 text-slate-400">
+              Crée un mot de passe
+            </label>
+            <input
+              type="password"
+              placeholder="Minimum 6 caractères"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete="new-password"
+              className="w-full border border-slate-700 rounded-xl px-3 py-2.5 text-xs outline-none bg-slate-950/60 text-slate-100"
+              required
+            />
+          </div>
+
+          <label className="flex items-start gap-2 text-xs text-slate-400">
+            <input
+              type="checkbox"
+              checked={legalAccepted}
+              onChange={(e) => setLegalAccepted(e.target.checked)}
+              className="mt-0.5 accent-amber-500"
+            />
+            <span>
+              J'accepte les <a href="/terms" className="underline text-amber-400">conditions d'utilisation</a>, la{' '}
+              <a href="/privacy" className="underline text-amber-400">confidentialité</a> et les{' '}
+              <a href="/community-guidelines" className="underline text-amber-400">règles de la communauté</a>.
+            </span>
+          </label>
+
+          {error && <p className="text-rose-400 text-xs">{error}</p>}
+
+          <button
+            type="submit"
+            disabled={loading || !legalAccepted}
+            className="w-full py-3 rounded-xl font-bold text-xs shadow-lg transition disabled:opacity-50 bg-amber-500 text-slate-950 hover:bg-amber-400"
+          >
+            {loading ? 'Envoi du code...' : "S'inscrire (Recevoir le code SMS)"}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setStep('phone')}
+            className="w-full text-center text-xs text-slate-400 hover:underline"
+          >
+            Changer de numéro
+          </button>
+        </form>
+      )}
+
+      {/* 3. VÉRIFICATION SMS (Uniquement à l'inscription ou récupération) */}
+      {step === 'otp_verify' && (
+        <form onSubmit={verifyOtpAndProceed} className="space-y-4">
+          <div>
+            <label className="block text-xs font-semibold mb-1 text-slate-400">
+              {isRecovery ? 'Code de réinitialisation' : "Code de confirmation"} reçu par SMS ({phone})
+            </label>
+
+            <div className={`mb-3 text-center text-sm font-semibold ${timeLeft < 60 ? 'text-rose-400' : 'text-emerald-400'}`}>
+              ⏱️ {Math.floor(timeLeft / 60)}:{String(timeLeft % 60).padStart(2, '0')}
             </div>
 
-            <div className="flex flex-col gap-3">
-              <input
-                type="email"
-                placeholder="Adresse email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-                autoComplete="email"
-                className="w-full px-4 py-3 rounded-xl border border-slate-800 bg-slate-950/60 text-slate-100 placeholder-slate-500 outline-none focus:border-amber-500/50 transition-colors text-sm"
-              />
-              <input
-                type="password"
-                placeholder="Mot de passe"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                minLength={6}
-                autoComplete={isLogin ? "current-password" : "new-password"}
-                className="w-full px-4 py-3 rounded-xl border border-slate-800 bg-slate-950/60 text-slate-100 placeholder-slate-500 outline-none focus:border-amber-500/50 transition-colors text-sm"
-              />
-            </div>
+            <input
+              ref={otpInputRef}
+              type="text"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              maxLength={6}
+              placeholder="123456"
+              value={otp}
+              onChange={(e) => setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
+              className="w-full border border-slate-700 rounded-xl px-3 py-2.5 tracking-widest text-center text-sm outline-none font-mono bg-slate-950/60 text-slate-100"
+              required
+            />
+          </div>
 
-            {!isLogin && (
-              <label className="flex items-start gap-2 text-xs text-slate-400">
-                <input
-                  type="checkbox"
-                  checked={legalAccepted}
-                  onChange={(e) => setLegalAccepted(e.target.checked)}
-                  className="mt-0.5 accent-amber-500"
-                />
-                <span>
-                  J'accepte les{" "}
-                  <a href="/terms" className="underline text-amber-400 hover:text-amber-300">
-                    conditions d'utilisation
-                  </a>
-                  , la{" "}
-                  <a href="/privacy" className="underline text-amber-400 hover:text-amber-300">
-                    confidentialité
-                  </a>{" "}
-                  et les{" "}
-                  <a
-                    href="/community-guidelines"
-                    className="underline text-amber-400 hover:text-amber-300"
-                  >
-                    règles de la communauté
-                  </a>
-                  .
-                </span>
-              </label>
-            )}
+          {error && <p className="text-rose-400 text-xs">{error}</p>}
 
+          <button
+            type="submit"
+            disabled={loading || otp.length !== 6}
+            className="w-full py-3 rounded-xl font-bold text-xs shadow-lg transition disabled:opacity-50 bg-teal-500 text-slate-950 hover:bg-teal-400"
+          >
+            {loading ? 'Validation...' : 'Valider et finaliser'}
+          </button>
+
+          <div className="flex justify-between text-xs pt-1">
             <button
-              type="submit"
-              disabled={loading || (!isLogin && !legalAccepted)}
-              className="w-full py-3.5 rounded-xl font-bold text-sm bg-gradient-to-r from-amber-500 to-teal-400 text-slate-950 shadow-lg disabled:opacity-50 hover:opacity-95 transition-all active:scale-[0.98]"
+              type="button"
+              onClick={() => setStep('phone')}
+              className="text-slate-400 hover:text-slate-200 hover:underline"
             >
-              {loading
-                ? "Traitement..."
-                : isLogin
-                ? "Se connecter"
-                : "S'inscrire"}
+              Annuler
             </button>
-
-            <div className="flex items-center justify-between text-xs text-slate-400 mt-1">
-              <button
-                type="button"
-                onClick={toggleAuthMode}
-                className="hover:text-amber-400 transition-colors underline"
-              >
-                {isLogin ? "Créer un compte" : "Déjà inscrit ?"}
-              </button>
-              <button
-                type="button"
-                onClick={() => switchMode("choice")}
-                className="hover:text-slate-200 transition-colors flex items-center gap-1"
-              >
-                <ArrowLeft size={12} />
-                <span>Retour</span>
-              </button>
-            </div>
-          </form>
-        )}
-      </div>
+            <button
+              type="button"
+              onClick={resendOtp}
+              disabled={resendCooldown > 0 || loading}
+              className={`hover:underline disabled:opacity-50 ${resendCooldown > 0 ? 'text-slate-500' : 'text-amber-500'}`}
+            >
+              {resendCooldown > 0 ? `Renvoyer (${resendCooldown}s)` : 'Renvoyer le code'}
+            </button>
+          </div>
+        </form>
+      )}
     </div>
   );
 }
