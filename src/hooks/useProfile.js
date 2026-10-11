@@ -2,8 +2,21 @@ import { useState, useEffect, useCallback } from "react";
 import { supabase } from "../supabaseClient.js";
 import { handleDbError } from "../lib/dbErrors.js";
 
+// Colonnes PUBLIQUES de profiles (lisibles par tous)
 const PROFILE_SELECT =
-  "id, display_name, handle, flag, bio, avatar_url, cover_url, first_name, last_name, birth_date, location, country, updated_at, created_at";
+  "id, display_name, handle, flag, bio, avatar_url, cover_url, location, country, updated_at, created_at";
+
+// Données PRIVÉES, stockées dans profile_private (visibles uniquement par leur propriétaire)
+const PRIVATE_FIELDS = ["first_name", "last_name", "birth_date", "phone"];
+const PRIVATE_SELECT = PRIVATE_FIELDS.join(",");
+
+function pickPrivate(source) {
+  const out = {};
+  for (const k of PRIVATE_FIELDS) {
+    if (source && source[k] !== undefined) out[k] = source[k];
+  }
+  return out;
+}
 
 /**
  * user_id = auth.users.id (UUID) uniquement.
@@ -35,14 +48,14 @@ export function useProfile(user_id, showToast) {
     setLoading(true);
     try {
       // profiles.id = auth.users.id
-      let profileRes = await supabase
+      const profileRes = await supabase
         .from("profiles")
         .select(PROFILE_SELECT)
         .eq("id", user_id)
         .maybeSingle();
 
       // FK user_id des tables satellites = auth.users.id
-      const [contactsRes, linksRes, socialsRes] = await Promise.all([
+      const [contactsRes, linksRes, socialsRes, privateRes] = await Promise.all([
         supabase
           .from("profile_contacts")
           .select("id,contact_type,value,label,position,is_primary")
@@ -58,12 +71,20 @@ export function useProfile(user_id, showToast) {
           .select("id,platform,username,url,position")
           .eq("user_id", user_id)
           .order("platform"),
+        // Renvoie une ligne seulement pour son propre profil (règles RLS)
+        supabase
+          .from("profile_private")
+          .select(PRIVATE_SELECT)
+          .eq("id", user_id)
+          .maybeSingle(),
       ]);
 
       if (profileRes.error) throw profileRes.error;
       if (contactsRes.error && contactsRes.error.code !== "42P01") throw contactsRes.error;
       if (linksRes.error && linksRes.error.code !== "42P01") throw linksRes.error;
       if (socialsRes.error && socialsRes.error.code !== "42P01") throw socialsRes.error;
+      // Table profile_private absente ou illisible : on continue sans données privées
+      const privateData = privateRes.error ? {} : privateRes.data || {};
 
       let profileData = profileRes.data;
       if (!profileData) {
@@ -89,8 +110,8 @@ export function useProfile(user_id, showToast) {
         }
       }
 
-      setProfile(
-        profileData || {
+      setProfile({
+        ...(profileData || {
           id: user_id,
           display_name: "Nouveau membre",
           handle: null,
@@ -98,8 +119,9 @@ export function useProfile(user_id, showToast) {
           bio: "",
           avatar_url: null,
           cover_url: null,
-        }
-      );
+        }),
+        ...privateData,
+      });
 
       const allContacts = contactsRes.data || [];
       setContacts({
@@ -127,7 +149,9 @@ export function useProfile(user_id, showToast) {
       try {
         // Seuls les champs fournis sont modifiés : jamais d'écrasement par null
         const payload = { updated_at: new Date().toISOString() };
+        const privatePayload = {};
         const has = (k) => Object.prototype.hasOwnProperty.call(updates, k);
+
         if (has("display_name")) payload.display_name = updates.display_name?.trim() || "Nouveau membre";
         if (has("handle")) {
           const h = updates.handle?.trim();
@@ -137,11 +161,30 @@ export function useProfile(user_id, showToast) {
         if (has("bio")) payload.bio = updates.bio?.trim() || "";
         if (has("avatar_url")) payload.avatar_url = updates.avatar_url ?? null;
         if (has("cover_url")) payload.cover_url = updates.cover_url ?? null;
-        if (has("first_name")) payload.first_name = updates.first_name?.trim() || null;
-        if (has("last_name")) payload.last_name = updates.last_name?.trim() || null;
-        if (has("birth_date")) payload.birth_date = updates.birth_date || null;
         if (has("location")) payload.location = updates.location?.trim() || null;
         if (has("country")) payload.country = updates.country || null;
+
+        // Champs privés → profile_private
+        if (has("first_name")) privatePayload.first_name = updates.first_name?.trim() || null;
+        if (has("last_name")) privatePayload.last_name = updates.last_name?.trim() || null;
+        if (has("birth_date")) privatePayload.birth_date = updates.birth_date || null;
+
+        if (Object.keys(privatePayload).length > 0) {
+          const { error: privErr } = await supabase
+            .from("profile_private")
+            .upsert(
+              { id: user_id, ...privatePayload, updated_at: new Date().toISOString() },
+              { onConflict: "id" }
+            );
+          if (privErr) {
+            if (privErr.code === "42P01") {
+              // Table pas encore créée : ancien comportement (écriture dans profiles)
+              Object.assign(payload, privatePayload);
+            } else {
+              throw privErr;
+            }
+          }
+        }
 
         const { data, error } = await supabase
           .from("profiles")
@@ -151,9 +194,11 @@ export function useProfile(user_id, showToast) {
           .single();
 
         if (error) throw error;
-        setProfile(data);
+
+        const merged = { ...data };
+        setProfile((prev) => ({ ...data, ...pickPrivate(prev), ...privatePayload }));
         showToast?.("Profil mis à jour", "success");
-        return { ok: true, data };
+        return { ok: true, data: { ...merged, ...privatePayload } };
       } catch (error) {
         handleDbError(error, showToast, "Impossible de sauvegarder le profil");
         return { ok: false };
