@@ -13,6 +13,7 @@ import {
   Trash2,
   MoreHorizontal,
   Check,
+  Zap,
 } from "lucide-react";
 import { COLORS } from "../../theme.js";
 import { randomId } from "../../lib/id.js";
@@ -78,6 +79,9 @@ export function FeedTab({ user_id, onOpenProfile, onRewardPoints }) {
   // États pour la création de sondage
   const [pollQuestion, setPollQuestion] = useState("");
   const [pollOptions, setPollOptions] = useState(["", ""]);
+  
+  // 🆕 État pour proposer de publier aussi en story
+  const [publishToStory, setPublishToStory] = useState(false);
   
   const [likedPosts, setLikedPosts] = useState({});
   const [commentOpen, setCommentOpen] = useState({});
@@ -418,17 +422,32 @@ export function FeedTab({ user_id, onOpenProfile, onRewardPoints }) {
         }
       }
 
+      const postContent = newText + (mood ? ` (Humeur: ${mood})` : "");
+
       const { data: createdPost, error } = await supabase
         .from("posts")
         .insert({
           author_id: authorId,
-          text: newText + (mood ? ` (Humeur: ${mood})` : ""),
+          text: postContent,
           ...mediaData,
         })
         .select("id")
         .single();
 
       if (error) throw error;
+
+      // 🆕 PUBLICATION AUSSI EN STORY SI COCHÉ
+      if (publishToStory) {
+        const hasPollForStory = showPoll && pollQuestion.trim() && pollOptions.filter((x) => x.trim()).length >= 2;
+        await supabase.from("stories").insert({
+          author_id: authorId,
+          media_type: mediaData.media_type || (mediaData.media_url ? 'image' : 'text'),
+          media_url: mediaData.media_url || null,
+          caption: postContent,
+          visibility: 'public',
+          poll: hasPollForStory ? { question: pollQuestion.trim(), options: pollOptions.map(o => o.trim()).filter(Boolean) } : null,
+        });
+      }
 
       // CRÉATION DU SONDAGE EN BASE DE DONNÉES
       if (showPoll && hasPollDraft) {
@@ -456,6 +475,7 @@ export function FeedTab({ user_id, onOpenProfile, onRewardPoints }) {
       setShowPoll(false);
       setPollQuestion("");
       setPollOptions(["", ""]);
+      setPublishToStory(false);
       handleRemoveMedia();
 
       onRewardPoints?.(mediaData?.media_url ? "publish_post_media" : "publish_post", "Publication créée !", createdPost?.id);
@@ -684,6 +704,22 @@ export function FeedTab({ user_id, onOpenProfile, onRewardPoints }) {
             onClose={() => setShowPoll(false)}
           />
         )}
+
+        {/* 🆕 OPTION : PUBLIER AUSSI EN STORY */}
+        <div className="mb-3 px-1">
+          <label className="flex items-center gap-2 cursor-pointer w-fit select-none">
+            <input
+              type="checkbox"
+              checked={publishToStory}
+              onChange={(e) => setPublishToStory(e.target.checked)}
+              className="rounded accent-amber-500 w-4 h-4 cursor-pointer"
+            />
+            <span className="text-xs font-semibold flex items-center gap-1.5" style={{ color: COLORS.ivory }}>
+              <Zap size={14} className="text-amber-400" />
+              Publier aussi en Story (24h)
+            </span>
+          </label>
+        </div>
 
         <div className="flex items-center justify-between pt-2 border-t" style={{ borderColor: COLORS.border }}>
           <div className="flex items-center gap-2">
