@@ -1,20 +1,53 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { supabase } from '../../supabaseClient.js';
 import { COLORS as C } from '../../theme.js';
-import { Plus, Eye, Heart, Send, Trash2, Image as ImageIcon, X, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Plus, Eye, Heart, Send, Trash2, Image as ImageIcon, X, HelpCircle, ShoppingBag } from 'lucide-react';
 import { EngagementList } from '../../components/EngagementList.jsx';
 import { uploadExternalMedia } from '../../lib/externalMedia.js';
 
-const STORY_DURATION = 5000; // 5 secondes par défaut pour les images
+// --- IMPORTS DE TOUS LES MODULES ---
+import { AudioPicker } from '../../components/AudioPicker.jsx';
+import { ConnectionStatus } from '../../components/ConnectionStatus.jsx';
+import { FutureModulePanel } from '../../components/FutureModulePanel.jsx';
+import { MediaCarousel } from '../../components/MediaCarousel.jsx';
+import { PollComposer } from '../../components/PollComposer.jsx';
+import { PollDisplay } from '../../components/PollDisplay.jsx';
+import ProductCard from '../../components/ProductCard.jsx';
+import { RichTextComposer } from '../../components/RichTextComposer.jsx';
+import { RichTextRenderer } from '../../components/RichTextRenderer.jsx';
+import { TranslateButton } from '../../components/TranslateButton.jsx';
+import { AutoTranslate } from '../../components/TranslatedText.jsx';
+import { VideoTranslateControls } from '../../components/VideoTranslateControls.jsx';
+
+const STORY_DURATION = 5000;
 
 export function StoriesTab({ id, onOpenProfile }) {
   const [stories, setStories] = useState([]);
   const [loading, setLoading] = useState(true);
   const [caption, setCaption] = useState('');
-  const [mediaFile, setMediaFile] = useState(null);
-  const [creating, setCreating] = useState(false);
   
-  // États de la visionneuse plein écran améliorée
+  // --- CARROUSEL MULTI-MÉDIAS ---
+  const [mediaItems, setMediaItems] = useState([]); 
+  const [selectedMediaIndex, setSelectedMediaIndex] = useState(0);
+
+  // --- AUDIO ---
+  const [selectedAudio, setSelectedAudio] = useState(null);
+
+  // --- SONDAGE ---
+  const [showPollComposer, setShowPollComposer] = useState(false);
+  const [pollData, setPollData] = useState(null);
+
+  // --- PRODUIT BOUTIQUE ---
+  const [showProductPicker, setShowProductPicker] = useState(false);
+  const [myProducts, setMyProducts] = useState([]);
+  const [selectedProduct, setSelectedProduct] = useState(null);
+  const [cartQuantities, setCartQuantities] = useState({});
+
+  // --- TRADUCTION ---
+  const [translatedCaption, setTranslatedCaption] = useState(null);
+
+  // --- ÉTATS VISIONNEUSE ---
+  const [creating, setCreating] = useState(false);
   const [selectedStoryIndex, setSelectedStoryIndex] = useState(null);
   const [isPaused, setIsPaused] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -31,14 +64,14 @@ export function StoriesTab({ id, onOpenProfile }) {
   const videoRef = useRef(null);
 
   // ------------------------------------------------------------------
-  // Chargement
+  // Chargement des Stories
   // ------------------------------------------------------------------
   const load = async (initial = false) => {
     if (initial) setLoading(true);
     try {
       const { data, error } = await supabase
         .from('stories')
-        .select('id, author_id, media_url, media_type, caption, background, visibility, expires_at, created_at')
+        .select('id, author_id, media_url, media_type, caption, audio_url, audio_title, poll, product, background, visibility, expires_at, created_at')
         .gt('expires_at', new Date().toISOString())
         .is('deleted_at', null)
         .order('created_at', { ascending: false })
@@ -75,6 +108,22 @@ export function StoriesTab({ id, onOpenProfile }) {
     }
   };
 
+  const loadMyProducts = async () => {
+    if (!id) return;
+    try {
+      const { data, error } = await supabase
+        .from('shop_products')
+        .select('*')
+        .eq('user_id', id)
+        .eq('is_available', true);
+      if (!error && data) {
+        setMyProducts(data);
+      }
+    } catch (e) {
+      console.error('[Stories] loadMyProducts:', e);
+    }
+  };
+
   const loadCounts = async (storyId) => {
     try {
       const [{ count: views }, { count: likes }] = await Promise.all([
@@ -93,6 +142,7 @@ export function StoriesTab({ id, onOpenProfile }) {
 
   useEffect(() => {
     load(true);
+    loadMyProducts();
     const ch = supabase
       .channel('stories_live')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'stories' }, () => load())
@@ -101,7 +151,39 @@ export function StoriesTab({ id, onOpenProfile }) {
   }, []);
 
   // ------------------------------------------------------------------
-  // Navigation fluide dans la visionneuse (Stories)
+  // Carrousel de Médias
+  // ------------------------------------------------------------------
+  const handleAddMediaFiles = (e) => {
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+
+    const newItems = files.map(file => ({
+      id: Math.random().toString(36).substring(2, 9),
+      file,
+      type: file.type.startsWith('video') ? 'video' : 'image',
+      previewUrl: URL.createObjectURL(file),
+      duration: 5,
+    }));
+
+    setMediaItems(prev => [...prev, ...newItems].slice(0, 10));
+    e.target.value = '';
+  };
+
+  const handleMoveMedia = (fromIndex, toIndex) => {
+    setMediaItems(prev => {
+      const updated = [...prev];
+      const [movedItem] = updated.splice(fromIndex, 1);
+      updated.splice(toIndex, 0, movedItem);
+      return updated;
+    });
+  };
+
+  const handleRemoveMedia = (mediaId) => {
+    setMediaItems(prev => prev.filter(m => m.id !== mediaId));
+  };
+
+  // ------------------------------------------------------------------
+  // Visionneuse de Story
   // ------------------------------------------------------------------
   const currentStory = selectedStoryIndex !== null ? stories[selectedStoryIndex] : null;
 
@@ -110,34 +192,32 @@ export function StoriesTab({ id, onOpenProfile }) {
       if (selectedStoryIndex < stories.length - 1) {
         setMediaLoading(true);
         setProgress(0);
+        setTranslatedCaption(null);
         setSelectedStoryIndex(prev => prev + 1);
       } else {
-        setSelectedStoryIndex(null); // Fin de toutes les stories
+        setSelectedStoryIndex(null);
+        setTranslatedCaption(null);
       }
     }
   }, [selectedStoryIndex, stories.length]);
 
   const handlePrevious = useCallback(() => {
-    if (selectedStoryIndex !== null) {
-      if (selectedStoryIndex > 0) {
-        setMediaLoading(true);
-        setProgress(0);
-        setSelectedStoryIndex(prev => prev - 1);
-      }
+    if (selectedStoryIndex !== null && selectedStoryIndex > 0) {
+      setMediaLoading(true);
+      setProgress(0);
+      setTranslatedCaption(null);
+      setSelectedStoryIndex(prev => prev - 1);
     }
   }, [selectedStoryIndex]);
 
-  // Gestion du timer de progression pour les images et stories textuelles
   useEffect(() => {
     if (!currentStory || isPaused || mediaLoading) return;
 
     if (currentStory.media_type !== 'video') {
       const startTime = Date.now();
-      const duration = STORY_DURATION;
-
       const updateProgress = () => {
         const elapsedTime = Date.now() - startTime;
-        const currentProgress = (elapsedTime / duration) * 100;
+        const currentProgress = (elapsedTime / STORY_DURATION) * 100;
 
         if (currentProgress >= 100) {
           setProgress(100);
@@ -147,34 +227,31 @@ export function StoriesTab({ id, onOpenProfile }) {
           progressTimer.current = setTimeout(updateProgress, 50);
         }
       };
-
       progressTimer.current = setTimeout(updateProgress, 50);
-
-      return () => {
-        if (progressTimer.current) clearTimeout(progressTimer.current);
-      };
+      return () => { if (progressTimer.current) clearTimeout(progressTimer.current); };
     }
   }, [currentStory, isPaused, mediaLoading, handleNext]);
 
-  // Enregistrement de la vue à l'ouverture d'une story
   const openStory = async (index) => {
     const s = stories[index];
     if (!s) return;
     setModalMsg(null);
     setProgress(0);
     setMediaLoading(true);
+    setTranslatedCaption(null);
     setSelectedStoryIndex(index);
 
     if (s.author_id === id) {
       loadCounts(s.id);            
     } else if (id) {
-      try { await supabase.rpc('record_story_view', { p_story_id: s.id }); } catch { /* non bloquant */ }
+      try { await supabase.rpc('record_story_view', { p_story_id: s.id }); } catch {}
     }
   };
 
   const closeViewer = () => {
     setSelectedStoryIndex(null);
     setProgress(0);
+    setTranslatedCaption(null);
   };
 
   // ------------------------------------------------------------------
@@ -182,32 +259,50 @@ export function StoriesTab({ id, onOpenProfile }) {
   // ------------------------------------------------------------------
   const create = async () => {
     setError('');
-    if (!caption.trim() && !mediaFile) { setError('Ajoute du texte ou un média'); return; }
+    const hasPoll = pollData?.question && pollData?.options?.some(o => o.trim());
+    if (!caption.trim() && mediaItems.length === 0 && !selectedAudio && !hasPoll && !selectedProduct) {
+      setError('Ajoute du texte, un média, un sondage, un produit ou une musique');
+      return;
+    }
     if (!id) { setError('Tu dois être connecté'); return; }
 
     setCreating(true);
     try {
       let mediaUrl = null;
       let mediaType = 'text';
-      if (mediaFile) {
-        const result = await uploadExternalMedia(mediaFile, {
+
+      if (mediaItems.length > 0) {
+        const activeMedia = mediaItems[0];
+        const result = await uploadExternalMedia(activeMedia.file, {
           folder: 'stories',
           user_id: id,
           maxBytes: 100 * 1024 * 1024,
         });
         mediaUrl = result.url;
-        mediaType = mediaFile.type.startsWith('video') ? 'video' : 'image';
+        mediaType = activeMedia.type;
       }
+
       const { error } = await supabase.from('stories').insert({
         author_id: id,
         media_type: mediaType,
         media_url: mediaUrl,
         caption: caption.trim(),
         visibility: 'public',
+        audio_url: selectedAudio?.audio_url || null,
+        audio_title: selectedAudio?.title || null,
+        poll: hasPoll ? pollData : null,
+        product: selectedProduct || null,
       });
+
       if (error) throw error;
+
       setCaption('');
-      setMediaFile(null);
+      setMediaItems([]);
+      setSelectedAudio(null);
+      setPollData(null);
+      setSelectedProduct(null);
+      setShowPollComposer(false);
+      setShowProductPicker(false);
       await load();
     } catch (e) {
       setError('Erreur : ' + (e.message || 'Impossible de créer la story'));
@@ -217,7 +312,7 @@ export function StoriesTab({ id, onOpenProfile }) {
   };
 
   // ------------------------------------------------------------------
-  // Like / unlike
+  // Actions
   // ------------------------------------------------------------------
   const react = async (s) => {
     if (!id) { setModalMsg({ type: 'error', text: 'Connecte-toi pour réagir.' }); return; }
@@ -226,62 +321,44 @@ export function StoriesTab({ id, onOpenProfile }) {
     setModalMsg(null);
     try {
       if (myLikes.has(s.id)) {
-        const { error } = await supabase
-          .from('story_reactions').delete().eq('story_id', s.id).eq('user_id', id);
+        const { error } = await supabase.from('story_reactions').delete().eq('story_id', s.id).eq('user_id', id);
         if (error) throw error;
         setMyLikes(prev => { const n = new Set(prev); n.delete(s.id); return n; });
       } else {
-        const { error } = await supabase
-          .from('story_reactions')
-          .upsert({ story_id: s.id, user_id: id, reaction: '❤️' }, { onConflict: 'story_id,user_id' });
+        const { error } = await supabase.from('story_reactions').upsert({ story_id: s.id, user_id: id, reaction: '❤️' }, { onConflict: 'story_id,user_id' });
         if (error) throw error;
         setMyLikes(prev => new Set(prev).add(s.id));
       }
       if (s.author_id === id) loadCounts(s.id);
     } catch (e) {
-      console.error('[Stories] react:', e);
       setModalMsg({ type: 'error', text: 'Réaction impossible : ' + (e.message || 'erreur') });
     } finally {
       setBusy(false);
     }
   };
 
-  // ------------------------------------------------------------------
-  // Partager
-  // ------------------------------------------------------------------
   const share = async (s) => {
     setModalMsg(null);
     const text = s.caption || 'Story BAARO';
     const url = s.media_url || window.location.origin;
     try {
-      if (navigator.share) {
-        await navigator.share({ title: 'BAARO', text, url });
-      } else if (navigator.clipboard) {
+      if (navigator.share) await navigator.share({ title: 'BAARO', text, url });
+      else if (navigator.clipboard) {
         await navigator.clipboard.writeText(url);
         setModalMsg({ type: 'ok', text: 'Lien copié' });
-      } else {
-        setModalMsg({ type: 'error', text: 'Partage non disponible sur cet appareil.' });
       }
     } catch (e) {
       if (e?.name !== 'AbortError') setModalMsg({ type: 'error', text: 'Partage impossible.' });
     }
   };
 
-  // ------------------------------------------------------------------
-  // Supprimer
-  // ------------------------------------------------------------------
   const remove = async (s) => {
     if (s.author_id !== id || busy) return;
     if (!window.confirm('Supprimer cette story ?')) return;
     setBusy(true);
     setModalMsg(null);
     try {
-      const { data, error } = await supabase
-        .from('stories')
-        .delete()
-        .eq('id', s.id)
-        .eq('author_id', id)
-        .select('id');
+      const { data, error } = await supabase.from('stories').delete().eq('id', s.id).eq('author_id', id).select('id');
       if (error) throw new Error(error.message);
       if (!data?.length) throw new Error('Story introuvable ou déjà supprimée.');
       setStories(prev => prev.filter(x => x.id !== s.id));
@@ -293,14 +370,24 @@ export function StoriesTab({ id, onOpenProfile }) {
     }
   };
 
+  const handleCartAdd = (productId) => {
+    setCartQuantities(prev => ({ ...prev, [productId]: (prev[productId] || 0) + 1 }));
+  };
+
+  const handleCartRemove = (productId) => {
+    setCartQuantities(prev => ({ ...prev, [productId]: Math.max(0, (prev[productId] || 0) - 1) }));
+  };
+
   const isMine = currentStory && currentStory.author_id === id;
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 relative">
+      <ConnectionStatus />
+
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-xl font-bold" style={{ color: C.ivory }}>Stories</h2>
-          <p className="text-xs" style={{ color: C.muted }}>24 h · texte et média</p>
+          <p className="text-xs" style={{ color: C.muted }}>24 h · texte, média, produit, sondage et musique</p>
         </div>
       </div>
 
@@ -313,43 +400,130 @@ export function StoriesTab({ id, onOpenProfile }) {
         </div>
       )}
 
-      {/* Formulaire de création */}
-      <div className="rounded-2xl p-4 border shadow-sm backdrop-blur-md" style={{ background: C.surface, borderColor: C.border }}>
-        <textarea
+      {/* FORMULAIRE DE CRÉATION DE STORY */}
+      <div className="rounded-2xl p-4 border shadow-sm backdrop-blur-md space-y-4" style={{ background: C.surface, borderColor: C.border }}>
+        {/* ÉDITEUR DE TEXTE ENRICHI */}
+        <RichTextComposer
           value={caption}
-          onChange={e => setCaption(e.target.value)}
+          onChange={setCaption}
           placeholder="Créer une story..."
-          className="w-full bg-transparent outline-none min-h-20 resize-none"
-          style={{ color: C.ivory }}
+          rows={3}
         />
 
-        <div className="flex items-center gap-2 mt-2 flex-wrap">
+        {/* CARROUSEL DE MÉDIAS */}
+        {mediaItems.length > 0 && (
+          <MediaCarousel
+            mediaItems={mediaItems}
+            selectedIndex={selectedMediaIndex}
+            onSelectIndex={setSelectedMediaIndex}
+            onMove={handleMoveMedia}
+            onRemove={handleRemoveMedia}
+          />
+        )}
+
+        {/* PRODUIT ÉPINGLÉ PRÉVISUALISATION */}
+        {selectedProduct && (
+          <div className="relative border rounded-xl p-2 bg-white/5">
+            <button
+              onClick={() => setSelectedProduct(null)}
+              className="absolute top-2 right-2 p-1 rounded-full bg-black/60 text-white z-10"
+            >
+              <X size={14} />
+            </button>
+            <ProductCard
+              product={selectedProduct}
+              quantity={cartQuantities[selectedProduct.id] || 0}
+              onAdd={() => handleCartAdd(selectedProduct.id)}
+              onRemove={() => handleCartRemove(selectedProduct.id)}
+            />
+          </div>
+        )}
+
+        {/* SÉLECTION DE PRODUIT BOUTIQUE */}
+        {showProductPicker && (
+          <div className="p-3 rounded-xl border space-y-2 bg-black/30 border-amber-500/30">
+            <div className="flex justify-between items-center">
+              <span className="text-xs font-bold text-amber-400">Épingler un produit de ta boutique</span>
+              <button onClick={() => setShowProductPicker(false)} className="text-zinc-400 hover:text-white"><X size={14}/></button>
+            </div>
+            {myProducts.length === 0 ? (
+              <p className="text-xs text-zinc-400">Aucun produit disponible dans ta boutique.</p>
+            ) : (
+              <div className="grid grid-cols-1 gap-2 max-h-48 overflow-y-auto pr-1">
+                {myProducts.map(prod => (
+                  <button
+                    key={prod.id}
+                    onClick={() => {
+                      setSelectedProduct(prod);
+                      setShowProductPicker(false);
+                    }}
+                    className="text-left p-2 rounded-lg border border-white/10 hover:border-amber-400/50 bg-white/5 transition flex items-center justify-between"
+                  >
+                    <span className="text-xs font-semibold text-white truncate">{prod.name}</span>
+                    <span className="text-xs font-bold text-amber-400">{prod.price} {prod.currency}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* SONDAGE */}
+        {showPollComposer && (
+          <PollComposer
+            value={pollData}
+            onChange={setPollData}
+            onClose={() => {
+              setShowPollComposer(false);
+              setPollData(null);
+            }}
+          />
+        )}
+
+        <div className="flex items-center gap-2 flex-wrap">
           <label className="flex items-center gap-2 px-3 py-2 rounded-xl border cursor-pointer active:opacity-70 transition-all hover:bg-white/5" style={{ borderColor: C.border, color: C.ivory }}>
             <ImageIcon size={16} />
             <span className="text-sm">Ajouter média</span>
             <input
               type="file"
               accept="image/*,video/*"
-              onChange={(e) => {
-                const file = e.target.files[0];
-                if (file) { setMediaFile(file); setError(''); }
-                e.target.value = '';
-              }}
+              multiple
+              onChange={handleAddMediaFiles}
               className="hidden"
             />
           </label>
 
-          {mediaFile && (
-            <div className="flex items-center gap-2">
-              <span className="text-xs px-2.5 py-1 rounded-lg truncate max-w-[200px]" style={{ background: C.border, color: C.ivory }}>{mediaFile.name}</span>
-              <button onClick={() => setMediaFile(null)} className="p-1 rounded-lg hover:opacity-70" style={{ color: C.muted }}><X size={14} /></button>
-            </div>
-          )}
+          <button
+            type="button"
+            onClick={() => setShowPollComposer(!showPollComposer)}
+            className="flex items-center gap-2 px-3 py-2 rounded-xl border transition-all hover:bg-white/5"
+            style={{ borderColor: C.border, color: C.teal || '#2dd4bf' }}
+          >
+            <HelpCircle size={16} />
+            <span className="text-sm">{showPollComposer ? "Masquer le sondage" : "Créer un sondage"}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setShowProductPicker(!showProductPicker)}
+            className="flex items-center gap-2 px-3 py-2 rounded-xl border transition-all hover:bg-white/5"
+            style={{ borderColor: C.border, color: C.gold || '#f59e0b' }}
+          >
+            <ShoppingBag size={16} />
+            <span className="text-sm">Produit</span>
+          </button>
         </div>
 
-        <div className="flex justify-end mt-3">
+        {/* MUSIQUE */}
+        <AudioPicker
+          selectedAudio={selectedAudio}
+          onSelectAudio={setSelectedAudio}
+          onRemoveAudio={() => setSelectedAudio(null)}
+        />
+
+        <div className="flex justify-end pt-2">
           <button
-            disabled={creating || (!caption.trim() && !mediaFile)}
+            disabled={creating || (!caption.trim() && mediaItems.length === 0 && !selectedAudio && !pollData?.question && !selectedProduct)}
             onClick={create}
             className="px-4 py-2 rounded-xl font-semibold flex items-center disabled:opacity-50 active:opacity-80 transition-all shadow-md"
             style={{ background: C.gold, color: '#000' }}
@@ -359,7 +533,7 @@ export function StoriesTab({ id, onOpenProfile }) {
         </div>
       </div>
 
-      {/* Grille des stories */}
+      {/* GRILLE DES STORIES */}
       {loading ? (
         <p style={{ color: C.muted }}>Chargement…</p>
       ) : stories.length === 0 ? (
@@ -385,7 +559,23 @@ export function StoriesTab({ id, onOpenProfile }) {
                   <img src={s.media_url} alt="story" className="w-full h-32 object-cover rounded-lg my-2" />
                 )
               ) : (
-                <p className="text-sm line-clamp-4 my-auto">{s.caption}</p>
+                <div className="text-sm line-clamp-4 my-auto">
+                  <AutoTranslate text={s.caption} showToggle={false}>
+                    {(translatedTxt) => <RichTextRenderer content={translatedTxt} />}
+                  </AutoTranslate>
+                </div>
+              )}
+
+              {s.product?.name && (
+                <div className="my-1 px-2 py-1 rounded bg-amber-500/10 border border-amber-500/20 text-[11px] truncate text-amber-400">
+                  🛍️ {s.product.name}
+                </div>
+              )}
+
+              {s.poll?.question && (
+                <div className="my-1 px-2 py-1 rounded bg-teal-500/10 border border-teal-500/20 text-[11px] truncate" style={{ color: C.teal || '#2dd4bf' }}>
+                  📊 {s.poll.question}
+                </div>
               )}
 
               <div className="text-[10px] opacity-60 flex items-center justify-between gap-2 z-10">
@@ -397,12 +587,14 @@ export function StoriesTab({ id, onOpenProfile }) {
         </div>
       )}
 
-      {/* --- VISIONNEUSE PLEIN ÉCRAN AMÉLIORÉE (Modal style Stories Pro) --- */}
+      <FutureModulePanel 
+        moduleId="stories_ia_filters" 
+        onNavigate={(modId, action) => console.log('Navigation futur module:', modId, action)} 
+      />
+
+      {/* VISIONNEUSE DE STORY PLEIN ÉCRAN */}
       {currentStory && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/95 backdrop-blur-md select-none"
-          onClick={closeViewer}
-        >
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/95 backdrop-blur-md select-none" onClick={closeViewer}>
           <div
             className="relative w-full h-full sm:w-[420px] sm:h-[85vh] sm:rounded-2xl overflow-hidden bg-zinc-950 shadow-2xl flex flex-col justify-between border border-zinc-800/50"
             onClick={(e) => e.stopPropagation()}
@@ -411,7 +603,10 @@ export function StoriesTab({ id, onOpenProfile }) {
             onTouchStart={() => setIsPaused(true)}
             onTouchEnd={() => setIsPaused(false)}
           >
-            {/* Barre de progression supérieure & En-tête */}
+            {currentStory.audio_url && (
+              <audio src={currentStory.audio_url} autoPlay loop muted={isPaused} />
+            )}
+
             <div className="absolute top-0 inset-x-0 z-30 p-3 bg-gradient-to-b from-black/80 via-black/40 to-transparent space-y-3">
               <div className="flex gap-1.5 w-full">
                 {stories.map((s, idx) => {
@@ -437,21 +632,31 @@ export function StoriesTab({ id, onOpenProfile }) {
                   </div>
                   <div>
                     <h4 className="text-white text-sm font-semibold tracking-wide">{currentStory.profiles?.display_name || 'Membre'}</h4>
-                    <span className="text-zinc-400 text-xs">{new Date(currentStory.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                    {currentStory.audio_title && (
+                      <p className="text-[10px] text-amber-300 font-medium truncate max-w-[180px]">🎵 {currentStory.audio_title}</p>
+                    )}
                   </div>
                 </div>
 
-                <button
-                  onClick={closeViewer}
-                  className="p-2 text-white/80 hover:text-white rounded-full bg-black/20 hover:bg-black/40 transition-colors"
-                  aria-label="Fermer"
-                >
-                  <X className="w-5 h-5" />
-                </button>
+                <div className="flex items-center gap-2">
+                  {/* CONTRÔLES DE TRADUCTION VIDÉO (SOUS-TITRES & VOIX DUB) */}
+                  {currentStory.media_type === 'video' && currentStory.media_url && (
+                    <div onClick={(e) => e.stopPropagation()}>
+                      <VideoTranslateControls
+                        mediaUrl={currentStory.media_url}
+                        videoId={currentStory.id}
+                        videoRef={videoRef}
+                      />
+                    </div>
+                  )}
+
+                  <button onClick={closeViewer} className="p-2 text-white/80 hover:text-white rounded-full bg-black/20 hover:bg-black/40 transition-colors">
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
               </div>
             </div>
 
-            {/* Contenu Média central */}
             <div className="absolute inset-0 flex items-center justify-center bg-zinc-900">
               {mediaLoading && (
                 <div className="absolute inset-0 flex items-center justify-center bg-zinc-950/60 z-20">
@@ -468,10 +673,7 @@ export function StoriesTab({ id, onOpenProfile }) {
                     autoPlay
                     playsInline
                     onLoadedData={() => setMediaLoading(false)}
-                    onTimeUpdate={(e) => {
-                      const v = e.currentTarget;
-                      setProgress((v.currentTime / v.duration) * 100);
-                    }}
+                    onTimeUpdate={(e) => setProgress((e.currentTarget.currentTime / e.currentTarget.duration) * 100)}
                     onEnded={handleNext}
                   />
                 ) : (
@@ -483,43 +685,73 @@ export function StoriesTab({ id, onOpenProfile }) {
                   />
                 )
               ) : (
-                <div className="p-8 text-center w-full">
-                  <p className="text-xl whitespace-pre-wrap font-medium" style={{ color: C.ivory }}>{currentStory.caption}</p>
+                <div className="p-8 text-center w-full space-y-3">
+                  {/* TRADUCTION AUTOMATIQUE OU MANUELLE */}
+                  <AutoTranslate text={currentStory.caption}>
+                    {(autoTranslatedTxt) => (
+                      <RichTextRenderer 
+                        content={translatedCaption || autoTranslatedTxt} 
+                        className="text-xl font-medium" 
+                      />
+                    )}
+                  </AutoTranslate>
+
+                  {/* BOUTON DE TRADUCTION MANUELLE */}
+                  {currentStory.caption && (
+                    <div className="flex justify-center" onClick={(e) => e.stopPropagation()}>
+                      <TranslateButton
+                        text={currentStory.caption}
+                        isTranslated={!!translatedCaption}
+                        onTranslated={(txt) => setTranslatedCaption(txt)}
+                        onClear={() => setTranslatedCaption(null)}
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* PRODUCT CARD DANS LA STORY */}
+              {currentStory.product && (
+                <div 
+                  className="absolute top-20 inset-x-6 z-30"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <ProductCard
+                    product={currentStory.product}
+                    quantity={cartQuantities[currentStory.product.id] || 0}
+                    onAdd={() => handleCartAdd(currentStory.product.id)}
+                    onRemove={() => handleCartRemove(currentStory.product.id)}
+                  />
+                </div>
+              )}
+
+              {/* SONDAGE POLLDISPLAY DANS LA STORY */}
+              {currentStory.poll?.question && (
+                <div 
+                  className="absolute bottom-20 inset-x-6 z-30"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <PollDisplay
+                    postId={currentStory.id}
+                    question={currentStory.poll.question}
+                    options={currentStory.poll.options}
+                    endsAt={currentStory.expires_at}
+                    user_id={id}
+                  />
                 </div>
               )}
             </div>
 
-            {/* Zones tactiles latérales invisibles pour naviguer */}
             <div className="absolute inset-y-0 left-0 w-1/3 z-20 cursor-pointer" onClick={handlePrevious} />
             <div className="absolute inset-y-0 right-0 w-1/3 z-20 cursor-pointer" onClick={handleNext} />
 
-            {/* Message contextuel dans la modale */}
-            {modalMsg && (
-              <div
-                className="absolute top-20 inset-x-6 z-40 p-2.5 rounded-xl text-xs text-center backdrop-blur-md shadow-lg"
-                style={{
-                  background: modalMsg.type === 'error' ? 'rgba(239,68,68,0.85)' : 'rgba(16,185,129,0.85)',
-                  color: '#fff',
-                }}
-              >
-                {modalMsg.text}
-              </div>
-            )}
-
-            {/* Barre d'interactions en bas */}
             <div className="absolute bottom-0 inset-x-0 z-30 p-4 bg-gradient-to-t from-black/80 via-black/40 to-transparent flex items-center gap-2">
               {isMine && (
                 <>
-                  <button
-                    onClick={() => setEngagement({ type: 'storyViews', id: currentStory.id })}
-                    className="px-3 py-2 rounded-xl border text-xs text-white bg-white/10 hover:bg-white/20 backdrop-blur-md transition-all border-white/20"
-                  >
+                  <button onClick={() => setEngagement({ type: 'storyViews', id: currentStory.id })} className="px-3 py-2 rounded-xl text-xs text-white bg-white/10 hover:bg-white/20 backdrop-blur-md border border-white/20">
                     👁 {counts[currentStory.id]?.views || 0}
                   </button>
-                  <button
-                    onClick={() => setEngagement({ type: 'storyLikes', id: currentStory.id })}
-                    className="px-3 py-2 rounded-xl border text-xs text-white bg-white/10 hover:bg-white/20 backdrop-blur-md transition-all border-white/20"
-                  >
+                  <button onClick={() => setEngagement({ type: 'storyLikes', id: currentStory.id })} className="px-3 py-2 rounded-xl text-xs text-white bg-white/10 hover:bg-white/20 backdrop-blur-md border border-white/20">
                     ❤️ {counts[currentStory.id]?.likes || 0}
                   </button>
                 </>
@@ -528,29 +760,19 @@ export function StoriesTab({ id, onOpenProfile }) {
               <button
                 onClick={() => react(currentStory)}
                 disabled={busy}
-                aria-label="J'aime"
-                className={`p-2.5 rounded-xl backdrop-blur-md transition-all border ${
-                  myLikes.has(currentStory.id) ? 'bg-red-500 border-red-500 text-white scale-105' : 'bg-white/10 text-white border-white/20 hover:bg-white/20'
+                className={`p-2.5 rounded-xl backdrop-blur-md border transition-all ${
+                  myLikes.has(currentStory.id) ? 'bg-red-500 border-red-500 text-white' : 'bg-white/10 text-white border-white/20 hover:bg-white/20'
                 }`}
               >
                 <Heart size={18} fill={myLikes.has(currentStory.id) ? 'currentColor' : 'transparent'} />
               </button>
 
-              <button
-                onClick={() => share(currentStory)}
-                aria-label="Partager"
-                className="p-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white backdrop-blur-md border border-white/20 transition-all"
-              >
+              <button onClick={() => share(currentStory)} className="p-2.5 rounded-xl bg-white/10 text-white backdrop-blur-md border border-white/20">
                 <Send size={18} />
               </button>
 
               {isMine && (
-                <button
-                  onClick={() => remove(currentStory)}
-                  disabled={busy}
-                  aria-label="Supprimer"
-                  className="p-2.5 rounded-xl bg-red-500/20 hover:bg-red-500/40 text-red-300 backdrop-blur-md border border-red-500/30 ml-auto transition-all"
-                >
+                <button onClick={() => remove(currentStory)} disabled={busy} className="p-2.5 rounded-xl bg-red-500/20 text-red-300 backdrop-blur-md border border-red-500/30 ml-auto">
                   <Trash2 size={18} />
                 </button>
               )}
