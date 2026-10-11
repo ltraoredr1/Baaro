@@ -10,7 +10,8 @@ import {
 } from "../lib/pushNotifications.js";
 
 /**
- * Bloc réglages notifications — à placer dans SettingsTab.
+ * Bloc réglages notifications push — affiché dans la section « Push » de SettingsTab.
+ * Le titre de la section est déjà fourni par l'écran Réglages.
  */
 export function PushSettings() {
   const { showToast } = useToast();
@@ -67,16 +68,8 @@ export function PushSettings() {
       className="rounded-2xl p-5 border flex flex-col gap-3"
       style={{ background: COLORS.surface, borderColor: COLORS.borderTeal }}
     >
-      <h3
-        className="text-base font-bold flex items-center gap-2"
-        style={{ color: COLORS.teal }}
-      >
-        <Bell size={18} />
-        Notifications
-      </h3>
       <p className="text-xs" style={{ color: COLORS.muted }}>
-        Recevez des alertes pour les messages, lives et récompenses. Nécessite un
-        service worker et une clé VAPID configurée.
+        Recevez des alertes pour les messages, lives et récompenses.
       </p>
       <p className="text-[11px] font-mono" style={{ color: COLORS.muted }}>
         État : {permission}
