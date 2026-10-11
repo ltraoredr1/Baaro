@@ -11,7 +11,35 @@ import {
 } from "lucide-react";
 import { COLORS } from "../theme.js";
 
-const PLATFORM_META = {
+interface ContactItem {
+  id: string | number;
+  value: string;
+  label?: string | null;
+}
+
+interface LinkItem {
+  id: string | number;
+  url: string;
+  label?: string | null;
+}
+
+interface SocialItem {
+  id: string | number;
+  platform: string;
+  url: string;
+  username?: string | null;
+}
+
+interface ProfileContactLinksViewProps {
+  contacts?: {
+    phones?: ContactItem[];
+    emails?: ContactItem[];
+  };
+  links?: LinkItem[];
+  socials?: SocialItem[];
+}
+
+const PLATFORM_META: Record<string, { label: string; Icon: React.ComponentType<{ size?: number; style?: React.CSSProperties; "aria-hidden"?: boolean }> }> = {
   facebook: { label: "Facebook", Icon: Facebook },
   youtube: { label: "YouTube", Icon: Youtube },
   tiktok: { label: "TikTok", Icon: MessageCircle },
@@ -30,7 +58,7 @@ const PLATFORM_META = {
  * Une adresse sans protocole reçoit https:// ; tout le reste (javascript:, data:…)
  * est rejeté et le lien n'est pas affiché.
  */
-function safeWebUrl(value) {
+function safeWebUrl(value?: string | null): string | null {
   const raw = String(value || "").trim();
   if (!raw) return null;
   const withProtocol = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
@@ -42,14 +70,14 @@ function safeWebUrl(value) {
   }
 }
 
-function telHref(value) {
+function telHref(value?: string | null): string | null {
   const digits = String(value || "").replace(/[^\d+]/g, "");
   return digits ? `tel:${digits}` : null;
 }
 
-function mailHref(value) {
+function mailHref(value?: string | null): string | null {
   const email = String(value || "").trim();
-  return /^[^\s@]+@[^\s@]+$/.test(email) ? `mailto:${email}` : null;
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? `mailto:${email}` : null;
 }
 
 /**
@@ -60,19 +88,22 @@ export default function ProfileContactLinksView({
   contacts = { phones: [], emails: [] },
   links = [],
   socials = [],
-}) {
+}: ProfileContactLinksViewProps) {
   const phones = (contacts.phones || [])
     .map((x) => ({ ...x, href: telHref(x.value) }))
-    .filter((x) => x.href);
+    .filter((x): x is ContactItem & { href: string } => Boolean(x.href));
+    
   const emails = (contacts.emails || [])
     .map((x) => ({ ...x, href: mailHref(x.value) }))
-    .filter((x) => x.href);
+    .filter((x): x is ContactItem & { href: string } => Boolean(x.href));
+    
   const safeLinks = links
     .map((x) => ({ ...x, href: safeWebUrl(x.url) }))
-    .filter((x) => x.href);
+    .filter((x): x is LinkItem & { href: string } => Boolean(x.href));
+    
   const safeSocials = socials
     .map((x) => ({ ...x, href: safeWebUrl(x.url) }))
-    .filter((x) => x.href);
+    .filter((x): x is SocialItem & { href: string } => Boolean(x.href));
 
   const hasAnything =
     phones.length > 0 ||
