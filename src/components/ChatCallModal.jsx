@@ -1,5 +1,14 @@
 /**
- * BAARO ChatCallModal — écran d'appel type téléphone
+ * BAARO ChatCallModal — écran d'appel type téléphone (VERSION CORRIGÉE)
+ *
+ * Corrections :
+ * - acceptIncoming : la mise à jour de la table `calls` ne bloque plus l'appel
+ *   (avant, un échec fermait l'appel dès qu'on décrochait)
+ * - acceptIncoming : l'erreur réelle de connexion Daily s'affiche dans une alerte
+ * - attachTracks : ne recrée plus les flux à chaque appel (son stable)
+ * - pistes audio/vidéo rattrapées dès que l'appel devient actif
+ * - endCall protégé contre les doubles appels (left-meeting + bouton)
+ *
  * - Sonnerie entrante (boucle + vibration)
  * - Ton d'attente sortant (ringback)
  * - UI plein écran, avatar, boutons décrocher / raccrocher
@@ -37,6 +46,17 @@ const FALLBACK = {
   teal: "#2DBFA6",
 };
 
+/** Associe un flux à un élément média seulement si les pistes ont changé */
+function setStream(el, tracks) {
+  if (!el || !tracks.length) return;
+  const ids = tracks.map((t) => t.id).join(",");
+  if (el.dataset.trackIds === ids) return;
+  el.dataset.trackIds = ids;
+  el.srcObject = new MediaStream(tracks);
+  const p = el.play();
+  if (p && p.catch) p.catch(() => {});
+}
+
 export function ChatCallModal({
   mode = "outgoing",
   callType = "voice",
@@ -59,6 +79,7 @@ export function ChatCallModal({
   const startedAtRef = useRef(null);
   const mountedRef = useRef(true);
   const unsubscribeRef = useRef(null);
+  const endedRef = useRef(false);
 
   const cleanupMedia = useCallback(() => {
     clearInterval(timerRef.current);
@@ -77,6 +98,7 @@ export function ChatCallModal({
           r.current.srcObject?.getTracks()?.forEach((t) => t.stop());
         } catch {}
         r.current.srcObject = null;
+        delete r.current.dataset.trackIds;
       }
     });
     if (unsubscribeRef.current) {
@@ -101,20 +123,24 @@ export function ChatCallModal({
 
         if (participant.local) {
           if (videoTrack && localVideoRef.current) {
-            localVideoRef.current.srcObject = new MediaStream([videoTrack]);
             localVideoRef.current.muted = true;
             localVideoRef.current.playsInline = true;
-            localVideoRef.current.play().catch(() => {});
+            setStream(localVideoRef.current, [videoTrack]);
           }
           return;
         }
 
+        // Vidéo distante : l'élément <video> porte aussi le son
         if (videoTrack && remoteVideoRef.current) {
-          remoteVideoRef.current.srcObject = new MediaStream(
+          setStream(
+            remoteVideoRef.current,
             [videoTrack, audioTrack].filter(Boolean)
           );
-          remoteVideoRef.current.play().catch(() => {});
-        } else if (audioTrack) {
+          return;
+        }
+
+        // Audio distant seul (appel vocal, ou caméra distante coupée)
+        if (audioTrack) {
           let audio = document.getElementById("baaro-call-remote-audio");
           if (!audio) {
             audio = document.createElement("audio");
@@ -122,12 +148,10 @@ export function ChatCallModal({
             audio.autoplay = true;
             audio.playsInline = true;
             audio.setAttribute("playsinline", "");
+            audio.style.display = "none";
             document.body.appendChild(audio);
           }
-          audio.srcObject = new MediaStream([audioTrack]);
-          audio.play().catch((error) => {
-            console.warn("Lecture audio distant impossible :", error);
-          });
+          setStream(audio, [audioTrack]);
         }
       });
     } catch (error) {
@@ -137,6 +161,8 @@ export function ChatCallModal({
 
   const endCall = useCallback(
     async (finalStatus = "ended") => {
+      if (endedRef.current) return;
+      endedRef.current = true;
       stopAllSounds();
       clearInterval(timerRef.current);
       const dur = startedAtRef.current
@@ -204,6 +230,10 @@ export function ChatCallModal({
       } catch (e) {
         console.error(e);
         stopAllSounds();
+        alert(
+          "Connexion à l'appel impossible : " +
+            (e?.errorMsg || e?.message || JSON.stringify(e))
+        );
         if (mountedRef.current) onClose?.();
       }
     })();
@@ -222,6 +252,14 @@ export function ChatCallModal({
     onClose,
     stopAllSounds,
   ]);
+
+  // Appel actif : rattraper les pistes déjà présentes et surveiller les changements
+  useEffect(() => {
+    if (status !== "active") return;
+    attachTracks();
+    const t = setInterval(attachTracks, 1500);
+    return () => clearInterval(t);
+  }, [status, attachTracks]);
 
   // Timer durée
   useEffect(() => {
@@ -245,30 +283,42 @@ export function ChatCallModal({
     };
   }, [cleanupMedia]);
 
+  // ── Appel entrant : décrocher ─────────────────────────────────────────────
   const acceptIncoming = async () => {
     if (!roomUrl || !token) return;
     stopAllSounds();
+
+    // 1. Rejoindre la salle Daily (seule étape qui peut vraiment faire échouer l'appel)
     try {
       await joinCall({ roomUrl, token, video: callType === "video" });
-      setStatus("active");
-      startedAtRef.current = Date.now();
-      if (callRecord?.id) {
-        await updateCallStatus(callRecord.id, {
-          status: "accepted",
-          started_at: new Date().toISOString(),
-        });
-      }
-      unsubscribeRef.current = subscribeCallEvents({
-        onParticipantLeft: () => endCall("ended"),
-        onTrackStarted: () => attachTracks(),
-        onLeft: () => endCall("ended"),
-      });
-      setTimeout(attachTracks, 400);
-      onAccepted?.();
     } catch (e) {
       console.error(e);
+      alert(
+        "Connexion à l'appel impossible : " +
+          (e?.errorMsg || e?.message || JSON.stringify(e))
+      );
       onClose?.();
+      return;
     }
+
+    // 2. Passer en mode actif et écouter les événements
+    setStatus("active");
+    startedAtRef.current = Date.now();
+    unsubscribeRef.current = subscribeCallEvents({
+      onParticipantLeft: () => endCall("ended"),
+      onTrackStarted: () => attachTracks(),
+      onLeft: () => endCall("ended"),
+    });
+    setTimeout(attachTracks, 400);
+
+    // 3. Mise à jour de la table calls : jamais bloquante
+    if (callRecord?.id) {
+      updateCallStatus(callRecord.id, {
+        status: "accepted",
+        started_at: new Date().toISOString(),
+      }).catch((e) => console.warn("updateCallStatus :", e));
+    }
+    onAccepted?.();
   };
 
   const rejectIncoming = async () => {
