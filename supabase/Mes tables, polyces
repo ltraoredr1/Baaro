@@ -1,0 +1,105 @@
+WITH table_columns AS (
+    SELECT 
+        table_name,
+        json_agg(
+            json_build_object(
+                'column_name', column_name,
+                'data_type', data_type,
+                'is_nullable', is_nullable,
+                'column_default', column_default
+            ) ORDER BY ordinal_position
+        ) AS columns
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+    GROUP BY table_name
+),
+table_constraints AS (
+    SELECT 
+        tc.table_name,
+        json_agg(
+            json_build_object(
+                'constraint_name', tc.constraint_name,
+                'constraint_type', tc.constraint_type,
+                'column_name', kcu.column_name,
+                'foreign_table', ccu.table_name,
+                'foreign_column', ccu.column_name
+            )
+        ) AS constraints
+    FROM information_schema.table_constraints tc
+    JOIN information_schema.key_column_usage kcu 
+      ON tc.constraint_name = kcu.constraint_name 
+     AND tc.table_schema = kcu.table_schema
+    LEFT JOIN information_schema.constraint_column_usage ccu 
+      ON ccu.constraint_name = tc.constraint_name 
+     AND ccu.table_schema = tc.table_schema
+    WHERE tc.table_schema = 'public'
+    GROUP BY tc.table_name
+),
+table_policies AS (
+    SELECT 
+        tablename AS table_name,
+        json_agg(
+            json_build_object(
+                'policy_name', policyname,
+                'permissive', permissive,
+                'roles', roles,
+                'cmd', cmd,
+                'qual', qual,
+                'with_check', with_check
+            )
+        ) AS policies
+    FROM pg_policies
+    WHERE schemaname = 'public'
+    GROUP BY tablename
+),
+table_indexes AS (
+    SELECT 
+        tablename AS table_name,
+        json_agg(
+            json_build_object(
+                'index_name', indexname,
+                'index_def', indexdef
+            )
+        ) AS indexes
+    FROM pg_indexes
+    WHERE schemaname = 'public'
+    GROUP BY tablename
+),
+table_triggers AS (
+    SELECT 
+        event_object_table AS table_name,
+        json_agg(
+            json_build_object(
+                'trigger_name', trigger_name,
+                'action_timing', action_timing,
+                'event_manipulation', event_manipulation,
+                'action_statement', action_statement
+            )
+        ) AS triggers
+    FROM information_schema.triggers
+    WHERE trigger_schema = 'public'
+    GROUP BY event_object_table
+)
+SELECT json_agg(
+    json_build_object(
+        'table_name', t.table_name,
+        'rls_enabled', (
+            SELECT c.relrowsecurity 
+            FROM pg_class c 
+            JOIN pg_namespace n ON n.oid = c.relnamespace 
+            WHERE n.nspname = 'public' AND c.relname = t.table_name
+        ),
+        'columns', COALESCE(col.columns, '[]'::json),
+        'constraints', COALESCE(cons.constraints, '[]'::json),
+        'policies', COALESCE(pol.policies, '[]'::json),
+        'indexes', COALESCE(idx.indexes, '[]'::json),
+        'triggers', COALESCE(trig.triggers, '[]'::json)
+    ) ORDER BY t.table_name
+) AS schema_json
+FROM information_schema.tables t
+LEFT JOIN table_columns col ON col.table_name = t.table_name
+LEFT JOIN table_constraints cons ON cons.table_name = t.table_name
+LEFT JOIN table_policies pol ON pol.table_name = t.table_name
+LEFT JOIN table_indexes idx ON idx.table_name = t.table_name
+LEFT JOIN table_triggers trig ON trig.table_name = t.table_name
+WHERE t.table_schema = 'public' AND t.table_type = 'BASE TABLE';
