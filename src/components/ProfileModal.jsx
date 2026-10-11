@@ -54,37 +54,44 @@ export function ProfileModal({
 
   const { showToast } = useToast();
   const [friendLoading, setFriendLoading] = useState(false);
+  // Message affiché dans la fenêtre (remplace les alert() de débogage)
+  const [notice, setNotice] = useState(null); // { type: "ok" | "error", text }
+  const [failedAvatarUrl, setFailedAvatarUrl] = useState(null);
 
   const { profile, contacts, links, socials, loading, reload } = useProfile(authorId, showToast);
   const stats = useProfileStats(authorId);
 
-  // ✅ VERSION CORRIGÉE AVEC RETURN APRÈS SUCCÈS
   const handleFriendRequest = async () => {
-    if (!currentUserId || !authorId || currentUserId === authorId || friendLoading) {
-      alert(`⚠️ BLOQUÉ :\n- currentUserId: ${currentUserId || "VIDE"}\n- authorId: ${authorId || "VIDE"}`);
+    if (friendLoading) return;
+    if (!currentUserId) {
+      setNotice({ type: "error", text: "Connecte-toi pour envoyer une demande d'ami." });
       return;
     }
-    
+    if (!authorId || currentUserId === authorId) return;
+
     setFriendLoading(true);
+    setNotice(null);
     try {
-      const { data, error } = await sendFriendRequest(authorId);
-      
-      if (error) {
-        alert(`❌ ERREUR SUPABASE :\n${error.message}`);
-        throw error;
-      }
-      
-      alert(`✅ SUCCÈS !\nDemande envoyée à : ${authorId}`);
-      return; // ✅ EMPÊCHE L'EXÉCUTION DE showToast() qui cause l'erreur randomId
-      
+      const { error } = await sendFriendRequest(authorId);
+      if (error) throw error;
+      setNotice({ type: "ok", text: "Demande d'ami envoyée." });
     } catch (error) {
       console.error("Erreur demande d'ami:", error);
-      alert(`❌ ÉCHEC FINAL :\n${error.message}`);
-      // ✅ NE PAS appeler showToast pour éviter l'erreur randomId
+      setNotice({
+        type: "error",
+        text: "Demande impossible : " + (error?.message || "erreur inconnue"),
+      });
     } finally {
       setFriendLoading(false);
     }
   };
+
+  // Le message disparaît tout seul
+  useEffect(() => {
+    if (!notice) return undefined;
+    const timer = setTimeout(() => setNotice(null), 5000);
+    return () => clearTimeout(timer);
+  }, [notice]);
 
   useEffect(() => {
     if (!authorId) return undefined;
@@ -105,6 +112,7 @@ export function ProfileModal({
 
   const isOwnProfile = currentUserId === authorId;
   const initials = getInitials(profile);
+  const avatarBroken = !!profile?.avatar_url && failedAvatarUrl === profile.avatar_url;
 
   const handleMessage = () => {
     onClose?.();
@@ -149,6 +157,20 @@ export function ProfileModal({
           <X size={20} />
         </button>
 
+        {notice && (
+          <div
+            className="absolute left-3 right-16 top-3 z-20 rounded-xl px-3 py-2 text-xs font-semibold"
+            role="status"
+            style={{
+              background: notice.type === "ok" ? "rgba(16,185,129,.2)" : "rgba(239,68,68,.2)",
+              color: notice.type === "ok" ? "#6ee7b7" : "#fca5a5",
+              border: "1px solid rgba(255,255,255,.1)",
+            }}
+          >
+            {notice.text}
+          </div>
+        )}
+
         {loading ? (
           <div className="flex min-h-[420px] items-center justify-center">
             <div className="flex flex-col items-center gap-3">
@@ -183,19 +205,13 @@ export function ProfileModal({
                   className="flex h-28 w-28 items-center justify-center overflow-hidden rounded-full border-4 shadow-xl"
                   style={{ background: COLORS.surface, borderColor: COLORS.background || "#0B1220" }}
                 >
-                  {profile?.avatar_url ? (
+                  {profile?.avatar_url && !avatarBroken ? (
                     <img
                       src={profile.avatar_url}
                       alt={profile?.display_name || "Photo de profil"}
                       className="h-full w-full object-cover"
                       loading="lazy"
-                      onError={(event) => {
-                        event.currentTarget.style.display = "none";
-                        const parent = event.currentTarget.parentElement;
-                        if (parent) {
-                          parent.innerHTML = `<span style="display:flex;align-items:center;justify-content:center;width:100%;height:100%;font-size:28px;font-weight:700;color:${COLORS.gold};">${initials}</span>`;
-                        }
-                      }}
+                      onError={() => setFailedAvatarUrl(profile.avatar_url)}
                     />
                   ) : (
                     <span className="text-3xl font-bold" style={{ color: COLORS.gold }}>{initials}</span>
