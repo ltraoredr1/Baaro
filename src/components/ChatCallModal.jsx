@@ -1,15 +1,55 @@
+/**
+ * BAARO ChatCallModal — écran d'appel type téléphone
+ * - Sonnerie entrante (boucle + vibration)
+ * - Ton d'attente sortant (ringback)
+ * - UI plein écran, avatar, boutons décrocher / raccrocher
+ */
 import { useEffect, useRef, useState, useCallback } from "react";
 import { Phone, PhoneOff, Video, VideoOff, Mic, MicOff, X } from "lucide-react";
 import { COLORS as THEME_COLORS } from "../theme.js";
-import { startCall, joinCall, leaveCall, enableMic, enableCamera, subscribeCallEvents, getParticipants, updateCallStatus } from "../lib/chatCalls.js";
+import {
+  startCall,
+  joinCall,
+  leaveCall,
+  enableMic,
+  enableCamera,
+  subscribeCallEvents,
+  getParticipants,
+  updateCallStatus,
+} from "../lib/chatCalls.js";
+import {
+  startIncomingRingtone,
+  startOutgoingRingback,
+  stopRingtone,
+} from "../lib/callRingtone.js";
 
 const baaroLogo = "/brand/baaro-logo.png";
 
-const FALLBACK = { surface: "#12141F", surface2: "rgba(255,255,255,0.08)", border: "rgba(255,255,255,0.1)", borderGold: "rgba(217,174,82,0.2)", ivory: "#F5F3EF", muted: "rgba(245,243,239,0.55)", gold: "#D9AE52", bg: "#0B1220" };
+const FALLBACK = {
+  surface: "#12141F",
+  surface2: "rgba(255,255,255,0.08)",
+  border: "rgba(255,255,255,0.1)",
+  borderGold: "rgba(217,174,82,0.2)",
+  ivory: "#F5F3EF",
+  muted: "rgba(245,243,239,0.55)",
+  gold: "#D9AE52",
+  bg: "#0B1220",
+  teal: "#2DBFA6",
+};
 
-export function ChatCallModal({ mode = "outgoing", callType = "voice", callRecord, roomUrl, token, otherUser = {}, onClose, onAccepted, onRejected }) {
+export function ChatCallModal({
+  mode = "outgoing",
+  callType = "voice",
+  callRecord,
+  roomUrl,
+  token,
+  otherUser = {},
+  onClose,
+  onAccepted,
+  onRejected,
+}) {
   const C = { ...FALLBACK, ...(THEME_COLORS || {}) };
-  const [status, setStatus] = useState(mode);
+  const [status, setStatus] = useState(mode); // outgoing | incoming | active | ended
   const [micOn, setMicOn] = useState(true);
   const [camOn, setCamOn] = useState(callType === "video");
   const [duration, setDuration] = useState(0);
@@ -24,21 +64,40 @@ export function ChatCallModal({ mode = "outgoing", callType = "voice", callRecor
     clearInterval(timerRef.current);
     timerRef.current = null;
     const el = document.getElementById("baaro-call-remote-audio");
-    if (el) { try{ el.srcObject?.getTracks()?.forEach(t=>t.stop()); }catch{} el.srcObject = null; el.remove(); }
-    [localVideoRef, remoteVideoRef].forEach(r=>{ if(r.current){ try{ r.current.srcObject?.getTracks()?.forEach(t=>t.stop()); }catch{} r.current.srcObject = null; } });
-    if(unsubscribeRef.current){ try{ unsubscribeRef.current(); }catch{} unsubscribeRef.current = null; }
+    if (el) {
+      try {
+        el.srcObject?.getTracks()?.forEach((t) => t.stop());
+      } catch {}
+      el.srcObject = null;
+      el.remove();
+    }
+    [localVideoRef, remoteVideoRef].forEach((r) => {
+      if (r.current) {
+        try {
+          r.current.srcObject?.getTracks()?.forEach((t) => t.stop());
+        } catch {}
+        r.current.srcObject = null;
+      }
+    });
+    if (unsubscribeRef.current) {
+      try {
+        unsubscribeRef.current();
+      } catch {}
+      unsubscribeRef.current = null;
+    }
+  }, []);
+
+  const stopAllSounds = useCallback(() => {
+    stopRingtone();
   }, []);
 
   const attachTracks = useCallback(() => {
     try {
       const parts = getParticipants() || {};
-
       Object.values(parts).forEach((participant) => {
         const tracks = participant.tracks || {};
-        const videoTrack =
-          tracks.video?.persistentTrack || tracks.video?.track;
-        const audioTrack =
-          tracks.audio?.persistentTrack || tracks.audio?.track;
+        const videoTrack = tracks.video?.persistentTrack || tracks.video?.track;
+        const audioTrack = tracks.audio?.persistentTrack || tracks.audio?.track;
 
         if (participant.local) {
           if (videoTrack && localVideoRef.current) {
@@ -57,7 +116,6 @@ export function ChatCallModal({ mode = "outgoing", callType = "voice", callRecor
           remoteVideoRef.current.play().catch(() => {});
         } else if (audioTrack) {
           let audio = document.getElementById("baaro-call-remote-audio");
-
           if (!audio) {
             audio = document.createElement("audio");
             audio.id = "baaro-call-remote-audio";
@@ -66,7 +124,6 @@ export function ChatCallModal({ mode = "outgoing", callType = "voice", callRecor
             audio.setAttribute("playsinline", "");
             document.body.appendChild(audio);
           }
-
           audio.srcObject = new MediaStream([audioTrack]);
           audio.play().catch((error) => {
             console.warn("Lecture audio distant impossible :", error);
@@ -78,16 +135,45 @@ export function ChatCallModal({ mode = "outgoing", callType = "voice", callRecor
     }
   }, []);
 
-  const endCall = useCallback(async (finalStatus = "ended") => {
-    clearInterval(timerRef.current);
-    const dur = startedAtRef.current ? Math.floor((Date.now() - startedAtRef.current) / 1000) : 0;
-    try { await leaveCall(); } catch {}
-    if (callRecord?.id) { updateCallStatus(callRecord.id, { status: finalStatus, ended_at: new Date().toISOString(), duration_seconds: dur }).catch(() => {}); }
-    cleanupMedia();
-    if (mountedRef.current) setStatus("ended");
-    onClose?.();
-  }, [callRecord?.id, cleanupMedia, onClose]);
+  const endCall = useCallback(
+    async (finalStatus = "ended") => {
+      stopAllSounds();
+      clearInterval(timerRef.current);
+      const dur = startedAtRef.current
+        ? Math.floor((Date.now() - startedAtRef.current) / 1000)
+        : 0;
+      try {
+        await leaveCall();
+      } catch {}
+      if (callRecord?.id) {
+        updateCallStatus(callRecord.id, {
+          status: finalStatus,
+          ended_at: new Date().toISOString(),
+          duration_seconds: dur,
+        }).catch(() => {});
+      }
+      cleanupMedia();
+      if (mountedRef.current) setStatus("ended");
+      onClose?.();
+    },
+    [callRecord?.id, cleanupMedia, onClose, stopAllSounds]
+  );
 
+  // ── Sonnerie selon le mode ────────────────────────────────────────────────
+  useEffect(() => {
+    if (status === "incoming") {
+      startIncomingRingtone();
+    } else if (status === "outgoing") {
+      startOutgoingRingback();
+    } else {
+      stopRingtone();
+    }
+    return () => {
+      stopRingtone();
+    };
+  }, [status]);
+
+  // ── Appel sortant : rejoindre la room Daily ───────────────────────────────
   useEffect(() => {
     mountedRef.current = true;
     if (mode !== "outgoing" || !roomUrl || !token) return;
@@ -96,47 +182,367 @@ export function ChatCallModal({ mode = "outgoing", callType = "voice", callRecor
       try {
         await startCall({ roomUrl, token, video: callType === "video" });
         if (cancelled || !mountedRef.current) return;
-        unsubscribeRef.current = subscribeCallEvents({ onParticipantJoined: () => { if (!mountedRef.current) return; setStatus("active"); startedAtRef.current = Date.now(); if (callRecord?.id) updateCallStatus(callRecord.id, { status: "accepted", started_at: new Date().toISOString() }).catch(() => {}); onAccepted?.(); }, onParticipantLeft: () => endCall("ended"), onTrackStarted: () => attachTracks(), onLeft: () => endCall("ended") });
+        unsubscribeRef.current = subscribeCallEvents({
+          onParticipantJoined: () => {
+            if (!mountedRef.current) return;
+            stopAllSounds();
+            setStatus("active");
+            startedAtRef.current = Date.now();
+            if (callRecord?.id) {
+              updateCallStatus(callRecord.id, {
+                status: "accepted",
+                started_at: new Date().toISOString(),
+              }).catch(() => {});
+            }
+            onAccepted?.();
+          },
+          onParticipantLeft: () => endCall("ended"),
+          onTrackStarted: () => attachTracks(),
+          onLeft: () => endCall("ended"),
+        });
         setTimeout(attachTracks, 500);
-      } catch (e) { console.error(e); if (mountedRef.current) onClose?.(); }
+      } catch (e) {
+        console.error(e);
+        stopAllSounds();
+        if (mountedRef.current) onClose?.();
+      }
     })();
-    return () => { cancelled = true; };
-  }, [mode, roomUrl, token, callType, callRecord?.id, attachTracks, endCall, onAccepted, onClose]);
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    mode,
+    roomUrl,
+    token,
+    callType,
+    callRecord?.id,
+    attachTracks,
+    endCall,
+    onAccepted,
+    onClose,
+    stopAllSounds,
+  ]);
 
-  useEffect(() => { if (status !== "active") return; timerRef.current = setInterval(() => { if (startedAtRef.current) setDuration(Math.floor((Date.now() - startedAtRef.current) / 1000)); }, 1000); return () => clearInterval(timerRef.current); }, [status]);
-  useEffect(() => { return () => { mountedRef.current = false; clearInterval(timerRef.current); cleanupMedia(); leaveCall().catch(() => {}); }; }, [cleanupMedia]);
+  // Timer durée
+  useEffect(() => {
+    if (status !== "active") return;
+    timerRef.current = setInterval(() => {
+      if (startedAtRef.current) {
+        setDuration(Math.floor((Date.now() - startedAtRef.current) / 1000));
+      }
+    }, 1000);
+    return () => clearInterval(timerRef.current);
+  }, [status]);
+
+  // Cleanup au démontage
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+      stopRingtone();
+      clearInterval(timerRef.current);
+      cleanupMedia();
+      leaveCall().catch(() => {});
+    };
+  }, [cleanupMedia]);
 
   const acceptIncoming = async () => {
     if (!roomUrl || !token) return;
+    stopAllSounds();
     try {
       await joinCall({ roomUrl, token, video: callType === "video" });
-      setStatus("active"); startedAtRef.current = Date.now();
-      if (callRecord?.id) await updateCallStatus(callRecord.id, { status: "accepted", started_at: new Date().toISOString() });
-      unsubscribeRef.current = subscribeCallEvents({ onParticipantLeft: () => endCall("ended"), onTrackStarted: () => attachTracks(), onLeft: () => endCall("ended") });
-      setTimeout(attachTracks, 400); onAccepted?.();
-    } catch (e) { console.error(e); onClose?.(); }
+      setStatus("active");
+      startedAtRef.current = Date.now();
+      if (callRecord?.id) {
+        await updateCallStatus(callRecord.id, {
+          status: "accepted",
+          started_at: new Date().toISOString(),
+        });
+      }
+      unsubscribeRef.current = subscribeCallEvents({
+        onParticipantLeft: () => endCall("ended"),
+        onTrackStarted: () => attachTracks(),
+        onLeft: () => endCall("ended"),
+      });
+      setTimeout(attachTracks, 400);
+      onAccepted?.();
+    } catch (e) {
+      console.error(e);
+      onClose?.();
+    }
   };
-  const rejectIncoming = async () => { if (callRecord?.id) await updateCallStatus(callRecord.id, { status: "rejected", ended_at: new Date().toISOString() }).catch(() => {}); onRejected?.(); onClose?.(); };
-  const toggleMic = async () => { try { await enableMic(!micOn); setMicOn((v) => !v); } catch {} };
-  const toggleCam = async () => { try { await enableCamera(!camOn); setCamOn((v) => !v); } catch {} };
-  const formatTime = (s) => { const m = Math.floor(s / 60); const r = s % 60; return `${m}:${String(r).padStart(2, "0")}`; };
+
+  const rejectIncoming = async () => {
+    stopAllSounds();
+    if (callRecord?.id) {
+      await updateCallStatus(callRecord.id, {
+        status: "rejected",
+        ended_at: new Date().toISOString(),
+      }).catch(() => {});
+    }
+    onRejected?.();
+    onClose?.();
+  };
+
+  const toggleMic = async () => {
+    try {
+      await enableMic(!micOn);
+      setMicOn((v) => !v);
+    } catch {}
+  };
+
+  const toggleCam = async () => {
+    try {
+      await enableCamera(!camOn);
+      setCamOn((v) => !v);
+    } catch {}
+  };
+
+  const formatTime = (s) => {
+    const m = Math.floor(s / 60);
+    const r = s % 60;
+    return `${m}:${String(r).padStart(2, "0")}`;
+  };
+
+  const statusLabel =
+    status === "outgoing"
+      ? "Appel en cours…"
+      : status === "incoming"
+        ? callType === "video"
+          ? "Appel vidéo entrant"
+          : "Appel vocal entrant"
+        : status === "active"
+          ? formatTime(duration)
+          : "Terminé";
+
+  const isRinging = status === "incoming" || status === "outgoing";
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4" style={{ background: "rgba(0,0,0,0.85)" }}>
-      <div className="w-full max-w-md rounded-3xl border overflow-hidden shadow-2xl flex flex-col" style={{ background: C.surface, borderColor: C.borderGold, minHeight: callType === "video" ? 480 : 360 }}>
-        <div className="flex items-center justify-between p-4 border-b" style={{ borderColor: C.border }}>
-          <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-full bg-white/10 flex items-center justify-center text-xl overflow-hidden">{otherUser.avatar ? <img src={otherUser.avatar} alt="" className="w-full h-full object-cover" onError={(e)=>e.target.src=baaroLogo} /> : <img src={baaroLogo} alt="" className="w-full h-full object-cover" />}</div>
-            <div><p className="font-bold text-sm" style={{ color: C.ivory }}>{otherUser.name || "Membre"}</p><p className="text-xs" style={{ color: C.muted }}>{status === "outgoing" && "Appel en cours..."}{status === "incoming" && (callType === "video" ? "Appel video entrant" : "Appel vocal entrant")}{status === "active" && formatTime(duration)}{status === "ended" && "Termine"}</p></div>
+    <div
+      className="fixed inset-0 z-[100] flex flex-col"
+      style={{
+        background:
+          "radial-gradient(ellipse at 50% 20%, #1a2338 0%, #0B1220 55%, #070b14 100%)",
+      }}
+    >
+      {/* Zone principale */}
+      <div className="flex-1 flex flex-col items-center justify-center px-6 pt-12 pb-8 relative">
+        {/* Vidéo distante (plein écran en appel vidéo actif) */}
+        {callType === "video" && status === "active" && (
+          <video
+            ref={remoteVideoRef}
+            autoPlay
+            playsInline
+            className="absolute inset-0 w-full h-full object-cover"
+          />
+        )}
+
+        {/* Overlay sombre si vidéo active pour lisibilité */}
+        {callType === "video" && status === "active" && (
+          <div className="absolute inset-0 bg-gradient-to-b from-black/50 via-transparent to-black/70 pointer-events-none" />
+        )}
+
+        {/* Contenu centré (avatar + nom) — visible surtout hors vidéo active */}
+        <div
+          className={`relative z-10 flex flex-col items-center text-center transition-opacity ${
+            callType === "video" && status === "active" ? "opacity-0 pointer-events-none" : "opacity-100"
+          }`}
+        >
+          {/* Anneaux de sonnerie animés */}
+          {isRinging && (
+            <>
+              <div
+                className="absolute w-40 h-40 rounded-full animate-ping"
+                style={{
+                  background: "rgba(217,174,82,0.12)",
+                  animationDuration: "1.8s",
+                }}
+              />
+              <div
+                className="absolute w-52 h-52 rounded-full animate-ping"
+                style={{
+                  background: "rgba(217,174,82,0.07)",
+                  animationDuration: "2.2s",
+                  animationDelay: "0.3s",
+                }}
+              />
+            </>
+          )}
+
+          {/* Avatar */}
+          <div
+            className={`relative w-28 h-28 rounded-full overflow-hidden ring-4 shadow-2xl ${
+              isRinging ? "animate-pulse" : ""
+            }`}
+            style={{
+              ringColor: status === "incoming" ? "#22C55E" : C.gold,
+              background: "rgba(255,255,255,0.08)",
+            }}
+          >
+            {otherUser.avatar ? (
+              <img
+                src={otherUser.avatar}
+                alt=""
+                className="w-full h-full object-cover"
+                onError={(e) => {
+                  e.target.src = baaroLogo;
+                }}
+              />
+            ) : (
+              <img src={baaroLogo} alt="" className="w-full h-full object-cover" />
+            )}
           </div>
-          <button onClick={() => endCall("ended")} className="p-2 rounded-full hover:bg-white/10" style={{ color: C.muted }}><X size={20} /></button>
+
+          <h2
+            className="mt-6 text-2xl font-bold tracking-tight"
+            style={{ color: C.ivory }}
+          >
+            {otherUser.name || "Membre"}
+          </h2>
+
+          <p
+            className={`mt-2 text-sm font-medium ${isRinging ? "animate-pulse" : ""}`}
+            style={{
+              color:
+                status === "incoming"
+                  ? "#22C55E"
+                  : status === "outgoing"
+                    ? C.gold
+                    : C.muted,
+            }}
+          >
+            {statusLabel}
+          </p>
+
+          {status === "outgoing" && (
+            <p className="mt-1 text-xs" style={{ color: C.muted }}>
+              Sonnerie chez le correspondant…
+            </p>
+          )}
+          {status === "incoming" && (
+            <p className="mt-1 text-xs" style={{ color: C.muted }}>
+              {callType === "video" ? "Vidéo" : "Vocal"} · BAARO sécurisé
+            </p>
+          )}
         </div>
-        <div className="flex-1 relative flex items-center justify-center bg-black/40 min-h-[200px]">
-          {callType === "video" ? <><video ref={remoteVideoRef} autoPlay playsInline className="absolute inset-0 w-full h-full object-cover" /><video ref={localVideoRef} autoPlay playsInline muted className="absolute bottom-3 right-3 w-28 h-40 rounded-xl object-cover border-2" style={{ borderColor: C.gold }} /></> : <div className="text-center py-10"><div className="w-24 h-24 rounded-full bg-white/10 flex items-center justify-center text-4xl mx-auto mb-4 overflow-hidden">{otherUser.avatar ? <img src={otherUser.avatar} alt="" className="w-full h-full object-cover" onError={(e)=>e.target.src=baaroLogo} /> : <img src={baaroLogo} alt="" className="w-full h-full object-cover" />}</div><p className="text-sm font-semibold" style={{ color: C.ivory }}>{otherUser.name || "Membre"}</p>{status === "outgoing" && <p className="text-xs mt-2 animate-pulse" style={{ color: C.gold }}>Sonnerie...</p>}</div>}
+
+        {/* Mini vidéo locale (coin bas-droit) en appel vidéo actif */}
+        {callType === "video" && status === "active" && (
+          <video
+            ref={localVideoRef}
+            autoPlay
+            playsInline
+            muted
+            className="absolute bottom-28 right-4 w-28 h-40 rounded-2xl object-cover border-2 z-20 shadow-xl"
+            style={{ borderColor: C.gold }}
+          />
+        )}
+      </div>
+
+      {/* Barre de contrôles */}
+      <div
+        className="relative z-20 px-6 pb-10 pt-4"
+        style={{
+          paddingBottom: "calc(2.5rem + env(safe-area-inset-bottom))",
+          background:
+            callType === "video" && status === "active"
+              ? "linear-gradient(transparent, rgba(0,0,0,0.75))"
+              : "transparent",
+        }}
+      >
+        {/* Durée en mode vidéo actif */}
+        {callType === "video" && status === "active" && (
+          <p
+            className="text-center text-sm font-semibold mb-4 tabular-nums"
+            style={{ color: C.ivory }}
+          >
+            {formatTime(duration)}
+          </p>
+        )}
+
+        <div className="flex items-center justify-center gap-5">
+          {status === "incoming" ? (
+            <>
+              {/* Refuser */}
+              <button
+                type="button"
+                onClick={rejectIncoming}
+                className="w-16 h-16 rounded-full flex items-center justify-center shadow-lg active:scale-95 transition"
+                style={{ background: "#EF4444", color: "#fff" }}
+                aria-label="Refuser"
+              >
+                <PhoneOff size={28} />
+              </button>
+              {/* Accepter */}
+              <button
+                type="button"
+                onClick={acceptIncoming}
+                className="w-16 h-16 rounded-full flex items-center justify-center shadow-lg active:scale-95 transition animate-pulse"
+                style={{ background: "#22C55E", color: "#fff" }}
+                aria-label="Accepter"
+              >
+                {callType === "video" ? <Video size={28} /> : <Phone size={28} />}
+              </button>
+            </>
+          ) : (
+            <>
+              {/* Micro */}
+              <button
+                type="button"
+                onClick={toggleMic}
+                className="w-14 h-14 rounded-full flex items-center justify-center border active:scale-95 transition"
+                style={{
+                  background: micOn ? "rgba(255,255,255,0.12)" : "rgba(239,68,68,0.35)",
+                  borderColor: "rgba(255,255,255,0.15)",
+                  color: micOn ? C.ivory : "#EF4444",
+                }}
+                aria-label={micOn ? "Couper le micro" : "Activer le micro"}
+              >
+                {micOn ? <Mic size={22} /> : <MicOff size={22} />}
+              </button>
+
+              {/* Caméra (vidéo seulement) */}
+              {callType === "video" && (
+                <button
+                  type="button"
+                  onClick={toggleCam}
+                  className="w-14 h-14 rounded-full flex items-center justify-center border active:scale-95 transition"
+                  style={{
+                    background: camOn ? "rgba(255,255,255,0.12)" : "rgba(239,68,68,0.35)",
+                    borderColor: "rgba(255,255,255,0.15)",
+                    color: camOn ? C.ivory : "#EF4444",
+                  }}
+                  aria-label={camOn ? "Couper la caméra" : "Activer la caméra"}
+                >
+                  {camOn ? <Video size={22} /> : <VideoOff size={22} />}
+                </button>
+              )}
+
+              {/* Raccrocher */}
+              <button
+                type="button"
+                onClick={() => endCall("ended")}
+                className="w-16 h-16 rounded-full flex items-center justify-center shadow-lg active:scale-95 transition"
+                style={{ background: "#EF4444", color: "#fff" }}
+                aria-label="Raccrocher"
+              >
+                <PhoneOff size={28} />
+              </button>
+            </>
+          )}
         </div>
-        <div className="p-5 flex items-center justify-center gap-4">
-          {status === "incoming" ? <><button onClick={rejectIncoming} className="w-14 h-14 rounded-full flex items-center justify-center" style={{ background: "#EF4444", color: "#fff" }}><PhoneOff size={24} /></button><button onClick={acceptIncoming} className="w-14 h-14 rounded-full flex items-center justify-center" style={{ background: "#22C55E", color: "#fff" }}><Phone size={24} /></button></> : <><button onClick={toggleMic} className="w-12 h-12 rounded-full flex items-center justify-center border" style={{ background: micOn ? C.surface2 : "rgba(239,68,68,0.3)", borderColor: C.border, color: micOn ? C.ivory : "#EF4444" }}>{micOn ? <Mic size={20} /> : <MicOff size={20} />}</button>{callType === "video" && <button onClick={toggleCam} className="w-12 h-12 rounded-full flex items-center justify-center border" style={{ background: camOn ? C.surface2 : "rgba(239,68,68,0.3)", borderColor: C.border, color: camOn ? C.ivory : "#EF4444" }}>{camOn ? <Video size={20} /> : <VideoOff size={20} />}</button>}<button onClick={() => endCall("ended")} className="w-14 h-14 rounded-full flex items-center justify-center" style={{ background: "#EF4444", color: "#fff" }}><PhoneOff size={24} /></button></>}
-        </div>
+
+        {/* Bouton fermer discret (sortant / actif) */}
+        {status !== "incoming" && (
+          <button
+            type="button"
+            onClick={() => endCall("ended")}
+            className="absolute top-0 right-4 p-2 rounded-full opacity-50 hover:opacity-100 transition"
+            style={{ color: C.muted }}
+            aria-label="Fermer"
+          >
+            <X size={18} />
+          </button>
+        )}
       </div>
     </div>
   );
