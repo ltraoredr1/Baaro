@@ -6,7 +6,7 @@ import {
   Phone,
   Mail,
   ArrowLeft,
-  UserCheck,
+  Sparkles,
 } from "lucide-react";
 import { supabase } from "../../supabaseClient.js";
 import { TurnstileWidget } from "../../Turnstile.jsx";
@@ -16,15 +16,16 @@ import {
 } from "../../lib/referralApi.js";
 import PhoneAuth from "./PhoneAuth.jsx";
 
+const LEGAL_VERSION = "2026-10-01";
+
 /**
- * Écran d'authentification BAARO
- * Méthodes autorisées uniquement :
- *  1. Téléphone
- *  2. Email (+ mot de passe)
- *  3. Anonyme / Invité
+ * Écran d'authentification BAARO — « invité d'abord »
+ *  1. Commencer (accès invité, sans inscription)
+ *  2. J'ai déjà un compte : Téléphone ou Email (+ mot de passe)
+ * Le compte invité peut être sécurisé plus tard depuis Réglages.
  */
 export default function AuthScreen() {
-  const [mode, setMode] = useState("choice"); // "choice" | "guest" | "email" | "phone"
+  const [mode, setMode] = useState("choice"); // "choice" | "email" | "phone"
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [isLogin, setIsLogin] = useState(true);
@@ -47,13 +48,29 @@ export default function AuthScreen() {
   };
 
   /**
+   * Enregistre l'acceptation des documents légaux (sans bloquer la connexion)
+   */
+  const recordConsents = async () => {
+    for (const type of ["terms", "privacy", "community"]) {
+      try {
+        await supabase.rpc("record_legal_consent", {
+          p_document_type: type,
+          p_version: LEGAL_VERSION,
+        });
+      } catch (e) {
+        console.error("[BAARO] Consentement " + type + ":", e);
+      }
+    }
+  };
+
+  /**
    * Connexion anonyme / invité (is_anonymous = true)
    */
   const handleAnonymous = async () => {
     if (loading) return;
 
     if (!captchaToken) {
-      setError("Veuillez valider le test de sécurité ci-dessous.");
+      setError("Veuillez valider le test de sécurité ci-dessus.");
       return;
     }
 
@@ -69,9 +86,7 @@ export default function AuthScreen() {
       const useCaptcha = captchaToken && captchaToken !== "dev-bypass";
 
       const { data, error: authError } = await supabase.auth.signInAnonymously(
-        useCaptcha
-          ? { options: { captchaToken } }
-          : undefined
+        useCaptcha ? { options: { captchaToken } } : undefined
       );
 
       if (authError) {
@@ -104,6 +119,7 @@ export default function AuthScreen() {
         } catch (e) {
           console.error("[BAARO] Profil invité:", e);
         }
+        await recordConsents();
       }
 
       setSuccess("Connexion réussie ! Bienvenue sur BAARO.");
@@ -164,9 +180,7 @@ export default function AuthScreen() {
 
       const id = data?.user?.id;
       if (!isLogin && id) {
-        await supabase.rpc("record_legal_consent", { p_document_type: "terms", p_version: "2026-10-01" });
-        await supabase.rpc("record_legal_consent", { p_document_type: "privacy", p_version: "2026-10-01" });
-        await supabase.rpc("record_legal_consent", { p_document_type: "community", p_version: "2026-10-01" });
+        await recordConsents();
       }
       if (data?.session && id) {
         try {
@@ -271,65 +285,10 @@ export default function AuthScreen() {
           </div>
         )}
 
-        {/* ========== VUE CHOIX ========== */}
+        {/* ========== VUE ACCUEIL : INVITÉ D'ABORD ========== */}
         {mode === "choice" && (
-          <div className="flex flex-col gap-3">
-            <p className="text-xs text-center uppercase tracking-wider font-semibold text-slate-400 mb-2">
-              Choisissez votre mode d'accès
-            </p>
-
-            {/* Téléphone */}
-            <button
-              type="button"
-              onClick={() => switchMode("phone")}
-              className="w-full py-3.5 px-4 rounded-xl font-semibold text-sm flex items-center justify-center gap-3 bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg transition-all active:scale-[0.98]"
-            >
-              <Phone size={18} />
-              <span>Continuer avec Téléphone</span>
-            </button>
-
-            {/* Email */}
-            <button
-              type="button"
-              onClick={() => switchMode("email")}
-              className="w-full py-3.5 px-4 rounded-xl font-semibold text-sm flex items-center justify-center gap-3 bg-blue-600 hover:bg-blue-500 text-white shadow-lg transition-all active:scale-[0.98]"
-            >
-              <Mail size={18} />
-              <span>Continuer avec Email</span>
-            </button>
-
-            {/* Séparateur */}
-            <div className="flex items-center gap-3 my-3">
-              <div className="flex-1 h-px bg-slate-800" />
-              <span className="text-xs text-slate-500 uppercase tracking-widest font-semibold">
-                ou
-              </span>
-              <div className="flex-1 h-px bg-slate-800" />
-            </div>
-
-            {/* Accès Invité / Anonyme */}
-            <button
-              type="button"
-              onClick={() => switchMode("guest")}
-              className="w-full py-3.5 px-4 rounded-xl font-bold text-sm flex items-center justify-center gap-2 border border-amber-500/40 text-amber-400 hover:bg-amber-500/10 transition-all active:scale-[0.98]"
-            >
-              <UserCheck size={18} />
-              <span>Accès Invité (Anonyme)</span>
-            </button>
-          </div>
-        )}
-
-        {/* ========== VUE INVITÉ ========== */}
-        {mode === "guest" && (
           <div className="flex flex-col gap-4">
-            <div className="text-center">
-              <h2 className="text-lg font-bold text-slate-100">Accès Invité</h2>
-              <p className="text-xs text-slate-400 mt-1">
-                Validez le contrôle de sécurité ci-dessous pour continuer.
-              </p>
-            </div>
-
-            <div className="flex justify-center my-2">
+            <div className="flex justify-center">
               <TurnstileWidget
                 onVerify={(token) => {
                   setCaptchaToken(token || null);
@@ -343,19 +302,59 @@ export default function AuthScreen() {
               type="button"
               onClick={handleAnonymous}
               disabled={loading || !captchaToken}
-              className="w-full py-3.5 rounded-xl font-bold text-sm bg-gradient-to-r from-amber-500 to-teal-400 text-slate-950 shadow-lg disabled:opacity-50 hover:opacity-95 transition-all active:scale-[0.98]"
+              className="w-full py-4 rounded-xl font-bold text-base flex items-center justify-center gap-2 bg-gradient-to-r from-amber-500 to-teal-400 text-slate-950 shadow-lg disabled:opacity-50 hover:opacity-95 transition-all active:scale-[0.98]"
             >
-              {loading ? "Connexion en cours..." : "Entrer en tant qu'invité"}
+              <Sparkles size={18} />
+              <span>{loading ? "Connexion en cours..." : "Commencer"}</span>
             </button>
+            <p className="text-[11px] text-center text-slate-400 -mt-2">
+              Sans inscription. Tu pourras sauvegarder ton compte plus tard
+              depuis Réglages.
+            </p>
 
-            <button
-              type="button"
-              onClick={() => switchMode("choice")}
-              className="text-xs text-slate-400 hover:text-slate-200 text-center flex items-center justify-center gap-1 mt-2 transition-colors"
-            >
-              <ArrowLeft size={14} />
-              <span>Retour aux choix de connexion</span>
-            </button>
+            {/* Séparateur */}
+            <div className="flex items-center gap-3 my-1">
+              <div className="flex-1 h-px bg-slate-800" />
+              <span className="text-xs text-slate-500 uppercase tracking-widest font-semibold">
+                J'ai déjà un compte
+              </span>
+              <div className="flex-1 h-px bg-slate-800" />
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => switchMode("phone")}
+                className="py-3 px-3 rounded-xl font-semibold text-xs flex items-center justify-center gap-2 border border-slate-700 text-slate-200 hover:bg-slate-800 transition-all active:scale-[0.98]"
+              >
+                <Phone size={16} />
+                <span>Téléphone</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => switchMode("email")}
+                className="py-3 px-3 rounded-xl font-semibold text-xs flex items-center justify-center gap-2 border border-slate-700 text-slate-200 hover:bg-slate-800 transition-all active:scale-[0.98]"
+              >
+                <Mail size={16} />
+                <span>Email</span>
+              </button>
+            </div>
+
+            <p className="text-[10px] text-center text-slate-500 leading-relaxed">
+              En continuant, tu acceptes les{" "}
+              <a href="/terms" className="underline text-amber-400/80">
+                conditions
+              </a>
+              , la{" "}
+              <a href="/privacy" className="underline text-amber-400/80">
+                confidentialité
+              </a>{" "}
+              et les{" "}
+              <a href="/community-guidelines" className="underline text-amber-400/80">
+                règles de la communauté
+              </a>
+              .
+            </p>
           </div>
         )}
 
@@ -369,7 +368,7 @@ export default function AuthScreen() {
               className="text-xs text-slate-400 hover:text-slate-200 text-center flex items-center justify-center gap-1 mt-2 transition-colors"
             >
               <ArrowLeft size={14} />
-              <span>Retour aux choix de connexion</span>
+              <span>Retour</span>
             </button>
           </div>
         )}
