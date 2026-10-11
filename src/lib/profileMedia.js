@@ -1,6 +1,7 @@
 /**
  * Upload avatar / couverture.
- * Les nouveaux médias sont stockés sur Cloudflare R2 via l’API BAARO.
+ * Les nouveaux médias sont stockés sur Cloudflare R2 via l'API BAARO
+ * (jamais dans Supabase : la base ne garde que l'URL).
  */
 import { uploadExternalMedia } from "./externalMedia.js";
 
@@ -17,34 +18,44 @@ async function compressImage(
   { maxWidth = 1600, quality = 0.82 } = {}
 ) {
   if (!file.type.startsWith("image/")) return file;
+  // Un GIF (souvent animé) reste tel quel : la compression le figerait
+  if (file.type === "image/gif" && file.size <= MAX_SIZE) return file;
 
-  const bitmap = await createImageBitmap(file);
-  let { width, height } = bitmap;
+  try {
+    const bitmap = await createImageBitmap(file);
+    let { width, height } = bitmap;
 
-  if (width > maxWidth) {
-    height = Math.round((height * maxWidth) / width);
-    width = maxWidth;
+    if (width > maxWidth) {
+      height = Math.round((height * maxWidth) / width);
+      width = maxWidth;
+    }
+
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      bitmap.close?.();
+      return file;
+    }
+
+    ctx.drawImage(bitmap, 0, 0, width, height);
+    bitmap.close?.();
+
+    const blob = await new Promise((resolve) =>
+      canvas.toBlob(resolve, "image/webp", quality)
+    );
+
+    if (!blob) return file;
+
+    return new File([blob], "current.webp", {
+      type: "image/webp",
+    });
+  } catch {
+    // Format non lisible par le navigateur : on tente l'envoi du fichier d'origine
+    return file;
   }
-
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return file;
-
-  ctx.drawImage(bitmap, 0, 0, width, height);
-  bitmap.close?.();
-
-  const blob = await new Promise((resolve) =>
-    canvas.toBlob(resolve, "image/webp", quality)
-  );
-
-  if (!blob) return file;
-
-  return new File([blob], "current.webp", {
-    type: "image/webp",
-  });
 }
 
 export async function uploadProfileMedia(
