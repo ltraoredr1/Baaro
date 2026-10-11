@@ -1,283 +1,256 @@
-import { useEffect, useState } from "react";
-import {
-  Globe,
-  Plus,
-  Trash2,
-  Facebook,
-  Youtube,
-  Instagram,
-  Linkedin,
-  MessageCircle,
-  Save,
-} from "lucide-react";
-import { supabase } from "../supabaseClient.js";
+/**
+ * Édition photo de profil + couverture
+ * Identité : user_id = auth.users.id = profiles.id (jamais handle / email)
+ * Place : src/components/ProfilePhotosEditor.jsx
+ *
+ * Usage : <ProfilePhotosEditor user_id={id} profile={profile} onUpdated={fn} />
+ * onUpdated reçoit le patch appliqué (par exemple { avatar_url }).
+ */
+import { useRef, useState, useEffect } from "react";
+import { Camera, ImagePlus, Loader2, Trash2 } from "lucide-react";
 import { COLORS } from "../theme.js";
+import { supabase } from "../supabaseClient.js";
+import { uploadProfileMedia } from "../lib/profileMedia.js";
 import { useToast } from "./ToastContext.jsx";
+import { LazyImage } from "./LazyMedia.jsx";
 
-const SOCIALS = [
-  ["facebook", "Facebook", Facebook],
-  ["youtube", "YouTube", Youtube],
-  ["tiktok", "TikTok", MessageCircle],
-  ["bigo", "Bigo", MessageCircle],
-  ["instagram", "Instagram", Instagram],
-  ["x", "X", MessageCircle],
-  ["linkedin", "LinkedIn", Linkedin],
-  ["whatsapp", "WhatsApp", MessageCircle],
-  ["telegram", "Telegram", MessageCircle],
-  ["snapchat", "Snapchat", MessageCircle],
-];
+function isAuthUserId(id) {
+  if (!id || typeof id !== "string") return false;
+  // Refuser handle (@xxx) ou email comme "identité"
+  if (id.startsWith("@")) return false;
+  if (id.includes("@") && id.includes(".")) return false;
+  return id.length >= 32;
+}
 
-const cleanUrl = (value) => {
-  const raw = String(value || "").trim();
-  if (!raw) return "";
-  return /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
-};
-
-const validUrl = (value) => {
-  try {
-    const u = new URL(cleanUrl(value));
-    return u.protocol === "http:" || u.protocol === "https:";
-  } catch {
-    return false;
-  }
-};
-
-export default function ProfileContactsLinks({ user_id }) {
+export default function ProfilePhotosEditor({ user_id, profile, onUpdated }) {
   const { showToast } = useToast();
-  const [phones, setPhones] = useState([]);
-  const [emails, setEmails] = useState([]);
-  const [links, setLinks] = useState([]);
-  const [socials, setSocials] = useState([]);
-  const [saving, setSaving] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const avatarRef = useRef(null);
+  const coverRef = useRef(null);
+  const [avatarUrl, setAvatarUrl] = useState(profile?.avatar_url || null);
+  const [coverUrl, setCoverUrl] = useState(profile?.cover_url || null);
+  const [busy, setBusy] = useState(null); // 'avatar' | 'cover' | null
 
-  const load = async () => {
-    if (!user_id) return;
-    setLoading(true);
-    try {
-      const [c, l, s] = await Promise.all([
-        supabase.from("profile_contacts").select("*").eq("user_id", user_id).order("position"),
-        supabase.from("profile_links").select("*").eq("user_id", user_id).order("position"),
-        supabase.from("profile_social_links").select("*").eq("user_id", user_id).order("platform"),
-      ]);
-      if (c.error) throw c.error;
-      if (l.error) throw l.error;
-      if (s.error) throw s.error;
-      setPhones((c.data || []).filter((x) => x.contact_type === "phone"));
-      setEmails((c.data || []).filter((x) => x.contact_type === "email"));
-      setLinks(l.data || []);
-      setSocials(s.data || []);
-    } catch (e) {
-      console.error("[BAARO] profile contacts load", e);
-      showToast?.("Impossible de charger les coordonnées", "error");
-    } finally {
-      setLoading(false);
+  // Resync quand le profil est rechargé (profiles.id = auth.users.id)
+  useEffect(() => {
+    setAvatarUrl(profile?.avatar_url || null);
+    setCoverUrl(profile?.cover_url || null);
+  }, [profile?.avatar_url, profile?.cover_url]);
+
+  async function persist(patch) {
+    if (!isAuthUserId(user_id)) {
+      throw new Error("Identité invalide : auth.users.id requis");
     }
-  };
+    const { data, error } = await supabase
+      .from("profiles")
+      .update({ ...patch, updated_at: new Date().toISOString() })
+      .eq("id", user_id)
+      .select("id");
+    if (error) throw error;
+    if (!data || data.length === 0) throw new Error("Profil introuvable");
+    onUpdated?.(patch);
+  }
 
-  useEffect(() => { load(); }, [user_id]);
-
-  const addContact = (type) => {
-    const setter = type === "phone" ? setPhones : setEmails;
-    const current = type === "phone" ? phones : emails;
-    if (current.length >= 3) {
-      showToast?.(`Maximum de 3 ${type === "phone" ? "numéros" : "e-mails"}`, "error");
+  async function onPick(kind, file) {
+    if (!file) return;
+    if (!isAuthUserId(user_id)) {
+      showToast?.("Connexion requise", "error");
       return;
     }
-    setter([...current, {
-      id: `new-${type}-${Date.now()}`,
-      contact_type: type,
-      value: "",
-      label: "",
-      position: current.length + 1,
-      is_primary: current.length === 0,
-    }]);
-  };
-
-  const save = async () => {
-    if (!user_id || saving) return;
-    setSaving(true);
+    const previous = kind === "avatar" ? avatarUrl : coverUrl;
+    setBusy(kind);
     try {
-      if (phones.length > 3 || emails.length > 3) {
-        throw new Error("Maximum de 3 numéros et 3 e-mails.");
+      const url = await uploadProfileMedia(file, { user_id, kind });
+      if (kind === "avatar") {
+        setAvatarUrl(url);
+        await persist({ avatar_url: url });
+      } else {
+        setCoverUrl(url);
+        await persist({ cover_url: url });
       }
-
-      const contactRows = [
-        ...phones.map((x, i) => ({ ...x, contact_type: "phone", position: i + 1, is_primary: i === 0 })),
-        ...emails.map((x, i) => ({ ...x, contact_type: "email", position: i + 1, is_primary: i === 0 })),
-      ].map(({ id, ...x }) => ({
-        ...x,
-        user_id: user_id,
-        value: x.value.trim(),
-        label: x.label?.trim() || "",
-      }));
-
-      if (contactRows.some((x) => !x.value)) throw new Error("Tous les contacts ajoutés doivent être remplis.");
-      if (emails.some((x) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(x.value.trim()))) {
-        throw new Error("Un e-mail n'est pas valide.");
-      }
-
-      const linkRows = links.map((x, i) => ({
-        ...(x.id && !String(x.id).startsWith("new-") ? { id: x.id } : {}),
-        user_id: user_id,
-        link_type: x.link_type || "link",
-        label: x.label?.trim() || "Lien",
-        url: cleanUrl(x.url),
-        position: i + 1,
-      }));
-      if (linkRows.some((x) => !validUrl(x.url))) throw new Error("Un lien n'est pas valide.");
-
-      const socialRows = socials.map((x) => ({
-        ...(x.id && !String(x.id).startsWith("new-") ? { id: x.id } : {}),
-        user_id: user_id,
-        platform: x.platform,
-        username: x.username?.trim() || "",
-        url: cleanUrl(x.url),
-        position: 1,
-      }));
-      if (socialRows.some((x) => !validUrl(x.url))) throw new Error("Un réseau social contient un lien invalide.");
-
-      const deletes = await Promise.all([
-        supabase.from("profile_contacts").delete().eq("user_id", user_id),
-        supabase.from("profile_links").delete().eq("user_id", user_id),
-        supabase.from("profile_social_links").delete().eq("user_id", user_id),
-      ]);
-      const deleteError = deletes.find((result) => result.error)?.error;
-      if (deleteError) throw deleteError;
-
-      const inserts = [
-        contactRows.length ? supabase.from("profile_contacts").insert(contactRows) : null,
-        linkRows.length ? supabase.from("profile_links").insert(linkRows) : null,
-        socialRows.length ? supabase.from("profile_social_links").insert(socialRows) : null,
-      ].filter(Boolean);
-
-      for (const request of inserts) {
-        const { error } = await request;
-        if (error) throw error;
-      }
-
-      showToast?.("Coordonnées et réseaux enregistrés", "success");
-      await load();
+      showToast?.(
+        kind === "avatar"
+          ? "Photo de profil mise à jour"
+          : "Couverture mise à jour",
+        "success"
+      );
     } catch (e) {
-      showToast?.(e.message || "Impossible d'enregistrer", "error");
+      console.error("[BAARO] upload profile media", e);
+      // Enregistrement échoué : on revient à l'ancienne image
+      if (kind === "avatar") setAvatarUrl(previous);
+      else setCoverUrl(previous);
+      showToast?.(e.message || "Échec de l'envoi", "error");
     } finally {
-      setSaving(false);
+      setBusy(null);
     }
-  };
+  }
 
-  const inputStyle = {
-    background: COLORS.surface,
-    borderColor: COLORS.border,
-    color: COLORS.ivory,
-  };
+  async function clear(kind) {
+    if (!isAuthUserId(user_id)) return;
+    const previous = kind === "avatar" ? avatarUrl : coverUrl;
+    setBusy(kind);
+    try {
+      if (kind === "avatar") {
+        setAvatarUrl(null);
+        await persist({ avatar_url: null });
+      } else {
+        setCoverUrl(null);
+        await persist({ cover_url: null });
+      }
+      showToast?.("Image retirée", "success");
+    } catch (e) {
+      if (kind === "avatar") setAvatarUrl(previous);
+      else setCoverUrl(previous);
+      showToast?.(e.message || "Erreur", "error");
+    } finally {
+      setBusy(null);
+    }
+  }
 
-  // Fonction de rendu (et non composant) : les champs gardent le focus à chaque frappe
-  const renderContactRows = (type, rows, setRows) => (
-    <div className="flex flex-col gap-2">
-      {rows.map((row, i) => (
-        <div key={row.id} className="grid grid-cols-[1fr_auto] gap-2">
-          <div className="grid grid-cols-2 gap-2">
-            <input
-              value={row.value}
-              onChange={(e) => setRows(rows.map((x) => x.id === row.id ? { ...x, value: e.target.value } : x))}
-              placeholder={type === "phone" ? "Numéro de téléphone" : "E-mail"}
-              type={type === "email" ? "email" : "tel"}
-              className="rounded-xl border px-3 py-2 text-sm outline-none"
-              style={inputStyle}
-            />
-            <input
-              value={row.label || ""}
-              onChange={(e) => setRows(rows.map((x) => x.id === row.id ? { ...x, label: e.target.value } : x))}
-              placeholder={i === 0 ? "Principal" : "Personnel / Travail"}
-              className="rounded-xl border px-3 py-2 text-sm outline-none"
-              style={inputStyle}
-            />
-          </div>
-          <button type="button" onClick={() => setRows(rows.filter((x) => x.id !== row.id))}
-            className="p-2 rounded-xl border" style={{ borderColor: COLORS.border, color: COLORS.muted }}
-            aria-label="Supprimer">
-            <Trash2 size={16} />
-          </button>
-        </div>
-      ))}
-      <button type="button" onClick={() => addContact(type)}
-        className="self-start flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-semibold"
-        style={{ borderColor: COLORS.borderGold, color: COLORS.gold }}>
-        <Plus size={14} /> Ajouter {type === "phone" ? "un numéro" : "un e-mail"}
-      </button>
-    </div>
-  );
-
-  if (!user_id) return null;
-  if (loading) return <div className="text-sm" style={{ color: COLORS.muted }}>Chargement...</div>;
+  const initial = (profile?.display_name || profile?.handle || "?").charAt(0).toUpperCase();
 
   return (
-    <div className="flex flex-col gap-5">
-      <p className="text-[11px]" style={{ color: COLORS.muted }}>
-        Ces informations sont visibles par tous sur ton profil public.
+    <div className="flex flex-col gap-3">
+      <p className="text-xs font-semibold" style={{ color: COLORS.muted }}>
+        Photos de profil
       </p>
 
-      <section className="rounded-2xl border p-4" style={{ borderColor: COLORS.border }}>
-        <h3 className="font-bold mb-3" style={{ color: COLORS.ivory }}>Téléphones</h3>
-        {renderContactRows("phone", phones, setPhones)}
-      </section>
-
-      <section className="rounded-2xl border p-4" style={{ borderColor: COLORS.border }}>
-        <h3 className="font-bold mb-3" style={{ color: COLORS.ivory }}>E-mails</h3>
-        {renderContactRows("email", emails, setEmails)}
-      </section>
-
-      <section className="rounded-2xl border p-4" style={{ borderColor: COLORS.border }}>
-        <h3 className="font-bold mb-3" style={{ color: COLORS.ivory }}>Site Web et liens</h3>
-        {links.map((row) => (
-          <div key={row.id} className="grid grid-cols-[auto_1fr_1fr_auto] gap-2 mb-2">
-            <Globe size={18} className="mt-2" style={{ color: COLORS.gold }} />
-            <input value={row.label} onChange={(e) => setLinks(links.map(x => x.id === row.id ? {...x,label:e.target.value} : x))}
-              placeholder="Nom" className="rounded-xl border px-3 py-2 text-sm" style={inputStyle} />
-            <input value={row.url} onChange={(e) => setLinks(links.map(x => x.id === row.id ? {...x,url:e.target.value} : x))}
-              placeholder="https://..." className="rounded-xl border px-3 py-2 text-sm" style={inputStyle} />
-            <button type="button" onClick={() => setLinks(links.filter(x => x.id !== row.id))} className="p-2" style={{color:COLORS.muted}} aria-label="Supprimer"><Trash2 size={16}/></button>
+      {/* ── Couverture ── */}
+      <div
+        className="relative w-full h-28 rounded-2xl overflow-hidden border"
+        style={{ borderColor: COLORS.border, background: COLORS.surface2 }}
+      >
+        {coverUrl ? (
+          <LazyImage
+            src={coverUrl}
+            alt="Couverture"
+            className="w-full h-full object-cover"
+          />
+        ) : (
+          <div
+            className="w-full h-full flex items-center justify-center"
+            style={{ background: `linear-gradient(135deg, ${COLORS.surface2}, ${COLORS.surface})` }}
+          >
+            <ImagePlus size={28} style={{ color: COLORS.muted }} />
           </div>
-        ))}
-        <button type="button" onClick={() => setLinks([...links, { id:`new-link-${Date.now()}`, link_type:"link", label:"Site Web", url:"", position:links.length+1 }])}
-          className="flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-semibold" style={{borderColor:COLORS.borderGold,color:COLORS.gold}}>
-          <Plus size={14}/> Ajouter un lien
-        </button>
-      </section>
+        )}
 
-      <section className="rounded-2xl border p-4" style={{ borderColor: COLORS.border }}>
-        <h3 className="font-bold mb-3" style={{ color: COLORS.ivory }}>Réseaux sociaux</h3>
-        <div className="grid sm:grid-cols-2 gap-2">
-          {SOCIALS.map(([key, label, Icon]) => {
-            const row = socials.find(x => x.platform === key);
-            return (
-              <div key={key} className="rounded-xl border p-3" style={{borderColor:COLORS.border}}>
-                <div className="flex items-center justify-between mb-2">
-                  <span className="flex items-center gap-2 text-sm font-semibold" style={{color:COLORS.ivory}}><Icon size={16}/> {label}</span>
-                  {row && <button type="button" onClick={() => setSocials(socials.filter(x=>x.platform!==key))} style={{color:COLORS.muted}} aria-label="Retirer"><Trash2 size={15}/></button>}
-                </div>
-                {row ? (
-                  <div className="flex flex-col gap-2">
-                    <input value={row.username || ""} onChange={(e)=>setSocials(socials.map(x=>x.platform===key?{...x,username:e.target.value}:x))}
-                      placeholder="@identifiant" className="rounded-xl border px-3 py-2 text-sm" style={inputStyle}/>
-                    <input value={row.url || ""} onChange={(e)=>setSocials(socials.map(x=>x.platform===key?{...x,url:e.target.value}:x))}
-                      placeholder="Lien du profil" className="rounded-xl border px-3 py-2 text-sm" style={inputStyle}/>
-                  </div>
-                ) : (
-                  <button type="button" onClick={()=>setSocials([...socials,{id:`new-social-${key}`,platform:key,username:"",url:"",position:1}])}
-                    className="w-full py-2 rounded-xl border text-xs" style={{borderColor:COLORS.border,color:COLORS.ivory}}>Connecter</button>
-                )}
-              </div>
-            );
-          })}
+        <div className="absolute inset-0 flex items-end justify-end gap-2 p-2">
+          <button
+            type="button"
+            disabled={!!busy}
+            onClick={() => coverRef.current?.click()}
+            className="text-[11px] font-bold px-3 py-1.5 rounded-lg border flex items-center gap-1"
+            style={{
+              borderColor: COLORS.borderGold,
+              color: COLORS.gold,
+              background: "rgba(0,0,0,0.45)",
+            }}
+          >
+            {busy === "cover" ? (
+              <Loader2 size={12} className="animate-spin" />
+            ) : (
+              <Camera size={12} />
+            )}
+            Couverture
+          </button>
+          {coverUrl && (
+            <button
+              type="button"
+              disabled={!!busy}
+              onClick={() => clear("cover")}
+              className="text-[11px] px-2 py-1.5 rounded-lg border flex items-center gap-1"
+              style={{
+                borderColor: COLORS.border,
+                color: COLORS.muted,
+                background: "rgba(0,0,0,0.45)",
+              }}
+              aria-label="Retirer la couverture"
+            >
+              <Trash2 size={12} />
+            </button>
+          )}
         </div>
-      </section>
 
-      <button type="button" disabled={saving} onClick={save}
-        className="flex items-center justify-center gap-2 py-3 rounded-xl font-bold"
-        style={{background:COLORS.gold,color:COLORS.bg,opacity:saving?.6:1}}>
-        <Save size={17}/> {saving ? "Enregistrement..." : "Enregistrer"}
-      </button>
+        <input
+          ref={coverRef}
+          type="file"
+          accept="image/jpeg,image/png,image/webp,image/gif"
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            e.target.value = "";
+            if (f) onPick("cover", f);
+          }}
+        />
+      </div>
+
+      {/* ── Avatar ── */}
+      <div className="flex items-center gap-4">
+        <div
+          className="relative w-20 h-20 rounded-full overflow-hidden border-2 shrink-0"
+          style={{ borderColor: COLORS.borderGold, background: COLORS.surface2 }}
+        >
+          {avatarUrl ? (
+            <LazyImage
+              src={avatarUrl}
+              alt="Photo de profil"
+              className="w-full h-full object-cover"
+            />
+          ) : (
+            <div
+              className="w-full h-full flex items-center justify-center text-2xl font-bold"
+              style={{ color: COLORS.gold }}
+            >
+              {initial}
+            </div>
+          )}
+          {busy === "avatar" && (
+            <div className="absolute inset-0 flex items-center justify-center bg-black/50">
+              <Loader2 size={20} className="animate-spin" style={{ color: COLORS.gold }} />
+            </div>
+          )}
+        </div>
+
+        <div className="flex flex-col gap-1.5 min-w-0">
+          <button
+            type="button"
+            disabled={!!busy}
+            onClick={() => avatarRef.current?.click()}
+            className="text-[11px] font-bold px-3 py-1.5 rounded-lg border self-start flex items-center gap-1.5"
+            style={{ borderColor: COLORS.borderGold, color: COLORS.gold }}
+          >
+            <Camera size={12} />
+            Photo de profil
+          </button>
+          {avatarUrl && (
+            <button
+              type="button"
+              disabled={!!busy}
+              onClick={() => clear("avatar")}
+              className="text-[11px] self-start flex items-center gap-1"
+              style={{ color: COLORS.muted }}
+            >
+              <Trash2 size={12} />
+              Retirer
+            </button>
+          )}
+          <p className="text-[10px]" style={{ color: COLORS.muted }}>
+            JPEG, PNG, WebP · max 5 Mo
+          </p>
+        </div>
+
+        <input
+          ref={avatarRef}
+          type="file"
+          accept="image/jpeg,image/png,image/webp,image/gif"
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            e.target.value = "";
+            if (f) onPick("avatar", f);
+          }}
+        />
+      </div>
     </div>
   );
 }
