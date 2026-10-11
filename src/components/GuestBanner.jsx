@@ -15,8 +15,9 @@ function wasDismissed() {
 
 /**
  * Bannière invité — rappel de sauvegarde du compte.
- * L'invité peut tout utiliser ; on lui rappelle seulement que son compte
- * peut être perdu (navigateur vidé, appli désinstallée) tant qu'il n'est pas sécurisé.
+ * L'invité peut utiliser BAARO (sauf la messagerie, réservée aux comptes sauvegardés) ;
+ * on lui rappelle que son compte peut être perdu (navigateur vidé, appli désinstallée)
+ * tant qu'il n'est pas sécurisé.
  * Props inchangées : onUpgrade, pointsHint.
  */
 export function GuestBanner({ onUpgrade, pointsHint = 0 }) {
@@ -69,8 +70,9 @@ export function GuestBanner({ onUpgrade, pointsHint = 0 }) {
               publications seraient perdus
             </>
           )}{" "}
-          si tu changes d'appareil ou vides ton navigateur. Ajoute un e-mail ou
-          un réseau social en 30 secondes.
+          si tu changes d'appareil ou vides ton navigateur. La messagerie
+          demande un compte sauvegardé : ajoute un e-mail ou un réseau social
+          en 30 secondes.
         </p>
       </div>
 
