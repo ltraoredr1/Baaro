@@ -11,6 +11,7 @@
     "cap:open": "npx cap open android"
   },
   "dependencies": {
+    "@aparajita/capacitor-biometric-auth": "^7.0.1",
     "@aws-sdk/client-s3": "^3.637.0",
     "@aws-sdk/s3-request-presigner": "^3.637.0",
     "@capacitor-community/contacts": "^7.0.1",
