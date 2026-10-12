@@ -15,15 +15,15 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Generate package-lock.json
         run: |
           rm -f package-lock.json
-          npm install --package-lock-only
+          npm install --package-lock-only --legacy-peer-deps
 
       - name: Commit package-lock.json
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "chore: generate package-lock.json"
+          commit_message: "chore: generate package-lock.json Capacitor 8"
           file_pattern: "package-lock.json"
