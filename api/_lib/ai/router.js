@@ -1,5 +1,14 @@
 /**
- * BAARO AI Router — v2 (avec exclude pour fallback)
+ * BAARO AI Router — v3
+ *  - ajoute groq et mistral (compatibles OpenAI)
+ *  - BAARO_AI_PROVIDER_ORDER passe avant les listes par pays
+ *  - adresses de base par défaut pour gemini / groq / mistral
+ *
+ * Variables d'environnement (Vercel) :
+ *   GEMINI_API_KEY  [GEMINI_API_BASE]  GEMINI_MODEL ou GEMINI_MODELS
+ *   GROQ_API_KEY    [GROQ_API_BASE]    GROQ_MODEL   ou GROQ_MODELS
+ *   MISTRAL_API_KEY [MISTRAL_API_BASE] MISTRAL_MODEL ou MISTRAL_MODELS
+ *   BAARO_AI_PROVIDER_ORDER=gemini,groq,mistral,anthropic,n8n
  */
 
 const PROVIDERS = new Set([
@@ -7,9 +16,17 @@ const PROVIDERS = new Set([
   "anthropic",
   "openai",
   "gemini",
+  "groq",
+  "mistral",
   "moonshot",
   "xai",
 ]);
+
+const DEFAULT_BASES = {
+  gemini: "https://generativelanguage.googleapis.com/v1beta/openai",
+  groq: "https://api.groq.com/openai/v1",
+  mistral: "https://api.mistral.ai/v1",
+};
 
 const REGION_DEFAULTS = {
   CN: ["moonshot", "n8n", "anthropic"],
@@ -36,13 +53,32 @@ function csv(value) {
     .filter(Boolean);
 }
 
+function envOf(provider, suffix) {
+  return process.env[provider.toUpperCase() + "_" + suffix];
+}
+
+function baseOf(provider) {
+  return envOf(provider, "API_BASE") || DEFAULT_BASES[provider] || "";
+}
+
+// Un modèle doit être défini (MODEL ou MODELS), sinon l'appel échouerait sans message clair
+function hasModel(provider) {
+  return Boolean(envOf(provider, "MODEL") || envOf(provider, "MODELS"));
+}
+
 function configured(provider) {
   if (provider === "n8n") return Boolean(process.env.N8N_BAARO_WEBHOOK_URL);
   if (provider === "anthropic") return Boolean(process.env.ANTHROPIC_API_KEY);
   if (provider === "openai")
     return Boolean(process.env.OPENAI_API_KEY && process.env.OPENAI_API_BASE);
   if (provider === "gemini")
-    return Boolean(process.env.GEMINI_API_KEY && process.env.GEMINI_API_BASE);
+    return Boolean(process.env.GEMINI_API_KEY && baseOf("gemini"));
+  if (provider === "groq")
+    return Boolean(process.env.GROQ_API_KEY && baseOf("groq") && hasModel("groq"));
+  if (provider === "mistral")
+    return Boolean(
+      process.env.MISTRAL_API_KEY && baseOf("mistral") && hasModel("mistral")
+    );
   if (provider === "moonshot")
     return Boolean(
       process.env.MOONSHOT_API_KEY && process.env.MOONSHOT_API_BASE
@@ -92,17 +128,25 @@ export function chooseProvider({
     PROVIDERS.has(p)
   );
   const regionOrder = REGION_DEFAULTS[normalizeCountry(country)] || [];
-  const globalOrder = envOrder.length
-    ? envOrder
-    : ["n8n", "anthropic", "openai", "gemini", "moonshot", "xai"];
+  const globalOrder = [
+    "n8n",
+    "anthropic",
+    "openai",
+    "gemini",
+    "groq",
+    "mistral",
+    "moonshot",
+    "xai",
+  ];
 
-  const candidates = [...new Set([...regionOrder, ...globalOrder])].filter(
-    (p) => !excludeSet.has(p)
-  );
+  // Si BAARO_AI_PROVIDER_ORDER est défini, il passe AVANT les listes par pays
+  const ordered = envOrder.length
+    ? [...envOrder, ...regionOrder, ...globalOrder]
+    : [...regionOrder, ...globalOrder];
 
-  return (
-    candidates.find((p) => !configuredOnly || configured(p)) || null
-  );
+  const candidates = [...new Set(ordered)].filter((p) => !excludeSet.has(p));
+
+  return candidates.find((p) => !configuredOnly || configured(p)) || null;
 }
 
 export function providerConfig(provider) {
@@ -124,8 +168,18 @@ export function providerConfig(provider) {
     },
     gemini: {
       key: process.env.GEMINI_API_KEY,
-      base: process.env.GEMINI_API_BASE,
+      base: baseOf("gemini"),
       model: process.env.GEMINI_MODEL || "",
+    },
+    groq: {
+      key: process.env.GROQ_API_KEY,
+      base: baseOf("groq"),
+      model: process.env.GROQ_MODEL || "",
+    },
+    mistral: {
+      key: process.env.MISTRAL_API_KEY,
+      base: baseOf("mistral"),
+      model: process.env.MISTRAL_MODEL || "",
     },
   };
   return configs[provider] || null;
