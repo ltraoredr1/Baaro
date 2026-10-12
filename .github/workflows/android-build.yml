@@ -1,46 +1,35 @@
-name: Android Build
+name: Build Android APK
 on:
   push:
     branches: [ main ]
-  workflow_dispatch:
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-node@v4
-      with:
-        node-version: '22'
-        cache: 'npm'
-    - uses: actions/setup-java@v5
-      with:
-        java-version: '21'
-        distribution: 'temurin'
-    - name: Setup Android SDK
-      uses: android-actions/setup-android@v3
-      with:
-        packages: platform-tools platforms;android-35 build-tools;35.0.0
-    - name: Install deps
-      run: npm ci --legacy-peer-deps
-    - name: Build Web
-      run: npx vite build
-      env:
-        VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
-        VITE_API_SECONDARY_URL: ${{ secrets.VITE_API_SECONDARY_URL }}
-        VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-        VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
-        VITE_TURNSTILE_SITE_KEY: ${{ secrets.VITE_TURNSTILE_SITE_KEY }}
-    - name: Sync Capacitor
-      run: |
-        if [ ! -d "android" ]; then npx cap add android; fi
-        npx cap sync android
-        npx cap copy android
-    - name: Build APK
-      run: |
-        cd android
-        chmod +x gradlew
-        ./gradlew assembleDebug --no-daemon
-    - uses: actions/upload-artifact@v4
-      with:
-        name: baaro-app-debug
-        path: android/app/build/outputs/apk/debug/app-debug.apk
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v5
+        with:
+          java-version: 21
+          distribution: temurin
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools platforms;android-35 build-tools;35.0.0
+      - name: Install dependencies
+        run: npm install --legacy-peer-deps
+      - name: Build web
+        run: npx vite build
+      - name: Sync Capacitor
+        run: npx cap sync android
+      - name: Build APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-debug
+          path: android/app/build/outputs/apk/debug/app-debug.apk
