@@ -18,8 +18,17 @@ jobs:
       - uses: android-actions/setup-android@v3
         with:
           packages: platform-tools platforms;android-35 build-tools;35.0.0
+
+      - name: Verify secrets & version
+        run: |
+          echo "Build commit: ${{ github.sha }}"
+          echo "Build date: $(date)"
+          if [ -z "${{ secrets.VITE_SUPABASE_URL }}" ]; then echo "❌ VITE_SUPABASE_URL manquant"; exit 1; else echo "✅ VITE_SUPABASE_URL OK"; fi
+          if [ -z "${{ secrets.VITE_SUPABASE_ANON_KEY }}" ]; then echo "❌ VITE_SUPABASE_ANON_KEY manquant"; exit 1; else echo "✅ VITE_SUPABASE_ANON_KEY OK"; fi
+
       - name: Install dependencies
         run: npm install --legacy-peer-deps
+
       - name: Build web
         run: npx vite build
         env:
@@ -31,14 +40,17 @@ jobs:
           VITE_DAILY_DOMAIN: ${{ secrets.VITE_DAILY_DOMAIN }}
           VITE_VAPID_PUBLIC_KEY: ${{ secrets.VITE_VAPID_PUBLIC_KEY }}
           VITE_BAARO_MEDIA_WORKER_URL: ${{ secrets.VITE_BAARO_MEDIA_WORKER_URL }}
+
       - name: Sync Capacitor
         run: npx cap sync android
+
       - name: Build APK
         run: |
           cd android
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon
+
       - uses: actions/upload-artifact@v4
         with:
-          name: app-debug
+          name: app-debug-${{ github.sha }}
           path: android/app/build/outputs/apk/debug/app-debug.apk
