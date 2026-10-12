@@ -132,6 +132,14 @@ async function startCallInternal({ roomUrl, token, video = false }) {
     if (video) {
       await callObject.setLocalVideo(true);
     }
+    // Suppression de bruit intégrée à Daily (ignorée si indisponible)
+    try {
+      await callObject.updateInputSettings({
+        audio: { processor: { type: "noise-cancellation" } },
+      });
+    } catch (e) {
+      console.warn("Suppression de bruit indisponible :", e?.message || e);
+    }
   } catch (error) {
     // Pas d'instance fantôme après un échec
     await destroyExistingCall();
@@ -209,6 +217,25 @@ export function getCallObject() {
 
 export function getParticipants() {
   return callObject?.participants() || {};
+}
+
+/** Le navigateur permet-il de choisir la sortie audio ? */
+export function canSelectAudioOutput() {
+  return (
+    typeof HTMLMediaElement !== "undefined" &&
+    "setSinkId" in HTMLMediaElement.prototype
+  );
+}
+
+/** Sorties audio exposées par le navigateur (haut-parleur, écouteur, casque…) */
+export async function listAudioOutputs() {
+  try {
+    if (!navigator.mediaDevices?.enumerateDevices) return [];
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    return devices.filter((d) => d.kind === "audiooutput");
+  } catch (_) {
+    return [];
+  }
 }
 
 /**
