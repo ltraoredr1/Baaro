@@ -15,10 +15,11 @@ import { bootstrapNative } from "./lib/nativeBootstrap.js";
 import { store } from "./store/index.js";
 import "./index.css";
 
-captureRefFromUrl();
-initPerf();
+// Ne bloque JAMAIS le render
+try { captureRefFromUrl(); } catch {}
+try { initPerf(); } catch {}
 
-// FIX NATIF : Config StatusBar pour APK
+// FIX NATIF : Config StatusBar en safe
 const setupNative = async () => {
   if (Capacitor.isNativePlatform()) {
     try {
@@ -32,7 +33,7 @@ const setupNative = async () => {
 };
 
 setupNative();
-bootstrapNative().catch(() => {});
+bootstrapNative().catch((e) => console.log("bootstrapNative error (non bloquant)", e));
 
 ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>
@@ -50,11 +51,11 @@ ReactDOM.createRoot(document.getElementById("root")).render(
   </React.StrictMode>
 );
 
-// FIX NATIF : Pas de Service Worker sur l'APK
+// Service Worker uniquement sur web
 if ("serviceWorker" in navigator && !Capacitor.isNativePlatform()) {
   window.addEventListener("load", () => {
     if (!navigator.serviceWorker.controller) {
-      navigator.serviceWorker.register("/sw.js").catch(() => {});
+      navigator.serviceWorker.register("./sw.js").catch(() => {});
     }
   });
 } else if (Capacitor.isNativePlatform() && "serviceWorker" in navigator) {
