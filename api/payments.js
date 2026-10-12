@@ -6,7 +6,7 @@
  * - never trusts a client supplied amount for an existing resource;
  * - authenticates the user with Supabase;
  * - supports monetization checkout intents, orders, shops and companies;
- * - Stripe/CinetPay only; no wallet/crypto/top-up surface;
+ * - Stripe / CinetPay / PayPal only; no wallet/crypto/top-up surface;
  * - provider webhooks remain the source of truth for settlement.
  */
 import { createClient } from "@supabase/supabase-js";
@@ -21,6 +21,12 @@ import {
 
 const CINETPAY_API_KEY = process.env.CINETPAY_API_KEY || "";
 const CINETPAY_SITE_ID = process.env.CINETPAY_SITE_ID || "";
+const PAYPAL_CLIENT_ID = process.env.PAYPAL_CLIENT_ID || "";
+const PAYPAL_CLIENT_SECRET = process.env.PAYPAL_CLIENT_SECRET || "";
+const PAYPAL_API_BASE =
+  process.env.PAYPAL_ENV === "live"
+    ? "https://api-m.paypal.com"
+    : "https://api-m.sandbox.paypal.com";
 const PUBLIC_APP_URL = (
   process.env.PUBLIC_APP_URL ||
   process.env.VERCEL_PROJECT_PRODUCTION_URL ||
@@ -28,13 +34,17 @@ const PUBLIC_APP_URL = (
   "http://localhost:3000"
 ).replace(/\/$/, "").replace(/^(?!https?:\/\/)/, "https://");
 
+// PayPal ne gère pas le XOF/XAF : on convertit au taux fixe officiel (parité CFA/EUR).
+const XOF_PER_EUR = 655.957;
+const PAYPAL_NATIVE_CURRENCIES = ["USD", "EUR", "GBP", "CAD", "AUD", "CHF"];
+
 function json(res, status, body) {
   return res.status(status).json(body);
 }
 
 function normalizeProvider(value) {
   const provider = String(value || "cinetpay").toLowerCase();
-  if (!['stripe', 'cinetpay'].includes(provider)) {
+  if (!['stripe', 'cinetpay', 'paypal'].includes(provider)) {
     const error = new Error("Fournisseur de paiement non supporté.");
     error.status = 400;
     throw error;
@@ -211,6 +221,104 @@ async function createCinetPayPayment({ user, payment, channel }) {
   };
 }
 
+// Montant PayPal (chaîne à 2 décimales) calculé côté serveur à partir du montant BAARO.
+function toPayPalAmount(payment) {
+  const cur = String(payment.currency || "XOF").toUpperCase();
+  const major = minorToMajor(payment.amount, cur);
+  if (["XOF", "XAF"].includes(cur)) {
+    return { currency_code: "EUR", value: (major / XOF_PER_EUR).toFixed(2) };
+  }
+  if (PAYPAL_NATIVE_CURRENCIES.includes(cur)) {
+    return { currency_code: cur, value: major.toFixed(2) };
+  }
+  return null;
+}
+
+async function getPayPalAccessToken() {
+  const basic = Buffer.from(`${PAYPAL_CLIENT_ID}:${PAYPAL_CLIENT_SECRET}`).toString("base64");
+  const response = await fetch(`${PAYPAL_API_BASE}/v1/oauth2/token`, {
+    method: "POST",
+    headers: {
+      Authorization: `Basic ${basic}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: "grant_type=client_credentials",
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || !data.access_token) throw new Error("Authentification PayPal impossible.");
+  return data.access_token;
+}
+
+async function createPayPalPayment({ user, payment }) {
+  if (!PAYPAL_CLIENT_ID || !PAYPAL_CLIENT_SECRET) {
+    return { error: "PayPal n'est pas configuré côté serveur.", status: 503 };
+  }
+  const amount = toPayPalAmount(payment);
+  if (!amount || Number(amount.value) <= 0) {
+    return { error: "Cette devise n'est pas supportée par PayPal.", status: 400 };
+  }
+
+  try {
+    const accessToken = await getPayPalAccessToken();
+    const response = await fetch(`${PAYPAL_API_BASE}/v2/checkout/orders`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        // Idempotence : un même paiement BAARO ne crée jamais deux commandes PayPal.
+        "PayPal-Request-Id": payment.paymentRef,
+      },
+      body: JSON.stringify({
+        intent: "CAPTURE",
+        purchase_units: [
+          {
+            reference_id: payment.paymentRef,
+            // custom_id = référence BAARO, relue par le webhook pour régler le paiement
+            custom_id: payment.paymentRef,
+            description: String(payment.description || "BAARO").slice(0, 120),
+            amount,
+          },
+        ],
+        payment_source: {
+          paypal: {
+            email_address: user.email || undefined,
+            experience_context: {
+              brand_name: "BAARO",
+              user_action: "PAY_NOW",
+              shipping_preference: "NO_SHIPPING",
+              return_url: `${PUBLIC_APP_URL}/?payment=return&provider=paypal&ref=${encodeURIComponent(payment.paymentRef)}`,
+              cancel_url: `${PUBLIC_APP_URL}/?payment=cancelled&provider=paypal&ref=${encodeURIComponent(payment.paymentRef)}`,
+            },
+          },
+        },
+      }),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || !result.id) {
+      return {
+        error: result.message || "Erreur PayPal.",
+        status: 502,
+        code: result.name || "paypal_error",
+      };
+    }
+    const link = (result.links || []).find((l) => ["payer-action", "approve"].includes(l.rel));
+    if (!link?.href) return { error: "Lien de paiement PayPal introuvable.", status: 502, code: "paypal_no_link" };
+
+    return {
+      ok: true,
+      provider: "paypal",
+      payment_url: link.href,
+      paypal_order_id: result.id,
+      transaction_id: payment.paymentRef,
+      kind: payment.kind,
+    };
+  } catch (error) {
+    console.error("[payments][paypal]", error);
+    return { error: "PayPal est momentanément indisponible.", status: 502, code: "paypal_unreachable" };
+  }
+}
+
 export default async function handler(req, res) {
   if (applyCors(req, res)) return;
   res.setHeader("Cache-Control", "no-store");
@@ -275,7 +383,10 @@ export default async function handler(req, res) {
       }
     }
 
-    const result = await createCinetPayPayment({ user, payment, channel: body.channel });
+    const result =
+      provider === "paypal"
+        ? await createPayPalPayment({ user, payment })
+        : await createCinetPayPayment({ user, payment, channel: body.channel });
     if (!result.ok && payment.kind === "monetization") {
       await admin.from("monetization_checkout_intents").update({ status: "pending", updated_at: new Date().toISOString() }).eq("id", payment.checkoutIntentId).eq("status", "processing");
     }
