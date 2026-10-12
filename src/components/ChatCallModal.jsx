@@ -14,7 +14,17 @@
  * - UI plein écran, avatar, boutons décrocher / raccrocher
  */
 import { useEffect, useRef, useState, useCallback } from "react";
-import { Phone, PhoneOff, Video, VideoOff, Mic, MicOff, X } from "lucide-react";
+import {
+  Phone,
+  PhoneOff,
+  Video,
+  VideoOff,
+  Mic,
+  MicOff,
+  X,
+  Volume2,
+  VolumeX,
+} from "lucide-react";
 import { COLORS as THEME_COLORS } from "../theme.js";
 import {
   startCall,
@@ -25,6 +35,8 @@ import {
   subscribeCallEvents,
   getParticipants,
   updateCallStatus,
+  listAudioOutputs,
+  canSelectAudioOutput,
 } from "../lib/chatCalls.js";
 import {
   startIncomingRingtone,
@@ -46,6 +58,9 @@ const FALLBACK = {
   teal: "#2DBFA6",
 };
 
+/** Sortie audio choisie par l'utilisateur (null = sortie par défaut du téléphone) */
+let outputSinkId = null;
+
 /** Associe un flux à un élément média seulement si les pistes ont changé */
 function setStream(el, tracks) {
   if (!el || !tracks.length) return;
@@ -53,6 +68,9 @@ function setStream(el, tracks) {
   if (el.dataset.trackIds === ids) return;
   el.dataset.trackIds = ids;
   el.srcObject = new MediaStream(tracks);
+  if (outputSinkId && !el.muted && typeof el.setSinkId === "function") {
+    el.setSinkId(outputSinkId).catch(() => {});
+  }
   const p = el.play();
   if (p && p.catch) p.catch(() => {});
 }
@@ -73,6 +91,7 @@ export function ChatCallModal({
   const [micOn, setMicOn] = useState(true);
   const [camOn, setCamOn] = useState(callType === "video");
   const [duration, setDuration] = useState(0);
+  const [speakerOn, setSpeakerOn] = useState(true);
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
   const timerRef = useRef(null);
@@ -132,6 +151,12 @@ export function ChatCallModal({
 
         // Vidéo distante : l'élément <video> porte aussi le son
         if (videoTrack && remoteVideoRef.current) {
+          // Évite le son en double : l'élément <video> joue déjà l'audio
+          const stale = document.getElementById("baaro-call-remote-audio");
+          if (stale) {
+            stale.srcObject = null;
+            stale.remove();
+          }
           setStream(
             remoteVideoRef.current,
             [videoTrack, audioTrack].filter(Boolean)
@@ -347,6 +372,39 @@ export function ChatCallModal({
     } catch {}
   };
 
+  // Haut-parleur / écouteur : possible seulement si le navigateur expose
+  // les sorties audio (setSinkId). Sinon, un message explique la limite.
+  const toggleSpeaker = async () => {
+    const next = !speakerOn;
+    const outputs = canSelectAudioOutput() ? await listAudioOutputs() : [];
+    const isEarpiece = (d) => /earpiece|receiver|handset|écouteur|ecouteur/i.test(d.label);
+    const isSpeaker = (d) => /speaker|haut-parleur|loud/i.test(d.label);
+    const target = next
+      ? outputs.find(isSpeaker) || outputs.find((d) => !isEarpiece(d))
+      : outputs.find(isEarpiece);
+
+    if (!target) {
+      alert(
+        "Ce navigateur ne permet pas de changer la sortie audio. " +
+          "Utilise les boutons de volume ou un casque. " +
+          "Le choix haut-parleur / écouteur sera disponible dans l'application Android."
+      );
+      return;
+    }
+
+    const elements = [
+      remoteVideoRef.current,
+      document.getElementById("baaro-call-remote-audio"),
+    ].filter(Boolean);
+    try {
+      await Promise.all(elements.map((el) => el.setSinkId(target.deviceId)));
+      outputSinkId = target.deviceId;
+      setSpeakerOn(next);
+    } catch (e) {
+      alert("Changement de sortie audio impossible : " + (e?.message || e));
+    }
+  };
+
   const formatTime = (s) => {
     const m = Math.floor(s / 60);
     const r = s % 60;
@@ -548,6 +606,21 @@ export function ChatCallModal({
                 aria-label={micOn ? "Couper le micro" : "Activer le micro"}
               >
                 {micOn ? <Mic size={22} /> : <MicOff size={22} />}
+              </button>
+
+              {/* Haut-parleur */}
+              <button
+                type="button"
+                onClick={toggleSpeaker}
+                className="w-14 h-14 rounded-full flex items-center justify-center border active:scale-95 transition"
+                style={{
+                  background: speakerOn ? "rgba(217,174,82,0.25)" : "rgba(255,255,255,0.12)",
+                  borderColor: "rgba(255,255,255,0.15)",
+                  color: speakerOn ? C.gold : C.ivory,
+                }}
+                aria-label={speakerOn ? "Passer sur l'écouteur" : "Activer le haut-parleur"}
+              >
+                {speakerOn ? <Volume2 size={22} /> : <VolumeX size={22} />}
               </button>
 
               {/* Caméra (vidéo seulement) */}
