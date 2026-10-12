@@ -1,7 +1,7 @@
 import "../i18n.js";
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { BrowserRouter } from "react-router-dom";
+import { HashRouter as BrowserRouter } from "react-router-dom";
 import { Provider } from "react-redux";
 import { Capacitor } from "@capacitor/core";
 import { StatusBar, Style } from "@capacitor/status-bar";
@@ -34,15 +34,6 @@ const setupNative = async () => {
 setupNative();
 bootstrapNative().catch(() => {});
 
-/**
- * Ordre des providers (du plus externe au plus interne) :
- * 1. Redux          → UI
- * 2. AppContext     → auth / session / profil
- * 3. ToastProvider  → notifications toast
- *
- * React Query (si utilisé) se place entre Redux et AppContext
- * ou dans App.jsx selon ton setup actuel.
- */
 ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>
     <ErrorBoundary>
