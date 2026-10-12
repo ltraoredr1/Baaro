@@ -1,5 +1,4 @@
 import { useDebateLive } from "../hooks/useDebates.js";
-import * as webrtc from "../lib/webrtc.js";
 import * as liveRoles from "../lib/liveRoles.js";
 import { useState, useEffect, useRef, memo } from "react";
 import { ArrowLeft, Hash, Users, Send, Copy, Check } from "lucide-react";
