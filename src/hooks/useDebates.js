@@ -19,6 +19,28 @@ function apiUrl(path) {
   return base + p;
 }
 
+/**
+ * Daily n'autorise qu'UNE seule instance à la fois dans toute la page.
+ * Cette fonction détruit toute instance existante (même celle créée
+ * par un rendu précédent, un join raté ou un autre écran).
+ * leave() et destroy() sont dans des try/catch SÉPARÉS : leave() lève
+ * une erreur si on n'est pas encore dans la room, et destroy() doit
+ * quand même s'exécuter.
+ */
+async function destroyExistingCall() {
+  var existing = null;
+  try {
+    existing = DailyIframe.getCallInstance ? DailyIframe.getCallInstance() : null;
+  } catch (_) {}
+  if (!existing) return;
+  try {
+    await existing.leave();
+  } catch (_) {}
+  try {
+    await existing.destroy();
+  } catch (_) {}
+}
+
 export function useDebates(user_id) {
   const [rooms, setRooms] = useState([]);
   const [loadingRooms, setLoadingRooms] = useState(true);
@@ -319,6 +341,7 @@ export function useRoomChat(roomId, user_id) {
 export function useDebateLive(room, user_id, isHost) {
   const callRef = useRef(null);
   const containerRef = useRef(null);
+  const joiningRef = useRef(false);
   const [camOn, setCamOn] = useState(room?.mode !== "audio");
   const [micOn, setMicOn] = useState(true);
   const [joined, setJoined] = useState(false);
@@ -327,10 +350,14 @@ export function useDebateLive(room, user_id, isHost) {
 
   const joinLive = useCallback(
     async function () {
-      if (!room?.id || !user_id || joining) return;
+      if (!room?.id || !user_id) return;
+      // Garde anti double-clic (le state "joining" arrive trop tard)
+      if (joiningRef.current) return;
+      joiningRef.current = true;
       setJoining(true);
       setError(null);
       try {
+        // Pré-test des permissions caméra/micro, puis libération
         try {
           var s = await navigator.mediaDevices.getUserMedia({
             video: room.mode !== "audio",
@@ -338,6 +365,10 @@ export function useDebateLive(room, user_id, isHost) {
           });
           s.getTracks().forEach(function (t) {
             t.stop();
+          });
+          // Laisse Android libérer la caméra avant que Daily la reprenne
+          await new Promise(function (r) {
+            setTimeout(r, 400);
           });
         } catch (_) {}
 
@@ -374,13 +405,9 @@ export function useDebateLive(room, user_id, isHost) {
             : null);
         if (!roomUrl) throw new Error("URL Daily manquante");
 
-        if (callRef.current) {
-          try {
-            await callRef.current.leave();
-            callRef.current.destroy();
-          } catch (_) {}
-          callRef.current = null;
-        }
+        // CORRECTIF : détruit TOUTE instance Daily existante avant d'en créer une
+        callRef.current = null;
+        await destroyExistingCall();
 
         var call = DailyIframe.createFrame(containerRef.current, {
           iframeStyle: { width: "100%", height: "100%", border: "0" },
@@ -393,12 +420,19 @@ export function useDebateLive(room, user_id, isHost) {
           var m = ev && ev.errorMsg && ev.errorMsg.errorMsg;
           setError("Caméra : " + (m || "accès refusé ou déjà utilisée"));
         });
+        call.on("left-meeting", function () {
+          setJoined(false);
+        });
 
         await Promise.race([
           call.join({ url: roomUrl, token: data.token }),
           new Promise(function (_, rej) {
             setTimeout(function () {
-              rej(new Error("Connexion Daily trop longue. Verifiez DAILY_DOMAIN et la camera/micro."));
+              rej(
+                new Error(
+                  "Connexion Daily trop longue. Vérifiez DAILY_DOMAIN et la caméra/micro."
+                )
+              );
             }, 15000);
           }),
         ]);
@@ -407,13 +441,17 @@ export function useDebateLive(room, user_id, isHost) {
 
         setJoined(true);
       } catch (e) {
+        // En cas d'échec, on nettoie pour que le prochain essai reparte propre
+        await destroyExistingCall();
+        callRef.current = null;
         setError(e.message || "Erreur join live");
         setJoined(false);
       } finally {
+        joiningRef.current = false;
         setJoining(false);
       }
     },
-    [room, user_id, isHost, camOn, micOn, joining]
+    [room, user_id, isHost]
   );
 
   const toggleCam = useCallback(function () {
@@ -432,21 +470,18 @@ export function useDebateLive(room, user_id, isHost) {
 
   const leaveLive = useCallback(async function () {
     try {
-      if (callRef.current) {
-        await callRef.current.leave();
-        await callRef.current.destroy();
-      }
+      await destroyExistingCall();
     } finally {
       callRef.current = null;
       setJoined(false);
     }
   }, []);
 
+  // Nettoyage au démontage (changement d'onglet, retour en arrière...)
   useEffect(function () {
     return function () {
-      try {
-        if (callRef.current) callRef.current.destroy();
-      } catch (_) {}
+      callRef.current = null;
+      destroyExistingCall();
     };
   }, []);
 
