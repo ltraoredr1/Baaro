@@ -1,16 +1,22 @@
-/**
- * BAARO service-worker — cache + push (messages + appels entrants)
- * Quand type === "incoming_call" : notification persistante + vibration + actions
- */
 const CACHE_NAME = "baaro-cache-v6";
 const MAX_RUNTIME_ENTRIES = 80;
-const APP_SHELL = ["/", "/index.html", "/manifest.json", "/icon-192.png", "/icon-512.png"];
+const APP_SHELL = [
+  "/",
+  "/index.html",
+  "/manifest.json",
+  "/icon-192.png",
+  "/icon-512.png",
+  "/sounds/baaro_pulse.mp3",
+  "/sounds/live_drop.mp3",
+];
 
 async function trimCache(cacheName, maxEntries) {
   const cache = await caches.open(cacheName);
   const keys = await cache.keys();
   if (keys.length <= maxEntries) return;
-  await Promise.all(keys.slice(0, keys.length - maxEntries).map((key) => cache.delete(key)));
+  await Promise.all(
+    keys.slice(0, keys.length - maxEntries).map((key) => cache.delete(key))
+  );
 }
 
 self.addEventListener("install", (event) => {
@@ -37,98 +43,50 @@ self.addEventListener("push", (event) => {
     payload = { body: event.data?.text() || "" };
   }
 
-  const isCall = payload.type === "incoming_call";
-  const title = String(payload.title || (isCall ? "Appel BAARO" : "BAARO")).slice(0, 80);
+  const title = String(payload.title || "BAARO").slice(0, 80);
   const body = String(payload.body || "").slice(0, 240);
   const url =
-    typeof payload.url === "string" && (payload.url.startsWith("/") || payload.url.startsWith("?"))
-      ? payload.url.startsWith("?")
-        ? `/${payload.url}`
-        : payload.url
-      : isCall
-        ? `/?open=call&call_id=${encodeURIComponent(payload.call_id || "")}`
-        : "/";
+    typeof payload.url === "string" && payload.url.startsWith("/")
+      ? payload.url
+      : "/";
+
+  // Son custom si fourni (chemin relatif public), sinon défaut navigateur
+  const sound =
+    typeof payload.sound === "string" && payload.sound.startsWith("/")
+      ? payload.sound
+      : undefined;
 
   const options = {
     body,
     icon: payload.icon || "/icon-192.png",
     badge: payload.badge || "/icon-192.png",
-    tag: payload.tag || (isCall ? `baaro-call-${payload.call_id || "x"}` : undefined),
-    data: {
-      url,
-      type: payload.type || "message",
-      call_id: payload.call_id,
-      call_type: payload.call_type,
-      caller_id: payload.caller_id,
-      caller_name: payload.caller_name,
-      daily_room_name: payload.daily_room_name,
-    },
-    renotify: isCall ? true : Boolean(payload.renotify),
-    requireInteraction: isCall || Boolean(payload.requireInteraction),
-    silent: false,
+    tag: payload.tag || undefined,
+    data: { url, category: payload.category || null },
+    renotify: !!payload.renotify,
+    silent: payload.silent === true,
   };
 
-  if (isCall) {
-    options.vibrate = payload.vibrate || [400, 200, 400, 200, 400, 1200];
-    // Actions (supportées Chrome / Android)
-    options.actions = payload.actions || [
-      { action: "accept", title: "Répondre" },
-      { action: "reject", title: "Refuser" },
-    ];
+  // Certains navigateurs supportent `sound` (Chrome Android notamment)
+  if (sound && !options.silent) {
+    options.sound = sound;
   }
 
   event.waitUntil(self.registration.showNotification(title, options));
 });
 
 self.addEventListener("notificationclick", (event) => {
-  const data = event.notification?.data || {};
-  const action = event.action; // "accept" | "reject" | ""
   event.notification.close();
-
-  let target = data.url || "/";
-  if (data.type === "incoming_call") {
-    if (action === "reject") {
-      target = `/?open=call&action=reject&call_id=${encodeURIComponent(data.call_id || "")}`;
-    } else {
-      // accept ou clic simple → ouvrir l'appel
-      target = `/?open=call&action=accept&call_id=${encodeURIComponent(data.call_id || "")}&call_type=${encodeURIComponent(data.call_type || "voice")}`;
-    }
-  }
-
+  const target = event.notification?.data?.url || "/";
   event.waitUntil(
     clients.matchAll({ type: "window", includeUncontrolled: true }).then((windows) => {
       const existing = windows.find((client) => "focus" in client);
       if (existing) {
-        if ("navigate" in existing) {
-          try {
-            existing.navigate(target);
-          } catch (_) {}
-        }
-        // Notifier la page ouverte
-        try {
-          existing.postMessage({
-            type: "baaro:incoming_call",
-            action: action || "accept",
-            call_id: data.call_id,
-            call_type: data.call_type,
-            caller_id: data.caller_id,
-            caller_name: data.caller_name,
-            daily_room_name: data.daily_room_name,
-          });
-        } catch (_) {}
+        if ("navigate" in existing) existing.navigate(target);
         return existing.focus();
       }
       return clients.openWindow(target);
     })
   );
-});
-
-self.addEventListener("notificationclose", (event) => {
-  // Optionnel : si l'utilisateur ferme sans répondre, on pourrait marquer missed côté client
-  const data = event.notification?.data || {};
-  if (data.type === "incoming_call") {
-    // no-op serveur ici (pas d'auth dans le SW)
-  }
 });
 
 self.addEventListener("fetch", (event) => {
@@ -139,7 +97,10 @@ self.addEventListener("fetch", (event) => {
   if (url.origin !== self.location.origin || url.pathname.startsWith("/api/")) return;
 
   const isNavigation = request.mode === "navigate";
-  const cacheable = /\.(?:js|css|png|jpg|jpeg|webp|svg|ico|woff2?|ttf|wasm)$/i.test(url.pathname);
+  const cacheable =
+    /\.(?:js|css|png|jpg|jpeg|webp|svg|ico|woff2?|ttf|wasm|mp3|wav)$/i.test(
+      url.pathname
+    );
 
   if (isNavigation) {
     event.respondWith(
@@ -157,13 +118,10 @@ self.addEventListener("fetch", (event) => {
       .then((response) => {
         if (response.ok) {
           const clone = response.clone();
-          caches
-            .open(CACHE_NAME)
-            .then(async (cache) => {
-              await cache.put(request, clone);
-              await trimCache(CACHE_NAME, MAX_RUNTIME_ENTRIES);
-            })
-            .catch(() => {});
+          caches.open(CACHE_NAME).then(async (cache) => {
+            await cache.put(request, clone);
+            await trimCache(CACHE_NAME, MAX_RUNTIME_ENTRIES);
+          }).catch(() => {});
         }
         return response;
       })
