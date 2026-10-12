@@ -1,6 +1,10 @@
 // src/lib/paymentProvider.js
 import { supabase } from "../supabaseClient.js";
 
+// PayPal n'apparaît dans l'app que si VITE_PAYPAL_ENABLED=true (à mettre sur Vercel
+// une fois les clés PayPal configurées côté serveur, puis redéployer).
+const PAYPAL_ENABLED = import.meta.env.VITE_PAYPAL_ENABLED === "true";
+
 function apiBase() {
   const base = import.meta.env.VITE_API_BASE_URL || "";
   return base.replace(/\/$/, "");
@@ -127,6 +131,19 @@ export function getAvailableProviders(countryCode) {
   const cc = String(countryCode || "").toUpperCase();
   const westAfrica = ["ML", "CI", "SN", "BF", "BJ", "TG", "GN", "CM", "NE"];
 
+  const paypal = PAYPAL_ENABLED
+    ? [
+        {
+          id: "paypal",
+          label: "PayPal",
+          description: "Compte PayPal ou carte via PayPal",
+          channels: [],
+          enabled: true,
+          icon: "🅿️",
+        },
+      ]
+    : [];
+
   if (westAfrica.includes(cc)) {
     return [
       {
@@ -145,6 +162,7 @@ export function getAvailableProviders(countryCode) {
         enabled: true,
         icon: "💳",
       },
+      ...paypal,
     ];
   }
 
@@ -157,6 +175,7 @@ export function getAvailableProviders(countryCode) {
       enabled: true,
       icon: "💳",
     },
+    ...paypal,
     {
       id: "cinetpay",
       label: "Mobile Money (CinetPay)",
@@ -225,15 +244,18 @@ export function calculateFees(amount, provider, currency = "XOF") {
     return { percentage: 0, fixed: 0, total: 0, net: 0 };
   }
 
+  // Estimations d'affichage uniquement. Les frais PayPal sont à vérifier
+  // dans ton compte PayPal Business (ils varient selon le pays et la devise).
   const feeRates = {
     cinetpay: 0.035,
     stripe: 0.029,
+    paypal: 0.044,
   };
 
   const fixedFees = {
-    XOF: { cinetpay: 0, stripe: 0 },
-    EUR: { cinetpay: 0.25, stripe: 0.25 },
-    USD: { cinetpay: 0.3, stripe: 0.3 },
+    XOF: { cinetpay: 0, stripe: 0, paypal: 230 },
+    EUR: { cinetpay: 0.25, stripe: 0.25, paypal: 0.35 },
+    USD: { cinetpay: 0.3, stripe: 0.3, paypal: 0.49 },
   };
 
   const rate = feeRates[provider] ?? 0.035;
