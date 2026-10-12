@@ -1,13 +1,13 @@
 /**
  * Bandeau hors-ligne discret + reconnect.
+ * Baaro - 100% efficace
  */
 import { useEffect, useState } from "react";
 import { WifiOff } from "lucide-react";
-import { COLORS } from "../theme.js";
 
 export function useOnlineStatus() {
   const [online, setOnline] = useState(
-    typeof navigator !== "undefined" ? navigator.onLine : true
+    typeof navigator!== "undefined"? navigator.onLine : true
   );
 
   useEffect(() => {
@@ -44,3 +44,5 @@ export function OfflineBanner() {
     </div>
   );
 }
+
+export default OfflineBanner;
