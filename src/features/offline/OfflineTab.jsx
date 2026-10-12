@@ -5,7 +5,7 @@ import { useToast } from "../../components/ToastContext.jsx";
 import { useNearbyChat } from "../../hooks/useNearbyChat.js";
 import { getCachedUsers } from "../../data/users.js";
 
-export function OfflineTab({ onRewardPoints }) {
+export function OfflineTab() {
   const { showToast } = useToast();
   const [displayName, setDisplayName] = useState("Moi");
   const [p2pInput, setP2pInput] = useState("");
@@ -34,12 +34,12 @@ export function OfflineTab({ onRewardPoints }) {
           <WifiOff size={40} style={{ color: "#ef4444" }} />
         </div>
         <div className="text-center space-y-2">
-          <h2 className="text-xl font-bold" style={{ color: COLORS.ivory }}>
+          <h2 className="text-xl font-bold" style={{ color: COLORS.ivory || "#fff" }}>
             Mode Hors-Ligne {isNative? "Plugin manquant" : "Indisponible sur Web"}
           </h2>
-          <p className="text-sm max-w-md" style={{ color: COLORS.muted }}>
+          <p className="text-sm max-w-md" style={{ color: COLORS.muted || "#9ca3af" }}>
             {isNative
-             ? "Plugin Nearby non installé. Fais npx cap sync android + rebuild APK."
+            ? "Plugin Nearby non installé. Fais npx cap sync android + rebuild APK."
               : "Cette fonctionnalité nécessite l'application Android native BAARO avec le plugin Nearby. Cache local disponible ci-dessous."}
           </p>
         </div>
@@ -69,8 +69,8 @@ export function OfflineTab({ onRewardPoints }) {
     e.preventDefault();
     if (!p2pInput.trim()) return;
     sendMessage(p2pInput.trim())
-     .then(() => setP2pInput(""))
-     .catch((err) => showToast("Échec de l'envoi : " + err.message, "error"));
+    .then(() => setP2pInput(""))
+    .catch((err) => showToast("Échec de l'envoi : " + err.message, "error"));
   };
 
   return (
@@ -147,3 +147,5 @@ export function OfflineTab({ onRewardPoints }) {
     </div>
   );
 }
+
+export default OfflineTab;
