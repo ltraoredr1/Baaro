@@ -25,9 +25,20 @@
     "StatusBar": {
       "style": "DARK",
       "backgroundColor": "#0b1220"
+    },
+    "BiometricAuth": {
+      "reason": "Déverrouille BAARO avec ton empreinte / Face ID",
+      "title": "Authentification BAARO",
+      "subtitle": "Accès sécurisé",
+      "negativeButtonText": "Annuler",
+      "allowDeviceCredential": true
+    },
+    "PrivacyScreen": {
+      "enable": true
     }
   },
   "android": {
-    "backgroundColor": "#0b1220"
+    "backgroundColor": "#0b1220",
+    "allowMixedContent": true
   }
 }
