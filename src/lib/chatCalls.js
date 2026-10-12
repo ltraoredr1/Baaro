@@ -2,11 +2,19 @@
  * src/lib/chatCalls.js — VERSION COMPLÈTE CORRIGÉE
  * Appels vocaux / vidéo 1-1 via Daily.co
  * + push notify_call via /api/live (app fermée)
+ *
+ * Correction « Duplicate DailyIframe instances are not allowed » :
+ * - Daily n'autorise qu'UNE instance d'appel par page. Avant chaque appel,
+ *   toute instance existante (même issue d'une tentative échouée) est détruite
+ *   via DailyIframe.getCallInstance().
+ * - Si le join échoue, l'instance créée est détruite (plus d'instance fantôme).
+ * - Les démarrages simultanés sont mis en file (verrou), pour éviter les doublons.
  */
 import DailyIframe from "@daily-co/daily-js";
 import { supabase } from "../supabaseClient.js";
 
 let callObject = null;
+let startingLock = null;
 
 async function authHeaders() {
   const { data } = await supabase.auth.getSession();
@@ -59,6 +67,29 @@ async function callApi(body) {
   }
 }
 
+/**
+ * Détruit toute instance Daily présente sur la page (appel, Live, tentative échouée).
+ * Chaque étape est protégée séparément : un échec de leave() n'empêche pas destroy().
+ */
+async function destroyExistingCall() {
+  const instances = [];
+  try {
+    const existing = DailyIframe.getCallInstance();
+    if (existing) instances.push(existing);
+  } catch (_) {}
+  if (callObject && !instances.includes(callObject)) instances.push(callObject);
+
+  for (const inst of instances) {
+    try {
+      await inst.leave();
+    } catch (_) {}
+    try {
+      inst.destroy();
+    } catch (_) {}
+  }
+  callObject = null;
+}
+
 /** 1. Créer la room Daily */
 export async function createCallRoom({ userName, mode = "video" }) {
   const inviteCode = `call-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
@@ -81,15 +112,8 @@ export async function getCallToken({ roomName, userName, isOwner = true }) {
   });
 }
 
-/** 3. Démarrer / rejoindre l'appel */
-export async function startCall({ roomUrl, token, video = false }) {
-  if (callObject) {
-    try {
-      await callObject.leave();
-      callObject.destroy();
-    } catch (_) {}
-    callObject = null;
-  }
+async function startCallInternal({ roomUrl, token, video = false }) {
+  await destroyExistingCall();
 
   callObject = DailyIframe.createCallObject({
     audioSource: true,
@@ -102,12 +126,33 @@ export async function startCall({ roomUrl, token, video = false }) {
     callObject.setSubscribeToTracksAutomatically(true);
   } catch (_) {}
 
-  await callObject.join({ url: roomUrl, token });
-  await callObject.setLocalAudio(true);
-  if (video) {
-    await callObject.setLocalVideo(true);
+  try {
+    await callObject.join({ url: roomUrl, token });
+    await callObject.setLocalAudio(true);
+    if (video) {
+      await callObject.setLocalVideo(true);
+    }
+  } catch (error) {
+    // Pas d'instance fantôme après un échec
+    await destroyExistingCall();
+    throw error;
   }
   return callObject;
+}
+
+/** 3. Démarrer / rejoindre l'appel (démarrages mis en file) */
+export async function startCall(opts) {
+  if (startingLock) {
+    try {
+      await startingLock;
+    } catch (_) {}
+  }
+  startingLock = startCallInternal(opts);
+  try {
+    return await startingLock;
+  } finally {
+    startingLock = null;
+  }
 }
 
 export async function joinCall({ roomUrl, token, video = false }) {
@@ -155,14 +200,7 @@ export function subscribeCallEvents(handlers = {}) {
 }
 
 export async function leaveCall() {
-  if (!callObject) return;
-  try {
-    await callObject.leave();
-    callObject.destroy();
-  } catch (e) {
-    console.warn("leaveCall:", e);
-  }
-  callObject = null;
+  await destroyExistingCall();
 }
 
 export function getCallObject() {
