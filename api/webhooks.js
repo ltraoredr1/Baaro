@@ -7,6 +7,18 @@ const CINETPAY_API_KEY = process.env.CINETPAY_API_KEY;
 const CINETPAY_SITE_ID = process.env.CINETPAY_SITE_ID;
 const SEND_SMS_HOOK_SECRET = process.env.SEND_SMS_HOOK_SECRET;
 
+const PAYPAL_CLIENT_ID = process.env.PAYPAL_CLIENT_ID || '';
+const PAYPAL_CLIENT_SECRET = process.env.PAYPAL_CLIENT_SECRET || '';
+const PAYPAL_WEBHOOK_ID = process.env.PAYPAL_WEBHOOK_ID || '';
+const PAYPAL_API_BASE =
+  process.env.PAYPAL_ENV === 'live'
+    ? 'https://api-m.paypal.com'
+    : 'https://api-m.sandbox.paypal.com';
+
+// Doit rester identique à api/payments.js (même taux, mêmes devises, même arrondi).
+const XOF_PER_EUR = 655.957;
+const PAYPAL_NATIVE_CURRENCIES = ['USD', 'EUR', 'GBP', 'CAD', 'AUD', 'CHF'];
+
 function admin() {
   return createClient(supabaseUrl, supabaseServiceKey);
 }
@@ -30,6 +42,7 @@ export default async function handler(req, res) {
   }
 
   const stripeSig = req.headers['stripe-signature'];
+  const paypalTransmissionId = req.headers['paypal-transmission-id'];
   const authHeader = req.headers['authorization'];
 
   try {
@@ -38,12 +51,17 @@ export default async function handler(req, res) {
       return await handleStripeWebhook(req, res, stripeSig);
     }
 
-    // 2. Gestion du webhook InfiniReach (Vérification du secret pour le 0401)
+    // 2. Gestion du webhook PayPal
+    if (paypalTransmissionId) {
+      return await handlePayPalWebhook(req, res);
+    }
+
+    // 3. Gestion du webhook InfiniReach (Vérification du secret pour le 0401)
     if (authHeader) {
       return await handleInfiniReachWebhook(req, res, authHeader);
     }
 
-    // 3. Gestion du webhook CinetPay (par défaut)
+    // 4. Gestion du webhook CinetPay (par défaut)
     return await handleCinetPayWebhook(req, res);
   } catch (error) {
     console.error('Erreur Webhook:', error);
@@ -218,6 +236,176 @@ async function handleStripeWebhook(req, res, signature) {
 }
 
 // ---------------------------------------------------------
+// Gestionnaire PayPal
+// ---------------------------------------------------------
+async function getPayPalAccessToken() {
+  const basic = Buffer.from(`${PAYPAL_CLIENT_ID}:${PAYPAL_CLIENT_SECRET}`).toString('base64');
+  const response = await fetch(`${PAYPAL_API_BASE}/v1/oauth2/token`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Basic ${basic}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: 'grant_type=client_credentials',
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || !data.access_token) throw new Error('Authentification PayPal impossible.');
+  return data.access_token;
+}
+
+async function paypalRequest(method, path, { body, headers } = {}) {
+  const accessToken = await getPayPalAccessToken();
+  const response = await fetch(`${PAYPAL_API_BASE}${path}`, {
+    method,
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      ...(headers || {}),
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await response.json().catch(() => ({}));
+  return { ok: response.ok, status: response.status, data };
+}
+
+// Vérifie que l'événement vient bien de PayPal (signature validée par PayPal lui-même).
+async function verifyPayPalSignature(req, event) {
+  const h = req.headers;
+  const { ok, data } = await paypalRequest('POST', '/v1/notifications/verify-webhook-signature', {
+    body: {
+      auth_algo: h['paypal-auth-algo'],
+      cert_url: h['paypal-cert-url'],
+      transmission_id: h['paypal-transmission-id'],
+      transmission_sig: h['paypal-transmission-sig'],
+      transmission_time: h['paypal-transmission-time'],
+      webhook_id: PAYPAL_WEBHOOK_ID,
+      webhook_event: event,
+    },
+  });
+  return ok && data.verification_status === 'SUCCESS';
+}
+
+async function markPaymentFailed(supabase, paymentRef) {
+  const ref = String(paymentRef || '');
+  if (ref.startsWith('checkout_')) {
+    await supabase
+      .from('monetization_checkout_intents')
+      .update({ status: 'failed', updated_at: new Date().toISOString() })
+      .eq('id', ref.slice('checkout_'.length))
+      .in('status', ['pending', 'processing']);
+  } else if (ref.startsWith('order_')) {
+    const match = ref.match(/^order_([0-9a-f-]{36})_/i);
+    if (match) {
+      await supabase
+        .from('orders')
+        .update({ payment_status: 'failed', updated_at: new Date().toISOString() })
+        .eq('id', match[1])
+        .eq('payment_status', 'pending');
+    }
+  }
+}
+
+async function handlePayPalWebhook(req, res) {
+  if (!PAYPAL_CLIENT_ID || !PAYPAL_CLIENT_SECRET || !PAYPAL_WEBHOOK_ID) {
+    return res.status(503).json({ error: 'PayPal non configuré.', code: 'paypal_not_configured' });
+  }
+
+  const raw = await readRawBody(req);
+  let event;
+  try {
+    event = JSON.parse(raw.toString());
+  } catch {
+    return res.status(400).json({ error: 'Payload PayPal invalide.' });
+  }
+
+  let verified = false;
+  try {
+    verified = await verifyPayPalSignature(req, event);
+  } catch (err) {
+    console.error('[webhook] PayPal verification error', err.message);
+    return res.status(500).json({ error: 'Vérification PayPal impossible.' });
+  }
+  if (!verified) {
+    console.error('[webhook] PayPal signature invalid');
+    return res.status(400).json({ error: 'Signature PayPal invalide', code: 'paypal_signature_invalid' });
+  }
+
+  const supabase = admin();
+  const resource = event.resource || {};
+
+  switch (event.event_type) {
+    // Le client a approuvé le paiement chez PayPal : on capture côté serveur.
+    // Le règlement BAARO se fait uniquement sur PAYMENT.CAPTURE.COMPLETED.
+    case 'CHECKOUT.ORDER.APPROVED': {
+      const orderId = resource.id;
+      if (!orderId) return res.status(400).json({ error: 'order_id manquant' });
+      const capture = await paypalRequest('POST', `/v2/checkout/orders/${orderId}/capture`, {
+        headers: { 'PayPal-Request-Id': `capture_${orderId}` },
+      });
+      if (capture.ok) return res.status(200).json({ received: true, captured: true });
+      const issue = capture.data?.details?.[0]?.issue || capture.data?.name;
+      if (issue === 'ORDER_ALREADY_CAPTURED') return res.status(200).json({ received: true, captured: true });
+      if (capture.status === 422) {
+        // Refus de capture (ex. instrument refusé) : le client peut souvent réessayer
+        // chez PayPal avec un autre moyen de paiement. On ne marque donc rien en échec ici
+        // (sinon un paiement réussi ensuite ne pourrait plus être réglé). Seul
+        // PAYMENT.CAPTURE.DENIED marque un échec définitif.
+        console.warn('[webhook] PayPal capture refused', orderId, issue);
+        return res.status(200).json({ received: true, refused: true, issue });
+      }
+      console.error('[webhook] PayPal capture error', orderId, capture.status, issue);
+      return res.status(500).json({ error: 'Capture PayPal impossible.' });
+    }
+
+    case 'PAYMENT.CAPTURE.COMPLETED': {
+      if (resource.status !== 'COMPLETED') {
+        return res.status(200).json({ received: true, skipped: 'not_completed' });
+      }
+
+      // custom_id = référence BAARO posée par /api/payments
+      let paymentRef = resource.custom_id;
+      if (!paymentRef) {
+        const orderId = resource.supplementary_data?.related_ids?.order_id;
+        if (orderId) {
+          const order = await paypalRequest('GET', `/v2/checkout/orders/${orderId}`);
+          paymentRef = order.data?.purchase_units?.[0]?.custom_id;
+        }
+      }
+      if (!paymentRef) {
+        console.error('[webhook] PayPal capture sans référence BAARO', resource.id);
+        return res.status(200).json({ received: true, skipped: 'no_reference' });
+      }
+
+      const kind = inferKind(paymentRef);
+      await fulfillPayment(supabase, {
+        paymentRef,
+        kind,
+        provider: 'paypal',
+        amount: majorToMinor(resource.amount?.value, resource.amount?.currency_code),
+        currency: String(resource.amount?.currency_code || 'EUR').toUpperCase(),
+        paypalPaid: {
+          value: resource.amount?.value,
+          currency_code: String(resource.amount?.currency_code || '').toUpperCase(),
+        },
+        cpmTransId: resource.id,
+      });
+
+      return res.status(200).json({ received: true, kind, paymentRef });
+    }
+
+    case 'PAYMENT.CAPTURE.DENIED':
+    case 'PAYMENT.CAPTURE.DECLINED': {
+      await markPaymentFailed(supabase, resource.custom_id);
+      return res.status(200).json({ received: true, failed: true });
+    }
+
+    default:
+      return res.status(200).json({ received: true, ignored: event.event_type });
+  }
+}
+
+// ---------------------------------------------------------
 // Gestionnaire CinetPay
 // ---------------------------------------------------------
 async function handleCinetPayWebhook(req, res) {
@@ -313,6 +501,30 @@ function providerMajorToMinor(amount, currency = 'XOF') {
   return majorToMinor(amount, currency);
 }
 
+// Montant PayPal attendu pour une ressource BAARO (même calcul que api/payments.js).
+function toPayPalAmount(amountMinor, currency = 'XOF') {
+  const cur = String(currency || 'XOF').toUpperCase();
+  const major = Number(amountMinor) / 100;
+  if (['XOF', 'XAF'].includes(cur)) {
+    return { currency_code: 'EUR', value: (major / XOF_PER_EUR).toFixed(2) };
+  }
+  if (PAYPAL_NATIVE_CURRENCIES.includes(cur)) {
+    return { currency_code: cur, value: major.toFixed(2) };
+  }
+  return null;
+}
+
+function paypalAmountMatches(paypalPaid, expectedMinor, expectedCurrency) {
+  const expected = toPayPalAmount(expectedMinor, expectedCurrency);
+  if (!paypalPaid || !expected) return false;
+  const paid = Number(paypalPaid.value);
+  if (!Number.isFinite(paid)) return false;
+  return (
+    String(paypalPaid.currency_code).toUpperCase() === expected.currency_code &&
+    Math.abs(paid - Number(expected.value)) < 0.005
+  );
+}
+
 function inferKind(ref) {
   if (!ref) return 'topup';
   if (String(ref).startsWith('order_')) return 'order';
@@ -321,7 +533,7 @@ function inferKind(ref) {
   return 'topup';
 }
 
-async function fulfillPayment(supabase, { paymentRef, kind, userId, provider, amount, currency, cpmTransId }) {
+async function fulfillPayment(supabase, { paymentRef, kind, userId, provider, amount, currency, cpmTransId, paypalPaid }) {
   const k = kind || inferKind(paymentRef);
 
   // V19 monetization checkout: provider confirmation is the only source of truth.
@@ -341,10 +553,14 @@ async function fulfillPayment(supabase, { paymentRef, kind, userId, provider, am
     if (intent.status === 'paid') return;
     if (!['pending', 'processing'].includes(intent.status)) throw new Error('CHECKOUT_NOT_PAYABLE');
     const expected = Number(intent.amount_minor);
-    const paid = Number(amount);
-    if (!Number.isFinite(expected) || !Number.isFinite(paid) || Math.abs(expected - paid) > 0.01) throw new Error('MONTANT_PAIEMENT_INATTENDU');
     const expectedCurrency = String(intent.currency || 'XOF').toUpperCase();
-    if (String(currency || expectedCurrency).toUpperCase() !== expectedCurrency) throw new Error('DEVISE_PAIEMENT_INATTENDUE');
+    if (provider === 'paypal') {
+      if (!paypalAmountMatches(paypalPaid, expected, expectedCurrency)) throw new Error('MONTANT_PAIEMENT_INATTENDU');
+    } else {
+      const paid = Number(amount);
+      if (!Number.isFinite(expected) || !Number.isFinite(paid) || Math.abs(expected - paid) > 0.01) throw new Error('MONTANT_PAIEMENT_INATTENDU');
+      if (String(currency || expectedCurrency).toUpperCase() !== expectedCurrency) throw new Error('DEVISE_PAIEMENT_INATTENDUE');
+    }
 
     const { error: fulfillError } = await supabase.rpc('fulfill_monetization_checkout', {
       p_intent_id: intent.id,
@@ -363,7 +579,10 @@ async function fulfillPayment(supabase, { paymentRef, kind, userId, provider, am
     if (!order) throw new Error('ORDER_NOT_FOUND');
     if (order.payment_status === 'paid') return;
     const expected = majorToMinor(order.total_amount, order.currency);
-    if (Number(amount) !== expected) throw new Error('MONTANT_PAIEMENT_INATTENDU');
+    const amountOk = provider === 'paypal'
+      ? paypalAmountMatches(paypalPaid, expected, order.currency || 'XOF')
+      : Number(amount) === expected;
+    if (!amountOk) throw new Error('MONTANT_PAIEMENT_INATTENDU');
     const { error } = await supabase.rpc('mark_order_paid', {
       p_order_id: match[1],
       p_payment_ref: paymentRef,
@@ -381,7 +600,11 @@ async function fulfillPayment(supabase, { paymentRef, kind, userId, provider, am
       .maybeSingle();
 
     if (sub && sub.status === 'pending') {
-      if (Number(amount) !== majorToMinor(sub.amount, sub.currency)) throw new Error('MONTANT_PAIEMENT_INATTENDU');
+      const expected = majorToMinor(sub.amount, sub.currency);
+      const amountOk = provider === 'paypal'
+        ? paypalAmountMatches(paypalPaid, expected, sub.currency || 'XOF')
+        : Number(amount) === expected;
+      if (!amountOk) throw new Error('MONTANT_PAIEMENT_INATTENDU');
       await supabase.rpc('activate_shop_subscription', {
         p_shop_id: sub.shop_id,
         p_payment_ref: paymentRef,
@@ -402,7 +625,11 @@ async function fulfillPayment(supabase, { paymentRef, kind, userId, provider, am
       .maybeSingle();
 
     if (sub && sub.status === 'pending') {
-      if (Number(amount) !== majorToMinor(sub.amount, sub.currency)) throw new Error('MONTANT_PAIEMENT_INATTENDU');
+      const expected = majorToMinor(sub.amount, sub.currency);
+      const amountOk = provider === 'paypal'
+        ? paypalAmountMatches(paypalPaid, expected, sub.currency || 'XOF')
+        : Number(amount) === expected;
+      if (!amountOk) throw new Error('MONTANT_PAIEMENT_INATTENDU');
       await supabase.rpc('activate_company_subscription', {
         p_company_id: sub.company_id,
         p_payment_ref: paymentRef,
