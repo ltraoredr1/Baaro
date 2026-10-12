@@ -1,6 +1,4 @@
-// Textes du panneau de préférences de notifications (FR/EN)
-// Le titre de la section est déjà affiché par l'écran Réglages :
-// le panneau n'affiche donc que les options.
+// Plus de "Wallet" crypto — catégorie "Gains & revenus"
 export const TEXTS = {
   fr: {
     loading: "Chargement des préférences…",
@@ -12,6 +10,7 @@ export const TEXTS = {
       messages: "Messages",
       social: "Social (follows, likes)",
       live: "Lives & débats",
+      earnings: "Gains & revenus",
       marketing: "Marketing",
     },
   },
@@ -25,6 +24,7 @@ export const TEXTS = {
       messages: "Messages",
       social: "Social (follows, likes)",
       live: "Lives & debates",
+      earnings: "Earnings & payouts",
       marketing: "Marketing",
     },
   },

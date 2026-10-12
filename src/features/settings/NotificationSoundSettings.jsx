@@ -1,5 +1,5 @@
 import { Volume2, VolumeX, Bell, Play } from "lucide-react";
-import { useNotificationSound } from "../../hooks/useNotificationSound.js";
+import { useNotificationSound, BAARO_SOUNDS } from "../../hooks/useNotificationSound.js";
 import SwitchButton from "./SwitchButton.jsx";
 
 export default function NotificationSoundSettings({ C }) {
@@ -7,10 +7,12 @@ export default function NotificationSoundSettings({ C }) {
     enabled,
     muted,
     volume,
+    soundId,
     loading,
     setEnabled,
     setMuted,
     setVolume,
+    setSoundId,
     playTest,
   } = useNotificationSound();
 
@@ -77,6 +79,29 @@ export default function NotificationSoundSettings({ C }) {
           disabled={!enabled || muted}
           className="w-full accent-amber-500 disabled:opacity-40"
         />
+      </div>
+
+      <div className="space-y-2">
+        <span className="text-sm" style={{ color: C.ivory }}>
+          Son BAARO
+        </span>
+        <select
+          value={soundId}
+          onChange={(e) => setSoundId(e.target.value)}
+          disabled={!enabled || muted}
+          className="w-full rounded-xl px-3 py-2 text-sm disabled:opacity-40"
+          style={{
+            background: C.surface || "#1a1a1a",
+            color: C.ivory,
+            border: `1px solid ${C.border}`,
+          }}
+        >
+          {Object.values(BAARO_SOUNDS).map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.name}
+            </option>
+          ))}
+        </select>
       </div>
 
       <button
