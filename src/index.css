@@ -1,6 +1,13 @@
-@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Noto+Naskh+Arabic:wght@400;700&family=Noto+Sans+NKo&display=swap');
-
 @import "tailwindcss";
+
+/* FIX NATIF : pas de Google Fonts en @import qui bloque l'APK */
+@font-face {
+  font-family: 'Plus Jakarta Sans';
+  font-style: normal;
+  font-weight: 300 800;
+  font-display: swap;
+  src: local('Plus Jakarta Sans'), local('Inter'), system-ui, sans-serif;
+}
 
 /* Base */
 html,
@@ -9,7 +16,7 @@ body,
   height: 100%;
   margin: 0;
   padding: 0;
-  background-color: var(--bg, #0b1220);
+  background-color: #0b1220;
   color: var(--fg, #f4efe3);
   font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   overflow-x: hidden;
@@ -124,7 +131,6 @@ body,
     opacity: 1;
     transform: scale(1);
   }
-
   50% {
     opacity: 0.85;
     transform: scale(1.02);
@@ -140,7 +146,6 @@ body,
   100% {
     transform: translateY(0px);
   }
-
   50% {
     transform: translateY(-4px);
   }
@@ -157,36 +162,18 @@ body,
   user-select: none;
 }
 
-/* =========================================================
-   NAVIGATION BASSE
-   ========================================================= */
-
-/*
- * La navigation mobile est positionnée en fixed en bas.
- * Cette classe réserve donc suffisamment d'espace pour que
- * le dernier contenu ne soit jamais caché derrière elle.
- */
 .mobile-nav-spacer {
   padding-bottom: calc(
     5.5rem + env(safe-area-inset-bottom, 0px)
   );
 }
 
-/*
- * Sur desktop, la navigation est latérale.
- * Aucun grand espace réservé en bas n'est nécessaire.
- */
 @media (min-width: 768px) {
   .mobile-nav-spacer {
     padding-bottom: 1.5rem;
   }
 }
 
-/*
- * Mobile Web + Android/iOS :
- * améliore le comportement lors des scrolls/focus vers
- * le bas de la page.
- */
 @media (max-width: 767px) {
   #main-content {
     scroll-padding-bottom: calc(
@@ -273,7 +260,6 @@ html.baaro-reduce-motion *::after {
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
-
   .animate-pulse-slow,
   .animate-float {
     animation: none !important;
@@ -341,7 +327,6 @@ html.baaro-reduce-motion *::after {
   0% {
     background-position: 200% 0;
   }
-
   100% {
     background-position: -200% 0;
   }
@@ -353,15 +338,11 @@ html.baaro-reduce-motion *::after {
   }
 }
 
-
-
-
-/* Valeurs par défaut des variables de thème (le JS les remplace) */
 :root {
   --surface: #111A2C; --surface2: #1A2740; --surface-hover: #203152;
   --muted: #8A93A6; --muted-light: #A0ABC0; --border: rgba(255,255,255,0.08);
 }
-/* RTL : police + sens du texte, sans toucher à la mise en page */
+
 html[data-rtl="1"] .baaro-rtl-text {
   font-family: 'Noto Naskh Arabic','Noto Sans NKo','Plus Jakarta Sans',sans-serif;
 }
