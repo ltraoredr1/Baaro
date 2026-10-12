@@ -1,13 +1,15 @@
 import { Capacitor } from "@capacitor/core";
 
 const PROD_URL_MAIN = "https://baaro-xi.vercel.app";
-
 const isNative = Capacitor.isNativePlatform();
 
-// Web : utilise /api du domaine baaro-xi.
-// Natif : utilise explicitement l'API baaro-xi.
+console.log("[BAARO CONFIG] isNative:", isNative, "platform:", Capacitor.getPlatform());
+
 export const API_BASE =
   import.meta.env.VITE_API_BASE_URL ||
   (isNative ? PROD_URL_MAIN : "");
 
-export const getApiBase = () => API_BASE;
+export const getApiBase = () => {
+  console.log("[BAARO CONFIG] API_BASE:", API_BASE);
+  return API_BASE;
+};
