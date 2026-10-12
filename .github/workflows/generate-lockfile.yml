@@ -1,6 +1,10 @@
 name: Generate package-lock.json
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'package.json'
   workflow_dispatch:
 
 jobs:
@@ -25,5 +29,5 @@ jobs:
       - name: Commit package-lock.json
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "chore: generate package-lock.json Capacitor 8"
+          commit_message: "chore: generate package-lock.json Capacitor 8 [skip ci]"
           file_pattern: "package-lock.json"
