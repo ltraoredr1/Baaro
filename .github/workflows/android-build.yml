@@ -1,23 +1,40 @@
 name: Build Android APK
+
 on:
   push:
     branches: [ main ]
+  workflow_dispatch:
+
+concurrency:
+  group: android-build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
+
       - uses: actions/setup-java@v5
         with:
           java-version: 21
           distribution: temurin
+
+      # compileSdk / targetSdk = 36 (android/variables.gradle)
       - uses: android-actions/setup-android@v3
         with:
-          packages: platform-tools platforms;android-35 build-tools;35.0.0
+          packages: platform-tools platforms;android-36 build-tools;36.0.0
+
+      - uses: gradle/actions/setup-gradle@v4
 
       - name: Verify secrets & version
         run: |
@@ -26,8 +43,9 @@ jobs:
           if [ -z "${{ secrets.VITE_SUPABASE_URL }}" ]; then echo "❌ VITE_SUPABASE_URL manquant"; exit 1; else echo "✅ VITE_SUPABASE_URL OK"; fi
           if [ -z "${{ secrets.VITE_SUPABASE_ANON_KEY }}" ]; then echo "❌ VITE_SUPABASE_ANON_KEY manquant"; exit 1; else echo "✅ VITE_SUPABASE_ANON_KEY OK"; fi
 
+      # Installation reproductible depuis package-lock.json (.npmrc gère legacy-peer-deps)
       - name: Install dependencies
-        run: npm install --legacy-peer-deps
+        run: npm ci
 
       - name: Build web
         run: npx vite build
@@ -45,8 +63,8 @@ jobs:
         run: npx cap sync android
 
       - name: Build APK
+        working-directory: android
         run: |
-          cd android
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon
 
@@ -54,3 +72,4 @@ jobs:
         with:
           name: app-debug-${{ github.sha }}
           path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error

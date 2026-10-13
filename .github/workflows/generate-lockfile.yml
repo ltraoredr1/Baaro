@@ -1,10 +1,9 @@
 name: Generate package-lock.json
 
+# Manuel uniquement : commite package-lock.json avec package.json depuis ton poste.
+# Ce workflow sert de secours et ne supprime plus le lockfile existant
+# (les versions ne changent que si package.json l'exige).
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'package.json'
   workflow_dispatch:
 
 jobs:
@@ -21,13 +20,11 @@ jobs:
         with:
           node-version: 22
 
-      - name: Generate package-lock.json
-        run: |
-          rm -f package-lock.json
-          npm install --package-lock-only --legacy-peer-deps
+      - name: Update package-lock.json
+        run: npm install --package-lock-only
 
       - name: Commit package-lock.json
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "chore: generate package-lock.json Capacitor 8 [skip ci]"
+          commit_message: "chore: update package-lock.json [skip ci]"
           file_pattern: "package-lock.json"
