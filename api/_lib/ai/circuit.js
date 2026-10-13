@@ -1,23 +1,19 @@
 /**
- * Circuit breaker simple - Optimisé Vercel
+ * Circuit breaker simple pour les providers IA.
+ * Mémoire process (suffisant sur Vercel serverless + cold starts).
+ * Après 3 échecs consécutifs → open pendant cooldownMs.
  */
 
-const failures = new Map();
+const failures = new Map(); // provider → { count, openUntil }
 
-const DEFAULT_COOLDOWN_MS = 60_000;
+const DEFAULT_COOLDOWN_MS = 60_000; // 1 minute
 const FAILURE_THRESHOLD = 3;
 
 export function isOpen(provider) {
   if (!provider) return false;
   const state = failures.get(provider);
   if (!state) return false;
-
-  // Si cooldown passé → on autorise 1 essai (half-open)
   if (Date.now() > state.openUntil) {
-    if (state.count >= FAILURE_THRESHOLD) {
-      // On passe en half-open: on laisse passer mais on garde le count
-      return false;
-    }
     failures.delete(provider);
     return false;
   }
@@ -26,40 +22,25 @@ export function isOpen(provider) {
 
 export function recordFailure(provider, cooldownMs = DEFAULT_COOLDOWN_MS) {
   if (!provider) return;
-  const prev = failures.get(provider) || { count: 0, openUntil: 0 };
-  const count = prev.count + 1;
-
-  const openUntil = count >= FAILURE_THRESHOLD
-   ? Date.now() + cooldownMs
-    : 0; // on n'ouvre qu'après threshold
-
-  failures.set(provider, { count, openUntil });
-
-  if (count >= FAILURE_THRESHOLD) {
-    console.warn(`[CB] OPEN ${provider} for ${cooldownMs}ms after ${count} fails`);
+  const state = failures.get(provider) || { count: 0, openUntil: 0 };
+  state.count += 1;
+  if (state.count >= FAILURE_THRESHOLD) {
+    state.openUntil = Date.now() + cooldownMs;
   }
+  failures.set(provider, state);
 }
 
 export function recordSuccess(provider) {
   if (!provider) return;
-  if (failures.has(provider)) {
-    console.log(`[CB] CLOSED ${provider} - success`);
-  }
   failures.delete(provider);
 }
 
+/** Liste des providers actuellement en circuit ouvert (debug). */
 export function openProviders() {
   const now = Date.now();
-  return [...failures.entries()]
-   .filter(([, s]) => now <= s.openUntil)
-   .map(([p]) => p);
-}
-
-// Pour ton /api/chat Gemini
-export function getNextProvider(providers) {
-  for (const p of providers) {
-    if (!isOpen(p)) return p;
+  const result = [];
+  for (const [p, state] of failures) {
+    if (now <= state.openUntil) result.push(p);
   }
-  // Tous ouverts → on force le premier qui a expiré
-  return providers[0];
+  return result;
 }
