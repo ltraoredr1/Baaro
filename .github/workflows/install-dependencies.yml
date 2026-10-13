@@ -1,0 +1,51 @@
+name: BAARO - Install and Verify Dependencies
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependencies-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  install-and-build:
+    name: Install dependencies and build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Verify npm files
+        run: |
+          test -f package.json || {
+            echo "Erreur : package.json est introuvable."
+            exit 1
+          }
+
+          test -f package-lock.json || {
+            echo "Erreur : package-lock.json est introuvable."
+            echo "Génère-le localement avec npm install, puis ajoute-le au dépôt."
+            exit 1
+          }
+
+      - name: Install all dependencies
+        run: npm ci
+
+      - name: Verify Markdown dependencies
+        run: npm ls markdown-it dompurify
+
+      - name: Build application
+        run: npm run build --if-present
