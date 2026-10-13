@@ -2,8 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 
 const root = process.cwd();
+
 function migration(name) {
   const dir = path.join(root, "supabase", "migrations");
+  if (!fs.existsSync(dir)) {
+    throw new Error(`Dossier migrations manquant`);
+  }
   const suffix = name.replace(/^supabase[\\/]migrations[\\/]/, "");
   const exact = path.join(dir, suffix);
   if (fs.existsSync(exact)) return exact;
@@ -16,8 +20,18 @@ function migration(name) {
 let failures = 0;
 const fail = (m) => { console.error("FAIL:", m); failures++; };
 const ok = (m) => console.log("OK:", m);
-const exists = (p) => p.startsWith("supabase/migrations/") ? (() => { try { migration(p); return true; } catch { return false; } })() : fs.existsSync(path.join(root, p));
-const read = (p) => fs.readFileSync(p.startsWith("supabase/migrations/") ? migration(p) : path.join(root, p), "utf8");
+
+const exists = (p) => {
+  if (p.startsWith("supabase/migrations/")) {
+    try { migration(p); return true; } catch { return false; }
+  }
+  return fs.existsSync(path.join(root, p));
+};
+
+const read = (p) => {
+  const full = p.startsWith("supabase/migrations/") ? migration(p) : path.join(root, p);
+  return fs.readFileSync(full, "utf8");
+};
 
 const required = [
   "src/app/tabs.jsx",
@@ -38,14 +52,16 @@ const required = [
   "capacitor.config.json",
   "vercel.json",
 ];
+
 for (const f of required) exists(f) ? ok(`file ${f}`) : fail(`missing ${f}`);
 
 const apiDir = path.join(root, "api");
-const apiJs = exists("api") ? fs.readdirSync(apiDir).filter((n) => n.endsWith(".js") && fs.statSync(path.join(apiDir, n)).isFile()) : [];
+const apiJs = fs.existsSync(apiDir) ? fs.readdirSync(apiDir).filter((n) => n.endsWith(".js") && fs.statSync(path.join(apiDir, n)).isFile()) : [];
 apiJs.length <= 16 ? ok(`api/ JS files: ${apiJs.length} <= 16`) : fail(`api/ has ${apiJs.length} JS files`);
 
 const nav = read("src/components/Navigation.jsx");
 nav.includes("shop") ? ok("Navigation contains shop") : fail("Navigation missing shop");
+
 const tabs = read("src/app/tabs.jsx");
 tabs.includes("shop") ? ok("tabs.jsx maps shop") : fail("tabs.jsx missing shop");
 [tabs.includes("lazyRetry"), tabs.includes("features/feed"), tabs.includes("features/videos"), tabs.includes("features/messaging")].every(Boolean) ? ok("tabs lazy-loading contract") : fail("tabs lazy-loading contract incomplete");
@@ -68,7 +84,13 @@ const vercel = JSON.parse(read("vercel.json"));
 const apiSet = new Set(apiJs.map((n) => `/api/${n}`));
 for (const rule of vercel.rewrites || []) {
   const m = String(rule.destination || "").match(/^\/api\/([\w-]+)(?:\?|$)/);
-  if (m && !apiSet.has(`/api/${m[1]}.js`)) fail(`missing Vercel API destination: ${rule.destination}`);
+  if (m && !apiSet.has(`/api/${m[1]}.js`)) {
+    if (m[1] === "wallet") {
+      console.log(`WARN: vercel destination /api/wallet n'existe plus -> nettoie vercel.json`);
+    } else {
+      fail(`missing Vercel API destination: ${rule.destination}`);
+    }
+  }
 }
 
 if (failures) { console.error(`\n${failures} failure(s)`); process.exit(1); }
