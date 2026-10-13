@@ -14,6 +14,21 @@ export const AppContext = createContext(null);
 const GUEST_KEY = "baaro_is_guest";
 const GUEST_OK_KEY = "baaro_guest_ok";
 
+// Champs que le client a le droit d'envoyer. Les champs sensibles
+// (is_premium, is_verified, restricted, id, created_at...) sont ignorés.
+const EDITABLE_PROFILE_FIELDS = [
+  "display_name", "handle", "flag", "bio",
+  "avatar_url", "cover_url", "location", "country",
+];
+
+function pickEditable(updates) {
+  const out = {};
+  for (const key of EDITABLE_PROFILE_FIELDS) {
+    if (updates && Object.prototype.hasOwnProperty.call(updates, key)) out[key] = updates[key];
+  }
+  return out;
+}
+
 const DEFAULT_PROFILE = {
   display_name: "Membre BAARO",
   handle: "@membre",
@@ -85,7 +100,7 @@ export function AppProvider({ children }) {
 
         const created = await supabase
           .from("profiles")
-          .upsert(fallback, { onConflict: "id" })
+          .upsert(fallback, { onConflict: "id", ignoreDuplicates: true })
           .select("*")
           .maybeSingle();
 
@@ -223,7 +238,6 @@ export function AppProvider({ children }) {
     const loadUserData = async () => {
       await loadProfile(id);
       if (cancelled) return;
-      if (cancelled) return;
       await registerDevice();
     };
     loadUserData().catch(() => {});
@@ -250,7 +264,7 @@ export function AppProvider({ children }) {
     if (!id) return { ok: false, error: "Non authentifié" };
 
     const payload = {
-      ...updates,
+      ...pickEditable(updates),
       id,
       updated_at: new Date().toISOString(),
     };
