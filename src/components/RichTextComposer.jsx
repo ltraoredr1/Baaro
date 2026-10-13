@@ -15,7 +15,7 @@ import { COLORS } from "../theme.js";
  * Toolbar : Gras, Italique, Souligné, Lien, Listes.
  */
 export function RichTextComposer({
-  value,
+  value = "",
   onChange,
   placeholder = "Quoi de neuf ?",
   rows = 3,
@@ -24,6 +24,32 @@ export function RichTextComposer({
 }) {
   const textareaRef = useRef(null);
 
+  const text = typeof value === "string" ? value : "";
+
+  const updateText = useCallback(
+    (nextValue) => {
+      if (typeof onChange === "function") {
+        onChange(nextValue);
+      }
+    },
+    [onChange]
+  );
+
+  const restoreSelection = useCallback((start, end = start) => {
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (!el) return;
+
+      el.focus();
+
+      const maxLength = el.value.length;
+      const safeStart = Math.min(Math.max(0, start), maxLength);
+      const safeEnd = Math.min(Math.max(safeStart, end), maxLength);
+
+      el.setSelectionRange(safeStart, safeEnd);
+    });
+  }, []);
+
   const wrapSelection = useCallback(
     (before, after = before) => {
       const el = textareaRef.current;
@@ -31,94 +57,156 @@ export function RichTextComposer({
 
       const start = el.selectionStart;
       const end = el.selectionEnd;
-      const selected = value.slice(start, end);
+      const selected = text.slice(start, end);
+
       const newText =
-        value.slice(0, start) + before + selected + after + value.slice(end);
+        text.slice(0, start) +
+        before +
+        selected +
+        after +
+        text.slice(end);
 
-      onChange(newText);
+      updateText(newText);
 
-      requestAnimationFrame(() => {
-        el.focus();
-        const cursor = start + before.length + selected.length + after.length;
-        el.setSelectionRange(
-          selected ? start + before.length : cursor,
-          selected ? start + before.length + selected.length : cursor
+      if (selected.length > 0) {
+        restoreSelection(
+          start + before.length,
+          start + before.length + selected.length
         );
-      });
+      } else {
+        const cursor = start + before.length;
+        restoreSelection(cursor);
+      }
     },
-    [value, onChange, disabled]
+    [text, disabled, updateText, restoreSelection]
   );
 
   const insertAtCursor = useCallback(
-    (text) => {
+    (insertedText) => {
       const el = textareaRef.current;
       if (!el || disabled) return;
 
       const start = el.selectionStart;
       const end = el.selectionEnd;
-      const newText = value.slice(0, start) + text + value.slice(end);
 
-      onChange(newText);
+      const newText =
+        text.slice(0, start) + insertedText + text.slice(end);
 
-      requestAnimationFrame(() => {
-        el.focus();
-        const pos = start + text.length;
-        el.setSelectionRange(pos, pos);
-      });
+      updateText(newText);
+
+      const cursor = start + insertedText.length;
+      restoreSelection(cursor);
     },
-    [value, onChange, disabled]
+    [text, disabled, updateText, restoreSelection]
   );
 
-  const handleBold = () => wrapSelection("**");
-  const handleItalic = () => wrapSelection("*");
-  const handleUnderline = () => wrapSelection("++");
+  const handleBold = useCallback(() => {
+    wrapSelection("**");
+  }, [wrapSelection]);
 
-  const handleLink = () => {
-    const url = window.prompt("Collez le lien (site ou groupe Baaro) :", "https://");
-    if (!url) return;
+  const handleItalic = useCallback(() => {
+    wrapSelection("*");
+  }, [wrapSelection]);
 
-    const el = textareaRef.current;
-    const start = el?.selectionStart ?? 0;
-    const end = el?.selectionEnd ?? 0;
-    const selected = value.slice(start, end) || "lien";
+  const handleUnderline = useCallback(() => {
+    wrapSelection("++");
+  }, [wrapSelection]);
 
-    const markdown = `[${selected}](${url.trim()})`;
-    const newText = value.slice(0, start) + markdown + value.slice(end);
-    onChange(newText);
+  const handleLink = useCallback(() => {
+    if (disabled) return;
 
-    requestAnimationFrame(() => {
-      el?.focus();
-    });
-  };
-
-  const handleBulletList = () => {
     const el = textareaRef.current;
     if (!el) return;
-    const start = el.selectionStart;
-    const lineStart = value.lastIndexOf("\n", start - 1) + 1;
-    insertAtCursor(value.slice(lineStart, start).trim() === "" ? "- " : "\n- ");
-  };
 
-  const handleOrderedList = () => {
-    const el = textareaRef.current;
-    if (!el) return;
     const start = el.selectionStart;
-    const lineStart = value.lastIndexOf("\n", start - 1) + 1;
-    insertAtCursor(value.slice(lineStart, start).trim() === "" ? "1. " : "\n1. ");
-  };
+    const end = el.selectionEnd;
+    const selected = text.slice(start, end) || "lien";
+
+    const enteredUrl = window.prompt(
+      "Collez le lien (site ou groupe Baaro) :",
+      "https://"
+    );
+
+    if (!enteredUrl) {
+      el.focus();
+      el.setSelectionRange(start, end);
+      return;
+    }
+
+    const url = enteredUrl.trim();
+
+    let parsedUrl;
+
+    try {
+      parsedUrl = new URL(url);
+    } catch {
+      window.alert("Veuillez saisir une URL valide.");
+      restoreSelection(start, end);
+      return;
+    }
+
+    if (!["http:", "https:"].includes(parsedUrl.protocol)) {
+      window.alert("Seuls les liens HTTP et HTTPS sont autorisés.");
+      restoreSelection(start, end);
+      return;
+    }
+
+    const markdown = `[${selected}](${url})`;
+
+    const newText =
+      text.slice(0, start) + markdown + text.slice(end);
+
+    updateText(newText);
+
+    const selectionStart = start + 1;
+    const selectionEnd = selectionStart + selected.length;
+
+    restoreSelection(selectionStart, selectionEnd);
+  }, [text, disabled, updateText, restoreSelection]);
+
+  const insertListMarker = useCallback(
+    (marker) => {
+      const el = textareaRef.current;
+      if (!el || disabled) return;
+
+      const start = el.selectionStart;
+      const end = el.selectionEnd;
+
+      // Détermine le début de la ligne où se trouve le curseur.
+      const lineStart = text.lastIndexOf("\n", Math.max(0, start - 1)) + 1;
+      const beforeCursor = text.slice(lineStart, start);
+
+      // Si le curseur est déjà au début d'une ligne vide,
+      // insère le marqueur directement. Sinon, commence une nouvelle ligne.
+      const prefix = beforeCursor.trim() === "" ? marker : `\n${marker}`;
+
+      insertAtCursor(prefix);
+    },
+    [text, disabled, insertAtCursor]
+  );
+
+  const handleBulletList = useCallback(() => {
+    insertListMarker("- ");
+  }, [insertListMarker]);
+
+  const handleOrderedList = useCallback(() => {
+    insertListMarker("1. ");
+  }, [insertListMarker]);
 
   const btnClass =
-    "p-1.5 rounded-lg transition-colors hover:bg-white/10 disabled:opacity-40";
+    "p-1.5 rounded-lg transition-colors hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed";
 
   return (
     <div className={`flex flex-col gap-2 ${className}`}>
-      {/* Toolbar */}
+      {/* Barre d'outils */}
       <div
         className="flex items-center gap-0.5 flex-wrap px-1 py-1 rounded-xl border"
         style={{
           background: COLORS.surface,
           borderColor: COLORS.border,
         }}
+        role="toolbar"
+        aria-label="Mise en forme du texte"
       >
         <button
           type="button"
@@ -129,8 +217,9 @@ export function RichTextComposer({
           aria-label="Gras"
           style={{ color: COLORS.ivory }}
         >
-          <Bold size={16} />
+          <Bold size={16} aria-hidden="true" />
         </button>
+
         <button
           type="button"
           onClick={handleItalic}
@@ -140,8 +229,9 @@ export function RichTextComposer({
           aria-label="Italique"
           style={{ color: COLORS.ivory }}
         >
-          <Italic size={16} />
+          <Italic size={16} aria-hidden="true" />
         </button>
+
         <button
           type="button"
           onClick={handleUnderline}
@@ -151,10 +241,14 @@ export function RichTextComposer({
           aria-label="Souligné"
           style={{ color: COLORS.ivory }}
         >
-          <Underline size={16} />
+          <Underline size={16} aria-hidden="true" />
         </button>
 
-        <div className="w-px h-4 mx-1" style={{ background: COLORS.border }} />
+        <div
+          className="w-px h-4 mx-1"
+          style={{ background: COLORS.border }}
+          aria-hidden="true"
+        />
 
         <button
           type="button"
@@ -165,10 +259,14 @@ export function RichTextComposer({
           aria-label="Lien"
           style={{ color: COLORS.gold }}
         >
-          <LinkIcon size={16} />
+          <LinkIcon size={16} aria-hidden="true" />
         </button>
 
-        <div className="w-px h-4 mx-1" style={{ background: COLORS.border }} />
+        <div
+          className="w-px h-4 mx-1"
+          style={{ background: COLORS.border }}
+          aria-hidden="true"
+        />
 
         <button
           type="button"
@@ -179,8 +277,9 @@ export function RichTextComposer({
           aria-label="Liste à puces"
           style={{ color: COLORS.ivory }}
         >
-          <List size={16} />
+          <List size={16} aria-hidden="true" />
         </button>
+
         <button
           type="button"
           onClick={handleOrderedList}
@@ -190,29 +289,31 @@ export function RichTextComposer({
           aria-label="Liste numérotée"
           style={{ color: COLORS.ivory }}
         >
-          <ListOrdered size={16} />
+          <ListOrdered size={16} aria-hidden="true" />
         </button>
       </div>
 
       {/* Zone de saisie */}
       <textarea
         ref={textareaRef}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
+        value={text}
+        onChange={(event) => updateText(event.target.value)}
         placeholder={placeholder}
         rows={rows}
         disabled={disabled}
         className="w-full bg-transparent resize-none outline-none text-sm leading-relaxed"
         style={{ color: COLORS.ivory }}
-        onKeyDown={(e) => {
-          if (e.ctrlKey || e.metaKey) {
-            if (e.key === "b") {
-              e.preventDefault();
-              handleBold();
-            } else if (e.key === "i") {
-              e.preventDefault();
-              handleItalic();
-            }
+        onKeyDown={(event) => {
+          if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+
+          const key = event.key.toLowerCase();
+
+          if (key === "b") {
+            event.preventDefault();
+            handleBold();
+          } else if (key === "i") {
+            event.preventDefault();
+            handleItalic();
           }
         }}
       />
