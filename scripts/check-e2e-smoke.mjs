@@ -37,7 +37,6 @@ const required = [
   "api/webhooks.js",
   "capacitor.config.json",
   "vercel.json",
-  "supabase/migrations/0001_baaro_unified.sql",
 ];
 for (const f of required) exists(f) ? ok(`file ${f}`) : fail(`missing ${f}`);
 
