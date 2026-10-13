@@ -17,6 +17,6 @@
     }
   },
   "peerDependencies": {
-    "@capacitor/core": "^6.0.0"
+    "@capacitor/core": "^8.0.0"
   }
 }
