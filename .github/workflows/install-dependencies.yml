@@ -1,51 +1,79 @@
-name: BAARO - Install and Verify Dependencies
+name: BAARO - Install, Validate and Build
 
 on:
   push:
-    branches: [main, master]
+    branches:
+      - main
+      - master
+
   pull_request:
+
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: dependencies-${{ github.ref }}
+  group: baaro-ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  install-and-build:
-    name: Install dependencies and build
+  install-and-verify:
+    name: Install dependencies and validate project
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
+      # 1. Récupérer le code
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # 2. Installer Node.js et activer le cache npm
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
-      - name: Verify npm files
+      # 3. Vérifier les fichiers npm
+      - name: Verify project files
+        shell: bash
         run: |
           test -f package.json || {
-            echo "Erreur : package.json est introuvable."
+            echo "::error::package.json introuvable."
             exit 1
           }
 
           test -f package-lock.json || {
-            echo "Erreur : package-lock.json est introuvable."
-            echo "Génère-le localement avec npm install, puis ajoute-le au dépôt."
+            echo "::error::package-lock.json introuvable."
             exit 1
           }
 
+      # 4. Installer toutes les dépendances déclarées
       - name: Install all dependencies
         run: npm ci
 
+      # 5. Vérifier les dépendances Markdown
       - name: Verify Markdown dependencies
         run: npm ls markdown-it dompurify
 
-      - name: Build application
-        run: npm run build --if-present
+      # 6. Vérifier les dépendances et le verrouillage
+      - name: Validate package lock
+        run: npm run check:lock
+
+      # 7. Exécuter les contrôles existants de BAARO
+      - name: Run BAARO CI checks
+        run: npm run ci
+
+      # 8. Construire l'application de production
+      - name: Build production application
+        run: npm run build
+
+      # 9. Résumé
+      - name: Workflow summary
+        if: success()
+        run: |
+          echo "## BAARO CI : succès" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Dépendances installées" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Vérifications exécutées" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Build de production réussi" >> "$GITHUB_STEP_SUMMARY"
