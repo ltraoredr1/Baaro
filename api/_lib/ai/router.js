@@ -1,8 +1,10 @@
 /**
- * BAARO AI Router — v3
+ * BAARO AI Router — v3.1
  *  - ajoute groq et mistral (compatibles OpenAI)
  *  - BAARO_AI_PROVIDER_ORDER passe avant les listes par pays
  *  - adresses de base par défaut pour gemini / groq / mistral
+ *  - CORRECTIF : providerConfig lit maintenant *_MODEL OU le premier élément de *_MODELS
+ *    (avant, GROQ_MODELS était accepté par configured() mais ignoré à l'appel -> modèle vide -> erreur)
  *
  * Variables d'environnement (Vercel) :
  *   GEMINI_API_KEY  [GEMINI_API_BASE]  GEMINI_MODEL ou GEMINI_MODELS
@@ -46,10 +48,19 @@ const REGION_DEFAULTS = {
   BF: ["anthropic", "openai", "n8n"],
 };
 
+// Liste de fournisseurs (en minuscules)
 function csv(value) {
   return String(value || "")
     .split(",")
     .map((x) => x.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+// Liste de modèles : on garde la casse exacte des noms de modèles
+function csvKeepCase(value) {
+  return String(value || "")
+    .split(",")
+    .map((x) => x.trim())
     .filter(Boolean);
 }
 
@@ -61,9 +72,17 @@ function baseOf(provider) {
   return envOf(provider, "API_BASE") || DEFAULT_BASES[provider] || "";
 }
 
+// Modèle à utiliser : *_MODEL, sinon le premier élément de *_MODELS
+function modelOf(provider) {
+  const single = String(envOf(provider, "MODEL") || "").trim();
+  if (single) return single;
+  const list = csvKeepCase(envOf(provider, "MODELS"));
+  return list[0] || "";
+}
+
 // Un modèle doit être défini (MODEL ou MODELS), sinon l'appel échouerait sans message clair
 function hasModel(provider) {
-  return Boolean(envOf(provider, "MODEL") || envOf(provider, "MODELS"));
+  return Boolean(modelOf(provider));
 }
 
 function configured(provider) {
@@ -72,7 +91,9 @@ function configured(provider) {
   if (provider === "openai")
     return Boolean(process.env.OPENAI_API_KEY && process.env.OPENAI_API_BASE);
   if (provider === "gemini")
-    return Boolean(process.env.GEMINI_API_KEY && baseOf("gemini"));
+    return Boolean(
+      process.env.GEMINI_API_KEY && baseOf("gemini") && hasModel("gemini")
+    );
   if (provider === "groq")
     return Boolean(process.env.GROQ_API_KEY && baseOf("groq") && hasModel("groq"));
   if (provider === "mistral")
@@ -154,32 +175,32 @@ export function providerConfig(provider) {
     openai: {
       key: process.env.OPENAI_API_KEY,
       base: process.env.OPENAI_API_BASE,
-      model: process.env.OPENAI_MODEL || "",
+      model: modelOf("openai"),
     },
     moonshot: {
       key: process.env.MOONSHOT_API_KEY,
       base: process.env.MOONSHOT_API_BASE,
-      model: process.env.MOONSHOT_MODEL || "",
+      model: modelOf("moonshot"),
     },
     xai: {
       key: process.env.XAI_API_KEY,
       base: process.env.XAI_API_BASE,
-      model: process.env.XAI_MODEL || "",
+      model: modelOf("xai"),
     },
     gemini: {
       key: process.env.GEMINI_API_KEY,
       base: baseOf("gemini"),
-      model: process.env.GEMINI_MODEL || "",
+      model: modelOf("gemini"),
     },
     groq: {
       key: process.env.GROQ_API_KEY,
       base: baseOf("groq"),
-      model: process.env.GROQ_MODEL || "",
+      model: modelOf("groq"),
     },
     mistral: {
       key: process.env.MISTRAL_API_KEY,
       base: baseOf("mistral"),
-      model: process.env.MISTRAL_MODEL || "",
+      model: modelOf("mistral"),
     },
   };
   return configs[provider] || null;
