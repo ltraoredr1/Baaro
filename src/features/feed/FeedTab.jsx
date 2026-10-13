@@ -1,3 +1,4 @@
+
 import { uploadExternalMedia } from "../../lib/externalMedia.js";
 import { ConnectionStatus } from "../../components/ConnectionStatus.jsx";
 import { useState, useEffect, useCallback, useRef } from "react";
@@ -23,7 +24,11 @@ import { handleDbError } from "../../lib/dbErrors.js";
 import { checkRateLimit, rateLimitMessage } from "../../lib/rateLimit.js";
 import { GuestBanner } from "../../components/GuestBanner.jsx";
 import { TranslateButton } from "../../components/TranslateButton.jsx";
-import { PollCard, SocialPostEnhancements, SocialSuggestions } from "./SocialEnhancements.jsx";
+import {
+  PollCard,
+  SocialPostEnhancements,
+  SocialSuggestions,
+} from "./SocialEnhancements.jsx";
 import { PollComposer } from "../../components/PollComposer.jsx";
 import { RichTextComposer } from "../../components/RichTextComposer.jsx";
 import { RichTextRenderer } from "../../components/RichTextRenderer.jsx";
@@ -31,34 +36,58 @@ import { EngagementList } from "../../components/EngagementList.jsx";
 import { TipButton } from "../../components/TipButton.jsx";
 import { LazyImage, LazyVideo } from "../../components/LazyMedia.jsx";
 
-// Taille de page pour le fil. Pagination par CURSEUR (created_at + id)
 const PAGE_SIZE = 20;
-
-// Limites d'upload média
-const MAX_IMAGE_SIZE = 10 * 1024 * 1024; // 10 Mo
-const MAX_VIDEO_SIZE = 50 * 1024 * 1024; // 50 Mo
+const MAX_IMAGE_SIZE = 10 * 1024 * 1024;
+const MAX_VIDEO_SIZE = 50 * 1024 * 1024;
 
 function applyCursor(query, cursor) {
-  if (!cursor) return query;
+  if (!cursor?.created_at || !cursor?.id) return query;
+
   return query.or(
     `created_at.lt.${cursor.created_at},and(created_at.eq.${cursor.created_at},id.lt.${cursor.id})`
   );
 }
 
+function mergeUniquePosts(previous, incoming) {
+  const seen = new Set(previous.map((post) => post.id));
+  return [
+    ...previous,
+    ...incoming.filter((post) => !seen.has(post.id)),
+  ];
+}
+
 function ExpandableText({ text, children }) {
   const [open, setOpen] = useState(false);
   const raw = String(text || "");
-  const isLong = raw.length > 280 || (raw.match(/\n/g) || []).length >= 5;
-  const clamp = isLong && !open
-    ? { display: "-webkit-box", WebkitLineClamp: 6, WebkitBoxOrient: "vertical", overflow: "hidden" }
-    : {};
+  const isLong =
+    raw.length > 280 || (raw.match(/\n/g) || []).length >= 5;
+
+  const clamp =
+    isLong && !open
+      ? {
+          display: "-webkit-box",
+          WebkitLineClamp: 6,
+          WebkitBoxOrient: "vertical",
+          overflow: "hidden",
+        }
+      : {};
+
   return (
     <div className="min-w-0">
-      <div className="text-sm leading-relaxed whitespace-pre-wrap break-words" style={{ color: COLORS.ivory, ...clamp }}>
+      <div
+        className="text-sm leading-relaxed whitespace-pre-wrap break-words"
+        style={{ color: COLORS.ivory, ...clamp }}
+      >
         {children}
       </div>
+
       {isLong && (
-        <button type="button" onClick={() => setOpen((v) => !v)} className="mt-1 text-xs font-bold hover:underline" style={{ color: COLORS.teal }}>
+        <button
+          type="button"
+          onClick={() => setOpen((value) => !value)}
+          className="mt-1 text-xs font-bold hover:underline"
+          style={{ color: COLORS.teal }}
+        >
           {open ? "Voir moins" : "Voir plus"}
         </button>
       )}
@@ -68,67 +97,105 @@ function ExpandableText({ text, children }) {
 
 export function FeedTab({ user_id, onOpenProfile, onRewardPoints }) {
   const { showToast, showPointsReward } = useToast();
+
   const [posts, setPosts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
+
   const [newText, setNewText] = useState("");
   const [mood, setMood] = useState("");
   const [showPoll, setShowPoll] = useState(false);
-  
-  // États pour la création de sondage
   const [pollQuestion, setPollQuestion] = useState("");
   const [pollOptions, setPollOptions] = useState(["", ""]);
-  
-  // 🆕 État pour proposer de publier aussi en story
   const [publishToStory, setPublishToStory] = useState(false);
-  
+
   const [likedPosts, setLikedPosts] = useState({});
   const [commentOpen, setCommentOpen] = useState({});
   const [commentsMap, setCommentsMap] = useState({});
   const [newCommentText, setNewCommentText] = useState({});
+  const [commentSubmitting, setCommentSubmitting] = useState({});
   const [translatedMap, setTranslatedMap] = useState({});
   const [user, setUser] = useState(null);
+
   const [submitting, setSubmitting] = useState(false);
   const [menuOpenId, setMenuOpenId] = useState(null);
   const [editingId, setEditingId] = useState(null);
   const [editText, setEditText] = useState("");
   const [savingEdit, setSavingEdit] = useState(false);
-  
-  // 🆕 État pour le drawer de notifications
   const [engagement, setEngagement] = useState(null);
 
-  // Média en cours de composition
   const [mediaFile, setMediaFile] = useState(null);
   const [mediaPreview, setMediaPreview] = useState(null);
   const [uploadingMedia, setUploadingMedia] = useState(false);
-  const fileInputRef = useRef(null);
 
+  const fileInputRef = useRef(null);
   const cursorRef = useRef(null);
   const sentinelRef = useRef(null);
   const postViewRefs = useRef({});
   const postViewedRef = useRef(new Set());
+  const likePendingRef = useRef(new Set());
+  const loadMorePendingRef = useRef(false);
+  const loadVersionRef = useRef(0);
+  const mountedRef = useRef(true);
+  const mediaPreviewRef = useRef(null);
 
-  // 🆕 Identifiant utilisateur unifié (disponible tôt pour le rendu)
   const meId = user?.id || user_id;
 
   useEffect(() => {
-    const getUser = async () => {
-      try {
-        const { data: { user } } = await supabase.auth.getUser();
-        setUser(user);
-      } catch (error) {
-        handleDbError(error, showToast, "Erreur session");
+    mountedRef.current = true;
+
+    return () => {
+      mountedRef.current = false;
+
+      if (mediaPreviewRef.current) {
+        URL.revokeObjectURL(mediaPreviewRef.current);
+        mediaPreviewRef.current = null;
       }
     };
-    getUser();
-  }, [showToast]);
+  }, []);
 
   useEffect(() => {
+    let cancelled = false;
+
+    async function getUser() {
+      try {
+        const {
+          data: { user: currentUser },
+          error,
+        } = await supabase.auth.getUser();
+
+        if (error) throw error;
+        if (!cancelled) setUser(currentUser || null);
+      } catch (error) {
+        if (!cancelled) {
+          handleDbError(error, showToast, "Erreur session");
+        }
+      }
+    }
+
+    getUser();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!cancelled) setUser(session?.user || null);
+    });
+
     return () => {
-      if (mediaPreview) URL.revokeObjectURL(mediaPreview);
+      cancelled = true;
+      subscription?.unsubscribe();
     };
-  }, [mediaPreview]);
+  }, [showToast]);
+
+  const setPreview = useCallback((nextPreview) => {
+    if (mediaPreviewRef.current) {
+      URL.revokeObjectURL(mediaPreviewRef.current);
+    }
+
+    mediaPreviewRef.current = nextPreview;
+    setMediaPreview(nextPreview);
+  }, []);
 
   const fetchPostsPage = useCallback(async (cursor) => {
     let query = supabase
@@ -161,6 +228,7 @@ export function FeedTab({ user_id, onOpenProfile, onRewardPoints }) {
 
     return (data || []).map((post) => {
       const profile = post.profiles || {};
+
       return {
         id: post.id,
         author_id: post.author_id,
@@ -182,36 +250,47 @@ export function FeedTab({ user_id, onOpenProfile, onRewardPoints }) {
   const fetchPostsPageFallback = useCallback(async (cursor) => {
     let query = supabase
       .from("posts")
-      .select("id, author_id, text, media_url, media_type, created_at, likes_count, comments_count, views_count")
+      .select(
+        "id, author_id, text, media_url, media_type, created_at, likes_count, comments_count, views_count"
+      )
       .order("created_at", { ascending: false })
       .order("id", { ascending: false })
       .limit(PAGE_SIZE);
 
     query = applyCursor(query, cursor);
 
-    const { data, error: err2 } = await query;
-    if (err2) throw err2;
+    const { data, error } = await query;
+    if (error) throw error;
 
-    const authorIds = [...new Set((data || []).map((p) => p.author_id).filter(Boolean))];
-    let profilesMap = {};
+    const authorIds = [
+      ...new Set((data || []).map((post) => post.author_id).filter(Boolean)),
+    ];
 
-    if (authorIds.length > 0) {
-      const { data: profiles } = await supabase
+    const profilesMap = {};
+
+    if (authorIds.length) {
+      const { data: profiles, error: profileError } = await supabase
         .from("profiles")
         .select("id, display_name, handle, flag, avatar_url")
         .in("id", authorIds);
 
-      (profiles || []).forEach((p) => {
-        profilesMap[p.id] = p;
+      if (profileError) {
+        console.warn("Chargement des profils indisponible:", profileError);
+      }
+
+      (profiles || []).forEach((profile) => {
+        profilesMap[profile.id] = profile;
       });
     }
 
     return (data || []).map((post) => {
       const profile = profilesMap[post.author_id] || {};
+
       return {
         ...post,
         likes: post.likes_count || 0,
         comments_count: post.comments_count || 0,
+        views_count: post.views_count || 0,
         display_name: profile.display_name || "Membre BAARO",
         handle: profile.handle || "@membre",
         flag: profile.flag || "🌍",
@@ -220,129 +299,254 @@ export function FeedTab({ user_id, onOpenProfile, onRewardPoints }) {
     });
   }, []);
 
-  const updateCursorFromRows = (rows) => {
+  const updateCursorFromRows = useCallback((rows) => {
     if (rows.length > 0) {
       const last = rows[rows.length - 1];
-      cursorRef.current = { created_at: last.created_at, id: last.id };
+      cursorRef.current = {
+        created_at: last.created_at,
+        id: last.id,
+      };
     }
+
     setHasMore(rows.length === PAGE_SIZE);
-  };
+  }, []);
 
   const loadPosts = useCallback(async () => {
+    const version = ++loadVersionRef.current;
+
     setLoading(true);
     cursorRef.current = null;
+    setHasMore(true);
+
     try {
-      const rows = await fetchPostsPage(null);
+      let rows;
+
+      try {
+        rows = await fetchPostsPage(null);
+      } catch (joinError) {
+        console.warn(
+          "Chargement avec jointure profiles impossible, utilisation du fallback:",
+          joinError?.message
+        );
+        rows = await fetchPostsPageFallback(null);
+      }
+
+      if (!mountedRef.current || version !== loadVersionRef.current) return;
+
       setPosts(rows);
       updateCursorFromRows(rows);
-      if (meId && rows.length) {
-        const { data: likes } = await supabase
+
+      const ids = rows.map((post) => post.id);
+
+      if (meId && ids.length) {
+        const { data: likes, error } = await supabase
           .from("post_likes")
           .select("post_id")
           .eq("user_id", meId)
-          .in("post_id", rows.map((row) => row.id));
-        setLikedPosts(Object.fromEntries((likes || []).map((like) => [like.post_id, true])));
+          .in("post_id", ids);
+
+        if (error) throw error;
+
+        if (!mountedRef.current || version !== loadVersionRef.current) return;
+
+        setLikedPosts(
+          Object.fromEntries((likes || []).map((like) => [like.post_id, true]))
+        );
       } else {
         setLikedPosts({});
       }
     } catch (error) {
-      console.warn("Jointure profiles échouée, fallback:", error.message);
-      try {
-        const rows = await fetchPostsPageFallback(null);
-        setPosts(rows);
-        updateCursorFromRows(rows);
-        if (meId && rows.length) {
-          const { data: likes } = await supabase
-            .from("post_likes")
-            .select("post_id")
-            .eq("user_id", meId)
-            .in("post_id", rows.map((row) => row.id));
-          setLikedPosts(Object.fromEntries((likes || []).map((like) => [like.post_id, true])));
-        } else {
-          setLikedPosts({});
-        }
-      } catch (fallbackError) {
-        handleDbError(fallbackError, showToast, "Erreur chargement des publications");
-        setPosts([]);
-        setHasMore(false);
-      }
+      if (!mountedRef.current || version !== loadVersionRef.current) return;
+
+      handleDbError(error, showToast, "Erreur chargement des publications");
+      setPosts([]);
+      setHasMore(false);
+      cursorRef.current = null;
     } finally {
-      setLoading(false);
+      if (mountedRef.current && version === loadVersionRef.current) {
+        setLoading(false);
+      }
     }
-  }, [fetchPostsPage, fetchPostsPageFallback, showToast, meId]);
+  }, [
+    fetchPostsPage,
+    fetchPostsPageFallback,
+    updateCursorFromRows,
+    showToast,
+    meId,
+  ]);
 
   const loadMorePosts = useCallback(async () => {
-    if (loadingMore || !hasMore || loading || !cursorRef.current) return;
+    if (
+      loadMorePendingRef.current ||
+      loadingMore ||
+      !hasMore ||
+      loading ||
+      !cursorRef.current
+    ) {
+      return;
+    }
+
+    loadMorePendingRef.current = true;
     setLoadingMore(true);
+
     const cursor = cursorRef.current;
+    const version = loadVersionRef.current;
+
     try {
-      const rows = await fetchPostsPage(cursor);
-      setPosts((prev) => [...prev, ...rows]);
-      updateCursorFromRows(rows);
-    } catch (error) {
+      let rows;
+
       try {
-        const rows = await fetchPostsPageFallback(cursor);
-        setPosts((prev) => [...prev, ...rows]);
+        rows = await fetchPostsPage(cursor);
+      } catch {
+        rows = await fetchPostsPageFallback(cursor);
+      }
+
+      if (!mountedRef.current || version !== loadVersionRef.current) return;
+
+      setPosts((previous) => mergeUniquePosts(previous, rows));
+
+      if (rows.length > 0) {
         updateCursorFromRows(rows);
-      } catch (fallbackError) {
-        handleDbError(fallbackError, showToast, "Erreur chargement de la suite du fil");
+      } else {
+        setHasMore(false);
+      }
+    } catch (error) {
+      if (mountedRef.current && version === loadVersionRef.current) {
+        handleDbError(
+          error,
+          showToast,
+          "Erreur chargement de la suite du fil"
+        );
       }
     } finally {
-      setLoadingMore(false);
+      loadMorePendingRef.current = false;
+
+      if (mountedRef.current) {
+        setLoadingMore(false);
+      }
     }
-  }, [fetchPostsPage, fetchPostsPageFallback, loadingMore, hasMore, loading, showToast]);
+  }, [
+    fetchPostsPage,
+    fetchPostsPageFallback,
+    updateCursorFromRows,
+    loadingMore,
+    hasMore,
+    loading,
+    showToast,
+  ]);
 
   useEffect(() => {
     loadPosts();
   }, [loadPosts]);
 
-  const postIdsKey = posts.map((p) => p.id).join(",");
+  const postIdsKey = posts.map((post) => post.id).join(",");
+
   useEffect(() => {
-    if (!meId || !postIdsKey) return;
+    if (!meId || !postIdsKey) {
+      setLikedPosts({});
+      return;
+    }
+
     let cancelled = false;
     const ids = postIdsKey.split(",");
-    (async () => {
-      const { data: likes } = await supabase
+
+    async function loadLikes() {
+      const { data, error } = await supabase
         .from("post_likes")
         .select("post_id")
         .eq("user_id", meId)
         .in("post_id", ids);
-      if (!cancelled && likes) {
-        setLikedPosts(Object.fromEntries(likes.map((l) => [l.post_id, true])));
+
+      if (error) {
+        console.warn("Chargement des likes impossible:", error);
+        return;
       }
-    })();
-    return () => { cancelled = true; };
+
+      if (!cancelled) {
+        setLikedPosts(
+          Object.fromEntries((data || []).map((like) => [like.post_id, true]))
+        );
+      }
+    }
+
+    loadLikes();
+
+    return () => {
+      cancelled = true;
+    };
   }, [meId, postIdsKey]);
 
   useEffect(() => {
-    if (!posts.length || !meId) return;
-    const observer = new IntersectionObserver((entries) => {
-      entries.forEach((entry) => {
-        if (!entry.isIntersecting || entry.intersectionRatio < 0.5) return;
-        const postId = entry.target.dataset.postId;
-        if (!postId || postViewedRef.current.has(postId)) return;
-        const post = posts.find((item) => item.id === postId);
-        if (!post || post.author_id === meId) return;
-        postViewedRef.current.add(postId);
-        supabase.rpc("register_post_view", { p_post_id: postId }).then(({ data, error }) => {
-          if (error) { postViewedRef.current.delete(postId); return; }
-          const next = Number(data?.views || 0);
-          setPosts((prev) => prev.map((item) => item.id === postId ? { ...item, views_count: next } : item));
+    if (
+      typeof IntersectionObserver === "undefined" ||
+      !posts.length ||
+      !meId
+    ) {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (!entry.isIntersecting || entry.intersectionRatio < 0.5) return;
+
+          const postId = entry.target.dataset.postId;
+          if (!postId || postViewedRef.current.has(postId)) return;
+
+          const post = posts.find((item) => item.id === postId);
+          if (!post || post.author_id === meId) return;
+
+          postViewedRef.current.add(postId);
+
+          supabase
+            .rpc("register_post_view", { p_post_id: postId })
+            .then(({ data, error }) => {
+              if (error) {
+                postViewedRef.current.delete(postId);
+                return;
+              }
+
+              const nextViews = Number(data?.views);
+
+              if (Number.isFinite(nextViews)) {
+                setPosts((previous) =>
+                  previous.map((item) =>
+                    item.id === postId
+                      ? { ...item, views_count: nextViews }
+                      : item
+                  )
+                );
+              }
+            })
+            .catch(() => {
+              postViewedRef.current.delete(postId);
+            });
         });
-      });
-    }, { threshold: [0.5] });
-    Object.values(postViewRefs.current).forEach((el) => el && observer.observe(el));
+      },
+      { threshold: [0.5] }
+    );
+
+    Object.values(postViewRefs.current).forEach((element) => {
+      if (element) observer.observe(element);
+    });
+
     return () => observer.disconnect();
   }, [posts, meId]);
 
   useEffect(() => {
-    if (!sentinelRef.current) return;
+    if (typeof IntersectionObserver === "undefined" || !sentinelRef.current) {
+      return;
+    }
+
     const observer = new IntersectionObserver(
       (entries) => {
-        if (entries[0].isIntersecting) loadMorePosts();
+        if (entries.some((entry) => entry.isIntersecting)) {
+          loadMorePosts();
+        }
       },
       { rootMargin: "400px" }
     );
+
     observer.observe(sentinelRef.current);
     return () => observer.disconnect();
   }, [loadMorePosts]);
@@ -350,84 +554,138 @@ export function FeedTab({ user_id, onOpenProfile, onRewardPoints }) {
   useEffect(() => {
     const channel = supabase
       .channel("posts_feed")
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "posts" }, () => loadPosts())
-      .on("postgres_changes", { event: "DELETE", schema: "public", table: "posts" }, () => loadPosts())
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "posts" },
+        () => loadPosts()
+      )
+      .on(
+        "postgres_changes",
+        { event: "DELETE", schema: "public", table: "posts" },
+        () => loadPosts()
+      )
       .subscribe();
-    return () => { supabase.removeChannel(channel); };
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [loadPosts]);
 
-  const handleFileSelect = (e) => {
-    const file = e.target.files?.[0];
+  const handleFileSelect = (event) => {
+    const file = event.target.files?.[0];
     if (!file) return;
-    const isVideo = file.type.startsWith("video");
-    const isImage = file.type.startsWith("image");
+
+    const isVideo = file.type.startsWith("video/");
+    const isImage = file.type.startsWith("image/");
+
     if (!isVideo && !isImage) {
       showToast("Format non supporté (image ou vidéo uniquement)", "error");
-      e.target.value = "";
+      event.target.value = "";
       return;
     }
+
     const maxSize = isVideo ? MAX_VIDEO_SIZE : MAX_IMAGE_SIZE;
+
     if (file.size > maxSize) {
-      showToast(`Fichier trop lourd (max ${isVideo ? "50" : "10"} Mo)`, "error");
-      e.target.value = "";
+      showToast(
+        `Fichier trop lourd (max ${isVideo ? "50" : "10"} Mo)`,
+        "error"
+      );
+      event.target.value = "";
       return;
     }
-    if (mediaPreview) URL.revokeObjectURL(mediaPreview);
-    setMediaFile(file);
-    setMediaPreview(URL.createObjectURL(file));
-    e.target.value = "";
+
+    try {
+      setPreview(URL.createObjectURL(file));
+      setMediaFile(file);
+    } catch (error) {
+      showToast("Impossible de prévisualiser ce média", "error");
+    }
+
+    event.target.value = "";
   };
 
   const handleRemoveMedia = () => {
-    if (mediaPreview) URL.revokeObjectURL(mediaPreview);
+    setPreview(null);
     setMediaFile(null);
-    setMediaPreview(null);
   };
 
   const uploadMedia = async (file, authorId) => {
     const result = await uploadExternalMedia(file, {
       folder: "posts",
       user_id: authorId,
-      maxBytes: file.type.startsWith("video/") ? MAX_VIDEO_SIZE : MAX_IMAGE_SIZE,
+      maxBytes: file.type.startsWith("video/")
+        ? MAX_VIDEO_SIZE
+        : MAX_IMAGE_SIZE,
     });
-    return { media_url: result.url, media_type: file.type.startsWith("video") ? "video" : "image" };
+
+    if (!result?.url) {
+      throw new Error("Le service média n'a pas retourné d'URL.");
+    }
+
+    return {
+      media_url: result.url,
+      media_type: file.type.startsWith("video/") ? "video" : "image",
+    };
   };
 
-  const handleCreatePost = async (e) => {
-    e.preventDefault();
-    const hasPollDraft = showPoll && pollQuestion.trim() && pollOptions.filter((x) => x.trim()).length >= 2;
-    if ((!newText.trim() && !mediaFile && !hasPollDraft) || submitting) return;
+  const handleCreatePost = async (event) => {
+    event.preventDefault();
 
-    const limit = checkRateLimit("create_post", { max: 5, windowMs: 60_000 });
+    const cleanOptions = pollOptions
+      .map((option) => option.trim())
+      .filter(Boolean)
+      .slice(0, 6);
+
+    const hasPollDraft =
+      showPoll && !!pollQuestion.trim() && cleanOptions.length >= 2;
+
+    if (
+      (!newText.trim() && !mediaFile && !hasPollDraft) ||
+      submitting
+    ) {
+      return;
+    }
+
+    const limit = checkRateLimit("create_post", {
+      max: 5,
+      windowMs: 60_000,
+    });
+
     if (!limit.allowed) {
       showToast(rateLimitMessage(limit.retryAfterSec), "error");
       return;
     }
 
-    const authorId = meId;
-    if (!authorId) {
+    if (!meId) {
       showToast("Vous devez être connecté", "error");
       return;
     }
 
     setSubmitting(true);
+
+    let createdPost = null;
+    let postContent = "";
+    let mediaData = {};
+    const secondaryErrors = [];
+
     try {
-      let mediaData = {};
       if (mediaFile) {
         setUploadingMedia(true);
+
         try {
-          mediaData = await uploadMedia(mediaFile, authorId);
+          mediaData = await uploadMedia(mediaFile, meId);
         } finally {
           setUploadingMedia(false);
         }
       }
 
-      const postContent = newText + (mood ? ` (Humeur: ${mood})` : "");
+      postContent = `${newText.trim()}${mood ? ` (Humeur: ${mood})` : ""}`;
 
-      const { data: createdPost, error } = await supabase
+      const { data, error } = await supabase
         .from("posts")
         .insert({
-          author_id: authorId,
+          author_id: meId,
           text: postContent,
           ...mediaData,
         })
@@ -436,38 +694,66 @@ export function FeedTab({ user_id, onOpenProfile, onRewardPoints }) {
 
       if (error) throw error;
 
-      // 🆕 PUBLICATION AUSSI EN STORY SI COCHÉ
-      if (publishToStory) {
-        const hasPollForStory = showPoll && pollQuestion.trim() && pollOptions.filter((x) => x.trim()).length >= 2;
-        await supabase.from("stories").insert({
-          author_id: authorId,
-          media_type: mediaData.media_type || (mediaData.media_url ? 'image' : 'text'),
-          media_url: mediaData.media_url || null,
-          caption: postContent,
-          visibility: 'public',
-          poll: hasPollForStory ? { question: pollQuestion.trim(), options: pollOptions.map(o => o.trim()).filter(Boolean) } : null,
-        });
+      createdPost = data;
+
+      // Les opérations secondaires ne doivent pas faire croire
+      // que la publication principale a échoué.
+      if (showPoll && hasPollDraft) {
+        try {
+          const { data: poll, error: pollError } = await supabase
+            .from("polls")
+            .insert({
+              post_id: createdPost.id,
+              question: pollQuestion.trim(),
+            })
+            .select("id")
+            .single();
+
+          if (pollError) throw pollError;
+
+          const { error: optionsError } = await supabase
+            .from("poll_options")
+            .insert(
+              cleanOptions.map((option_text, position) => ({
+                poll_id: poll.id,
+                option_text,
+                position,
+              }))
+            );
+
+          if (optionsError) throw optionsError;
+        } catch (error) {
+          console.error("Erreur création du sondage:", error);
+          secondaryErrors.push("Le sondage n'a pas pu être créé.");
+        }
       }
 
-      // CRÉATION DU SONDAGE EN BASE DE DONNÉES
-      if (showPoll && hasPollDraft) {
-        const cleanOptions = pollOptions.map((x) => x.trim()).filter(Boolean).slice(0, 6);
-        const { data: poll, error: pollError } = await supabase
-          .from("polls")
-          .insert({ post_id: createdPost.id, question: pollQuestion.trim() })
-          .select("id")
-          .single();
+      if (publishToStory) {
+        try {
+          const { error: storyError } = await supabase
+            .from("stories")
+            .insert({
+              author_id: meId,
+              media_type: mediaData.media_type || (
+                mediaData.media_url ? "image" : "text"
+              ),
+              media_url: mediaData.media_url || null,
+              caption: postContent,
+              visibility: "public",
+              poll:
+                showPoll && hasPollDraft
+                  ? {
+                      question: pollQuestion.trim(),
+                      options: cleanOptions,
+                    }
+                  : null,
+            });
 
-        if (pollError) throw pollError;
-
-        const { error: optionsError } = await supabase.from("poll_options").insert(
-          cleanOptions.map((option_text, position) => ({
-            poll_id: poll.id,
-            option_text,
-            position,
-          }))
-        );
-        if (optionsError) throw optionsError;
+          if (storyError) throw storyError;
+        } catch (error) {
+          console.error("Erreur création de la story:", error);
+          secondaryErrors.push("La story n'a pas pu être publiée.");
+        }
       }
 
       setNewText("");
@@ -478,13 +764,40 @@ export function FeedTab({ user_id, onOpenProfile, onRewardPoints }) {
       setPublishToStory(false);
       handleRemoveMedia();
 
-      onRewardPoints?.(mediaData?.media_url ? "publish_post_media" : "publish_post", "Publication créée !", createdPost?.id);
-      showPointsReward?.(mediaData?.media_url ? 8 : 5, "Publication créée !");
+      onRewardPoints?.(
+        mediaData.media_url ? "publish_post_media" : "publish_post",
+        "Publication créée !",
+        createdPost.id
+      );
+
+      showPointsReward?.(
+        mediaData.media_url ? 8 : 5,
+        "Publication créée !"
+      );
+
+      showToast("Publication créée", "success");
+
+      if (secondaryErrors.length) {
+        showToast(secondaryErrors.join(" "), "error");
+      }
+
       await loadPosts();
     } catch (error) {
-      handleDbError(error, showToast, "Impossible de publier");
+      if (!createdPost) {
+        handleDbError(error, showToast, "Impossible de publier");
+      } else {
+        console.error("Erreur après création de la publication:", error);
+        showToast(
+          "La publication existe, mais une opération complémentaire a échoué.",
+          "error"
+        );
+        await loadPosts();
+      }
     } finally {
-      setSubmitting(false);
+      if (mountedRef.current) {
+        setSubmitting(false);
+        setUploadingMedia(false);
+      }
     }
   };
 
@@ -493,111 +806,274 @@ export function FeedTab({ user_id, onOpenProfile, onRewardPoints }) {
       showToast("Vous devez être connecté", "error");
       return;
     }
-    const limit = checkRateLimit("like", { max: 30, windowMs: 60_000 });
+
+    if (likePendingRef.current.has(postId)) return;
+
+    const limit = checkRateLimit("like", {
+      max: 30,
+      windowMs: 60_000,
+    });
+
     if (!limit.allowed) {
       showToast(rateLimitMessage(limit.retryAfterSec), "error");
       return;
     }
+
+    likePendingRef.current.add(postId);
+
     const isLiked = !!likedPosts[postId];
-    setLikedPosts((prev) => ({ ...prev, [postId]: !isLiked }));
-    setPosts((prev) => prev.map((p) => p.id === postId ? { ...p, likes: Math.max(0, (p.likes || 0) + (isLiked ? -1 : 1)) } : p));
+
+    setLikedPosts((previous) => ({
+      ...previous,
+      [postId]: !isLiked,
+    }));
+
+    setPosts((previous) =>
+      previous.map((post) =>
+        post.id === postId
+          ? {
+              ...post,
+              likes: Math.max(
+                0,
+                (post.likes || 0) + (isLiked ? -1 : 1)
+              ),
+            }
+          : post
+      )
+    );
 
     try {
       if (isLiked) {
-        const { error } = await supabase.from("post_likes").delete().eq("post_id", postId).eq("user_id", meId);
+        const { error } = await supabase
+          .from("post_likes")
+          .delete()
+          .eq("post_id", postId)
+          .eq("user_id", meId);
+
         if (error) throw error;
       } else {
-        const { error } = await supabase.from("post_likes").insert({ post_id: postId, user_id: meId });
+        const { error } = await supabase
+          .from("post_likes")
+          .insert({
+            post_id: postId,
+            user_id: meId,
+          });
+
         if (error) throw error;
+
         onRewardPoints?.("like_post", "J'aime distribué", postId);
         showPointsReward?.(2, "J'aime distribué");
       }
     } catch (error) {
-      setLikedPosts((prev) => ({ ...prev, [postId]: isLiked }));
-      setPosts((prev) => prev.map((p) => p.id === postId ? { ...p, likes: Math.max(0, (p.likes || 0) + (isLiked ? 1 : -1)) } : p));
+      setLikedPosts((previous) => ({
+        ...previous,
+        [postId]: isLiked,
+      }));
+
+      setPosts((previous) =>
+        previous.map((post) =>
+          post.id === postId
+            ? {
+                ...post,
+                likes: Math.max(
+                  0,
+                  (post.likes || 0) + (isLiked ? 1 : -1)
+                ),
+              }
+            : post
+        )
+      );
+
       handleDbError(error, showToast, "Impossible d'aimer");
+    } finally {
+      likePendingRef.current.delete(postId);
     }
   };
 
   const loadComments = async (postId) => {
     if (!postId) return;
+
     try {
       const { data, error } = await supabase
         .from("comments")
-        .select(`id, text, created_at, author_id, profiles:author_id (display_name, handle)`)
+        .select(`
+          id,
+          text,
+          created_at,
+          author_id,
+          profiles:author_id (display_name, handle)
+        `)
         .eq("post_id", postId)
         .order("created_at", { ascending: true })
         .limit(50);
+
       if (error) throw error;
-      const rows = (data || []).map((c) => ({
-        id: c.id,
-        text: c.text,
-        author: c.profiles?.display_name || c.profiles?.handle || "Membre",
-        author_id: c.author_id,
-        created_at: c.created_at,
+
+      const rows = (data || []).map((comment) => ({
+        id: comment.id,
+        text: comment.text,
+        author:
+          comment.profiles?.display_name ||
+          comment.profiles?.handle ||
+          "Membre",
+        author_id: comment.author_id,
+        created_at: comment.created_at,
       }));
-      setCommentsMap((prev) => ({ ...prev, [postId]: rows }));
-    } catch (e) {
+
+      setCommentsMap((previous) => ({
+        ...previous,
+        [postId]: rows,
+      }));
+    } catch (error) {
       try {
-        const { data } = await supabase
+        const { data, error: fallbackError } = await supabase
           .from("comments")
           .select("id, text, created_at, author_id")
           .eq("post_id", postId)
           .order("created_at", { ascending: true })
           .limit(50);
-        setCommentsMap((prev) => ({
-          ...prev,
-          [postId]: (data || []).map((c) => ({ id: c.id, text: c.text, author: "Membre", author_id: c.author_id, created_at: c.created_at })),
+
+        if (fallbackError) throw fallbackError;
+
+        setCommentsMap((previous) => ({
+          ...previous,
+          [postId]: (data || []).map((comment) => ({
+            id: comment.id,
+            text: comment.text,
+            author: "Membre",
+            author_id: comment.author_id,
+            created_at: comment.created_at,
+          })),
         }));
-      } catch (err) {
-        handleDbError(err, showToast, "Impossible de charger les commentaires");
+      } catch (fallbackError) {
+        handleDbError(
+          fallbackError,
+          showToast,
+          "Impossible de charger les commentaires"
+        );
       }
     }
   };
 
   const handleAddComment = async (postId) => {
     const text = (newCommentText[postId] || "").trim();
-    if (!text) return;
-    const limit = checkRateLimit("comment", { max: 20, windowMs: 60_000 });
-    if (!limit.allowed) {
-      showToast(rateLimitMessage(limit.retryAfterSec), "error");
-      return;
-    }
+
+    if (!text || commentSubmitting[postId]) return;
+
     if (!meId) {
       showToast("Vous devez être connecté", "error");
       return;
     }
+
+    const limit = checkRateLimit("comment", {
+      max: 20,
+      windowMs: 60_000,
+    });
+
+    if (!limit.allowed) {
+      showToast(rateLimitMessage(limit.retryAfterSec), "error");
+      return;
+    }
+
+    setCommentSubmitting((previous) => ({
+      ...previous,
+      [postId]: true,
+    }));
+
     try {
       const { data: createdComment, error } = await supabase
         .from("comments")
-        .insert({ post_id: postId, author_id: meId, text })
-        .select("id")
+        .insert({
+          post_id: postId,
+          author_id: meId,
+          text,
+        })
+        .select("id, created_at")
         .single();
+
       if (error) throw error;
 
-      const newCmt = { id: `c_${Date.now()}`, author: "Vous", text, author_id: meId };
-      setCommentsMap((prev) => ({ ...prev, [postId]: [...(prev[postId] || []), newCmt] }));
-      setPosts((prev) => prev.map((p) => p.id === postId ? { ...p, comments_count: (p.comments_count || 0) + 1 } : p));
-      setNewCommentText((prev) => ({ ...prev, [postId]: "" }));
-      
-      onRewardPoints?.("comment", "Commentaire ajouté", createdComment?.id);
+      const newComment = {
+        id: createdComment.id,
+        author: user?.user_metadata?.display_name || "Vous",
+        text,
+        author_id: meId,
+        created_at: createdComment.created_at || new Date().toISOString(),
+      };
+
+      setCommentsMap((previous) => ({
+        ...previous,
+        [postId]: [...(previous[postId] || []), newComment],
+      }));
+
+      setPosts((previous) =>
+        previous.map((post) =>
+          post.id === postId
+            ? {
+                ...post,
+                comments_count: (post.comments_count || 0) + 1,
+              }
+            : post
+        )
+      );
+
+      setNewCommentText((previous) => ({
+        ...previous,
+        [postId]: "",
+      }));
+
+      onRewardPoints?.(
+        "comment",
+        "Commentaire ajouté",
+        createdComment.id
+      );
+
       showPointsReward?.(1, "Commentaire ajouté");
     } catch (error) {
       handleDbError(error, showToast, "Impossible de commenter");
+    } finally {
+      setCommentSubmitting((previous) => ({
+        ...previous,
+        [postId]: false,
+      }));
     }
   };
 
   const handleDeletePost = async (postId) => {
-    if (!meId) return showToast("Connecte-toi", "error");
+    if (!meId) {
+      showToast("Connecte-toi", "error");
+      return;
+    }
+
     if (!window.confirm("Supprimer cette publication ?")) return;
+
     setMenuOpenId(null);
+
     try {
-      const { error } = await supabase.from("posts").delete().eq("id", postId).eq("author_id", meId);
+      const { data, error } = await supabase
+        .from("posts")
+        .delete()
+        .eq("id", postId)
+        .eq("author_id", meId)
+        .select("id");
+
       if (error) throw error;
-      setPosts((prev) => prev.filter((p) => p.id !== postId));
+
+      if (!data?.length) {
+        showToast(
+          "Publication introuvable ou suppression non autorisée.",
+          "error"
+        );
+        return;
+      }
+
+      setPosts((previous) =>
+        previous.filter((post) => post.id !== postId)
+      );
+
       showToast("Publication supprimée", "success");
-    } catch (e) {
-      handleDbError(e, showToast, "Impossible de supprimer");
+    } catch (error) {
+      handleDbError(error, showToast, "Impossible de supprimer");
     }
   };
 
@@ -613,19 +1089,46 @@ export function FeedTab({ user_id, onOpenProfile, onRewardPoints }) {
   };
 
   const saveEditPost = async (postId) => {
-    if (!meId) return;
+    if (!meId || savingEdit) return;
+
     const text = editText.trim();
-    if (!text) return showToast("Texte vide", "error");
+
+    if (!text) {
+      showToast("Texte vide", "error");
+      return;
+    }
+
     setSavingEdit(true);
+
     try {
-      const { error } = await supabase.from("posts").update({ text }).eq("id", postId).eq("author_id", meId);
+      const { data, error } = await supabase
+        .from("posts")
+        .update({ text })
+        .eq("id", postId)
+        .eq("author_id", meId)
+        .select("id");
+
       if (error) throw error;
-      setPosts((prev) => prev.map((p) => (p.id === postId ? { ...p, text } : p)));
+
+      if (!data?.length) {
+        showToast(
+          "Publication introuvable ou modification non autorisée.",
+          "error"
+        );
+        return;
+      }
+
+      setPosts((previous) =>
+        previous.map((post) =>
+          post.id === postId ? { ...post, text } : post
+        )
+      );
+
       setEditingId(null);
       setEditText("");
       showToast("Publication modifiée", "success");
-    } catch (e) {
-      handleDbError(e, showToast, "Impossible de modifier");
+    } catch (error) {
+      handleDbError(error, showToast, "Impossible de modifier");
     } finally {
       setSavingEdit(false);
     }
@@ -633,15 +1136,56 @@ export function FeedTab({ user_id, onOpenProfile, onRewardPoints }) {
 
   const handleDeleteComment = async (postId, commentId) => {
     if (!meId) return;
+
     if (!window.confirm("Supprimer ce commentaire ?")) return;
+
     try {
-      const { error } = await supabase.from("comments").delete().eq("id", commentId).eq("author_id", meId);
+      const { data, error } = await supabase
+        .from("comments")
+        .delete()
+        .eq("id", commentId)
+        .eq("post_id", postId)
+        .eq("author_id", meId)
+        .select("id");
+
       if (error) throw error;
-      setCommentsMap((prev) => ({ ...prev, [postId]: (prev[postId] || []).filter((c) => c.id !== commentId) }));
-      setPosts((prev) => prev.map((p) => p.id === postId ? { ...p, comments_count: Math.max(0, (p.comments_count || 1) - 1) } : p));
+
+      if (!data?.length) {
+        showToast(
+          "Commentaire introuvable ou suppression non autorisée.",
+          "error"
+        );
+        return;
+      }
+
+      setCommentsMap((previous) => ({
+        ...previous,
+        [postId]: (previous[postId] || []).filter(
+          (comment) => comment.id !== commentId
+        ),
+      }));
+
+      setPosts((previous) =>
+        previous.map((post) =>
+          post.id === postId
+            ? {
+                ...post,
+                comments_count: Math.max(
+                  0,
+                  (post.comments_count || 0) - 1
+                ),
+              }
+            : post
+        )
+      );
+
       showToast("Commentaire supprimé", "success");
-    } catch (e) {
-      handleDbError(e, showToast, "Impossible de supprimer le commentaire");
+    } catch (error) {
+      handleDbError(
+        error,
+        showToast,
+        "Impossible de supprimer le commentaire"
+      );
     }
   };
 
@@ -656,15 +1200,26 @@ export function FeedTab({ user_id, onOpenProfile, onRewardPoints }) {
 
   return (
     <div className="flex flex-col gap-4 max-w-2xl mx-auto w-full pb-20">
+      {meId && (
+        <SocialSuggestions
+          user_id={meId}
+          onOpenProfile={onOpenProfile}
+        />
+      )}
 
-      {/* Suggestions de comptes (visible uniquement si connecté) */}
-      {meId && <SocialSuggestions user_id={meId} onOpenProfile={onOpenProfile} />}
-
-      <form onSubmit={handleCreatePost} className="glass-card rounded-2xl p-4 shadow-xl border" style={{ borderColor: COLORS.borderGold }}>
+      <form
+        onSubmit={handleCreatePost}
+        className="glass-card rounded-2xl p-4 shadow-xl border"
+        style={{ borderColor: COLORS.borderGold }}
+      >
         <div className="flex gap-3 mb-3">
-          <div className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm shadow-md gold-glow" style={{ background: COLORS.gold, color: COLORS.bg }}>
+          <div
+            className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm shadow-md gold-glow"
+            style={{ background: COLORS.gold, color: COLORS.bg }}
+          >
             {user?.email?.charAt(0)?.toUpperCase() || "V"}
           </div>
+
           <div className="flex-1 min-w-0">
             <RichTextComposer
               value={newText}
@@ -677,22 +1232,41 @@ export function FeedTab({ user_id, onOpenProfile, onRewardPoints }) {
         </div>
 
         {mediaPreview && (
-          <div className="relative mb-3 rounded-xl overflow-hidden border" style={{ borderColor: COLORS.border }}>
-            {mediaFile?.type.startsWith("video") ? (
-              <video src={mediaPreview} controls className="w-full max-h-64 object-cover bg-black" />
+          <div
+            className="relative mb-3 rounded-xl overflow-hidden border"
+            style={{ borderColor: COLORS.border }}
+          >
+            {mediaFile?.type.startsWith("video/") ? (
+              <video
+                src={mediaPreview}
+                controls
+                className="w-full max-h-64 object-cover bg-black"
+              />
             ) : (
-              <img src={mediaPreview} alt="Prévisualisation" className="w-full max-h-64 object-cover" />
+              <img
+                src={mediaPreview}
+                alt="Prévisualisation"
+                className="w-full max-h-64 object-cover"
+              />
             )}
-            <button type="button" onClick={handleRemoveMedia} className="absolute top-2 right-2 bg-black/70 hover:bg-black/90 rounded-full p-1.5 text-white transition" aria-label="Retirer le média">
+
+            <button
+              type="button"
+              onClick={handleRemoveMedia}
+              className="absolute top-2 right-2 bg-black/70 hover:bg-black/90 rounded-full p-1.5 text-white transition"
+              aria-label="Retirer le média"
+            >
               <X size={14} />
             </button>
           </div>
         )}
 
-        {/* Formulaire de création de sondage complet */}
         {showPoll && (
           <PollComposer
-            value={{ question: pollQuestion, options: pollOptions }}
+            value={{
+              question: pollQuestion,
+              options: pollOptions,
+            }}
             onChange={(next) => {
               setPollQuestion(next.question || "");
               setPollOptions(
@@ -705,34 +1279,69 @@ export function FeedTab({ user_id, onOpenProfile, onRewardPoints }) {
           />
         )}
 
-        {/* 🆕 OPTION : PUBLIER AUSSI EN STORY */}
         <div className="mb-3 px-1">
           <label className="flex items-center gap-2 cursor-pointer w-fit select-none">
             <input
               type="checkbox"
               checked={publishToStory}
-              onChange={(e) => setPublishToStory(e.target.checked)}
+              onChange={(event) =>
+                setPublishToStory(event.target.checked)
+              }
               className="rounded accent-amber-500 w-4 h-4 cursor-pointer"
             />
-            <span className="text-xs font-semibold flex items-center gap-1.5" style={{ color: COLORS.ivory }}>
+            <span
+              className="text-xs font-semibold flex items-center gap-1.5"
+              style={{ color: COLORS.ivory }}
+            >
               <Zap size={14} className="text-amber-400" />
               Publier aussi en Story (24h)
             </span>
           </label>
         </div>
 
-        <div className="flex items-center justify-between pt-2 border-t" style={{ borderColor: COLORS.border }}>
+        <div
+          className="flex items-center justify-between pt-2 border-t"
+          style={{ borderColor: COLORS.border }}
+        >
           <div className="flex items-center gap-2">
-            <input ref={fileInputRef} type="file" accept="image/*,video/*" onChange={handleFileSelect} className="hidden" />
-            <button type="button" onClick={() => fileInputRef.current?.click()} disabled={uploadingMedia} className="p-2 rounded-lg hover:bg-white/5 text-amber-400 flex items-center gap-1 text-xs disabled:opacity-40">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*,video/*"
+              onChange={handleFileSelect}
+              className="hidden"
+            />
+
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploadingMedia || submitting}
+              className="p-2 rounded-lg hover:bg-white/5 text-amber-400 flex items-center gap-1 text-xs disabled:opacity-40"
+            >
               <ImageIcon size={16} />
               <span className="hidden sm:inline">Média</span>
             </button>
-            <button type="button" onClick={() => setShowPoll(!showPoll)} className="p-2 rounded-lg hover:bg-white/5 text-teal-400 flex items-center gap-1 text-xs">
+
+            <button
+              type="button"
+              onClick={() => setShowPoll((value) => !value)}
+              disabled={submitting}
+              className="p-2 rounded-lg hover:bg-white/5 text-teal-400 flex items-center gap-1 text-xs"
+            >
               <BarChart2 size={16} />
               <span className="hidden sm:inline">Sondage</span>
             </button>
-            <select value={mood} onChange={(e) => setMood(e.target.value)} className="bg-transparent text-xs p-1 rounded border outline-none" style={{ borderColor: COLORS.border, color: COLORS.muted }}>
+
+            <select
+              value={mood}
+              onChange={(event) => setMood(event.target.value)}
+              disabled={submitting}
+              className="bg-transparent text-xs p-1 rounded border outline-none"
+              style={{
+                borderColor: COLORS.border,
+                color: COLORS.muted,
+              }}
+            >
               <option value="">Humeur ?</option>
               <option value="🔥 Inspiré">🔥 Inspiré</option>
               <option value="💡 Innovant">💡 Innovant</option>
@@ -740,14 +1349,45 @@ export function FeedTab({ user_id, onOpenProfile, onRewardPoints }) {
             </select>
           </div>
 
-          <button type="submit" disabled={(!newText.trim() && !mediaFile && !(showPoll && pollQuestion.trim())) || submitting} className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold shadow-lg transition disabled:opacity-40" style={{ background: "linear-gradient(135deg, #D9AE52 0%, #2DBFA6 100%)", color: COLORS.bg }}>
-            <span>{uploadingMedia ? "Envoi du média..." : submitting ? "..." : "Publier"}</span>
-            <span className="text-[10px] px-1.5 py-0.5 rounded-full font-extrabold bg-black/20 text-white">+15 pts</span>
+          <button
+            type="submit"
+            disabled={
+              (!newText.trim() &&
+                !mediaFile &&
+                !(showPoll &&
+                  pollQuestion.trim() &&
+                  pollOptions.filter((option) => option.trim()).length >= 2)) ||
+              submitting
+            }
+            className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold shadow-lg transition disabled:opacity-40"
+            style={{
+              background:
+                "linear-gradient(135deg, #D9AE52 0%, #2DBFA6 100%)",
+              color: COLORS.bg,
+            }}
+          >
+            <span>
+              {uploadingMedia
+                ? "Envoi du média..."
+                : submitting
+                  ? "Publication..."
+                  : "Publier"}
+            </span>
+            <span className="text-[10px] px-1.5 py-0.5 rounded-full font-extrabold bg-black/20 text-white">
+              +15 pts
+            </span>
           </button>
         </div>
       </form>
 
-      <GuestBanner onUpgrade={() => showToast("Crée un compte depuis Réglages pour gagner des points", "info")} />
+      <GuestBanner
+        onUpgrade={() =>
+          showToast(
+            "Crée un compte depuis Réglages pour gagner des points",
+            "info"
+          )
+        }
+      />
 
       {posts.length === 0 ? (
         <div className="text-center py-8 text-gray-400">
@@ -758,40 +1398,114 @@ export function FeedTab({ user_id, onOpenProfile, onRewardPoints }) {
       ) : (
         <div className="flex flex-col gap-4">
           {posts.map((post) => {
-            const isLiked = !!likedPosts[post.id];
             const isTranslated = !!translatedMap[post.id];
             const comments = commentsMap[post.id] || [];
 
             return (
-              <article key={post.id} data-post-id={post.id} ref={(el) => { if (el) postViewRefs.current[post.id] = el; else delete postViewRefs.current[post.id]; }} className="glass-card rounded-2xl p-5 shadow-xl border flex flex-col gap-3 min-w-0 break-words" style={{ borderColor: COLORS.border }}>
+              <article
+                key={post.id}
+                data-post-id={post.id}
+                ref={(element) => {
+                  if (element) {
+                    postViewRefs.current[post.id] = element;
+                  } else {
+                    delete postViewRefs.current[post.id];
+                  }
+                }}
+                className="glass-card rounded-2xl p-5 shadow-xl border flex flex-col gap-3 min-w-0 break-words"
+                style={{ borderColor: COLORS.border }}
+              >
                 <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3 cursor-pointer group" onClick={() => onOpenProfile?.(post.author_id)}>
-                    <div className="w-10 h-10 rounded-full overflow-hidden border flex items-center justify-center font-bold text-sm" style={{ borderColor: COLORS.borderGold, background: COLORS.surface }}>
+                  <button
+                    type="button"
+                    className="flex items-center gap-3 cursor-pointer group text-left min-w-0"
+                    onClick={() => onOpenProfile?.(post.author_id)}
+                  >
+                    <div
+                      className="w-10 h-10 rounded-full overflow-hidden border flex items-center justify-center font-bold text-sm shrink-0"
+                      style={{
+                        borderColor: COLORS.borderGold,
+                        background: COLORS.surface,
+                      }}
+                    >
                       {post.avatar ? (
-                        <img src={post.avatar} alt="" className="w-full h-full object-cover" />
+                        <img
+                          src={post.avatar}
+                          alt=""
+                          className="w-full h-full object-cover"
+                        />
                       ) : (
-                        <span style={{ color: COLORS.gold }}>{post.display_name?.charAt(0) || "?"}</span>
+                        <span style={{ color: COLORS.gold }}>
+                          {post.display_name?.charAt(0) || "?"}
+                        </span>
                       )}
                     </div>
-                    <div>
-                      <p className="font-bold text-sm group-hover:underline" style={{ color: COLORS.ivory }}>{post.display_name} {post.flag}</p>
-                      <p className="text-xs" style={{ color: COLORS.muted }}>
-                        {post.handle} · {new Date(post.created_at).toLocaleDateString("fr-FR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+
+                    <div className="min-w-0">
+                      <p
+                        className="font-bold text-sm group-hover:underline"
+                        style={{ color: COLORS.ivory }}
+                      >
+                        {post.display_name} {post.flag}
+                      </p>
+                      <p
+                        className="text-xs"
+                        style={{ color: COLORS.muted }}
+                      >
+                        {post.handle} ·{" "}
+                        {post.created_at
+                          ? new Date(post.created_at).toLocaleDateString(
+                              "fr-FR",
+                              {
+                                day: "numeric",
+                                month: "short",
+                                hour: "2-digit",
+                                minute: "2-digit",
+                              }
+                            )
+                          : ""}
                       </p>
                     </div>
-                  </div>
+                  </button>
 
                   {post.author_id === meId && (
                     <div className="relative">
-                      <button type="button" onClick={() => setMenuOpenId((id) => (id === post.id ? null : post.id))} className="p-2 rounded-lg hover:bg-white/5" style={{ color: COLORS.muted }} aria-label="Actions">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setMenuOpenId((id) =>
+                            id === post.id ? null : post.id
+                          )
+                        }
+                        className="p-2 rounded-lg hover:bg-white/5"
+                        style={{ color: COLORS.muted }}
+                        aria-label="Actions"
+                      >
                         <MoreHorizontal size={18} />
                       </button>
+
                       {menuOpenId === post.id && (
-                        <div className="absolute right-0 top-9 z-20 min-w-[160px] rounded-xl border shadow-xl py-1" style={{ background: COLORS.surface, borderColor: COLORS.borderGold }}>
-                          <button type="button" onClick={() => startEditPost(post)} className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-white/5" style={{ color: COLORS.ivory }}>
+                        <div
+                          className="absolute right-0 top-9 z-20 min-w-[160px] rounded-xl border shadow-xl py-1"
+                          style={{
+                            background: COLORS.surface,
+                            borderColor: COLORS.borderGold,
+                          }}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => startEditPost(post)}
+                            className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-white/5"
+                            style={{ color: COLORS.ivory }}
+                          >
                             <Pencil size={14} /> Modifier
                           </button>
-                          <button type="button" onClick={() => handleDeletePost(post.id)} className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-white/5 text-red-400">
+
+                          <button
+                            type="button"
+                            onClick={() => handleDeletePost(post.id)}
+                            className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-white/5 text-red-400"
+                          >
                             <Trash2 size={14} /> Supprimer
                           </button>
                         </div>
@@ -802,55 +1516,143 @@ export function FeedTab({ user_id, onOpenProfile, onRewardPoints }) {
 
                 {editingId === post.id ? (
                   <div className="flex flex-col gap-2">
-                    <textarea value={editText} onChange={(e) => setEditText(e.target.value)} rows={3} className="w-full rounded-xl px-3 py-2 text-sm outline-none border resize-none" style={{ background: COLORS.surface2, borderColor: COLORS.borderGold, color: COLORS.ivory }} />
+                    <textarea
+                      value={editText}
+                      onChange={(event) => setEditText(event.target.value)}
+                      rows={3}
+                      className="w-full rounded-xl px-3 py-2 text-sm outline-none border resize-none"
+                      style={{
+                        background: COLORS.surface2,
+                        borderColor: COLORS.borderGold,
+                        color: COLORS.ivory,
+                      }}
+                    />
+
                     <div className="flex gap-2 justify-end">
-                      <button type="button" onClick={cancelEdit} className="px-3 py-1.5 rounded-lg text-xs" style={{ color: COLORS.muted }}>Annuler</button>
-                      <button type="button" disabled={savingEdit} onClick={() => saveEditPost(post.id)} className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-bold disabled:opacity-40" style={{ background: COLORS.gold, color: "#000" }}>
-                        <Check size={14} /> {savingEdit ? "…" : "Enregistrer"}
+                      <button
+                        type="button"
+                        onClick={cancelEdit}
+                        className="px-3 py-1.5 rounded-lg text-xs"
+                        style={{ color: COLORS.muted }}
+                      >
+                        Annuler
+                      </button>
+
+                      <button
+                        type="button"
+                        disabled={savingEdit}
+                        onClick={() => saveEditPost(post.id)}
+                        className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-bold disabled:opacity-40"
+                        style={{ background: COLORS.gold, color: "#000" }}
+                      >
+                        <Check size={14} />
+                        {savingEdit ? "…" : "Enregistrer"}
                       </button>
                     </div>
                   </div>
                 ) : (
-                  <ExpandableText text={isTranslated ? translatedMap[post.id] : post.text}>
-                    {isTranslated ? translatedMap[post.id] : <RichTextRenderer content={post.text} />}
+                  <ExpandableText
+                    text={
+                      isTranslated ? translatedMap[post.id] : post.text
+                    }
+                  >
+                    {isTranslated ? (
+                      translatedMap[post.id]
+                    ) : (
+                      <RichTextRenderer content={post.text} />
+                    )}
                   </ExpandableText>
                 )}
-                
-                {isTranslated && <p className="text-[10px]" style={{ color: COLORS.muted }}>Traduit par BAARO</p>}
+
+                {isTranslated && (
+                  <p
+                    className="text-[10px]"
+                    style={{ color: COLORS.muted }}
+                  >
+                    Traduit par BAARO
+                  </p>
+                )}
 
                 {post.media_url && (
                   <div className="rounded-xl overflow-hidden">
                     {post.media_type?.startsWith("video") ? (
-                      <LazyVideo src={post.media_url} fit="contain" className="w-full" />
+                      <LazyVideo
+                        src={post.media_url}
+                        fit="contain"
+                        className="w-full"
+                      />
                     ) : (
-                      <LazyImage src={post.media_url} alt="" fit="contain" className="w-full" />
+                      <LazyImage
+                        src={post.media_url}
+                        alt=""
+                        fit="contain"
+                        className="w-full"
+                      />
                     )}
                   </div>
                 )}
 
-                {/* Barre d'actions unifiée avec Sondage, Réactions, Commentaires et Traduction */}
-                <div className="flex flex-col gap-3 pt-2 border-t" style={{ borderColor: COLORS.border }}>
-                  {/* 1. Sondage (s'affiche uniquement si le post en a un) */}
+                <div
+                  className="flex flex-col gap-3 pt-2 border-t"
+                  style={{ borderColor: COLORS.border }}
+                >
                   <PollCard postId={post.id} user_id={meId} />
 
-                  {/* 2. Actions sociales avancées (Réactions, Favoris, Partage, Suivi) */}
-                  <SocialPostEnhancements post={post} user_id={meId} />
-                  <div className="flex flex-wrap items-center gap-2 text-[10px]" style={{ color: COLORS.muted }}>
+                  <SocialPostEnhancements
+                    post={post}
+                    user_id={meId}
+                  />
+
+                  <div
+                    className="flex flex-wrap items-center gap-2 text-[10px]"
+                    style={{ color: COLORS.muted }}
+                  >
                     <span>👁 {Number(post.views_count || 0)} vues</span>
+
                     {post.author_id === meId && (
                       <>
-                        <button type="button" onClick={() => setEngagement({ type: "postViews", id: post.id })} className="ml-auto rounded-lg border px-2 py-1 hover:text-white" style={{ borderColor: COLORS.border }}>Voir les vues</button>
-                        <button type="button" onClick={() => setEngagement({ type: "postLikes", id: post.id })} className="rounded-lg border px-2 py-1 hover:text-white" style={{ borderColor: COLORS.border }}>Voir les likes</button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setEngagement({
+                              type: "postViews",
+                              id: post.id,
+                            })
+                          }
+                          className="ml-auto rounded-lg border px-2 py-1 hover:text-white"
+                          style={{ borderColor: COLORS.border }}
+                        >
+                          Voir les vues
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setEngagement({
+                              type: "postLikes",
+                              id: post.id,
+                            })
+                          }
+                          className="rounded-lg border px-2 py-1 hover:text-white"
+                          style={{ borderColor: COLORS.border }}
+                        >
+                          Voir les likes
+                        </button>
                       </>
                     )}
                   </div>
 
-                  {/* 3. Commentaires et Traduction (conservés) */}
                   <div className="flex flex-wrap items-center gap-3 w-full min-h-[32px]">
                     <button
+                      type="button"
                       onClick={() => {
                         const next = !commentOpen[post.id];
-                        setCommentOpen((prev) => ({ ...prev, [post.id]: next }));
+
+                        setCommentOpen((previous) => ({
+                          ...previous,
+                          [post.id]: next,
+                        }));
+
                         if (next) loadComments(post.id);
                       }}
                       className="flex items-center gap-1.5 text-xs"
@@ -864,38 +1666,105 @@ export function FeedTab({ user_id, onOpenProfile, onRewardPoints }) {
                       text={post.text}
                       isTranslated={!!translatedMap[post.id]}
                       preferredLang="fr"
-                      onTranslated={(translated) => setTranslatedMap((prev) => ({ ...prev, [post.id]: translated }))}
-                      onClear={() => setTranslatedMap((prev) => ({ ...prev, [post.id]: null }))}
+                      onTranslated={(translated) =>
+                        setTranslatedMap((previous) => ({
+                          ...previous,
+                          [post.id]: translated,
+                        }))
+                      }
+                      onClear={() =>
+                        setTranslatedMap((previous) => ({
+                          ...previous,
+                          [post.id]: null,
+                        }))
+                      }
                     />
+
                     <div className="ml-auto">
-                      {post.author_id !== meId && <TipButton recipientId={post.author_id} postId={post.id} />}
+                      {post.author_id !== meId && (
+                        <TipButton
+                          recipientId={post.author_id}
+                          postId={post.id}
+                        />
+                      )}
                     </div>
                   </div>
                 </div>
 
                 {commentOpen[post.id] && (
-                  <div className="pt-3 border-t space-y-2" style={{ borderColor: COLORS.border }}>
-                    {comments.map((c) => (
-                      <div key={c.id} className="text-xs flex items-start justify-between gap-2" style={{ color: COLORS.muted }}>
-                        <div>
-                          <span className="font-bold" style={{ color: COLORS.ivory }}>{c.author}</span> : {c.text}
+                  <div
+                    className="pt-3 border-t space-y-2"
+                    style={{ borderColor: COLORS.border }}
+                  >
+                    {comments.map((comment) => (
+                      <div
+                        key={comment.id}
+                        className="text-xs flex items-start justify-between gap-2"
+                        style={{ color: COLORS.muted }}
+                      >
+                        <div className="min-w-0 break-words">
+                          <span
+                            className="font-bold"
+                            style={{ color: COLORS.ivory }}
+                          >
+                            {comment.author}
+                          </span>{" "}
+                          : {comment.text}
                         </div>
-                        {c.author_id === meId && (
-                          <button type="button" onClick={() => handleDeleteComment(post.id, c.id)} className="shrink-0 p-1 text-red-400/80 hover:text-red-400" aria-label="Supprimer commentaire">
+
+                        {comment.author_id === meId && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleDeleteComment(post.id, comment.id)
+                            }
+                            className="shrink-0 p-1 text-red-400/80 hover:text-red-400"
+                            aria-label="Supprimer commentaire"
+                          >
                             <Trash2 size={12} />
                           </button>
                         )}
                       </div>
                     ))}
+
                     <div className="flex gap-2">
                       <input
                         value={newCommentText[post.id] || ""}
-                        onChange={(e) => setNewCommentText((prev) => ({ ...prev, [post.id]: e.target.value }))}
+                        onChange={(event) =>
+                          setNewCommentText((previous) => ({
+                            ...previous,
+                            [post.id]: event.target.value,
+                          }))
+                        }
+                        onKeyDown={(event) => {
+                          if (
+                            event.key === "Enter" &&
+                            !event.shiftKey
+                          ) {
+                            event.preventDefault();
+                            handleAddComment(post.id);
+                          }
+                        }}
                         placeholder="Ajouter un commentaire..."
-                        className="flex-1 px-3 py-2 rounded-lg border text-xs outline-none"
-                        style={{ background: COLORS.surface2, borderColor: COLORS.border, color: COLORS.ivory }}
+                        className="flex-1 min-w-0 px-3 py-2 rounded-lg border text-xs outline-none"
+                        style={{
+                          background: COLORS.surface2,
+                          borderColor: COLORS.border,
+                          color: COLORS.ivory,
+                        }}
                       />
-                      <button onClick={() => handleAddComment(post.id)} className="p-2 rounded-lg" style={{ background: COLORS.gold, color: "#000" }}>
+
+                      <button
+                        type="button"
+                        disabled={
+                          commentSubmitting[post.id] ||
+                          !(newCommentText[post.id] || "").trim()
+                        }
+                        onClick={() => handleAddComment(post.id)}
+                        className="p-2 rounded-lg disabled:opacity-40"
+                        style={{ background: COLORS.gold, color: "#000" }}
+                        aria-label="Envoyer le commentaire"
+                      >
                         <Send size={14} />
                       </button>
                     </div>
@@ -906,11 +1775,36 @@ export function FeedTab({ user_id, onOpenProfile, onRewardPoints }) {
           })}
 
           {hasMore && <div ref={sentinelRef} style={{ height: 1 }} />}
-          {loadingMore && <div className="text-center py-4 text-xs" style={{ color: COLORS.muted }}>Chargement de plus de publications...</div>}
-          {!hasMore && posts.length > 0 && <div className="text-center py-4 text-xs" style={{ color: COLORS.muted }}>Vous avez tout vu ✨</div>}
+
+          {loadingMore && (
+            <div
+              className="text-center py-4 text-xs"
+              style={{ color: COLORS.muted }}
+            >
+              Chargement de plus de publications...
+            </div>
+          )}
+
+          {!hasMore && posts.length > 0 && (
+            <div
+              className="text-center py-4 text-xs"
+              style={{ color: COLORS.muted }}
+            >
+              Vous avez tout vu ✨
+            </div>
+          )}
         </div>
       )}
-      {engagement && <EngagementList type={engagement.type} targetId={engagement.id} ownerId={meId} viewerId={meId} onClose={() => setEngagement(null)} />}
+
+      {engagement && (
+        <EngagementList
+          type={engagement.type}
+          targetId={engagement.id}
+          ownerId={meId}
+          viewerId={meId}
+          onClose={() => setEngagement(null)}
+        />
+      )}
     </div>
   );
 }
