@@ -5,6 +5,6 @@ export {
   getCurrentUserId,
   assert_user_id,
   isValidAuthUserId,
-} from "./current_user_id.js";
+} from "./currentUserId.js";
 
 export { supabase } from "../supabaseClient.js";
