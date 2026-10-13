@@ -1,7 +1,7 @@
 
 import { Capacitor } from "@capacitor/core";
 
-const SERVICE_NAME = "com.baaro.app.p2p";
+const SERVICE_NAME = "com.baaro.app.nearby";
 
 let isInitialized = false;
 let isStarting = false;
@@ -41,7 +41,15 @@ function normalizePermission(value) {
   if (typeof value === "string") {
     const normalized = value.toLowerCase();
 
-    if (["granted", "denied", "prompt", "prompt-with-rationale"].includes(normalized)) {
+    if (
+      [
+        "granted",
+        "denied",
+        "prompt",
+        "prompt-with-rationale",
+        "limited",
+      ].includes(normalized)
+    ) {
       return normalized;
     }
 
@@ -67,10 +75,7 @@ function normalizePermission(value) {
 
 function normalizePermissions(status) {
   if (!status || typeof status !== "object") {
-    return {
-      nearby: "unknown",
-      location: "unknown",
-    };
+    return { nearby: "unknown", location: "unknown" };
   }
 
   return {
@@ -104,6 +109,28 @@ function requireEndpointId(endpointId) {
   return endpointId.trim();
 }
 
+function assertAndroid() {
+  if (
+    !Capacitor.isNativePlatform() ||
+    Capacitor.getPlatform() !== "android"
+  ) {
+    throw new Error(
+      "Le mode Nearby est disponible uniquement dans l’application Android native."
+    );
+  }
+}
+
+function assertPermissionsGranted(permissions) {
+  if (
+    permissions?.nearby !== "granted" ||
+    permissions?.location !== "granted"
+  ) {
+    throw new Error(
+      "Les permissions Nearby nécessaires ne sont pas confirmées. Vérifie les autorisations Bluetooth et localisation dans les paramètres de l’application."
+    );
+  }
+}
+
 export function isNearbyAvailable() {
   try {
     return (
@@ -124,7 +151,7 @@ export function getNearbyDebug() {
     isNative = Capacitor.isNativePlatform();
     platform = Capacitor.getPlatform();
   } catch {
-    // Les informations de diagnostic restent disponibles sur le Web.
+    // Diagnostic disponible même si Capacitor ne répond pas.
   }
 
   return {
@@ -140,45 +167,31 @@ export function getNearbyDebug() {
   };
 }
 
-/**
- * Vérifie les permissions sans considérer une erreur
- * ou une méthode absente comme une autorisation.
- */
 export async function checkNearbyPermissions() {
   const plugin = getPlugin();
 
   if (!plugin || typeof plugin.checkPermissions !== "function") {
-    return {
-      nearby: "unknown",
-      location: "unknown",
-    };
+    return { nearby: "unknown", location: "unknown" };
   }
 
   try {
     const status = await plugin.checkPermissions();
     return normalizePermissions(status);
   } catch (error) {
-    console.warn("Vérification des permissions Nearby impossible:", error);
+    console.warn(
+      "Vérification des permissions Nearby impossible:",
+      error
+    );
 
-    return {
-      nearby: "unknown",
-      location: "unknown",
-    };
+    return { nearby: "unknown", location: "unknown" };
   }
 }
 
-/**
- * Demande les permissions si le plugin expose cette API,
- * puis relit leur état réel.
- */
 export async function requestNearbyPermissions() {
   const plugin = getPlugin();
 
   if (!plugin) {
-    return {
-      nearby: "unknown",
-      location: "unknown",
-    };
+    return { nearby: "unknown", location: "unknown" };
   }
 
   if (typeof plugin.requestPermissions !== "function") {
@@ -188,21 +201,13 @@ export async function requestNearbyPermissions() {
   try {
     await plugin.requestPermissions();
   } catch (error) {
-    console.warn("Demande de permissions Nearby impossible:", error);
+    console.warn(
+      "Demande de permissions Nearby impossible:",
+      error
+    );
   }
 
   return checkNearbyPermissions();
-}
-
-function assertPermissionsGranted(permissions) {
-  if (
-    permissions?.nearby !== "granted" ||
-    permissions?.location !== "granted"
-  ) {
-    throw new Error(
-      "Les permissions Nearby nécessaires ne sont pas confirmées. Vérifie les autorisations Bluetooth et localisation dans les paramètres de l’application."
-    );
-  }
 }
 
 async function ensureInitialized() {
@@ -210,6 +215,7 @@ async function ensureInitialized() {
 
   const plugin = requirePlugin();
 
+  // Le plugin Kotlin fourni ne nécessite pas de méthode initialize().
   if (typeof plugin.initialize === "function") {
     await plugin.initialize({
       serviceName: SERVICE_NAME,
@@ -217,8 +223,6 @@ async function ensureInitialized() {
     });
   }
 
-  // Certains plugins locaux n'exposent pas initialize().
-  // L'état est réinitialisé si le démarrage échoue.
   isInitialized = true;
 }
 
@@ -231,11 +235,11 @@ export async function startNearby(displayName = "BAARO User") {
     throw new Error("Arrête Nearby avant de le redémarrer.");
   }
 
+  assertAndroid();
+
   if (!isNearbyAvailable()) {
     throw new Error(
-      Capacitor.isNativePlatform()
-        ? "Plugin Nearby indisponible sur Android. Vérifie son enregistrement et reconstruis l’APK."
-        : "Le mode Nearby est disponible uniquement sur Android natif."
+      "Plugin Nearby indisponible. Vérifie son enregistrement Android et reconstruis l’APK."
     );
   }
 
@@ -246,9 +250,16 @@ export async function startNearby(displayName = "BAARO User") {
   isStarting = true;
 
   try {
-    const permissions = await checkNearbyPermissions();
-    assertPermissionsGranted(permissions);
+    let permissions = await checkNearbyPermissions();
 
+    if (
+      permissions.nearby !== "granted" ||
+      permissions.location !== "granted"
+    ) {
+      permissions = await requestNearbyPermissions();
+    }
+
+    assertPermissionsGranted(permissions);
     await ensureInitialized();
 
     const plugin = requirePlugin();
@@ -266,14 +277,13 @@ export async function startNearby(displayName = "BAARO User") {
         try {
           await plugin.startDiscovery();
         } catch (error) {
-          // Évite de laisser la publicité active si la découverte échoue.
           try {
             if (typeof plugin.stopAdvertising === "function") {
               await plugin.stopAdvertising();
             }
           } catch (stopError) {
             console.warn(
-              "Impossible d'arrêter la publicité Nearby après une erreur:",
+              "Impossible d'arrêter la diffusion après l'échec de la découverte:",
               stopError
             );
           }
@@ -290,7 +300,6 @@ export async function startNearby(displayName = "BAARO User") {
     );
   } catch (error) {
     isInitialized = false;
-
     throw new Error(getErrorMessage(error));
   } finally {
     isStarting = false;
@@ -299,6 +308,12 @@ export async function startNearby(displayName = "BAARO User") {
 
 export async function stopNearby() {
   if (isStopping) return;
+
+  if (isStarting) {
+    throw new Error(
+      "Le démarrage de Nearby est en cours. Réessaie après sa fin."
+    );
+  }
 
   isStopping = true;
 
@@ -330,7 +345,11 @@ export async function stopNearby() {
         try {
           await method.call(plugin);
         } catch (error) {
-          firstError ||= new Error(`${name}: ${getErrorMessage(error)}`);
+          if (!firstError) {
+            firstError = new Error(
+              `${name}: ${getErrorMessage(error)}`
+            );
+          }
         }
       }
 
@@ -346,7 +365,6 @@ export async function stopNearby() {
     connectedEndpoints.clear();
     isInitialized = false;
   } catch (error) {
-    // Ne pas prétendre que le service est arrêté si l'arrêt a échoué.
     throw new Error(getErrorMessage(error));
   } finally {
     isStopping = false;
@@ -356,12 +374,11 @@ export async function stopNearby() {
 export async function sendNearbyMessage(text, endpointId = null) {
   const plugin = requirePlugin();
 
-  const payload =
-    typeof text === "string" ? text : JSON.stringify(text);
-
-  if (typeof payload !== "string" || !payload.trim()) {
+  if (typeof text !== "string" || !text.trim()) {
     throw new Error("Le message Nearby ne peut pas être vide.");
   }
+
+  const payload = text;
 
   if (endpointId !== null && endpointId !== undefined) {
     endpointId = requireEndpointId(endpointId);
@@ -426,7 +443,7 @@ export async function acceptNearbyConnection(endpointId) {
     );
   }
 
-  connectedEndpoints.add(endpointId);
+  // DEVICE_CONNECTED confirme l'établissement réel de la connexion.
 }
 
 export async function rejectNearbyConnection(endpointId) {
@@ -457,24 +474,11 @@ function normalizeEvent(event) {
 
   switch (type) {
     case "DEVICE_FOUND":
-      return {
-        type,
-        endpointId,
-        deviceName,
-      };
-
     case "DEVICE_CONNECTED":
-      return {
-        type,
-        endpointId,
-        deviceName,
-      };
+      return { type, endpointId, deviceName };
 
     case "DEVICE_LOST":
-      return {
-        type,
-        endpointId,
-      };
+      return { type, endpointId };
 
     case "MESSAGE_RECEIVED":
       return {
@@ -485,11 +489,7 @@ function normalizeEvent(event) {
       };
 
     case "CONNECTION_REQUESTED":
-      return {
-        type,
-        endpointId,
-        deviceName,
-      };
+      return { type, endpointId, deviceName };
 
     case "ERROR":
       return {
@@ -502,18 +502,11 @@ function normalizeEvent(event) {
   }
 }
 
-/**
- * Compatible avec les deux familles de plugins.
- * Capacitor addListener() peut renvoyer une Promise :
- * le nettoyage attend donc la résolution des handles.
- */
 export function onNearbyEvent(_eventName, callback) {
   const plugin = getPlugin();
 
   if (!plugin || typeof plugin.addListener !== "function") {
-    return {
-      remove: async () => {},
-    };
+    return { remove: async () => {} };
   }
 
   let removed = false;
@@ -525,12 +518,12 @@ export function onNearbyEvent(_eventName, callback) {
       const registration = Promise.resolve(
         plugin.addListener(eventName, handler)
       )
-        .then((handle) => {
+        .then(async (handle) => {
           if (removed) {
-            return handle?.remove?.();
+            await handle?.remove?.();
+          } else if (handle) {
+            handles.push(handle);
           }
-
-          if (handle) handles.push(handle);
         })
         .catch((error) => {
           console.warn(
@@ -554,24 +547,23 @@ export function onNearbyEvent(_eventName, callback) {
 
     if (event.type === "DEVICE_CONNECTED" && event.endpointId) {
       connectedEndpoints.add(event.endpointId);
-    }
-
-    if (event.type === "DEVICE_LOST" && event.endpointId) {
+    } else if (event.type === "DEVICE_LOST" && event.endpointId) {
       connectedEndpoints.delete(event.endpointId);
     }
 
     try {
       callback(event);
     } catch (error) {
-      console.error("Erreur dans le gestionnaire d'événements Nearby:", error);
+      console.error(
+        "Erreur dans le gestionnaire d'événements Nearby:",
+        error
+      );
     }
   };
 
   if (getPluginName() === "NearbyChat") {
-    // API du plugin local : un seul flux d'événements pour éviter les doublons.
     subscribe("nearbyEvent", dispatch);
   } else {
-    // API historique NearbyConnections.
     subscribe("onEndpointFound", (data) =>
       dispatch({
         ...data,
@@ -583,14 +575,8 @@ export function onNearbyEvent(_eventName, callback) {
 
     subscribe("onConnectionResult", (data) => {
       if (data?.result === "SUCCESS" || data?.status === "SUCCESS") {
-        dispatch({
-          ...data,
-          type: "DEVICE_CONNECTED",
-        });
-      } else if (
-        data?.result === "FAILURE" ||
-        data?.status === "FAILURE"
-      ) {
+        dispatch({ ...data, type: "DEVICE_CONNECTED" });
+      } else {
         dispatch({
           type: "ERROR",
           message: data?.message || "La connexion Nearby a échoué.",
@@ -607,8 +593,6 @@ export function onNearbyEvent(_eventName, callback) {
       })
     );
 
-    // Certains plugins historiques exposent aussi les événements de
-    // demande de connexion. Le hook UI doit décider de les accepter.
     subscribe("onConnectionRequested", (data) =>
       dispatch({
         ...data,
@@ -622,7 +606,6 @@ export function onNearbyEvent(_eventName, callback) {
       if (removed) return;
 
       removed = true;
-
       await Promise.allSettled(pendingRegistrations);
 
       const registeredHandles = handles.splice(0);
