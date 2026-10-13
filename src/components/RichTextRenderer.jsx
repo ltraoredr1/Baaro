@@ -1,12 +1,14 @@
 /**
- * Rendu léger du Markdown BAARO (sans dépendance react-markdown).
- * Supporte :
+ * Rendu léger du Markdown BAARO, sans dépendance react-markdown.
+ *
+ * Formats pris en charge :
  * - **gras**
  * - *italique*
  * - ++souligné++
- * - listes à puces et numérotées
+ * - listes à puces
+ * - listes numérotées
  * - liens [texte](url)
- * - URLs nues HTTP/HTTPS
+ * - URL HTTP/HTTPS nues
  */
 
 import { COLORS } from "../theme.js";
@@ -20,11 +22,6 @@ function escapeHtml(value) {
     .replace(/'/g, "&#39;");
 }
 
-/**
- * N'autorise que les URL HTTP et HTTPS.
- * Le contrôle est fait après décodage des entités HTML,
- * afin d'éviter qu'une URL encodée contourne la validation.
- */
 function isSafeUrl(value) {
   if (typeof value !== "string") return false;
 
@@ -36,56 +33,54 @@ function isSafeUrl(value) {
 
   try {
     const parsed = new URL(url);
-    return parsed.protocol === "http:" || parsed.protocol === "https:";
+
+    return (
+      ["http:", "https:"].includes(parsed.protocol) &&
+      Boolean(parsed.hostname)
+    );
   } catch {
     return false;
   }
 }
 
-/**
- * Protège les caractères spéciaux dans les expressions régulières.
- */
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /**
- * Transforme le texte en HTML en échappant d'abord son contenu.
- * Les balises HTML ne sont jamais acceptées directement depuis le texte.
+ * Convertit les éléments Markdown en HTML.
+ * Le texte utilisateur est échappé avant toute génération de balises.
  */
 function formatInline(value) {
   const source = String(value ?? "");
   const tokens = [];
 
-  // Protège les liens avant d'appliquer le formatage Markdown.
-  // Les marqueurs temporaires sont ensuite réinsérés après le formatage.
-  const linkPattern = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g;
+  // 1. Protège les liens Markdown avant les autres transformations.
+  const markdownLinkPattern = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g;
 
-  const textWithTokens = source.replace(
-    linkPattern,
+  let html = source.replace(
+    markdownLinkPattern,
     (match, label, url) => {
       if (!isSafeUrl(url)) return match;
 
-      const token = `BAAROLINKTOKEN${tokens.length}END`;
-      const safeLabel = formatInline(label);
-      const safeUrl = escapeHtml(url);
+      const token = `BAAROMARKDOWNLINK${tokens.length}TOKEN`;
 
       tokens.push(
-        `<a href="${safeUrl}" target="_blank" rel="noopener noreferrer" class="underline" style="color:#2DBFA6">${safeLabel}</a>`
+        `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" class="underline" style="color:#2DBFA6">${escapeHtml(label)}</a>`
       );
 
       return token;
     }
   );
 
-  let html = escapeHtml(textWithTokens);
+  // 2. Échappe le texte pour empêcher l'injection de HTML.
+  html = escapeHtml(html);
 
-  // Les URL nues sont converties en liens.
-  // Les URL déjà traitées dans le Markdown sont protégées par des tokens.
+  // 3. Transforme les URL nues en liens sécurisés.
   html = html.replace(
     /(^|[\s(])((?:https?):\/\/[^\s<>"']+)/gi,
     (match, prefix, rawUrl) => {
-      // Évite d'inclure une ponctuation terminale courante dans le lien.
+      // Retire les signes de ponctuation de fin du lien.
       const url = rawUrl.replace(/[.,!?;:]+$/, "");
       const suffix = rawUrl.slice(url.length);
 
@@ -95,19 +90,25 @@ function formatInline(value) {
 
       const safeUrl = escapeHtml(url);
 
-      return `${prefix}<a href="${safeUrl}" target="_blank" rel="noopener noreferrer" class="underline" style="color:#2DBFA6">${safeUrl}</a>${suffix}`;
+      return (
+        `${prefix}<a href="${safeUrl}" ` +
+        'target="_blank" rel="noopener noreferrer" ' +
+        'class="underline" style="color:#2DBFA6">' +
+        `${safeUrl}</a>${suffix}`
+      );
     }
   );
 
-  // Gras, italique et souligné.
-  // Le contenu est déjà échappé ; les balises ajoutées sont contrôlées.
-  html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-  html = html.replace(/\*([^*]+)\*/g, "<em>$1</em>");
-  html = html.replace(/\+\+([^+]+)\+\+/g, "<u>$1</u>");
+  // 4. Applique les mises en forme Markdown.
+  // Le gras est traité avant l'italique.
+  html = html.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+  html = html.replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
+  html = html.replace(/\+\+([^+\n]+)\+\+/g, "<u>$1</u>");
 
-  // Restaure les liens Markdown après les transformations de texte.
+  // 5. Restaure les liens Markdown protégés.
   tokens.forEach((tokenHtml, index) => {
-    const token = `BAAROLINKTOKEN${index}END`;
+    const token = `BAAROMARKDOWNLINK${index}TOKEN`;
+
     html = html.replace(
       new RegExp(escapeRegExp(token), "g"),
       tokenHtml
@@ -117,6 +118,10 @@ function formatInline(value) {
   return html;
 }
 
+/**
+ * Convertit le texte en paragraphes et listes HTML.
+ * Les numéros de listes sont affichés par le navigateur.
+ */
 function toHtml(content) {
   const lines = String(content ?? "").split(/\r?\n/);
   const output = [];
@@ -132,14 +137,16 @@ function toHtml(content) {
 
   for (const line of lines) {
     const unordered = line.match(/^\s*[-*]\s+(.+)$/);
-    const ordered = line.match(/^\s*\d+\.\s+(.+)$/);
+    const ordered = line.match(/^\s*(\d+)\.\s+(.+)$/);
 
     if (unordered) {
       if (listType !== "ul") {
         closeList();
+
         output.push(
           '<ul class="list-disc list-inside mb-2 space-y-1">'
         );
+
         listType = "ul";
       }
 
@@ -150,13 +157,15 @@ function toHtml(content) {
     if (ordered) {
       if (listType !== "ol") {
         closeList();
+
         output.push(
           '<ol class="list-decimal list-inside mb-2 space-y-1">'
         );
+
         listType = "ol";
       }
 
-      output.push(`<li>${formatInline(ordered[1])}</li>`);
+      output.push(`<li>${formatInline(ordered[2])}</li>`);
       continue;
     }
 
