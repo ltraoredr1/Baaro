@@ -10,9 +10,13 @@ import {
 import { COLORS } from "../theme.js";
 
 /**
- * Éditeur de texte riche pour les publications.
- * Génère du Markdown + syntaxe ++souligné++.
- * Toolbar : Gras, Italique, Souligné, Lien, Listes.
+ * Éditeur de texte riche pour les publications BAARO.
+ * Génère du Markdown :
+ * - **gras**
+ * - *italique*
+ * - ++souligné++
+ * - [texte](url)
+ * - listes à puces et numérotées
  */
 export function RichTextComposer({
   value = "",
@@ -43,13 +47,18 @@ export function RichTextComposer({
       el.focus();
 
       const maxLength = el.value.length;
-      const safeStart = Math.min(Math.max(0, start), maxLength);
-      const safeEnd = Math.min(Math.max(safeStart, end), maxLength);
+      const safeStart = Math.min(Math.max(start, 0), maxLength);
+      const safeEnd = Math.min(Math.max(end, safeStart), maxLength);
 
       el.setSelectionRange(safeStart, safeEnd);
     });
   }, []);
 
+  /**
+   * Applique un formatage autour du texte sélectionné.
+   * Sans sélection, insère les marqueurs et place le curseur
+   * à l'intérieur pour permettre de taper directement.
+   */
   const wrapSelection = useCallback(
     (before, after = before) => {
       const el = textareaRef.current;
@@ -74,13 +83,15 @@ export function RichTextComposer({
           start + before.length + selected.length
         );
       } else {
-        const cursor = start + before.length;
-        restoreSelection(cursor);
+        restoreSelection(start + before.length);
       }
     },
     [text, disabled, updateText, restoreSelection]
   );
 
+  /**
+   * Insère du texte à la position du curseur.
+   */
   const insertAtCursor = useCallback(
     (insertedText) => {
       const el = textareaRef.current;
@@ -93,9 +104,7 @@ export function RichTextComposer({
         text.slice(0, start) + insertedText + text.slice(end);
 
       updateText(newText);
-
-      const cursor = start + insertedText.length;
-      restoreSelection(cursor);
+      restoreSelection(start + insertedText.length);
     },
     [text, disabled, updateText, restoreSelection]
   );
@@ -112,24 +121,24 @@ export function RichTextComposer({
     wrapSelection("++");
   }, [wrapSelection]);
 
+  /**
+   * Ajoute un lien Markdown sécurisé.
+   */
   const handleLink = useCallback(() => {
-    if (disabled) return;
-
     const el = textareaRef.current;
-    if (!el) return;
+    if (!el || disabled) return;
 
     const start = el.selectionStart;
     const end = el.selectionEnd;
     const selected = text.slice(start, end) || "lien";
 
     const enteredUrl = window.prompt(
-      "Collez le lien (site ou groupe Baaro) :",
+      "Collez le lien (site ou groupe BAARO) :",
       "https://"
     );
 
     if (!enteredUrl) {
-      el.focus();
-      el.setSelectionRange(start, end);
+      restoreSelection(start, end);
       return;
     }
 
@@ -158,40 +167,149 @@ export function RichTextComposer({
 
     updateText(newText);
 
-    const selectionStart = start + 1;
-    const selectionEnd = selectionStart + selected.length;
-
-    restoreSelection(selectionStart, selectionEnd);
+    // Sélectionne le libellé du lien après insertion.
+    restoreSelection(start + 1, start + 1 + selected.length);
   }, [text, disabled, updateText, restoreSelection]);
 
+  /**
+   * Insère une puce ou un numéro.
+   * Pour les listes numérotées, recherche le dernier numéro
+   * présent avant la ligne courante et l'incrémente.
+   */
   const insertListMarker = useCallback(
-    (marker) => {
+    (type) => {
       const el = textareaRef.current;
       if (!el || disabled) return;
 
       const start = el.selectionStart;
-      const end = el.selectionEnd;
-
-      // Détermine le début de la ligne où se trouve le curseur.
       const lineStart = text.lastIndexOf("\n", Math.max(0, start - 1)) + 1;
       const beforeCursor = text.slice(lineStart, start);
 
-      // Si le curseur est déjà au début d'une ligne vide,
-      // insère le marqueur directement. Sinon, commence une nouvelle ligne.
-      const prefix = beforeCursor.trim() === "" ? marker : `\n${marker}`;
+      let marker;
 
-      insertAtCursor(prefix);
+      if (type === "ul") {
+        marker = "- ";
+      } else {
+        const previousText = text.slice(0, lineStart);
+        const matches = [
+          ...previousText.matchAll(/^\s*(\d+)\.\s+/gm),
+        ];
+
+        const lastNumber = matches.length
+          ? Number(matches[matches.length - 1][1])
+          : 0;
+
+        marker = `${lastNumber + 1}. `;
+      }
+
+      const insertion =
+        beforeCursor.trim() === "" ? marker : `\n${marker}`;
+
+      insertAtCursor(insertion);
     },
     [text, disabled, insertAtCursor]
   );
 
   const handleBulletList = useCallback(() => {
-    insertListMarker("- ");
+    insertListMarker("ul");
   }, [insertListMarker]);
 
   const handleOrderedList = useCallback(() => {
-    insertListMarker("1. ");
+    insertListMarker("ol");
   }, [insertListMarker]);
+
+  /**
+   * Permet de poursuivre automatiquement une liste numérotée
+   * ou à puces avec la touche Entrée.
+   */
+  const handleKeyDown = useCallback(
+    (event) => {
+      if (disabled) return;
+
+      // Raccourcis clavier pour le gras et l'italique.
+      if ((event.ctrlKey || event.metaKey) && !event.altKey) {
+        const key = event.key.toLowerCase();
+
+        if (key === "b") {
+          event.preventDefault();
+          handleBold();
+          return;
+        }
+
+        if (key === "i") {
+          event.preventDefault();
+          handleItalic();
+          return;
+        }
+      }
+
+      if (event.key !== "Enter" || event.shiftKey) return;
+
+      const el = textareaRef.current;
+      if (!el || el.selectionStart !== el.selectionEnd) return;
+
+      const cursor = el.selectionStart;
+      const lineStart = text.lastIndexOf("\n", Math.max(0, cursor - 1)) + 1;
+      const lineEndIndex = text.indexOf("\n", cursor);
+      const lineEnd = lineEndIndex === -1 ? text.length : lineEndIndex;
+      const currentLine = text.slice(lineStart, lineEnd);
+
+      const unorderedMatch = currentLine.match(/^(\s*)[-*]\s+(.*)$/);
+      const orderedMatch = currentLine.match(/^(\s*)(\d+)\.\s+(.*)$/);
+
+      if (!unorderedMatch && !orderedMatch) return;
+
+      const contentBeforeCursor = text.slice(lineStart, cursor);
+      const contentAfterCursor = text.slice(cursor, lineEnd);
+
+      // Une ligne vide de liste : retire le marqueur et termine la liste.
+      if (
+        (unorderedMatch && !unorderedMatch[2].trim()) ||
+        (orderedMatch && !orderedMatch[3].trim())
+      ) {
+        event.preventDefault();
+
+        const markerLength = unorderedMatch
+          ? unorderedMatch[1].length + 2
+          : orderedMatch[1].length + orderedMatch[2].length + 2;
+
+        const newText =
+          text.slice(0, lineStart) +
+          text.slice(lineStart + markerLength, lineEnd) +
+          text.slice(lineEnd);
+
+        updateText(newText);
+        restoreSelection(lineStart);
+        return;
+      }
+
+      event.preventDefault();
+
+      let nextMarker;
+
+      if (unorderedMatch) {
+        nextMarker = `${unorderedMatch[1]}- `;
+      } else {
+        nextMarker = `${orderedMatch[1]}${Number(orderedMatch[2]) + 1}. `;
+      }
+
+      const insertion = `\n${nextMarker}`;
+
+      const newText =
+        text.slice(0, cursor) + insertion + text.slice(cursor);
+
+      updateText(newText);
+      restoreSelection(cursor + insertion.length);
+    },
+    [
+      text,
+      disabled,
+      updateText,
+      restoreSelection,
+      handleBold,
+      handleItalic,
+    ]
+  );
 
   const btnClass =
     "p-1.5 rounded-lg transition-colors hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed";
@@ -298,24 +416,12 @@ export function RichTextComposer({
         ref={textareaRef}
         value={text}
         onChange={(event) => updateText(event.target.value)}
+        onKeyDown={handleKeyDown}
         placeholder={placeholder}
         rows={rows}
         disabled={disabled}
         className="w-full bg-transparent resize-none outline-none text-sm leading-relaxed"
         style={{ color: COLORS.ivory }}
-        onKeyDown={(event) => {
-          if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
-
-          const key = event.key.toLowerCase();
-
-          if (key === "b") {
-            event.preventDefault();
-            handleBold();
-          } else if (key === "i") {
-            event.preventDefault();
-            handleItalic();
-          }
-        }}
       />
     </div>
   );
