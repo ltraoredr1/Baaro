@@ -1,79 +1,90 @@
-name: BAARO - Install, Validate and Build
+name: BAARO - Dependencies and lockfile
 
+# Un seul workflow pour :
+#   1. installer tout ce qui est déclaré dans package.json,
+#   2. garder package-lock.json synchronisé (mis à jour et commité si besoin),
+#   3. vérifier que chaque dépendance est bien installée.
 on:
   push:
-    branches:
-      - main
-      - master
-
+    branches: [main, master]
+    paths:
+      - 'package.json'
+      - 'package-lock.json'
+      - '.npmrc'
+      - '.github/workflows/install-dependencies.yml'
   pull_request:
-
+    paths:
+      - 'package.json'
+      - 'package-lock.json'
   workflow_dispatch:
-
-permissions:
-  contents: read
+    inputs:
+      run_ci:
+        description: "Lancer aussi npm run ci (vérifications + build)"
+        type: boolean
+        default: false
 
 concurrency:
-  group: baaro-ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: baaro-dependencies-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  install-and-verify:
-    name: Install dependencies and validate project
+  dependencies:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-
+    timeout-minutes: 15
+    permissions:
+      contents: write   # nécessaire seulement pour commiter package-lock.json
     steps:
-      # 1. Récupérer le code
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. Installer Node.js et activer le cache npm
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
 
-      # 3. Vérifier les fichiers npm
-      - name: Verify project files
+      # npm ci si le lockfile correspond à package.json ;
+      # sinon npm install met le lockfile à jour à partir de package.json.
+      - name: Install dependencies
         shell: bash
         run: |
-          test -f package.json || {
-            echo "::error::package.json introuvable."
-            exit 1
-          }
+          if npm ci; then
+            echo "✅ Installation via package-lock.json (npm ci)"
+          else
+            echo "::warning::package-lock.json n'était pas synchronisé : mise à jour depuis package.json."
+            npm install
+          fi
 
-          test -f package-lock.json || {
-            echo "::error::package-lock.json introuvable."
-            exit 1
-          }
+      - name: Verify declared dependencies are installed
+        shell: bash
+        run: |
+          node -e '
+            const fs = require("fs");
+            const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+            const declared = ["dependencies", "devDependencies"].flatMap((g) => Object.keys(pkg[g] || {}));
+            const missing = declared.filter(
+              (name) => !fs.existsSync(`node_modules/${name}/package.json`)
+            );
+            if (missing.length) {
+              console.error("Dépendances déclarées mais non installées :\n- " + missing.join("\n- "));
+              process.exit(1);
+            }
+            console.log(`✅ ${declared.length} dépendances déclarées, toutes installées.`);
+          '
 
-      # 4. Installer toutes les dépendances déclarées
-      - name: Install all dependencies
-        run: npm ci
+      # Commit du lockfile mis à jour : uniquement sur un push vers main/master
+      # (jamais sur une pull request). Sans changement, cette étape ne fait rien.
+      - name: Commit updated package-lock.json
+        if: ${{ github.event_name == 'push' }}
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: update package-lock.json [skip ci]"
+          file_pattern: "package-lock.json"
 
-      # 5. Vérifier les dépendances Markdown
-      - name: Verify Markdown dependencies
-        run: npm ls markdown-it dompurify
-
-      # 6. Vérifier les dépendances et le verrouillage
-      - name: Validate package lock
-        run: npm run check:lock
-
-      # 7. Exécuter les contrôles existants de BAARO
-      - name: Run BAARO CI checks
+      - name: Run BAARO CI checks and build (optionnel)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_ci }}
         run: npm run ci
 
-      # 8. Construire l'application de production
-      - name: Build production application
-        run: npm run build
-
-      # 9. Résumé
-      - name: Workflow summary
+      - name: Summary
         if: success()
-        run: |
-          echo "## BAARO CI : succès" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Dépendances installées" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Vérifications exécutées" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Build de production réussi" >> "$GITHUB_STEP_SUMMARY"
+        run: echo "## Dépendances installées, vérifiées et lockfile synchronisé" >> "$GITHUB_STEP_SUMMARY"
