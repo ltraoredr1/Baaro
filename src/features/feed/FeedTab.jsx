@@ -110,7 +110,6 @@ export function FeedTab({ user_id, onOpenProfile, onRewardPoints }) {
   const [pollOptions, setPollOptions] = useState(["", ""]);
   const [publishToStory, setPublishToStory] = useState(false);
 
-  const [likedPosts, setLikedPosts] = useState({});
   const [commentOpen, setCommentOpen] = useState({});
   const [commentsMap, setCommentsMap] = useState({});
   const [newCommentText, setNewCommentText] = useState({});
@@ -134,7 +133,6 @@ export function FeedTab({ user_id, onOpenProfile, onRewardPoints }) {
   const sentinelRef = useRef(null);
   const postViewRefs = useRef({});
   const postViewedRef = useRef(new Set());
-  const likePendingRef = useRef(new Set());
   const loadMorePendingRef = useRef(false);
   const loadVersionRef = useRef(0);
   const mountedRef = useRef(true);
@@ -336,25 +334,6 @@ export function FeedTab({ user_id, onOpenProfile, onRewardPoints }) {
       setPosts(rows);
       updateCursorFromRows(rows);
 
-      const ids = rows.map((post) => post.id);
-
-      if (meId && ids.length) {
-        const { data: likes, error } = await supabase
-          .from("post_likes")
-          .select("post_id")
-          .eq("user_id", meId)
-          .in("post_id", ids);
-
-        if (error) throw error;
-
-        if (!mountedRef.current || version !== loadVersionRef.current) return;
-
-        setLikedPosts(
-          Object.fromEntries((likes || []).map((like) => [like.post_id, true]))
-        );
-      } else {
-        setLikedPosts({});
-      }
     } catch (error) {
       if (!mountedRef.current || version !== loadVersionRef.current) return;
 
@@ -439,42 +418,6 @@ export function FeedTab({ user_id, onOpenProfile, onRewardPoints }) {
     loadPosts();
   }, [loadPosts]);
 
-  const postIdsKey = posts.map((post) => post.id).join(",");
-
-  useEffect(() => {
-    if (!meId || !postIdsKey) {
-      setLikedPosts({});
-      return;
-    }
-
-    let cancelled = false;
-    const ids = postIdsKey.split(",");
-
-    async function loadLikes() {
-      const { data, error } = await supabase
-        .from("post_likes")
-        .select("post_id")
-        .eq("user_id", meId)
-        .in("post_id", ids);
-
-      if (error) {
-        console.warn("Chargement des likes impossible:", error);
-        return;
-      }
-
-      if (!cancelled) {
-        setLikedPosts(
-          Object.fromEntries((data || []).map((like) => [like.post_id, true]))
-        );
-      }
-    }
-
-    loadLikes();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [meId, postIdsKey]);
 
   useEffect(() => {
     if (
@@ -801,94 +744,15 @@ export function FeedTab({ user_id, onOpenProfile, onRewardPoints }) {
     }
   };
 
-  const handleLike = async (postId) => {
-    if (!meId) {
-      showToast("Vous devez être connecté", "error");
-      return;
-    }
-
-    if (likePendingRef.current.has(postId)) return;
-
-    const limit = checkRateLimit("like", {
-      max: 30,
-      windowMs: 60_000,
-    });
-
-    if (!limit.allowed) {
-      showToast(rateLimitMessage(limit.retryAfterSec), "error");
-      return;
-    }
-
-    likePendingRef.current.add(postId);
-
-    const isLiked = !!likedPosts[postId];
-
-    setLikedPosts((previous) => ({
-      ...previous,
-      [postId]: !isLiked,
-    }));
-
-    setPosts((previous) =>
-      previous.map((post) =>
-        post.id === postId
-          ? {
-              ...post,
-              likes: Math.max(
-                0,
-                (post.likes || 0) + (isLiked ? -1 : 1)
-              ),
-            }
-          : post
-      )
-    );
-
-    try {
-      if (isLiked) {
-        const { error } = await supabase
-          .from("post_likes")
-          .delete()
-          .eq("post_id", postId)
-          .eq("user_id", meId);
-
-        if (error) throw error;
-      } else {
-        const { error } = await supabase
-          .from("post_likes")
-          .insert({
-            post_id: postId,
-            user_id: meId,
-          });
-
-        if (error) throw error;
-
-        onRewardPoints?.("like_post", "J'aime distribué", postId);
-        showPointsReward?.(2, "J'aime distribué");
-      }
-    } catch (error) {
-      setLikedPosts((previous) => ({
-        ...previous,
-        [postId]: isLiked,
-      }));
-
-      setPosts((previous) =>
-        previous.map((post) =>
-          post.id === postId
-            ? {
-                ...post,
-                likes: Math.max(
-                  0,
-                  (post.likes || 0) + (isLiked ? 1 : -1)
-                ),
-              }
-            : post
-        )
-      );
-
-      handleDbError(error, showToast, "Impossible d'aimer");
-    } finally {
-      likePendingRef.current.delete(postId);
-    }
-  };
+  // Le like lui-même est géré par SocialPostEnhancements (un seul système).
+  // FeedTab ne fait qu'attribuer les points.
+  const handlePostLiked = useCallback(
+    (postId) => {
+      onRewardPoints?.("like_post", "J'aime distribué", postId);
+      showPointsReward?.(2, "J'aime distribué");
+    },
+    [onRewardPoints, showPointsReward]
+  );
 
   const loadComments = async (postId) => {
     if (!postId) return;
@@ -1601,6 +1465,7 @@ export function FeedTab({ user_id, onOpenProfile, onRewardPoints }) {
                   <SocialPostEnhancements
                     post={post}
                     user_id={meId}
+                    onLiked={handlePostLiked}
                   />
 
                   <div
