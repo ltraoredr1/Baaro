@@ -1,6 +1,6 @@
+
 package com.baaro.nearby
 
-import android.Manifest
 import com.getcapacitor.JSObject
 import com.getcapacitor.Plugin
 import com.getcapacitor.PluginCall
@@ -8,7 +8,21 @@ import com.getcapacitor.PluginMethod
 import com.getcapacitor.annotation.CapacitorPlugin
 import com.getcapacitor.annotation.Permission
 import com.google.android.gms.nearby.Nearby
-import com.google.android.gms.nearby.connection.*
+import com.google.android.gms.nearby.connection.AdvertisingOptions
+import com.google.android.gms.nearby.connection.ConnectionInfo
+import com.google.android.gms.nearby.connection.ConnectionLifecycleCallback
+import com.google.android.gms.nearby.connection.ConnectionResolution
+import com.google.android.gms.nearby.connection.ConnectionsClient
+import com.google.android.gms.nearby.connection.DiscoveredEndpointInfo
+import com.google.android.gms.nearby.connection.DiscoveryOptions
+import com.google.android.gms.nearby.connection.EndpointDiscoveryCallback
+import com.google.android.gms.nearby.connection.Payload
+import com.google.android.gms.nearby.connection.PayloadCallback
+import com.google.android.gms.nearby.connection.PayloadTransferUpdate
+import com.google.android.gms.nearby.connection.Strategy
+import com.google.android.gms.tasks.Task
+import com.google.android.gms.tasks.Tasks
+import android.Manifest
 
 @CapacitorPlugin(
     name = "NearbyChat",
@@ -29,164 +43,412 @@ import com.google.android.gms.nearby.connection.*
 )
 class NearbyChatPlugin : Plugin() {
 
+    companion object {
+        private const val SERVICE_ID = "com.baaro.app.nearby"
+        private const val DEFAULT_DISPLAY_NAME = "Utilisateur BAARO"
+    }
+
     private lateinit var connectionsClient: ConnectionsClient
+
     private val strategy = Strategy.P2P_CLUSTER
-    private val serviceId = "com.baaro.app.nearby"
-    private var myDisplayName: String = "Utilisateur BAARO"
+
+    // Appareils découverts ou en attente d'une décision.
+    private val endpointNames = mutableMapOf<String, String>()
+    private val pendingEndpoints = mutableSetOf<String>()
+
+    // Uniquement les connexions réellement établies.
     private val connectedEndpoints = mutableMapOf<String, String>()
 
+    private var isStarting = false
+    private var isStarted = false
+    private var isStopping = false
+    private var displayName = DEFAULT_DISPLAY_NAME
+
+    private fun client(): ConnectionsClient {
+        if (!::connectionsClient.isInitialized) {
+            connectionsClient = Nearby.getConnectionsClient(activity)
+        }
+        return connectionsClient
+    }
+
+    private fun emit(type: String, endpointId: String? = null, extras: JSObject.() -> Unit = {}) {
+        val event = JSObject()
+        event.put("type", type)
+
+        if (endpointId != null) {
+            event.put("endpointId", endpointId)
+        }
+
+        event.extras()
+        notifyListeners("nearbyEvent", event)
+    }
+
+    private fun emitError(message: String) {
+        emit("ERROR") {
+            put("message", message)
+        }
+    }
+
+    private fun rejectPendingState(endpointId: String) {
+        pendingEndpoints.remove(endpointId)
+        connectedEndpoints.remove(endpointId)
+        endpointNames.remove(endpointId)
+    }
+
     private val payloadCallback = object : PayloadCallback() {
+
         override fun onPayloadReceived(endpointId: String, payload: Payload) {
-            if (payload.type == Payload.Type.BYTES) {
-                val message = String(payload.asBytes()!!)
-                val senderName = connectedEndpoints[endpointId] ?: "Inconnu"
+            if (payload.type != Payload.Type.BYTES) return
 
-                val ret = JSObject().apply {
-                    put("type", "MESSAGE_RECEIVED")
-                    put("endpointId", endpointId)
-                    put("senderName", senderName)
-                    put("text", message)
-                }
-                notifyListeners("nearbyEvent", ret)
+            val bytes = payload.asBytes() ?: return
+            val message = String(bytes, Charsets.UTF_8)
+
+            emit("MESSAGE_RECEIVED", endpointId) {
+                put(
+                    "senderName",
+                    connectedEndpoints[endpointId] ?: "Inconnu"
+                )
+                put("text", message)
             }
         }
 
-        override fun onPayloadTransferUpdate(endpointId: String, update: PayloadTransferUpdate) {}
+        override fun onPayloadTransferUpdate(
+            endpointId: String,
+            update: PayloadTransferUpdate
+        ) {
+            // Les mises à jour de transfert ne sont pas exposées
+            // pour le moment afin de conserver le contrat actuel.
+        }
     }
 
-    private val connectionLifecycleCallback = object : ConnectionLifecycleCallback() {
-        override fun onConnectionInitiated(endpointId: String, connectionInfo: ConnectionInfo) {
-            // On sauvegarde temporairement le nom associé à cet endpoint
-            connectedEndpoints[endpointId] = connectionInfo.endpointName
+    private val connectionLifecycleCallback =
+        object : ConnectionLifecycleCallback() {
 
-            val ret = JSObject().apply {
-                put("type", "CONNECTION_REQUESTED")
-                put("endpointId", endpointId)
-                put("deviceName", connectionInfo.endpointName)
-            }
-            notifyListeners("nearbyEvent", ret)
-            connectionsClient.acceptConnection(endpointId, payloadCallback)
-        }
+            override fun onConnectionInitiated(
+                endpointId: String,
+                connectionInfo: ConnectionInfo
+            ) {
+                endpointNames[endpointId] = connectionInfo.endpointName
+                pendingEndpoints.add(endpointId)
 
-        override fun onConnectionResult(endpointId: String, result: ConnectionResolution) {
-            if (result.status.isSuccess) {
-                val name = connectedEndpoints[endpointId] ?: "Appareil distant"
-
-                val ret = JSObject().apply {
-                    put("type", "DEVICE_CONNECTED")
-                    put("endpointId", endpointId)
-                    put("deviceName", name)
+                // IMPORTANT : aucune acceptation automatique.
+                // L'interface doit appeler accept() ou reject().
+                emit("CONNECTION_REQUESTED", endpointId) {
+                    put("deviceName", connectionInfo.endpointName)
                 }
-                notifyListeners("nearbyEvent", ret)
-            } else {
+            }
+
+            override fun onConnectionResult(
+                endpointId: String,
+                result: ConnectionResolution
+            ) {
+                pendingEndpoints.remove(endpointId)
+
+                if (result.status.isSuccess) {
+                    val name =
+                        endpointNames[endpointId] ?: "Appareil distant"
+
+                    connectedEndpoints[endpointId] = name
+
+                    emit("DEVICE_CONNECTED", endpointId) {
+                        put("deviceName", name)
+                    }
+                } else {
+                    connectedEndpoints.remove(endpointId)
+
+                    emit("ERROR") {
+                        put(
+                            "message",
+                            "La connexion avec ${endpointNames[endpointId] ?: "l'appareil distant"} a échoué."
+                        )
+                    }
+
+                    endpointNames.remove(endpointId)
+                }
+            }
+
+            override fun onDisconnected(endpointId: String) {
+                val name = endpointNames[endpointId]
+
                 connectedEndpoints.remove(endpointId)
+                pendingEndpoints.remove(endpointId)
+                endpointNames.remove(endpointId)
+
+                emit("DEVICE_LOST", endpointId) {
+                    if (name != null) put("deviceName", name)
+                }
             }
         }
 
-        override fun onDisconnected(endpointId: String) {
-            connectedEndpoints.remove(endpointId)
-            val ret = JSObject().apply {
-                put("type", "DEVICE_LOST")
-                put("endpointId", endpointId)
-            }
-            notifyListeners("nearbyEvent", ret)
-        }
-    }
+    private val endpointDiscoveryCallback =
+        object : EndpointDiscoveryCallback() {
 
-    private val endpointDiscoveryCallback = object : EndpointDiscoveryCallback() {
-        override fun onEndpointFound(endpointId: String, info: DiscoveredEndpointInfo) {
-            connectedEndpoints[endpointId] = info.endpointName
-            val ret = JSObject().apply {
-                put("type", "DEVICE_FOUND")
-                put("endpointId", endpointId)
-                put("deviceName", info.endpointName)
-                put("serviceId", info.serviceId)
-            }
-            notifyListeners("nearbyEvent", ret)
-        }
+            override fun onEndpointFound(
+                endpointId: String,
+                info: DiscoveredEndpointInfo
+            ) {
+                endpointNames[endpointId] = info.endpointName
 
-        override fun onEndpointLost(endpointId: String) {
-            connectedEndpoints.remove(endpointId)
-            val ret = JSObject().apply {
-                put("type", "DEVICE_LOST")
-                put("endpointId", endpointId)
+                emit("DEVICE_FOUND", endpointId) {
+                    put("deviceName", info.endpointName)
+                    put("serviceId", info.serviceId)
+                }
             }
-            notifyListeners("nearbyEvent", ret)
+
+            override fun onEndpointLost(endpointId: String) {
+                // Un appareil peut sortir de la portée de découverte
+                // tout en restant connecté : ne pas déconnecter ici.
+                if (!connectedEndpoints.containsKey(endpointId) &&
+                    !pendingEndpoints.contains(endpointId)
+                ) {
+                    endpointNames.remove(endpointId)
+                }
+
+                emit("DEVICE_LOST", endpointId)
+            }
         }
-    }
 
     @PluginMethod
     fun start(call: PluginCall) {
-        myDisplayName = call.getString("displayName") ?: "Utilisateur BAARO"
-        connectionsClient = Nearby.getConnectionsClient(activity)
+        if (isStarting || isStopping) {
+            call.reject("Une opération Nearby est déjà en cours.")
+            return
+        }
 
-        val advertisingOptions = AdvertisingOptions.Builder().setStrategy(strategy).build()
-        connectionsClient.startAdvertising(
-            myDisplayName,
-            serviceId,
+        if (isStarted) {
+            call.resolve(JSObject().apply { put("success", true) })
+            return
+        }
+
+        displayName = call.getString("displayName")
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?: DEFAULT_DISPLAY_NAME
+
+        isStarting = true
+
+        val advertisingOptions = AdvertisingOptions.Builder()
+            .setStrategy(strategy)
+            .build()
+
+        client().startAdvertising(
+            displayName,
+            SERVICE_ID,
             connectionLifecycleCallback,
             advertisingOptions
         ).addOnSuccessListener {
-            val discoveryOptions = DiscoveryOptions.Builder().setStrategy(strategy).build()
-            connectionsClient.startDiscovery(
-                serviceId,
+            val discoveryOptions = DiscoveryOptions.Builder()
+                .setStrategy(strategy)
+                .build()
+
+            client().startDiscovery(
+                SERVICE_ID,
                 endpointDiscoveryCallback,
                 discoveryOptions
             ).addOnSuccessListener {
-                call.resolve(JSObject().apply { put("success", true) })
-            }.addOnFailureListener { e ->
-                call.reject("Erreur découverte: " + e.message)
+                isStarting = false
+                isStarted = true
+
+                call.resolve(
+                    JSObject().apply { put("success", true) }
+                )
+            }.addOnFailureListener { error ->
+                // La découverte a échoué : tenter de fermer la publicité.
+                client().stopAdvertising()
+                    .addOnCompleteListener {
+                        isStarting = false
+                        isStarted = false
+
+                        call.reject(
+                            "Échec de la découverte Nearby : ${error.message}"
+                        )
+                    }
             }
-        }.addOnFailureListener { e ->
-            call.reject("Erreur diffusion: " + e.message)
+        }.addOnFailureListener { error ->
+            isStarting = false
+            isStarted = false
+
+            call.reject(
+                "Échec de la diffusion Nearby : ${error.message}"
+            )
         }
     }
 
     @PluginMethod
     fun stop(call: PluginCall) {
-        try {
-            connectionsClient.stopAdvertising()
-            connectionsClient.stopDiscovery()
-            connectedEndpoints.clear()
-            call.resolve(JSObject().apply { put("success", true) })
-        } catch (e: Exception) {
-            call.reject("Erreur arrêt: " + e.message)
+        if (isStopping) {
+            call.reject("L'arrêt de Nearby est déjà en cours.")
+            return
         }
+
+        isStopping = true
+
+        if (!::connectionsClient.isInitialized) {
+            clearConnectionState()
+            isStarted = false
+            isStarting = false
+            isStopping = false
+
+            call.resolve(JSObject().apply { put("success", true) })
+            return
+        }
+
+        val tasks = mutableListOf<Task<Void>>()
+
+        tasks.add(client().stopAdvertising())
+        tasks.add(client().stopDiscovery())
+
+        val endpoints = (
+            connectedEndpoints.keys +
+            pendingEndpoints
+        ).toSet()
+
+        endpoints.forEach { endpointId ->
+            tasks.add(client().disconnectFromEndpoint(endpointId))
+        }
+
+        Tasks.whenAllComplete(tasks)
+            .addOnCompleteListener {
+                val failures = tasks.mapNotNull { task ->
+                    if (task.isCanceled) {
+                        "Une opération d'arrêt a été annulée."
+                    } else {
+                        task.exception?.message
+                    }
+                }
+
+                clearConnectionState()
+                isStarted = false
+                isStarting = false
+                isStopping = false
+
+                if (failures.isNotEmpty()) {
+                    call.reject(
+                        "Nearby n'a pas pu s'arrêter proprement : " +
+                            failures.joinToString("; ")
+                    )
+                } else {
+                    call.resolve(
+                        JSObject().apply { put("success", true) }
+                    )
+                }
+            }
+    }
+
+    private fun clearConnectionState() {
+        connectedEndpoints.clear()
+        pendingEndpoints.clear()
+        endpointNames.clear()
     }
 
     @PluginMethod
     fun send(call: PluginCall) {
-        val text = call.getString("text") ?: ""
-        val endpointId = call.getString("endpointId")
+        val text = call.getString("text")
 
-        if (text.isEmpty()) {
-            call.reject("Message vide")
+        if (text.isNullOrBlank()) {
+            call.reject("Le message ne peut pas être vide.")
             return
         }
 
-        val payload = Payload.fromBytes(text.toByteArray())
-
-        if (endpointId != null) {
-            connectionsClient.sendPayload(endpointId, payload)
-        } else {
-            connectedEndpoints.keys.forEach { id ->
-                connectionsClient.sendPayload(id, payload)
-            }
+        if (!::connectionsClient.isInitialized || !isStarted || isStopping) {
+            call.reject("Nearby n'est pas démarré.")
+            return
         }
-        call.resolve(JSObject().apply { put("success", true) })
+
+        val requestedEndpoint = call.getString("endpointId")
+
+        val targets = if (!requestedEndpoint.isNullOrBlank()) {
+            if (!connectedEndpoints.containsKey(requestedEndpoint)) {
+                call.reject("Cet appareil n'est pas connecté.")
+                return
+            }
+            listOf(requestedEndpoint)
+        } else {
+            connectedEndpoints.keys.toList()
+        }
+
+        if (targets.isEmpty()) {
+            call.reject("Aucun appareil Nearby n'est connecté.")
+            return
+        }
+
+        val payload = Payload.fromBytes(text.toByteArray(Charsets.UTF_8))
+
+        val tasks = targets.map { endpointId ->
+            client().sendPayload(endpointId, payload)
+        }
+
+        Tasks.whenAll(tasks)
+            .addOnSuccessListener {
+                call.resolve(
+                    JSObject().apply {
+                        put("success", true)
+                        put("sentTo", targets.size)
+                    }
+                )
+            }
+            .addOnFailureListener { error ->
+                call.reject(
+                    "Échec de l'envoi Nearby : ${error.message}"
+                )
+            }
     }
 
     @PluginMethod
     fun accept(call: PluginCall) {
-        val endpointId = call.getString("endpointId") ?: return call.reject("endpointId manquant")
-        connectionsClient.acceptConnection(endpointId, payloadCallback)
-        call.resolve(JSObject().apply { put("success", true) })
+        val endpointId = call.getString("endpointId")
+
+        if (endpointId.isNullOrBlank()) {
+            call.reject("endpointId manquant.")
+            return
+        }
+
+        if (!pendingEndpoints.contains(endpointId)) {
+            call.reject("Aucune demande de connexion en attente pour cet appareil.")
+            return
+        }
+
+        client().acceptConnection(endpointId, payloadCallback)
+            .addOnSuccessListener {
+                call.resolve(
+                    JSObject().apply { put("success", true) }
+                )
+            }
+            .addOnFailureListener { error ->
+                call.reject(
+                    "Impossible d'accepter la connexion : ${error.message}"
+                )
+            }
     }
 
     @PluginMethod
     fun reject(call: PluginCall) {
-        val endpointId = call.getString("endpointId") ?: return call.reject("endpointId manquant")
-        connectionsClient.rejectConnection(endpointId)
-        call.resolve(JSObject().apply { put("success", true) })
+        val endpointId = call.getString("endpointId")
+
+        if (endpointId.isNullOrBlank()) {
+            call.reject("endpointId manquant.")
+            return
+        }
+
+        if (!pendingEndpoints.contains(endpointId)) {
+            call.reject("Aucune demande de connexion en attente pour cet appareil.")
+            return
+        }
+
+        client().rejectConnection(endpointId)
+            .addOnSuccessListener {
+                pendingEndpoints.remove(endpointId)
+                connectedEndpoints.remove(endpointId)
+                endpointNames.remove(endpointId)
+
+                call.resolve(
+                    JSObject().apply { put("success", true) }
+                )
+            }
+            .addOnFailureListener { error ->
+                call.reject(
+                    "Impossible de refuser la connexion : ${error.message}"
+                )
+            }
     }
 }
