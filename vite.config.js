@@ -43,6 +43,10 @@ export default defineConfig({
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
         globIgnores: ['**/node_modules/**/*', 'sw.js', 'workbox-*.js'],
         navigateFallback: null, // IMPORTANT pour Capacitor - sinon écran blanc en natif
+        // Prend le contrôle immédiatement et supprime les anciens caches
+        clientsClaim: true,
+        skipWaiting: true,
+        cleanupOutdatedCaches: true,
         runtimeCaching: [
           {
             urlPattern: /^https:\/\/.*\.supabase\.co\/.*/i,
@@ -59,13 +63,21 @@ export default defineConfig({
             }
           },
           {
-            urlPattern: /\.(?:png|jpg|jpeg|svg|gif|webp)$/,
+            // Images du site UNIQUEMENT (même origine).
+            // Les images R2 (photos de profil, couverture, posts) ne passent
+            // plus par le service worker : le navigateur les charge directement,
+            // ce qui évite d'être bloqué par la règle connect-src de la CSP.
+            urlPattern: ({ url, sameOrigin }) =>
+              sameOrigin && /\.(?:png|jpg|jpeg|svg|gif|webp)$/i.test(url.pathname),
             handler: 'CacheFirst',
             options: {
-              cacheName: 'images-cache',
+              cacheName: 'images-cache-v2',
               expiration: {
                 maxEntries: 100,
                 maxAgeSeconds: 60 * 60 * 24 * 7
+              },
+              cacheableResponse: {
+                statuses: [200]
               }
             }
           }
