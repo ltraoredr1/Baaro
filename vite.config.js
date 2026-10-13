@@ -78,12 +78,26 @@ export default defineConfig({
   ],
   build: {
     outDir: 'dist',
+    chunkSizeWarningLimit: 1000,
     rollupOptions: {
       input: resolve(__dirname, 'index.html'),
       output: {
-        manualChunks: {
-          vendor: ['react', 'react-dom', 'react-router-dom'],
-          supabase: ['@supabase/supabase-js']
+        manualChunks(id) {
+          if (!id.includes('node_modules')) {
+            // Gros composants = chunks séparés lazy
+            if (id.includes('DiscoverHub')) return 'discover'
+            if (id.includes('CommunityTab') || id.includes('EnterprisesTab')) return 'community'
+            if (id.includes('VideoTranslate')) return 'video'
+            if (id.includes('EngagementList') || id.includes('FriendRequest')) return 'social'
+            return null
+          }
+          // Vendors séparés intelligemment
+          if (id.includes('@supabase')) return 'supabase'
+          if (id.includes('@capacitor')) return 'capacitor'
+          if (id.includes('react-router')) return 'router'
+          if (id.includes('react-dom') || id.includes('react/')) return 'react-vendor'
+          if (id.includes('lucide-react') || id.includes('framer-motion')) return 'ui'
+          return 'vendor'
         }
       }
     }
