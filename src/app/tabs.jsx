@@ -1,11 +1,16 @@
 import { lazy } from "react";
 
-// Retry si chunk Vercel/Supabase supprimé - fix "Failed to fetch dynamically imported module"
+// Retry si chunk Vercel supprimé - version safe qui ne fait pas écran noir
 function lazyRetry(importFn, name) {
   return lazy(async () => {
-    const tryImport = async (retries = 2) => {
+    const tryImport = async (retries = 1) => {
       try {
-        return await importFn();
+        const mod = await importFn();
+        // Vérifie que le module a bien un default
+        if (!mod || (!mod.default && Object.keys(mod).length === 0)) {
+          throw new Error(`Module ${name} vide`);
+        }
+        return mod;
       } catch (err) {
         const msg = String(err?.message || err || "");
         const isChunkError =
@@ -15,19 +20,19 @@ function lazyRetry(importFn, name) {
           msg.includes("Importing a module script failed");
 
         if (isChunkError && retries > 0) {
-          console.warn(`[BAARO] Chunk ${name} obsolète, retry...`, { retries, msg });
-          await new Promise((r) => setTimeout(r, 600));
+          console.warn(`[BAARO] Chunk ${name} obsolète, retry...`, { retries });
+          await new Promise((r) => setTimeout(r, 800));
           return tryImport(retries - 1);
         }
 
-        // Dernier essai : force reload une seule fois toutes les 15s
         if (isChunkError) {
-          const key = "baaro_chunk_reload_tabs";
+          const key = `baaro_chunk_reload_${name}`;
           const lastReload = Number(sessionStorage.getItem(key) || 0);
           if (Date.now() - lastReload > 15000) {
             sessionStorage.setItem(key, String(Date.now()));
             console.warn(`[BAARO] Reload forcé pour chunk ${name}`);
             window.location.reload();
+            await new Promise((r) => setTimeout(r, 2000));
           }
         }
         throw err;
@@ -58,17 +63,3 @@ export const tabs = {
 };
 
 export const TAB_IDS = Object.keys(tabs);
-
-// Preload tabs critiques en background (optionnel mais recommandé)
-if (typeof window !== "undefined") {
-  const preloadCritical = () => {
-    tabs.feed._payload?._result || import("../features/feed/index.js");
-    tabs.messages._payload?._result || import("../features/messaging/index.js");
-  };
-  // Après idle ou 3s
-  if ("requestIdleCallback" in window) {
-    window.requestIdleCallback(preloadCritical, { timeout: 3000 });
-  } else {
-    setTimeout(preloadCritical, 3000);
-  }
-}
