@@ -7,6 +7,7 @@ import { COLORS } from "../../theme.js";
 import { supabase } from "../../supabaseClient.js";
 import { useToast } from "../../components/ToastContext.jsx";
 import TranslatedText from "../../components/TranslatedText.jsx";
+import { checkRateLimit, rateLimitMessage } from "../../lib/rateLimit.js";
 
 function isValidAuthUserId(value) {
   if (typeof value !== "string" || !value.trim()) return false;
@@ -419,12 +420,11 @@ export const PollCard = memo(function PollCard({ postId, user_id }) {
    ========================================================= */
 
 export const SocialPostEnhancements = memo(
-  function SocialPostEnhancements({ post, user_id }) {
+  function SocialPostEnhancements({ post, user_id, onLiked }) {
     const { showToast } = useToast();
 
     const [reaction, setReaction] = useState(null);
     const [reactionCount, setReactionCount] = useState(0);
-    const [picker, setPicker] = useState(false);
     const [saved, setSaved] = useState(false);
     const [shareCount, setShareCount] = useState(0);
     const [following, setFollowing] = useState(false);
@@ -538,6 +538,15 @@ export const SocialPostEnhancements = memo(
 
       if (!post?.id || busy) return;
 
+      const isUnlike = reaction === "like" && value === "like";
+      if (!isUnlike) {
+        const limit = checkRateLimit("like", { max: 30, windowMs: 60_000 });
+        if (!limit.allowed) {
+          showToast(rateLimitMessage(limit.retryAfterSec), "error");
+          return;
+        }
+      }
+
       setBusy(true);
       setPop(true);
 
@@ -553,7 +562,6 @@ export const SocialPostEnhancements = memo(
 
           setReaction(null);
           setReactionCount((count) => Math.max(0, count - 1));
-          setPicker(false);
 
           await load();
           return;
@@ -569,7 +577,7 @@ export const SocialPostEnhancements = memo(
         if (error) throw error;
 
         setReaction("like");
-        setPicker(false);
+        onLiked?.(post.id);
 
         await load();
       } catch (error) {
@@ -802,10 +810,10 @@ export const SocialPostEnhancements = memo(
         <div className="relative">
           <button
             type="button"
-            onClick={() => setPicker((value) => !value)}
+            onClick={() => chooseReaction("like")}
             disabled={busy}
-            aria-expanded={picker}
-            aria-label="Réagir à cette publication"
+            aria-pressed={reaction === "like"}
+            aria-label={reaction === "like" ? "Retirer mon J’aime" : "J’aime"}
             className="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-xs border transition-all duration-200 active:scale-95 disabled:opacity-50"
             style={{
               borderColor: COLORS.border,
@@ -828,40 +836,6 @@ export const SocialPostEnhancements = memo(
               {reactionCount || "J’aime"}
             </span>
           </button>
-
-          {picker && (
-            <div
-              className="absolute bottom-full left-0 z-30 mb-1 flex gap-1 rounded-xl border p-2 shadow-xl transition-all duration-200 ease-out"
-              style={{
-                background: COLORS.surface,
-                borderColor: COLORS.borderGold,
-              }}
-            >
-              {REACTIONS.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  title={item.title}
-                  aria-label={item.title}
-                  onClick={() => chooseReaction(item.id)}
-                  disabled={busy}
-                  className="rounded-lg p-1.5 text-lg transition-transform duration-200 hover:scale-125 hover:bg-white/10 active:scale-90 disabled:opacity-50"
-                >
-                  {item.label}
-                </button>
-              ))}
-
-              <button
-                type="button"
-                title="Fermer"
-                aria-label="Fermer les réactions"
-                onClick={() => setPicker(false)}
-                className="rounded-lg p-1.5"
-              >
-                <X size={15} />
-              </button>
-            </div>
-          )}
         </div>
 
         <button
