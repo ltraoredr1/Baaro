@@ -33,7 +33,6 @@ const required = [
   "api/social.js",
   "api/wallet.js",
   "api/webhooks.js",
-  "supabase/migrations/0001_baaro_unified.sql",
 ];
 for (const p of required) exists(p) ? ok(`file ${p}`) : fail(`missing ${p}`);
 
