@@ -22,17 +22,17 @@ export default defineConfig({
         background_color: '#0a0a0a',
         display: 'standalone',
         orientation: 'portrait',
-        scope: '/',
-        start_url: '/',
+        scope: './',
+        start_url: './',
         icons: [
           {
-            src: '/icon-192.png',
+            src: 'icon-192.png',
             sizes: '192x192',
             type: 'image/png',
             purpose: 'any'
           },
           {
-            src: '/icon-512.png',
+            src: 'icon-512.png',
             sizes: '512x512',
             type: 'image/png',
             purpose: 'maskable'
@@ -42,7 +42,7 @@ export default defineConfig({
       workbox: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
         globIgnores: ['**/node_modules/**/*', 'sw.js', 'workbox-*.js'],
-        navigateFallback: null, // IMPORTANT pour Capacitor - sinon écran blanc en natif
+        navigateFallback: null,
         runtimeCaching: [
           {
             urlPattern: /^https:\/\/.*\.supabase\.co\/.*/i,
@@ -65,7 +65,7 @@ export default defineConfig({
               cacheName: 'images-cache',
               expiration: {
                 maxEntries: 100,
-                maxAgeSeconds: 60 * 60 * 24 * 7 // 7 jours au lieu de 30
+                maxAgeSeconds: 60 * 60 * 24 * 7
               }
             }
           }
@@ -78,12 +78,39 @@ export default defineConfig({
   ],
   build: {
     outDir: 'dist',
+    chunkSizeWarningLimit: 1000,
     rollupOptions: {
       input: resolve(__dirname, 'index.html'),
       output: {
-        manualChunks: {
-          vendor: ['react', 'react-dom', 'react-router-dom'],
-          supabase: ['@supabase/supabase-js']
+        manualChunks(id) {
+          // Code applicatif (lazy chunks)
+          if (!id.includes('node_modules')) {
+            if (id.includes('DiscoverHub')) return 'discover';
+            if (id.includes('CommunityTab') || id.includes('EnterprisesTab')) return 'community';
+            if (id.includes('VideoTranslate')) return 'video';
+            if (id.includes('EngagementList') || id.includes('FriendRequest')) return 'social';
+            return null;
+          }
+
+          // React + dépendances critiques → même chunk (évite createContext undefined)
+          if (
+            id.includes('node_modules/react/') ||
+            id.includes('node_modules/react-dom/') ||
+            id.includes('node_modules/scheduler/') ||
+            id.includes('react-router') ||
+            id.includes('react-redux') ||
+            id.includes('@reduxjs/toolkit') ||
+            id.includes('react-i18next') ||
+            id.includes('i18next')
+          ) {
+            return 'react-vendor';
+          }
+
+          if (id.includes('@supabase')) return 'supabase';
+          if (id.includes('@capacitor')) return 'capacitor';
+          if (id.includes('lucide-react') || id.includes('framer-motion')) return 'ui';
+
+          return 'vendor';
         }
       }
     }
