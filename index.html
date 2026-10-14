@@ -12,19 +12,15 @@
       content="BAARO : réseau social international pour publier, créer, discuter, découvrir et collaborer."
     />
     <meta name="theme-color" content="#FAF7F0" />
-    <meta name="color-scheme" content="light dark" />
+    <meta name="color-scheme" content="light" />
 
-    <!-- Applique le thème enregistré avant le premier affichage (évite le flash) -->
+    <!-- Thème unique : clair (crème / or). Évite tout flash au chargement. -->
     <script>
       try {
-        var t = localStorage.getItem('baaro_theme') || 'light';
         var r = document.documentElement;
-        r.setAttribute('data-theme', t);
-        r.setAttribute('data-mode', t === 'light' ? 'light' : 'dark');
-        var bgs = { light:'#FAF7F0', midnight:'#0B1220', oled:'#000000', emerald:'#061A14',
-                    sunset:'#2A1215', ocean:'#0A1628', forest:'#0E1F14', desert:'#1F1A14' };
-        var m = document.querySelector('meta[name="theme-color"]');
-        if (m && bgs[t]) m.setAttribute('content', bgs[t]);
+        r.setAttribute('data-theme', 'light');
+        r.setAttribute('data-mode', 'light');
+        localStorage.setItem('baaro_theme', 'light');
       } catch (e) {}
     </script>
 
@@ -51,7 +47,6 @@
     <meta property="og:type" content="website" />
   </head>
   <body>
-    <a class="skip-link" href="#main-content">Aller au contenu</a>
     <div id="root"></div>
     <script type="module" src="./src/main.jsx"></script>
   </body>
