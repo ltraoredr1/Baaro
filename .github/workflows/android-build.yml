@@ -1,8 +1,9 @@
+
 name: Build Android APK
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
@@ -16,38 +17,57 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
 
-      - uses: actions/setup-java@v5
+      - name: Setup Java
+        uses: actions/setup-java@v5
         with:
           java-version: 21
           distribution: temurin
 
-      # compileSdk / targetSdk = 36 (android/variables.gradle)
-      - uses: android-actions/setup-android@v3
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
         with:
           packages: platform-tools platforms;android-36 build-tools;36.0.0
 
-      - uses: gradle/actions/setup-gradle@v4
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
 
-      - name: Verify secrets & version
+      - name: Verify required secrets
+        shell: bash
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
         run: |
-          echo "Build commit: ${{ github.sha }}"
-          echo "Build date: $(date)"
-          if [ -z "${{ secrets.VITE_SUPABASE_URL }}" ]; then echo "❌ VITE_SUPABASE_URL manquant"; exit 1; else echo "✅ VITE_SUPABASE_URL OK"; fi
-          if [ -z "${{ secrets.VITE_SUPABASE_ANON_KEY }}" ]; then echo "❌ VITE_SUPABASE_ANON_KEY manquant"; exit 1; else echo "✅ VITE_SUPABASE_ANON_KEY OK"; fi
+          set -euo pipefail
 
-      # Installation reproductible depuis package-lock.json (.npmrc gère legacy-peer-deps)
+          if [[ -z "${VITE_SUPABASE_URL:-}" ]]; then
+            echo "::error::Le secret VITE_SUPABASE_URL est manquant."
+            exit 1
+          fi
+
+          if [[ -z "${VITE_SUPABASE_ANON_KEY:-}" ]]; then
+            echo "::error::Le secret VITE_SUPABASE_ANON_KEY est manquant."
+            exit 1
+          fi
+
+          echo "Les secrets Supabase requis sont présents."
+          echo "Commit : ${GITHUB_SHA}"
+          echo "Date UTC : $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+
       - name: Install dependencies
         run: npm ci
 
-      - name: Build web
+      - name: Build web application
         run: npx vite build
         env:
           VITE_APP_ENV: production
@@ -62,14 +82,31 @@ jobs:
       - name: Sync Capacitor
         run: npx cap sync android
 
-      - name: Build APK
+      - name: Build debug APK
         working-directory: android
+        shell: bash
         run: |
+          set -euo pipefail
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon
 
-      - uses: actions/upload-artifact@v4
+      - name: Verify APK exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="android/app/build/outputs/apk/debug/app-debug.apk"
+
+          if [[ ! -s "$APK" ]]; then
+            echo "::error::APK absent ou vide : $APK"
+            exit 1
+          fi
+
+          ls -lh "$APK"
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
         with:
           name: app-debug-${{ github.sha }}
           path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+          retention-days: 14
