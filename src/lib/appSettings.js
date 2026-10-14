@@ -120,6 +120,19 @@ export function isAutoplayOn() {
   return !!getSetting("autoplay_video");
 }
 
+/**
+ * Fonction exportée demandée par initPerf.js pour déterminer
+ * si le préchargement des ressources doit être exécuté.
+ */
+export function shouldPrefetch() {
+  var settings = loadLocalSettings();
+  if (!settings.smart_prefetch) return false;
+  if (settings.data_saver || settings.low_bandwidth_mode || settings.battery_saver) {
+    return false;
+  }
+  return true;
+}
+
 function pickCloudPayload(settings, userId) {
   var payload = {
     user_id: userId,
