@@ -8,12 +8,13 @@ import {
   Sparkles,
 } from "lucide-react";
 
-// Imports via l'alias absolu configuré (@/ -> src/)
+// Imports via l'alias absolu (@/ -> src/)
 import { COLORS } from "@/theme.js";
 import { useToast } from "@/components/ToastContext.jsx";
 import { supabase } from "@/supabaseClient.js";
 import { handleDbError } from "@/lib/dbErrors.js";
-import { fetchFeedPage } from "@/lib/feedLoader.js";
+// Correction : pointe vers feedPagination.js au lieu de feedLoader.js
+import { fetchFeedPage } from "@/lib/feedPagination.js";
 import { recordFeedEvent } from "@/lib/feedEvents.js";
 
 import { PollCard, SocialPostEnhancements, SocialSuggestions } from "./SocialEnhancements.jsx";
