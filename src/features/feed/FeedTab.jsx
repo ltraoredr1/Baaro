@@ -12,6 +12,8 @@ import { COLORS } from "../../theme.js";
 import { useToast } from "../../components/ToastContext.jsx";
 import { supabase } from "../../supabaseClient.js";
 import { handleDbError } from "../../lib/dbErrors.js";
+import { fetchFeedPage } from "../../lib/feedLoader.js";
+import { recordFeedEvent } from "../../lib/feedEvents.js";
 import { PollCard, SocialPostEnhancements, SocialSuggestions } from "./SocialEnhancements.jsx";
 import { RichTextComposer } from "../../components/RichTextComposer.jsx";
 import { RichTextRenderer } from "../../components/RichTextRenderer.jsx";
@@ -20,33 +22,32 @@ import { TipButton } from "../../components/TipButton.jsx";
 
 const PAGE_SIZE = 20;
 
-function applyCursor(query, cursor) {
-  if (!cursor) return query;
-  return query.or(`created_at.lt.${cursor.created_at},and(created_at.eq.${cursor.created_at},id.lt.${cursor.id})`);
-}
-
 export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
   const { showToast } = useToast();
   const [posts, setPosts] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
-  
-  // Saisie enrichie
+
+  // Saisie enrichie & média
   const [newText, setNewText] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  
+  const [mediaFile, setMediaFile] = useState(null);
+  const [mediaPreview, setMediaPreview] = useState(null);
+
+  // États utilisateur et modales
   const [user, setUser] = useState(null);
   const [menuOpenId, setMenuOpenId] = useState(null);
   const [engagement, setEngagement] = useState(null);
-  
-  const [mediaFile, setMediaFile] = useState(null);
-  const [mediaPreview, setMediaPreview] = useState(null);
-  
+  const [likedPosts, setLikedPosts] = useState({});
+
   const fileInputRef = useRef(null);
   const cursorRef = useRef(null);
   const sentinelRef = useRef(null);
+  const postViewRefs = useRef({});
   const meId = user?.id || userId;
 
+  // Récupération de la session utilisateur
   useEffect(() => {
     const getUser = async () => {
       try {
@@ -59,64 +60,56 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
     getUser();
   }, [showToast]);
 
+  // Nettoyage de la mémoire de l'aperçu vidéo/image
   useEffect(() => {
     return () => {
       if (mediaPreview) URL.revokeObjectURL(mediaPreview);
     };
   }, [mediaPreview]);
 
-  // Chargement des posts et formatage du handle (évite les @@)
-  const fetchPostsPage = useCallback(async (cursor) => {
-    let query = supabase
-      .from("posts")
-      .select(`id, author_id, text, media_url, media_type, created_at, likes_count, comments_count, views_count, profiles ( display_name, handle, flag, avatar_url )`)
-      .order("created_at", { ascending: false })
-      .order("id", { ascending: false })
-      .limit(PAGE_SIZE);
-
-    query = applyCursor(query, cursor);
-    const { data, error } = await query;
-    if (error) throw error;
-
-    return (data || []).map((post) => {
-      const profile = post.profiles || {};
-      const rawHandle = profile.handle || "membre";
-      // Nettoyage strict pour éviter les double @
-      const cleanHandle = rawHandle.startsWith("@") ? rawHandle : `@${rawHandle}`;
-
-      return {
-        id: post.id,
-        author_id: post.author_id,
-        text: post.text,
-        media_url: post.media_url,
-        media_type: post.media_type,
-        created_at: post.created_at,
-        likes: post.likes_count || 0,
-        comments_count: post.comments_count || 0,
-        views_count: post.views_count || 0,
-        display_name: profile.display_name || "Membre BAARO",
-        handle: cleanHandle,
-        flag: profile.flag || "🌍",
-        avatar: profile.avatar_url || "",
-      };
-    });
-  }, []);
-
-  const updateCursorFromRows = (rows) => {
-    if (rows.length > 0) {
-      const last = rows[rows.length - 1];
-      cursorRef.current = { created_at: last.created_at, id: last.id };
-    }
-    setHasMore(rows.length === PAGE_SIZE);
-  };
-
+  // 1. Chargement initial du flux via fetchFeedPage
   const loadPosts = useCallback(async () => {
     setLoading(true);
     cursorRef.current = null;
     try {
-      const rows = await fetchPostsPage(null);
-      setPosts(rows);
-      updateCursorFromRows(rows);
+      const { rows, nextCursor } = await fetchFeedPage({ cursor: null, pageSize: PAGE_SIZE });
+
+      const formattedRows = rows.map((post) => {
+        const profile = post.profiles || {};
+        const rawHandle = profile.handle || "membre";
+        const cleanHandle = rawHandle.startsWith("@") ? rawHandle : `@${rawHandle}`;
+
+        return {
+          id: post.id,
+          author_id: post.author_id,
+          text: post.text,
+          media_url: post.media_url,
+          media_type: post.media_type,
+          created_at: post.created_at,
+          likes: post.likes_count || 0,
+          comments_count: post.comments_count || 0,
+          views_count: post.views_count || 0,
+          display_name: profile.display_name || "Membre BAARO",
+          handle: cleanHandle,
+          flag: profile.flag || "🌍",
+          avatar: profile.avatar_url || "",
+        };
+      });
+
+      setPosts(formattedRows);
+      cursorRef.current = nextCursor;
+      setHasMore(Boolean(nextCursor));
+
+      if (meId && formattedRows.length) {
+        const { data: likes } = await supabase
+          .from("post_likes")
+          .select("post_id")
+          .eq("user_id", meId)
+          .in("post_id", formattedRows.map((r) => r.id));
+        setLikedPosts(Object.fromEntries((likes || []).map((l) => [l.post_id, true])));
+      } else {
+        setLikedPosts({});
+      }
     } catch (error) {
       handleDbError(error, showToast, "Erreur lors du chargement du fil");
       setPosts([]);
@@ -124,8 +117,65 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
     } finally {
       setLoading(false);
     }
-  }, [fetchPostsPage, showToast]);
+  }, [meId, showToast]);
 
+  // 2. Chargement des pages suivantes (Infinite Scroll)
+  const loadMorePosts = useCallback(async () => {
+    if (loadingMore || !hasMore || loading || !cursorRef.current) return;
+    setLoadingMore(true);
+    try {
+      const { rows, nextCursor } = await fetchFeedPage({ cursor: cursorRef.current, pageSize: PAGE_SIZE });
+
+      const formattedRows = rows.map((post) => {
+        const profile = post.profiles || {};
+        const rawHandle = profile.handle || "membre";
+        const cleanHandle = rawHandle.startsWith("@") ? rawHandle : `@${rawHandle}`;
+
+        return {
+          id: post.id,
+          author_id: post.author_id,
+          text: post.text,
+          media_url: post.media_url,
+          media_type: post.media_type,
+          created_at: post.created_at,
+          likes: post.likes_count || 0,
+          comments_count: post.comments_count || 0,
+          views_count: post.views_count || 0,
+          display_name: profile.display_name || "Membre BAARO",
+          handle: cleanHandle,
+          flag: profile.flag || "🌍",
+          avatar: profile.avatar_url || "",
+        };
+      });
+
+      setPosts((prev) => [...prev, ...formattedRows]);
+      cursorRef.current = nextCursor;
+      setHasMore(Boolean(nextCursor));
+    } catch (error) {
+      handleDbError(error, showToast, "Erreur suite du fil");
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [loadingMore, hasMore, loading, showToast]);
+
+  useEffect(() => {
+    loadPosts();
+  }, [loadPosts]);
+
+  // Observer pour la détection de défilement infini
+  useEffect(() => {
+    if (!sentinelRef.current) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting) loadMorePosts();
+      },
+      { rootMargin: "400px" }
+    );
+    observer.observe(sentinelRef.current);
+    return () => observer.disconnect();
+  }, [loadMorePosts]);
+
+  // Publication d'un nouveau post
   const handlePublish = async () => {
     if (!newText.trim() && !mediaFile) return;
     setSubmitting(true);
@@ -165,10 +215,6 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
     }
   };
 
-  useEffect(() => {
-    loadPosts();
-  }, [loadPosts]);
-
   if (loading) {
     return (
       <div className="text-center py-12 text-xs font-medium tracking-widest uppercase opacity-70">
@@ -179,7 +225,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
 
   return (
     <div className="flex flex-col gap-6 max-w-2xl mx-auto w-full pb-20">
-      {/* ÉDITEUR ENRICHI POUR PUBLICATION RAPIDE */}
+      {/* COMPOSITEUR DE PUBLICATION AVANCÉ */}
       {meId && (
         <div
           className="glass-card rounded-2xl p-4 shadow-xl border flex flex-col gap-3 transition-all"
@@ -293,7 +339,6 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
                   <p className="font-bold text-sm flex items-center gap-1" style={{ color: COLORS.ivory }}>
                     {post.display_name} {post.flag}
                   </p>
-                  {/* Formatage propre pour éviter le double @ */}
                   <p className="text-xs" style={{ color: COLORS.muted }}>
                     {post.handle} ·{" "}
                     {new Date(post.created_at).toLocaleDateString("fr-FR", {
@@ -305,6 +350,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
                   </p>
                 </div>
               </div>
+
               {post.author_id === meId && (
                 <div className="relative">
                   <button
@@ -346,7 +392,12 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
             {post.media_url && (
               <div className="rounded-xl overflow-hidden border" style={{ borderColor: COLORS.border }}>
                 {post.media_type?.startsWith("video") ? (
-                  <video src={post.media_url} controls className="w-full max-h-80 object-cover bg-black" />
+                  <video
+                    src={post.media_url}
+                    controls
+                    className="w-full max-h-80 object-cover bg-black"
+                    onEnded={() => recordFeedEvent(post.id, "complete")}
+                  />
                 ) : (
                   <img src={post.media_url} alt="" className="w-full max-h-80 object-cover" />
                 )}
@@ -356,7 +407,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
             <PollCard postId={post.id} userId={meId} />
             <SocialPostEnhancements post={post} userId={meId} />
 
-            {/* BARRE FINALE PROFESSIONNELLE */}
+            {/* BARRE FINALE PROFESSIONNELLE AVEC ENREGISTREMENT DES ÉVÉNEMENTS */}
             <div
               className="flex items-center justify-between gap-2 pt-2 border-t flex-wrap"
               style={{ borderColor: COLORS.border }}
@@ -391,6 +442,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
                 )}
                 <button
                   title="Archiver"
+                  onClick={() => recordFeedEvent(post.id, "save")}
                   className="w-8 h-8 rounded-full border flex items-center justify-center text-xs hover:bg-white/10 transition-colors"
                   style={{ background: COLORS.surface2, borderColor: COLORS.border }}
                 >
@@ -398,6 +450,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
                 </button>
                 <button
                   title="Diffuser à l'international"
+                  onClick={() => recordFeedEvent(post.id, "share")}
                   className="w-8 h-8 rounded-full border flex items-center justify-center text-xs hover:bg-white/10 transition-colors"
                   style={{ background: COLORS.surface2, borderColor: COLORS.border }}
                 >
@@ -407,6 +460,8 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
             </div>
           </article>
         ))}
+
+        {hasMore && <div ref={sentinelRef} style={{ height: 1 }} />}
       </div>
 
       {engagement && (
