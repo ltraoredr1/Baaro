@@ -8,19 +8,19 @@ import {
   Sparkles,
 } from "lucide-react";
 
-// Chemins d'accès corrigés (3 niveaux depuis src/features/feed/)
-import { COLORS } from "../../theme.js";
-import { useToast } from "../../components/ToastContext.jsx";
-import { supabase } from "../../supabaseClient.js";
-import { handleDbError } from "../../../lib/dbErrors.js";
-import { fetchFeedPage } from "../../../lib/feedLoader.js";
-import { recordFeedEvent } from "../../../lib/feedEvents.js";
+// Utilisation des alias absolus (@/) pour garantir la résolution des chemins sur Vercel
+import { COLORS } from "@/theme.js";
+import { useToast } from "@/components/ToastContext.jsx";
+import { supabase } from "@/supabaseClient.js";
+import { handleDbError } from "@/lib/dbErrors.js";
+import { fetchFeedPage } from "@/lib/feedLoader.js";
+import { recordFeedEvent } from "@/lib/feedEvents.js";
 
 import { PollCard, SocialPostEnhancements, SocialSuggestions } from "./SocialEnhancements.jsx";
-import { RichTextComposer } from "../../components/RichTextComposer.jsx";
-import { RichTextRenderer } from "../../components/RichTextRenderer.jsx";
-import { EngagementList } from "../../components/EngagementList.jsx";
-import { TipButton } from "../../components/TipButton.jsx";
+import { RichTextComposer } from "@/components/RichTextComposer.jsx";
+import { RichTextRenderer } from "@/components/RichTextRenderer.jsx";
+import { EngagementList } from "@/components/EngagementList.jsx";
+import { TipButton } from "@/components/TipButton.jsx";
 
 const PAGE_SIZE = 20;
 
@@ -393,7 +393,7 @@ export function FeedTab({ userId, onOpenProfile }) {
                         }}
                         className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-white/5 text-red-400"
                       >
-                        <Trash2 size={14} /> Supprimer
+                        <Trash2 size5={14} /> Supprimer
                       </button>
                     </div>
                   )}
