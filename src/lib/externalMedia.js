@@ -1,10 +1,44 @@
+import { Capacitor } from "@capacitor/core";
 import { supabase } from "../supabaseClient.js";
+
 /**
- * Upload média vers R2 via /api/media
+ * Upload média vers R2 via /api/media (prepare -> PUT R2 -> finalize)
  * Compatible avec les 2 signatures :
  *  uploadExternalMedia(file, "posts")
  *  uploadExternalMedia(file, { folder: "theme", maxBytes: ... })
  */
+
+// Dans l'APK (https://localhost), "/api/..." ne pointe pas vers Vercel :
+// on utilise donc une URL absolue en natif. Sur le web, rien ne change.
+function mediaApiUrl() {
+  const base = Capacitor.isNativePlatform()
+    ? import.meta.env.VITE_API_BASE_URL || "https://baaro-xi.vercel.app"
+    : "";
+  return `${base}/api/media`;
+}
+
+async function callMediaApi(payload, token) {
+  const res = await fetch(mediaApiUrl(), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const raw = await res.text();
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    throw new Error(
+      `Réponse serveur invalide (${res.status}) : ${raw.slice(0, 80)}`
+    );
+  }
+  return data;
+}
+
 export async function uploadExternalMedia(file, folderOrOptions = "posts") {
   let folder = "posts";
   if (typeof folderOrOptions === "string") {
@@ -21,15 +55,10 @@ export async function uploadExternalMedia(file, folderOrOptions = "posts") {
   const token = session?.access_token;
 
   // 1. Étape "prepare" AVEC le token d'authentification
-  const prepRes = await fetch("/api/media", {
-    method: "POST",
-    headers: { 
-      "Content-Type": "application/json", 
-      ...(token ? { Authorization: `Bearer ${token}` } : {}) 
-    },
-    body: JSON.stringify({ action: "prepare", folder, extension: ext, size, contentType, fileName }),
-  });
-  const prep = await prepRes.json();
+  const prep = await callMediaApi(
+    { action: "prepare", folder, extension: ext, size, contentType, fileName },
+    token
+  );
   if (!prep.ok) throw new Error(prep.error || "prepare failed");
   const { uploadUrl, path, publicUrl } = prep;
 
@@ -38,15 +67,10 @@ export async function uploadExternalMedia(file, folderOrOptions = "posts") {
   if (!putRes.ok) throw new Error(`PUT R2 failed ${putRes.status}`);
 
   // 3. Étape "finalize" AVEC le token d'authentification
-  const finRes = await fetch("/api/media", {
-    method: "POST",
-    headers: { 
-      "Content-Type": "application/json", 
-      ...(token ? { Authorization: `Bearer ${token}` } : {}) 
-    },
-    body: JSON.stringify({ action: "finalize", folder, path, publicUrl, size, contentType, fileName }),
-  });
-  const fin = await finRes.json();
+  const fin = await callMediaApi(
+    { action: "finalize", folder, path, publicUrl, size, contentType, fileName },
+    token
+  );
   if (!fin.ok) throw new Error(fin.error || "finalize failed");
 
   const asset = fin.asset || {};
