@@ -1,26 +1,27 @@
-import fs from "node:fs";
-import path from "node:path";
+
+import fs from 'node:fs';
+import path from 'node:path';
 
 const root = process.cwd();
 
 const required = [
-  "package.json",
-  "vite.config.js",
-  "capacitor.config.json",
-  "SECURITY.md",
-  "scripts/security-audit-scan.mjs",
+  'package.json',
+  'vite.config.js',
+  'capacitor.config.json',
+  'SECURITY.md',
+  'scripts/security-audit-scan.mjs',
 ];
 
 const npmScripts = [
-  "build",
-  "check:lock",
-  "check:e2e",
-  "audit:security",
-  "check:payout",
-  "check:upstash:production",
+  'build',
+  'check:lock',
+  'check:e2e',
+  'audit:security',
+  'check:payout',
+  'check:upstash',
 ];
 
-const envExamples = [".env.example"];
+const envExamples = ['.env.example'];
 
 let bad = 0;
 
@@ -45,20 +46,26 @@ for (const file of required) {
   }
 }
 
-const packagePath = path.join(root, "package.json");
 let pkg = null;
 
-if (isFile("package.json")) {
+if (isFile('package.json')) {
   try {
-    pkg = JSON.parse(fs.readFileSync(packagePath, "utf8"));
+    const packagePath = path.join(root, 'package.json');
+    pkg = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
   } catch (error) {
-    fail(`INVALID package.json: ${error.message}`);
+    const message =
+      error instanceof Error ? error.message : String(error);
+
+    fail(`INVALID package.json: ${message}`);
   }
 }
 
 if (pkg) {
   for (const script of npmScripts) {
-    if (typeof pkg.scripts?.[script] !== "string" || !pkg.scripts[script].trim()) {
+    if (
+      typeof pkg.scripts?.[script] !== 'string' ||
+      !pkg.scripts[script].trim()
+    ) {
       fail(`MISSING npm script ${script}`);
     }
   }
@@ -70,11 +77,13 @@ for (const file of envExamples) {
   }
 }
 
-if (bad) {
+if (bad > 0) {
+  console.error(`Production readiness configuration: ${bad} failure(s).`);
   process.exit(1);
 }
 
-console.log("Production readiness configuration: OK");
+console.log('Production readiness configuration: OK');
+
 console.log(
-  "Live deployment, secrets, DNS, provider credentials and CI runners still require environment validation."
+  'Live deployment, secrets, DNS, provider credentials and CI runners still require environment validation.'
 );
