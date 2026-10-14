@@ -1,8 +1,8 @@
 /**
  * BAARO — préférences app (local + cloud user_settings)
- * FIX FINAL: 9 themes + RTL sans ecran noir
- * Thème perso : stocké dans la colonne user_settings.custom_theme (jsonb).
- * Si la colonne n'existe pas encore, les autres réglages sont quand même enregistrés.
+ * Thème unique : clair (crème / or), forcé quels que soient les réglages enregistrés.
+ * Thème perso : colonne user_settings.custom_theme (jsonb), conservée pour compatibilité
+ * mais non utilisée à l'affichage.
  */
 import { supabase } from "../supabaseClient.js";
 import { applyNativeSettings } from "./nativeSettings.js";
@@ -34,7 +34,7 @@ export const DEFAULT_SETTINGS = {
   low_bandwidth_mode: false,
   local_cache: true,
   privacy_ai: true,
-  customTheme: { bgColor: "#0B1220", accent: "#2DBFA6", bgImage: null, fg: "#F4EFE3" },
+  customTheme: { bgColor: "#FAF7F0", accent: "#C99A2E", bgImage: null, fg: "#14213D" },
 };
 
 // Colonnes à plat de user_settings (customTheme est géré à part → custom_theme)
@@ -53,7 +53,9 @@ export function loadLocalSettings() {
       localStorage.getItem("baaro_settings_v21") ||
       localStorage.getItem("baaro_settings_v20");
     if (!raw) return Object.assign({}, DEFAULT_SETTINGS);
-    return Object.assign({}, DEFAULT_SETTINGS, JSON.parse(raw));
+    var merged = Object.assign({}, DEFAULT_SETTINGS, JSON.parse(raw));
+    merged.theme = "light";
+    return merged;
   } catch (_) {
     return Object.assign({}, DEFAULT_SETTINGS);
   }
@@ -61,49 +63,27 @@ export function loadLocalSettings() {
 
 export function saveLocalSettings(settings) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
-    localStorage.setItem("baaro_theme", settings.theme || "light");
+    var toSave = Object.assign({}, settings, { theme: "light" });
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
+    localStorage.setItem("baaro_theme", "light");
   } catch (_) {}
 }
 
-// THEMES : 8 thèmes fixes + custom calculé
-function mix(hex, amt) {
-  var h = String(hex).replace("#", "");
-  if (h.length === 3) h = h.split("").map(function (c) { return c + c; }).join("");
-  var n = parseInt(h, 16);
-  if (isNaN(n)) return hex;
-  var f = function (v) { return Math.max(0, Math.min(255, Math.round(v + (amt > 0 ? (255 - v) : v) * amt))); };
-  var r = f((n >> 16) & 255), g = f((n >> 8) & 255), b = f(n & 255);
-  return "#" + ((1 << 24) | (r << 16) | (g << 8) | b).toString(16).slice(1);
-}
-
-var THEME_MAP = {
-  midnight: { bg: "#0B1220", surface: "#111A2C", surface2: "#1A2740", hover: "#203152", fg: "#F4EFE3", muted: "#8A93A6", border: "rgba(255,255,255,0.08)" },
-  oled:     { bg: "#000000", surface: "#0A0A0A", surface2: "#151515", hover: "#1F1F1F", fg: "#FFFFFF", muted: "#8A8A8A", border: "rgba(255,255,255,0.10)" },
-  emerald:  { bg: "#061A14", surface: "#0B2820", surface2: "#12382D", hover: "#184A3B", fg: "#D1FAE5", muted: "#7FA896", border: "rgba(255,255,255,0.08)" },
-  light:    { bg: "#FAF7F0", surface: "#FFFFFF", surface2: "#F3EEE2", hover: "#EDE6D5", fg: "#14213D", muted: "#6B7385", border: "rgba(20,33,61,0.10)" },
-  sunset:   { bg: "#2A1215", surface: "#38191D", surface2: "#4A2227", hover: "#5C2C32", fg: "#FFE4E6", muted: "#C79AA0", border: "rgba(255,255,255,0.08)" },
-  ocean:    { bg: "#0A1628", surface: "#102240", surface2: "#173158", hover: "#1E4070", fg: "#E0F2FE", muted: "#8FB0CC", border: "rgba(255,255,255,0.08)" },
-  forest:   { bg: "#0E1F14", surface: "#15301F", surface2: "#1D4029", hover: "#265234", fg: "#DCFCE7", muted: "#86AE93", border: "rgba(255,255,255,0.08)" },
-  desert:   { bg: "#1F1A14", surface: "#2C251C", surface2: "#3A3125", hover: "#4A3E2F", fg: "#FEF3C7", muted: "#B5A585", border: "rgba(255,255,255,0.08)" },
+// THEME UNIQUE : clair ivoire / or
+var LIGHT_THEME = {
+  bg: "#FAF7F0",
+  surface: "#FFFFFF",
+  surface2: "#F3EEE2",
+  hover: "#EDE6D5",
+  fg: "#14213D",
+  muted: "#6B7385",
+  border: "rgba(20,33,61,0.10)",
+  bgImage: null,
+  dark: false,
 };
 
-function buildTheme(themeId, s) {
-  if (themeId === "custom" && s.customTheme) {
-    var c = s.customTheme, bg = c.bgColor || "#0B1220";
-    var dark = parseInt(bg.replace("#", "").slice(0, 2), 16) < 140;
-    return {
-      bg: bg, fg: c.fg || (dark ? "#F4EFE3" : "#0F172A"),
-      surface: mix(bg, dark ? 0.08 : -0.04), surface2: mix(bg, dark ? 0.16 : -0.09),
-      hover: mix(bg, dark ? 0.24 : -0.14),
-      muted: dark ? "#9AA3B5" : "#64748B",
-      border: dark ? "rgba(255,255,255,0.10)" : "rgba(15,23,42,0.12)",
-      bgImage: c.bgImage || null,
-      dark: dark,
-    };
-  }
-  var fixed = THEME_MAP[themeId] || THEME_MAP.light;
-  return Object.assign({ dark: themeId !== "light" && !!THEME_MAP[themeId] ? true : false }, fixed);
+function buildTheme() {
+  return LIGHT_THEME;
 }
 
 export function applySettingsToDom(settings) {
@@ -111,7 +91,7 @@ export function applySettingsToDom(settings) {
     var root = document.documentElement;
     var body = document.body;
     var s = settings || DEFAULT_SETTINGS;
-    var themeId = s.theme || "light";
+    var themeId = "light";
 
     // 1. A11Y
     root.classList.toggle("baaro-large-text",!!s.large_text);
@@ -126,15 +106,13 @@ export function applySettingsToDom(settings) {
     root.dataset.baaroTheme = themeId;
     root.dataset.baaroCountry = s.country || "";
 
-    // 3. THEME - C'EST ICI QUE CA MARCHE MAINTENANT
+    // 3. THEME (clair uniquement)
     root.setAttribute("data-theme", themeId);
     root.dataset.theme = themeId;
     if (body) body.dataset.theme = themeId;
 
-    var t = buildTheme(themeId, s);
-    // Mode clair/sombre : pilote les couleurs dérivées dans index.css
-    var isDark = !!t.dark;
-    root.setAttribute("data-mode", isDark ? "dark" : "light");
+    var t = buildTheme();
+    root.setAttribute("data-mode", "light");
     var set = function (k, v) { root.style.setProperty(k, v); };
     set("--bg", t.bg);
     set("--fg", t.fg);
@@ -142,22 +120,20 @@ export function applySettingsToDom(settings) {
     set("--surface2", t.surface2);
     set("--surface-hover", t.hover);
     set("--muted", t.muted);
-    set("--muted-light", t.muted);
+    set("--muted-light", "#4B5468");
     set("--border", t.border);
-    set("--accent", (themeId === "custom" && s.customTheme && s.customTheme.accent) || "#D9AE52");
-    root.style.colorScheme = isDark ? "dark" : "light";
-    if (t.bgImage) {
-      root.style.setProperty("--bg-image", 'url("' + t.bgImage + '")');
-      if (body) body.style.backgroundImage = 'url("' + t.bgImage + '")';
-    } else {
-      root.style.removeProperty("--bg-image");
-      if (body) body.style.backgroundImage = "";
-    }
+    set("--accent", "#C99A2E");
+    root.style.colorScheme = "light";
+
+    // Pas d'image de fond en thème unique
+    root.style.removeProperty("--bg-image");
     if (body) {
+      body.style.backgroundImage = "";
       body.style.backgroundColor = t.bg;
       body.style.color = t.fg;
     }
-    // Barre d'état mobile / PWA alignée sur le thème actif
+
+    // Barre d'état mobile / PWA alignée sur le thème
     var metaTheme = document.querySelector('meta[name="theme-color"]');
     if (metaTheme) metaTheme.setAttribute("content", t.bg);
 
@@ -188,8 +164,8 @@ export function isAutoplayOn() { return!!getSetting("autoplay_video"); }
 function pickCloudPayload(settings, user_id, withCustomTheme) {
   var payload = { user_id: user_id, id: user_id, updated_at: new Date().toISOString() };
   for (var i = 0; i < CLOUD_KEYS.length; i++) { var k = CLOUD_KEYS[i]; if (k in settings) payload[k] = settings[k]; }
+  payload.theme = "light";
   if (withCustomTheme && settings.customTheme) payload.custom_theme = settings.customTheme;
-  if (settings.customTheme) payload.custom_theme = settings.customTheme;
   return payload;
 }
 
@@ -201,10 +177,10 @@ export async function loadCloudSettings(user_id) {
   if (!res.data) return { ok: true, data: null };
   var merged = {};
   for (var i = 0; i < CLOUD_KEYS.length; i++) { var k = CLOUD_KEYS[i]; if (k in res.data && res.data[k]!= null) merged[k] = res.data[k]; }
+  merged.theme = "light";
   if (res.data.custom_theme && typeof res.data.custom_theme === "object") {
     merged.customTheme = Object.assign({}, DEFAULT_SETTINGS.customTheme, res.data.custom_theme);
   }
-  if (res.data.custom_theme) merged.customTheme = res.data.custom_theme;
   return { ok: true, data: merged };
 }
 
