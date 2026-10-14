@@ -5,9 +5,12 @@
  * - **gras**
  * - *italique*
  * - ++souligné++
- * - listes à puces
- * - listes numérotées
- * - liens [texte](url)
+ * - Mentions @pseudo (sans doublons @@)
+ * - Hashtags #tendance
+ * - Extrait de code `code`
+ * - Citations > texte
+ * - Listes à puces et numérotées
+ * - Liens [texte](url)
  * - URL HTTP/HTTPS nues
  */
 
@@ -52,7 +55,11 @@ function escapeRegExp(value) {
  * Le texte utilisateur est échappé avant toute génération de balises.
  */
 function formatInline(value) {
-  const source = String(value ?? "");
+  let source = String(value ?? "");
+
+  // 0. Nettoyage des doublons d'arobases (ex: @@pseudo -> @pseudo)
+  source = source.replace(/@@+/g, "@");
+
   const tokens = [];
 
   // 1. Protège les liens Markdown avant les autres transformations.
@@ -66,7 +73,7 @@ function formatInline(value) {
       const token = `BAAROMARKDOWNLINK${tokens.length}TOKEN`;
 
       tokens.push(
-        `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" class="underline" style="color:#2DBFA6">${escapeHtml(label)}</a>`
+        `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" class="underline font-semibold hover:opacity-80 transition-opacity" style="color:#2DBFA6">${escapeHtml(label)}</a>`
       );
 
       return token;
@@ -80,7 +87,6 @@ function formatInline(value) {
   html = html.replace(
     /(^|[\s(])((?:https?):\/\/[^\s<>"']+)/gi,
     (match, prefix, rawUrl) => {
-      // Retire les signes de ponctuation de fin du lien.
       const url = rawUrl.replace(/[.,!?;:]+$/, "");
       const suffix = rawUrl.slice(url.length);
 
@@ -93,19 +99,25 @@ function formatInline(value) {
       return (
         `${prefix}<a href="${safeUrl}" ` +
         'target="_blank" rel="noopener noreferrer" ' +
-        'class="underline" style="color:#2DBFA6">' +
+        'class="underline font-semibold hover:opacity-80 transition-opacity" style="color:#2DBFA6">' +
         `${safeUrl}</a>${suffix}`
       );
     }
   );
 
-  // 4. Applique les mises en forme Markdown.
-  // Le gras est traité avant l'italique.
-  html = html.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
-  html = html.replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
-  html = html.replace(/\+\+([^+\n]+)\+\+/g, "<u>$1</u>");
+  // 4. Applique les mises en forme Markdown standards
+  html = html.replace(/\*\*([^*\n]+)\*\*/g, "<strong className='font-bold' style='color:#F5F3EF'>$1</strong>");
+  html = html.replace(/\*([^*\n]+)\*/g, "<em className='italic'>$1</em>");
+  html = html.replace(/\+\+([^+\n]+)\+\+/g, "<u className='underline decoration-amber-400/50'>$1</u>");
 
-  // 5. Restaure les liens Markdown protégés.
+  // 5. Code en ligne `code`
+  html = html.replace(/`([^`\n]+)`/g, "<code className='px-1.5 py-0.5 rounded text-xs font-mono border' style='background:rgba(255,255,255,0.06); border-color:rgba(255,255,255,0.1); color:#D9AE52'>$1</code>");
+
+  // 6. Mentions @pseudo et Hashtags #tendance
+  html = html.replace(/(^|[\s(])@([a-zA-Z0-9_]+)/g, "$1<span className='font-bold cursor-pointer hover:underline' style='color:#D9AE52'>@$2</span>");
+  html = html.replace(/(^|[\s(])#([a-zA-Z0-9_]+)/g, "$1<span className='font-semibold cursor-pointer hover:underline' style='color:#2DBFA6'>#$2</span>");
+
+  // 7. Restaure les liens Markdown protégés.
   tokens.forEach((tokenHtml, index) => {
     const token = `BAAROMARKDOWNLINK${index}TOKEN`;
 
@@ -119,8 +131,7 @@ function formatInline(value) {
 }
 
 /**
- * Convertit le texte en paragraphes et listes HTML.
- * Les numéros de listes sont affichés par le navigateur.
+ * Convertit le texte en paragraphes, citations et listes HTML.
  */
 function toHtml(content) {
   const lines = String(content ?? "").split(/\r?\n/);
@@ -130,7 +141,6 @@ function toHtml(content) {
 
   const closeList = () => {
     if (!listType) return;
-
     output.push(listType === "ol" ? "</ol>" : "</ul>");
     listType = null;
   };
@@ -138,18 +148,22 @@ function toHtml(content) {
   for (const line of lines) {
     const unordered = line.match(/^\s*[-*]\s+(.+)$/);
     const ordered = line.match(/^\s*(\d+)\.\s+(.+)$/);
+    const quote = line.match(/^\s*&gt;\s+(.+)$/) || line.match(/^\s*>\s+(.+)$/);
+
+    if (quote) {
+      closeList();
+      output.push(
+        `<blockquote class="border-l-2 pl-3 my-1 italic text-xs py-1 rounded-r opacity-90" style="border-color:#D9AE52; background:rgba(217,174,82,0.05); color:#F5F3EF">${formatInline(quote[1])}</blockquote>`
+      );
+      continue;
+    }
 
     if (unordered) {
       if (listType !== "ul") {
         closeList();
-
-        output.push(
-          '<ul class="list-disc list-inside mb-2 space-y-1">'
-        );
-
+        output.push('<ul class="list-disc list-inside mb-2 space-y-1 pl-1">');
         listType = "ul";
       }
-
       output.push(`<li>${formatInline(unordered[1])}</li>`);
       continue;
     }
@@ -157,14 +171,9 @@ function toHtml(content) {
     if (ordered) {
       if (listType !== "ol") {
         closeList();
-
-        output.push(
-          '<ol class="list-decimal list-inside mb-2 space-y-1">'
-        );
-
+        output.push('<ol class="list-decimal list-inside mb-2 space-y-1 pl-1">');
         listType = "ol";
       }
-
       output.push(`<li>${formatInline(ordered[2])}</li>`);
       continue;
     }
@@ -177,7 +186,7 @@ function toHtml(content) {
     }
 
     output.push(
-      `<p class="mb-2 last:mb-0 whitespace-pre-wrap">${formatInline(line)}</p>`
+      `<p class="mb-2 last:mb-0 whitespace-pre-wrap leading-relaxed">${formatInline(line)}</p>`
     );
   }
 
