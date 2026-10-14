@@ -1,3 +1,4 @@
+// src/features/feed/FeedTab.jsx - COMPLET CORRIGÉ BUILD OK
 import { useState, useRef, useEffect } from "react";
 import { supabase } from "../../supabaseClient.js";
 import { useCursorFeed } from "../../hooks/useCursorFeed.js";
@@ -5,7 +6,7 @@ import { recordFeedEvent } from "../../lib/feedEvents.js";
 import { uploadExternalMedia } from "../../lib/externalMedia.js";
 import { RichTextRenderer } from "../../components/RichTextRenderer.jsx";
 import { RichTextComposer } from "../../components/RichTextComposer.jsx";
-import SocialEnhancements from "../social/SocialEnhancements.jsx";
+import SocialEnhancements from "./SocialEnhancements.jsx";
 
 export default function FeedTab() {
   const { posts, loading, hasMore, loadMore, refresh } = useCursorFeed();
@@ -46,6 +47,7 @@ export default function FeedTab() {
 
   const handlePost = async () => {
     if (!text.trim() &&!mediaUrl) return;
+    if (!userId) return;
     setComposing(true);
     try {
       await supabase.from("posts").insert({
@@ -56,6 +58,8 @@ export default function FeedTab() {
       });
       setText(""); setMediaUrl(""); setMediaType(null);
       refresh();
+    } catch (err) {
+      console.error(err);
     } finally { setComposing(false); }
   };
 
@@ -69,10 +73,18 @@ export default function FeedTab() {
   return (
     <div className="max-w-[680px] mx-auto w-full bg-[#0a0a0a] text-white min-h-screen">
       <div className="sticky top-0 z-20 bg-[#111]/80 backdrop-blur-xl border-b border-white/10 p-4">
-        <RichTextComposer value={text} onChange={setText} placeholder="Quoi de neuf chef?" className="w-full bg-white/[0.06] border border-white/10 rounded-2xl p-3 min-h-[48px] outline-none" />
+        <RichTextComposer
+          value={text}
+          onChange={setText}
+          placeholder="Quoi de neuf chef?"
+          className="w-full bg-white/[0.06] border border-white/10 rounded-2xl p-3 min-h-[48px] outline-none"
+        />
         {mediaUrl && (
           <div className="mt-3 rounded-xl overflow-hidden border border-white/10 relative">
-            {mediaType?.startsWith("video")? <video src={mediaUrl} className="w-full max-h-[300px]" controls /> : <img src={mediaUrl} className="w-full max-h-[300px] object-cover" />}
+            {mediaType?.startsWith("video")?
+              <video src={mediaUrl} className="w-full max-h-[300px]" controls /> :
+              <img src={mediaUrl} className="w-full max-h-[300px] object-cover" alt="" />
+            }
             <button onClick={() => { setMediaUrl(""); setMediaType(null); }} className="absolute top-2 right-2 bg-black/70 rounded-full w-7 h-7">✕</button>
           </div>
         )}
@@ -91,7 +103,7 @@ export default function FeedTab() {
             <div key={post.id} className="p-4 hover:bg-white/[0.02] group">
               <div className="flex justify-between">
                 <div className="flex gap-3">
-                  <img src={p?.avatar_url || `https://api.dicebear.com/7.x/initials/svg?seed=${p?.handle}`} className="w-10 h-10 rounded-full bg-white/10" />
+                  <img src={p?.avatar_url || `https://api.dicebear.com/7.x/initials/svg?seed=${p?.handle}`} className="w-10 h-10 rounded-full bg-white/10" alt="" />
                   <div>
                     <div className="flex gap-1.5 items-center">
                       <span className="font-semibold text-[15px]">{p?.display_name}</span>
@@ -104,17 +116,26 @@ export default function FeedTab() {
               </div>
               {post.media_url && (
                 <div className="mt-3 ml-12 rounded-2xl overflow-hidden border border-white/10 bg-black">
-                  {post.media_type?.startsWith("video")? <video src={post.media_url} className="w-full max-h-[480px] object-contain" controls onPlay={() => recordFeedEvent(post.id, "watch")} /> : <img src={post.media_url} className="w-full max-h-[480px] object-contain" onClick={() => recordFeedEvent(post.id, "open")} />}
+                  {post.media_type?.startsWith("video")?
+                    <video src={post.media_url} className="w-full max-h-[480px] object-contain" controls onPlay={() => recordFeedEvent(post.id, "watch")} /> :
+                    <img src={post.media_url} className="w-full max-h-[480px] object-contain" alt="" onClick={() => recordFeedEvent(post.id, "open")} />
+                  }
                 </div>
               )}
-              <div className="mt-3 ml-12"><SocialEnhancements post={post} onLike={() => recordFeedEvent(post.id, "like")} onComment={() => recordFeedEvent(post.id, "comment")} /></div>
+              <div className="mt-3 ml-12">
+                <SocialEnhancements
+                  post={post}
+                  onLike={() => recordFeedEvent(post.id, "like")}
+                  onComment={() => recordFeedEvent(post.id, "comment")}
+                />
+              </div>
             </div>
           );
         })}
       </div>
-
       <div ref={sentinelRef} className="h-1" />
       {loading && <div className="py-8 flex justify-center"><div className="w-5 h-5 border-2 border-white/20 border-t-white rounded-full animate-spin" /></div>}
+      {!hasMore && filtered.length > 0 && <div className="py-8 text-center text-white/30 text-sm">Tu es à jour chef 👌</div>}
     </div>
   );
 }
