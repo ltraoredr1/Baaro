@@ -1,354 +1,356 @@
-@import "tailwindcss";
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap');
 
-/* Les polices sont chargées via <link> dans index.html (voir instructions) */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
-/* ============ JETONS TAILWIND (classes utilitaires qui suivent le thème) ============
-   Usage : bg-panel  text-ink  text-gold  border-line  font-display  rounded-card */
-@theme inline {
-  --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  --font-display: 'Fraunces', 'Playfair Display', Georgia, serif;
-  --color-canvas: var(--bg);
-  --color-panel: var(--surface);
-  --color-panel-2: var(--surface2);
-  --color-ink: var(--fg);
-  --color-soft: var(--muted);
-  --color-line: var(--border);
-  --color-gold: var(--gold-1);
-  --color-teal: var(--teal-1);
-  --radius-card: 20px;
-}
-
-/* ============ BASE : MODE CLAIR (par défaut) ============
-   Les neutres sont posés en ligne sur <html> par appSettings.js selon le thème
-   choisi ; les valeurs ci-dessous servent de défaut avant l'exécution du JS. */
-:root {
-  color-scheme: light;
-  --bg: #FAF7F0;
-  --surface: #FFFFFF;
-  --surface2: #F3EEE2;
-  --surface-hover: #EDE6D5;
-  --fg: #14213D;
-  --muted: #6B7385;
-  --muted-light: #4B5468;
-  --border: rgba(20,33,61,0.10);
-
-  /* Dérivées : s'adaptent à n'importe quel thème */
-  --glass: color-mix(in srgb, var(--surface) 82%, transparent);
-  --card-from: var(--surface);
-  --card-to: color-mix(in srgb, var(--surface) 65%, var(--surface2));
-  --feature-bg: color-mix(in srgb, var(--surface) 75%, transparent);
-  --feature-border: var(--border);
-  --scroll-track: color-mix(in srgb, var(--fg) 5%, transparent);
-  --skel-a: color-mix(in srgb, var(--fg) 5%, transparent);
-  --skel-b: color-mix(in srgb, var(--fg) 11%, transparent);
-  --input-bg: color-mix(in srgb, var(--surface) 92%, var(--surface2));
-
-  /* Accents mode clair */
-  --glow: rgba(217,174,82,0.18);
-  --glow-2: rgba(31,165,142,0.08);
-  --card-border: rgba(201,154,46,0.26);
-  --card-border-hover: rgba(201,154,46,0.55);
-  --card-shadow: 0 1px 2px rgba(20,33,61,0.05), 0 10px 30px -8px rgba(20,33,61,0.12);
-  --card-shadow-hover: 0 2px 4px rgba(20,33,61,0.06), 0 18px 40px -10px rgba(20,33,61,0.18);
-  --card-highlight: inset 0 1px 0 rgba(255,255,255,0.9);
-  --scroll-thumb: rgba(201,154,46,0.40);
-  --scroll-thumb-hover: rgba(201,154,46,0.70);
-  --gold-1: #C99A2E;
-  --gold-2: #A97B14;
-  --gold-3: #8A6410;
-  --teal-1: #1FA58E;
-  --teal-2: #148572;
-  --pattern-opacity: 0.05;
-}
-
-/* ============ MODE SOMBRE (conservé pour compatibilité) ============ */
-:root[data-mode="dark"] {
-  color-scheme: dark;
-  --bg: #0B1220;
-  --surface: #131E32;
-  --surface2: #1A2740;
-  --surface-hover: #203152;
-  --fg: #F4EFE3;
-  --muted: #8A93A6;
-  --muted-light: #A0ABC0;
-  --border: rgba(255,255,255,0.08);
-
-  --glass: color-mix(in srgb, var(--surface) 80%, transparent);
-  --card-from: color-mix(in srgb, var(--surface2) 95%, transparent);
-  --card-to: color-mix(in srgb, var(--surface) 95%, transparent);
-  --feature-bg: color-mix(in srgb, var(--surface) 60%, transparent);
-  --feature-border: rgba(255,255,255,0.06);
-  --scroll-track: color-mix(in srgb, var(--bg) 60%, transparent);
-  --skel-a: rgba(255,255,255,0.04);
-  --skel-b: rgba(255,255,255,0.08);
-  --input-bg: color-mix(in srgb, var(--surface) 70%, var(--bg));
-
-  --glow: rgba(217,174,82,0.10);
-  --glow-2: rgba(45,191,166,0.06);
-  --card-border: rgba(217,174,82,0.18);
-  --card-border-hover: rgba(217,174,82,0.34);
-  --card-shadow: 0 8px 32px rgba(0,0,0,0.35);
-  --card-shadow-hover: 0 14px 44px rgba(0,0,0,0.5);
-  --card-highlight: inset 0 1px 0 rgba(255,255,255,0.05);
-  --scroll-thumb: rgba(217,174,82,0.25);
-  --scroll-thumb-hover: rgba(217,174,82,0.50);
-  --gold-1: #F5C86B;
-  --gold-2: #D9AE52;
-  --gold-3: #B88B2A;
-  --teal-1: #4EE1C8;
-  --teal-2: #2DBFA6;
-  --pattern-opacity: 0.07;
-}
-
-/* ============ FOND & TYPOGRAPHIE ============ */
-html, body, #root {
+/* Base */
+html,
+body,
+#root {
   height: 100%;
   margin: 0;
   padding: 0;
-  background-color: var(--bg);
-  background-image:
-    radial-gradient(ellipse 80% 50% at 50% -10%, var(--glow) 0%, transparent 70%),
-    radial-gradient(ellipse 60% 40% at 100% 100%, var(--glow-2) 0%, transparent 70%);
-  background-attachment: fixed;
-  color: var(--fg);
-  font-family: 'Plus Jakarta Sans', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  font-feature-settings: 'cv11', 'ss01';
-  line-height: 1.55;
+  background-color: #0b1220;
+  color: #f4efe3;
+  font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   overflow-x: hidden;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
   overscroll-behavior-y: none;
   -webkit-tap-highlight-color: transparent;
-  transition: background-color .25s ease, color .25s ease;
+  -webkit-touch-callout: none;
 }
 
-/* Titres : serif d'affichage pour la dignité et l'élégance */
-.font-display, .baaro-title {
-  font-family: 'Fraunces', 'Playfair Display', Georgia, serif;
-  font-weight: 600;
-  letter-spacing: -0.015em;
-  line-height: 1.15;
-}
-.baaro-title { font-size: clamp(1.6rem, 4vw + .6rem, 2.6rem); }
-.baaro-eyebrow {
-  font-size: .72rem; font-weight: 700; letter-spacing: .14em; text-transform: uppercase;
-  color: var(--gold-2);
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 9999;
+  padding: 0.75rem 1.25rem;
+  background: #d9ae52;
+  color: #0b1220;
+  font-weight: 700;
+  border-radius: 0 0 0.75rem 0;
 }
 
-/* ============ CARTES ============ */
+.skip-link:focus {
+  left: 0;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(11, 18, 32, 0.6);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(217, 174, 82, 0.25);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(217, 174, 82, 0.5);
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
 .glass-panel {
-  background: var(--glass);
-  backdrop-filter: blur(18px) saturate(1.4);
-  -webkit-backdrop-filter: blur(18px) saturate(1.4);
-  border: 1px solid var(--border);
+  background: rgba(17, 26, 44, 0.75);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .glass-card {
-  position: relative;
-  background: linear-gradient(135deg, var(--card-from) 0%, var(--card-to) 100%);
-  border: 1px solid var(--card-border);
-  border-radius: 20px;
-  box-shadow: var(--card-shadow), var(--card-highlight);
-  transition: border-color .25s ease, box-shadow .25s ease, transform .25s ease;
-}
-.glass-card:hover { border-color: var(--card-border-hover); }
-/* Carte cliquable : léger soulèvement */
-.glass-card.interactive, a.glass-card, button.glass-card { cursor: pointer; }
-.glass-card.interactive:hover, a.glass-card:hover, button.glass-card:hover {
-  transform: translateY(-3px);
-  box-shadow: var(--card-shadow-hover), var(--card-highlight);
+  background: linear-gradient(
+    135deg,
+    rgba(26, 39, 64, 0.6) 0%,
+    rgba(17, 26, 44, 0.8) 100%
+  );
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
-.baaro-feature-card {
-  background: var(--feature-bg);
-  border: 1px solid var(--feature-border);
-  border-radius: 16px;
+.glass-card:hover {
+  border-color: rgba(217, 174, 82, 0.3);
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
 }
 
-/* ============ BOUTONS ============ */
-.btn-baaro {
-  background: linear-gradient(135deg, #FFA62B 0%, #E8B84A 45%, #2DBFA6 100%);
-  color: #0B1220;
-  font-weight: 800;
-  letter-spacing: .01em;
-  border: 0;
-  border-radius: 16px;
-  box-shadow: 0 6px 22px rgba(217,174,82,0.32), inset 0 1px 0 rgba(255,255,255,0.35);
-  transition: transform .15s ease, box-shadow .2s ease, filter .15s ease;
-  cursor: pointer;
-}
-.btn-baaro:hover { transform: translateY(-1px); filter: brightness(1.05); box-shadow: 0 10px 30px rgba(217,174,82,0.42), inset 0 1px 0 rgba(255,255,255,0.35); }
-.btn-baaro:active { transform: translateY(0) scale(.98); }
-.btn-baaro:disabled { opacity: .55; cursor: not-allowed; transform: none; filter: grayscale(.2); }
-
-.btn-baaro-outline {
-  background: transparent;
-  color: var(--gold-2);
-  font-weight: 700;
-  border: 1.5px solid var(--card-border-hover);
-  border-radius: 16px;
-  transition: background .2s ease, border-color .2s ease, transform .15s ease;
-  cursor: pointer;
-}
-.btn-baaro-outline:hover { background: color-mix(in srgb, var(--gold-1) 12%, transparent); border-color: var(--gold-1); }
-.btn-baaro-outline:active { transform: scale(.98); }
-
-.btn-baaro-ghost {
-  background: transparent; color: var(--muted-light); font-weight: 600;
-  border: 0; border-radius: 14px; cursor: pointer;
-  transition: background .2s ease, color .2s ease;
-}
-.btn-baaro-ghost:hover { background: var(--surface-hover); color: var(--fg); }
-
-/* ============ CHAMPS DE SAISIE ============ */
-.baaro-input {
-  width: 100%;
-  background: var(--input-bg);
-  color: var(--fg);
-  border: 1.5px solid var(--border);
-  border-radius: 14px;
-  padding: .8rem 1rem;
-  font: inherit;
-  transition: border-color .2s ease, box-shadow .2s ease, background .2s ease;
-}
-.baaro-input::placeholder { color: var(--muted); opacity: .8; }
-.baaro-input:hover { border-color: var(--card-border); }
-.baaro-input:focus {
-  outline: none;
-  border-color: var(--gold-1);
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--gold-1) 20%, transparent);
+.gold-glow {
+  box-shadow: 0 0 20px rgba(217, 174, 82, 0.25);
 }
 
-/* ============ BADGES, PASTILLES, SÉPARATEURS ============ */
-.baaro-chip {
-  display: inline-flex; align-items: center; gap: .35rem;
-  padding: .3rem .75rem; border-radius: 9999px;
-  font-size: .78rem; font-weight: 600;
-  background: var(--surface2); color: var(--muted-light);
-  border: 1px solid var(--border);
+.teal-glow {
+  box-shadow: 0 0 20px rgba(45, 191, 166, 0.25);
 }
-.baaro-chip-gold {
-  background: color-mix(in srgb, var(--gold-1) 14%, transparent);
-  color: var(--gold-2);
-  border-color: color-mix(in srgb, var(--gold-1) 35%, transparent);
-}
-.baaro-chip-teal {
-  background: color-mix(in srgb, var(--teal-1) 14%, transparent);
-  color: var(--teal-2);
-  border-color: color-mix(in srgb, var(--teal-1) 35%, transparent);
-}
-.baaro-divider {
-  height: 1px; border: 0; margin: 1.25rem 0;
-  background: linear-gradient(90deg, transparent, var(--card-border-hover), transparent);
-}
-
-/* Avatar avec anneau doré */
-.baaro-avatar-ring {
-  padding: 2px; border-radius: 9999px;
-  background: linear-gradient(135deg, var(--gold-1), var(--teal-1));
-}
-.baaro-avatar-ring > img, .baaro-avatar-ring > div {
-  border-radius: 9999px; border: 2px solid var(--bg); display: block;
-}
-
-/* ============ NAVIGATION ============ */
-.baaro-appbar {
-  position: sticky; top: 0; z-index: 40;
-  background: var(--glass);
-  backdrop-filter: blur(18px) saturate(1.4);
-  -webkit-backdrop-filter: blur(18px) saturate(1.4);
-  border-bottom: 1px solid var(--border);
-}
-.baaro-bottom-nav {
-  position: fixed; left: 12px; right: 12px;
-  bottom: calc(10px + env(safe-area-inset-bottom, 0px));
-  z-index: 50;
-  background: var(--glass);
-  backdrop-filter: blur(20px) saturate(1.5);
-  -webkit-backdrop-filter: blur(20px) saturate(1.5);
-  border: 1px solid var(--card-border);
-  border-radius: 24px;
-  box-shadow: var(--card-shadow-hover);
-}
-@media (min-width: 768px) { .baaro-bottom-nav { display: none; } }
-
-/* ============ MOTIF DISCRET INSPIRÉ DU BOGOLAN ============
-   Ajouter la classe .baaro-pattern à une section (hero, en-tête, onboarding). */
-.baaro-pattern { position: relative; isolation: isolate; }
-.baaro-pattern::before {
-  content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
-  opacity: var(--pattern-opacity);
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='56' height='56' viewBox='0 0 56 56'%3E%3Cg fill='none' stroke='%23C99A2E' stroke-width='1.4'%3E%3Cpath d='M28 6l10 10-10 10-10-10z'/%3E%3Cpath d='M0 34l10 10-10 10M56 34L46 44l10 10'/%3E%3Cpath d='M22 44h12M22 50h12'/%3E%3C/g%3E%3C/svg%3E");
-  background-size: 56px 56px;
-  -webkit-mask-image: linear-gradient(to bottom, #000 0%, transparent 85%);
-  mask-image: linear-gradient(to bottom, #000 0%, transparent 85%);
-}
-
-/* ============ ANIMATIONS (entrée douce) ============ */
-@keyframes baaro-fade-up { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
-.baaro-fade-up { animation: baaro-fade-up .5s cubic-bezier(.2,.7,.2,1) both; }
-.baaro-fade-up:nth-child(2) { animation-delay: .06s; }
-.baaro-fade-up:nth-child(3) { animation-delay: .12s; }
-.baaro-fade-up:nth-child(4) { animation-delay: .18s; }
-.baaro-fade-up:nth-child(5) { animation-delay: .24s; }
-@media (prefers-reduced-motion: reduce) {
-  .baaro-fade-up { animation: none; }
-  .glass-card, .btn-baaro { transition: none; }
-}
-
-/* ============ DIVERS ============ */
-::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: var(--scroll-track); }
-::-webkit-scrollbar-thumb { background: var(--scroll-thumb); border-radius: 9999px; }
-::-webkit-scrollbar-thumb:hover { background: var(--scroll-thumb-hover); }
-.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
-.no-scrollbar::-webkit-scrollbar { display: none; }
 
 .text-gradient-gold {
-  background: linear-gradient(135deg, var(--gold-1) 0%, var(--gold-2) 50%, var(--gold-3) 100%);
-  -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
-}
-.text-gradient-teal {
-  background: linear-gradient(135deg, var(--teal-1) 0%, var(--teal-2) 100%);
-  -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+  background: linear-gradient(
+    135deg,
+    #f5c86b 0%,
+    #d9ae52 50%,
+    #b88b2a 100%
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
 }
 
-.mobile-nav-spacer { padding-bottom: calc(6.5rem + env(safe-area-inset-bottom, 0px)); }
-@media (min-width: 768px) { .mobile-nav-spacer { padding-bottom: 1.5rem; } }
+.text-gradient-teal {
+  background: linear-gradient(
+    135deg,
+    #4ee1c8 0%,
+    #2dbfa6 100%
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+@keyframes pulse-slow {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  50% {
+    opacity: 0.85;
+    transform: scale(1.02);
+  }
+}
+
+.animate-pulse-slow {
+  animation: pulse-slow 4s infinite ease-in-out;
+}
+
+@keyframes float {
+  0%,
+  100% {
+    transform: translateY(0px);
+  }
+
+  50% {
+    transform: translateY(-4px);
+  }
+}
+
+.animate-float {
+  animation: float 3s ease-in-out infinite;
+}
+
+.privacy-blur {
+  filter: blur(14px) brightness(0.7);
+  transition: filter 0.12s ease;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* =========================================================
+   NAVIGATION BASSE
+   ========================================================= */
+
+/*
+ * La navigation mobile est positionnée en fixed en bas.
+ * Cette classe réserve donc suffisamment d'espace pour que
+ * le dernier contenu ne soit jamais caché derrière elle.
+ */
+.mobile-nav-spacer {
+  padding-bottom: calc(
+    5.5rem + env(safe-area-inset-bottom, 0px)
+  );
+}
+
+/*
+ * Sur desktop, la navigation est latérale.
+ * Aucun grand espace réservé en bas n'est nécessaire.
+ */
+@media (min-width: 768px) {
+  .mobile-nav-spacer {
+    padding-bottom: 1.5rem;
+  }
+}
+
+/*
+ * Mobile Web + Android/iOS :
+ * améliore le comportement lors des scrolls/focus vers
+ * le bas de la page.
+ */
+@media (max-width: 767px) {
+  #main-content {
+    scroll-padding-bottom: calc(
+      5.5rem + env(safe-area-inset-bottom, 0px)
+    );
+  }
+}
+
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.safe-top {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+button,
+[role='button'],
+a {
+  touch-action: manipulation;
+}
+
+@media (pointer: coarse) {
+  button:not(.icon-sm),
+  [role='button']:not(.icon-sm) {
+    min-height: 44px;
+  }
+}
+
+.nav-tab-btn,
+button.touch-target {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+.feed-card,
+.content-visibility-auto {
+  content-visibility: auto;
+  contain-intrinsic-size: 80px 280px;
+}
+
+.virtual-list-item {
+  content-visibility: auto;
+  contain-intrinsic-size: 60px 120px;
+}
+
+.lazy-media-box {
+  contain: layout paint;
+}
+
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+:focus-visible {
+  outline: 2px solid #d9ae52;
+  outline-offset: 2px;
+}
+
+.baaro-readable {
+  line-height: 1.55;
+  letter-spacing: 0.01em;
+}
+
+html.baaro-large-text {
+  font-size: 112.5%;
+}
+
+html.baaro-reduce-motion *,
+html.baaro-reduce-motion *::before,
+html.baaro-reduce-motion *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .animate-pulse-slow,
+  .animate-float {
+    animation: none !important;
+  }
+}
+
+.line-clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.line-clamp-3 {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+::selection {
+  background: rgba(217, 174, 82, 0.35);
+  color: #f4efe3;
+}
+
+.baaro-feed-item {
+  content-visibility: auto;
+  contain-intrinsic-size: 1px 320px;
+}
+
+.baaro-tap {
+  min-height: 44px;
+  min-width: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.baaro-safe-bottom {
+  padding-bottom: max(
+    0.75rem,
+    env(safe-area-inset-bottom, 0px)
+  );
+}
+
+.baaro-safe-top {
+  padding-top: max(
+    0.5rem,
+    env(safe-area-inset-top, 0px)
+  );
+}
 
 .baaro-skeleton {
-  background: linear-gradient(90deg, var(--skel-a) 25%, var(--skel-b) 50%, var(--skel-a) 75%);
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.04) 25%,
+    rgba(255, 255, 255, 0.08) 50%,
+    rgba(255, 255, 255, 0.04) 75%
+  );
   background-size: 200% 100%;
   animation: baaro-shimmer 1.2s ease-in-out infinite;
-  border-radius: 12px;
 }
-@keyframes baaro-shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
-:focus-visible { outline: 2px solid var(--gold-1); outline-offset: 2px; }
-::selection { background: rgba(217, 174, 82, 0.35); color: var(--fg); }
 
-/* ============ LIEN « ALLER AU CONTENU » MASQUÉ ============ */
-.skip-link { display: none !important; }
+@keyframes baaro-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
 
-/* ============ HARMONISATION MODE CLAIR ============
-   Corrige les classes sombres codées en dur dans les composants. */
-:root:not([data-mode="dark"]) [class*="bg-white/"] {
-  background-color: color-mix(in srgb, var(--fg) 4%, transparent);
+  100% {
+    background-position: -200% 0;
+  }
 }
-:root:not([data-mode="dark"]) [class*="border-white/"] {
-  border-color: var(--border);
-}
-:root:not([data-mode="dark"]) [class*="text-white/"],
-:root:not([data-mode="dark"]) [class*="text-gray-1"],
-:root:not([data-mode="dark"]) [class*="text-gray-2"],
-:root:not([data-mode="dark"]) [class*="text-gray-3"] {
-  color: var(--muted-light);
-}
-:root:not([data-mode="dark"]) [class*="bg-gray-8"],
-:root:not([data-mode="dark"]) [class*="bg-gray-9"],
-:root:not([data-mode="dark"]) [class*="bg-slate-8"],
-:root:not([data-mode="dark"]) [class*="bg-slate-9"],
-:root:not([data-mode="dark"]) [class*="bg-zinc-8"],
-:root:not([data-mode="dark"]) [class*="bg-zinc-9"],
-:root:not([data-mode="dark"]) [class*="bg-neutral-9"] {
-  background-color: var(--surface);
+
+@media (prefers-reduced-motion: reduce) {
+  .baaro-skeleton {
+    animation: none;
+  }
 }
