@@ -1,1100 +1,1063 @@
-import { useState, useEffect, useCallback, useRef } from "react";
-import {
-  X,
-  Trash2,
-  MoreHorizontal,
-  Image as ImageIcon,
-  Send,
-  Sparkles,
-  Pencil,
-  Flag,
-  MessageCircle,
-} from "lucide-react";
+export { PollDisplay } from "../../components/PollDisplay.jsx";
 
-// Imports via l'alias absolu (@/ -> src/)
-import { COLORS } from "@/theme.js";
-import { useToast } from "@/components/ToastContext.jsx";
-import { supabase } from "@/supabaseClient.js";
-import { handleDbError } from "@/lib/dbErrors.js";
-import { fetchFeedPage } from "@/lib/feedPagination.js";
-import { recordFeedEvent } from "@/lib/feedEvents.js";
-import { checkRateLimit, rateLimitMessage } from "@/lib/rateLimit.js";
+import { useCallback, useEffect, useMemo, useState, memo } from "react";
+import { Bookmark, Check, Share2, UserPlus, X, Zap } from "lucide-react";
+import { COLORS } from "../../theme.js";
+import { supabase } from "../../supabaseClient.js";
+import { useToast } from "../../components/ToastContext.jsx";
+import TranslatedText from "../../components/TranslatedText.jsx";
+import { checkRateLimit, rateLimitMessage } from "../../lib/rateLimit.js";
 
-import { PollCard, SocialPostEnhancements, SocialSuggestions } from "./SocialEnhancements.jsx";
-import { RichTextComposer } from "@/components/RichTextComposer.jsx";
-import { RichTextRenderer } from "@/components/RichTextRenderer.jsx";
-import { EngagementList } from "@/components/EngagementList.jsx";
-import { TipButton } from "@/components/TipButton.jsx";
-import { AskAiButton } from "@/components/AskAiButton.jsx";
-// ⚠️ Ajuste ce chemin : c'est le fichier qui contient ta fonction uploadExternalMedia (R2)
-import { uploadExternalMedia } from "@/lib/externalMedia.js";
-import { TranslateButton } from "@/components/TranslateButton.jsx";
-import { GuestBanner } from "@/components/GuestBanner.jsx";
+function isValidAuthUserId(value) {
+  if (typeof value !== "string" || !value.trim()) return false;
 
-const PAGE_SIZE = 20;
-const MAX_IMAGE_BYTES = 10 * 1024 * 1024; // 10 Mo
-const MAX_VIDEO_BYTES = 50 * 1024 * 1024; // 50 Mo
+  if (
+    value.startsWith("@") ||
+    (value.includes("@") && value.includes("."))
+  ) {
+    return false;
+  }
 
-const REPORT_REASONS = [
-  "Spam ou arnaque",
-  "Harcèlement ou haine",
-  "Contenu inapproprié",
-  "Fausse information",
-  "Autre",
-];
-
-/** Transforme une ligne Supabase en objet post prêt à afficher */
-function formatPost(post) {
-  const profile = post.profiles || {};
-  const rawHandle = profile.handle || "membre";
-  const cleanHandle = rawHandle.startsWith("@") ? rawHandle : `@${rawHandle}`;
-
-  return {
-    id: post.id,
-    author_id: post.author_id,
-    text: post.text,
-    media_url: post.media_url,
-    media_type: post.media_type,
-    created_at: post.created_at,
-    likes: post.likes_count || 0,
-    comments_count: post.comments_count || 0,
-    views_count: post.views_count || 0,
-    display_name: profile.display_name || "Membre BAARO",
-    handle: cleanHandle,
-    flag: profile.flag || "🌍",
-    avatar: profile.avatar_url || "",
-  };
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+    value
+  );
 }
 
-export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
-  // MainShell envoie `id` et `user_id`
-  const propUserId = id || user_id || null;
+const REACTIONS = [
+  { id: "like", label: "👍", title: "J’aime" },
+];
 
-  const { showToast, showPointsReward } = useToast();
-  const [posts, setPosts] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [hasMore, setHasMore] = useState(true);
+/* =========================================================
+   POLL CARD
+   ========================================================= */
 
-  // Saisie enrichie, sondages & médias
-  const [newText, setNewText] = useState("");
-  const [pollData, setPollData] = useState(null);
-  const [mood, setMood] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [mediaFile, setMediaFile] = useState(null);
-  const [mediaPreview, setMediaPreview] = useState(null);
+export const PollCard = memo(function PollCard({ postId, user_id }) {
+  const { showToast } = useToast();
 
-  // Session & modales
-  const [currentUserId, setCurrentUserId] = useState(propUserId);
-  const [menuOpenId, setMenuOpenId] = useState(null);
-  const [engagement, setEngagement] = useState(null);
+  const [poll, setPoll] = useState(null);
+  const [rows, setRows] = useState([]);
+  const [myVote, setMyVote] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [showVoters, setShowVoters] = useState(false);
+  const [votersData, setVotersData] = useState([]);
+  const [loadingVoters, setLoadingVoters] = useState(false);
 
-  // Modification & signalement
-  const [editingId, setEditingId] = useState(null);
-  const [editText, setEditText] = useState("");
-  const [savingEdit, setSavingEdit] = useState(false);
-  const [reportPost, setReportPost] = useState(null);
-
-  // Commentaires, traduction
-  const [commentOpen, setCommentOpen] = useState({});
-  const [commentsMap, setCommentsMap] = useState({});
-  const [newCommentText, setNewCommentText] = useState({});
-  const [translatedMap, setTranslatedMap] = useState({});
-
-  const fileInputRef = useRef(null);
-  const cursorRef = useRef(null);
-  const sentinelRef = useRef(null);
-  const postViewRefs = useRef({});
-  const postViewedRef = useRef(new Set());
-  const postsRef = useRef([]);
-
-  const activeUserId = currentUserId || propUserId || null;
-
-  // Session Supabase
-  useEffect(() => {
-    let mounted = true;
-
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (mounted && session?.user?.id) setCurrentUserId(session.user.id);
-    });
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (mounted) setCurrentUserId(session?.user?.id || null);
-    });
-
-    return () => {
-      mounted = false;
-      subscription?.unsubscribe();
-    };
-  }, []);
-
-  // Libération de l'URL d'aperçu média
-  useEffect(() => {
-    return () => {
-      if (mediaPreview) URL.revokeObjectURL(mediaPreview);
-    };
-  }, [mediaPreview]);
-
-  // Fermer le menu "..." en touchant ailleurs
-  useEffect(() => {
-    if (!menuOpenId) return;
-    const close = (e) => {
-      if (!e.target.closest?.("[data-post-menu]")) setMenuOpenId(null);
-    };
-    document.addEventListener("pointerdown", close);
-    return () => document.removeEventListener("pointerdown", close);
-  }, [menuOpenId]);
-
-  // Texte rédigé par l'IA, envoyé vers le champ de publication
-  useEffect(() => {
-    const apply = (text) => {
-      if (!text) return;
-      setNewText(text);
-      window.scrollTo({ top: 0, behavior: "smooth" });
-    };
-    try {
-      const draft = sessionStorage.getItem("baaro:ai_draft");
-      if (draft) {
-        sessionStorage.removeItem("baaro:ai_draft");
-        apply(draft);
-      }
-    } catch {
-      // sessionStorage indisponible
+  const load = useCallback(async () => {
+    if (!postId) {
+      setPoll(null);
+      setRows([]);
+      setMyVote(null);
+      return;
     }
-    const onDraft = (e) => {
-      try { sessionStorage.removeItem("baaro:ai_draft"); } catch {}
-      apply(e.detail?.text);
-    };
-    window.addEventListener("baaro:ai-draft", onDraft);
-    return () => window.removeEventListener("baaro:ai-draft", onDraft);
-  }, []);
 
-  // 1. Chargement du flux (silent = rafraîchir sans écran de chargement)
-  const loadPosts = useCallback(
-    async ({ silent = false } = {}) => {
-      if (!silent) setLoading(true);
-      cursorRef.current = null;
-      try {
-        const { rows, nextCursor } = await fetchFeedPage({
-          cursor: null,
-          pageSize: PAGE_SIZE,
-        });
-        setPosts(rows.map(formatPost));
-        cursorRef.current = nextCursor;
-        setHasMore(Boolean(nextCursor));
-      } catch (error) {
-        handleDbError(error, showToast, "Erreur lors du chargement du fil");
-        if (!silent) setPosts([]);
-        setHasMore(false);
-      } finally {
-        setLoading(false);
-      }
-    },
-    [showToast]
-  );
-
-  // 2. Défilement infini
-  const loadMorePosts = useCallback(async () => {
-    if (loadingMore || !hasMore || loading || !cursorRef.current) return;
-    setLoadingMore(true);
     try {
-      const { rows, nextCursor } = await fetchFeedPage({
-        cursor: cursorRef.current,
-        pageSize: PAGE_SIZE,
-      });
-      const incoming = rows.map(formatPost);
-      // Évite les doublons si un post est apparu entre deux pages
-      setPosts((prev) => {
-        const seen = new Set(prev.map((p) => p.id));
-        return [...prev, ...incoming.filter((p) => !seen.has(p.id))];
-      });
-      cursorRef.current = nextCursor;
-      setHasMore(Boolean(nextCursor));
+      const { data: pollRow, error: pollError } = await supabase
+        .from("polls")
+        .select("id,question")
+        .eq("post_id", postId)
+        .maybeSingle();
+
+      if (pollError) throw pollError;
+
+      if (!pollRow) {
+        setPoll(null);
+        setRows([]);
+        setMyVote(null);
+        return;
+      }
+
+      const [resultsResponse, voteResponse] = await Promise.all([
+        supabase
+          .from("poll_results")
+          .select("option_id,option_text,position,vote_count")
+          .eq("poll_id", pollRow.id)
+          .order("position"),
+        isValidAuthUserId(user_id)
+          ? supabase
+              .from("poll_votes")
+              .select("option_id")
+              .eq("poll_id", pollRow.id)
+              .eq("user_id", user_id)
+              .maybeSingle()
+          : Promise.resolve({ data: null, error: null }),
+      ]);
+
+      if (resultsResponse.error) throw resultsResponse.error;
+      if (voteResponse.error) throw voteResponse.error;
+
+      setPoll(pollRow);
+      setRows(resultsResponse.data || []);
+      setMyVote(voteResponse.data?.option_id || null);
     } catch (error) {
-      handleDbError(error, showToast, "Erreur lors de la récupération de la suite du fil");
-    } finally {
-      setLoadingMore(false);
+      console.error("[BAARO] Erreur chargement sondage :", error);
     }
-  }, [loadingMore, hasMore, loading, showToast]);
+  }, [postId, user_id]);
 
   useEffect(() => {
-    loadPosts();
-  }, [loadPosts]);
+    load();
+  }, [load]);
 
   useEffect(() => {
-    if (!sentinelRef.current) return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0].isIntersecting) loadMorePosts();
-      },
-      { rootMargin: "400px" }
-    );
-    observer.observe(sentinelRef.current);
-    return () => observer.disconnect();
-  }, [loadMorePosts, posts.length]);
+    if (!poll?.id) return undefined;
 
-  // Rafraîchit le haut du fil sans perdre les pages déjà chargées
-  const refreshTop = useCallback(async () => {
-    try {
-      const { rows } = await fetchFeedPage({ cursor: null, pageSize: PAGE_SIZE });
-      const incoming = rows.map(formatPost);
-      setPosts((prev) => {
-        const seen = new Set(prev.map((p) => p.id));
-        const fresh = incoming.filter((p) => !seen.has(p.id));
-        return fresh.length ? [...fresh, ...prev] : prev;
-      });
-    } catch {
-      // Rafraîchissement silencieux : on ignore l'erreur
-    }
-  }, []);
-
-  // Temps réel : nouveaux posts et suppressions
-  useEffect(() => {
-    let timer = null;
     const channel = supabase
-      .channel("posts_feed")
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "posts" }, () => {
-        clearTimeout(timer);
-        timer = setTimeout(refreshTop, 600);
-      })
-      .on("postgres_changes", { event: "DELETE", schema: "public", table: "posts" }, (payload) => {
-        const deletedId = payload.old?.id;
-        if (deletedId) setPosts((prev) => prev.filter((p) => p.id !== deletedId));
-      })
+      .channel(`poll-${poll.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "poll_votes",
+          filter: `poll_id=eq.${poll.id}`,
+        },
+        () => {
+          load();
+        }
+      )
       .subscribe();
+
     return () => {
-      clearTimeout(timer);
       supabase.removeChannel(channel);
     };
-  }, [refreshTop]);
+  }, [poll?.id, load]);
 
-  // Comptage des vues : un post compte quand il est visible à 50 %
-  useEffect(() => {
-    postsRef.current = posts;
-  }, [posts]);
+  const total = useMemo(
+    () => rows.reduce((sum, row) => sum + Number(row.vote_count || 0), 0),
+    [rows]
+  );
 
-  useEffect(() => {
-    if (!posts.length || !activeUserId) return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        entries.forEach((entry) => {
-          if (!entry.isIntersecting || entry.intersectionRatio < 0.5) return;
-          const postId = entry.target.dataset.postId;
-          if (!postId || postViewedRef.current.has(postId)) return;
-          const post = postsRef.current.find((item) => item.id === postId);
-          if (!post || post.author_id === activeUserId) return;
-
-          postViewedRef.current.add(postId);
-          supabase.rpc("register_post_view", { p_post_id: postId }).then(({ data, error }) => {
-            if (error) {
-              postViewedRef.current.delete(postId);
-              return;
-            }
-            const next = Number(data?.views || 0);
-            setPosts((prev) =>
-              prev.map((item) => (item.id === postId ? { ...item, views_count: next } : item))
-            );
-          });
-        });
-      },
-      { threshold: [0.5] }
-    );
-    Object.values(postViewRefs.current).forEach((el) => el && observer.observe(el));
-    return () => observer.disconnect();
-  }, [posts.length, activeUserId]);
-
-  // Choix d'un média
-  const handlePickFile = (e) => {
-    const file = e.target.files?.[0];
-    e.target.value = ""; // permet de re-choisir le même fichier
-    if (!file) return;
-
-    const isVideo = file.type.startsWith("video");
-    const isImage = file.type.startsWith("image");
-    if (!isVideo && !isImage) {
-      showToast("Format non supporté (image ou vidéo uniquement)", "error");
+  const vote = async (optionId) => {
+    if (!isValidAuthUserId(user_id)) {
+      showToast("Connectez-vous pour voter", "info");
       return;
     }
-    if (file.size > (isVideo ? MAX_VIDEO_BYTES : MAX_IMAGE_BYTES)) {
-      showToast(`Fichier trop lourd (max ${isVideo ? "50" : "10"} Mo)`, "error");
-      return;
+
+    if (busy || !poll?.id || !optionId) return;
+
+    setBusy(true);
+
+    try {
+      const { error } = await supabase.rpc("vote_poll", {
+        p_poll_id: poll.id,
+        p_option_id: optionId,
+      });
+
+      if (error) throw error;
+
+      setMyVote(optionId);
+      await load();
+      showToast("Vote enregistré !", "success");
+    } catch (error) {
+      console.error("[BAARO] Erreur vote sondage :", error);
+
+      showToast(
+        error?.message === "SOCIAL_RATE_LIMIT"
+          ? "Trop d'actions, réessayez."
+          : `Vote impossible : ${error?.message || "erreur inconnue"}`,
+        "error"
+      );
+    } finally {
+      setBusy(false);
     }
-    setMediaFile(file);
-    setMediaPreview(URL.createObjectURL(file));
   };
 
-  // 3. Publication
-  const handlePublish = async () => {
-    const hasText = Boolean(newText.trim());
-    const hasMedia = Boolean(mediaFile);
-    const hasPoll = Boolean(pollData?.question?.trim());
-
-    if (!hasText && !hasMedia && !hasPoll) return;
-    if (submitting) return;
-
-    if (!activeUserId) {
-      showToast("Veuillez vous connecter pour publier", "error");
+  const openVoters = async () => {
+    if (!isValidAuthUserId(user_id)) {
+      showToast("Connectez-vous pour voir les votants", "info");
       return;
     }
 
-    const limit = checkRateLimit("create_post", { max: 5, windowMs: 60_000 });
-    if (!limit.allowed) {
-      showToast(rateLimitMessage(limit.retryAfterSec), "error");
-      return;
-    }
+    if (!poll?.id) return;
 
-    setSubmitting(true);
+    setShowVoters(true);
+    setLoadingVoters(true);
+
     try {
-      let mediaUrl = null;
-      let mediaType = null;
+      const { data, error } = await supabase.rpc("get_poll_voters", {
+        p_poll_id: poll.id,
+      });
 
-      if (mediaFile) {
-        const isVideo = mediaFile.type.startsWith("video");
-        const result = await uploadExternalMedia(mediaFile, {
-          folder: "posts",
-          userId: activeUserId,
-          maxBytes: isVideo ? MAX_VIDEO_BYTES : MAX_IMAGE_BYTES,
-        });
-        mediaUrl = result.url;
-        mediaType = isVideo ? "video" : "image";
+      if (error) throw error;
+
+      setVotersData(Array.isArray(data) ? data : []);
+    } catch (error) {
+      console.error("[BAARO] Erreur chargement votants :", error);
+
+      showToast(
+        error?.message === "ACCESS_DENIED"
+          ? "Accès refusé"
+          : "Impossible de charger les votants",
+        "error"
+      );
+
+      setShowVoters(false);
+    } finally {
+      setLoadingVoters(false);
+    }
+  };
+
+  if (!poll) return null;
+
+  return (
+    <>
+      <div
+        className="rounded-xl border p-3"
+        style={{
+          borderColor: COLORS.borderTeal,
+          background: COLORS.surface,
+        }}
+      >
+        <TranslatedText
+          text={poll.question}
+          className="font-semibold text-sm mb-3"
+          style={{ color: COLORS.ivory }}
+        />
+
+        <div className="space-y-2">
+          {rows.map((row) => {
+            const active = myVote === row.option_id;
+            const count = Number(row.vote_count || 0);
+            const percentage = total
+              ? Math.round((count / total) * 100)
+              : 0;
+
+            return (
+              <button
+                key={row.option_id}
+                type="button"
+                disabled={busy}
+                onClick={() => vote(row.option_id)}
+                className="relative w-full overflow-hidden rounded-lg border px-3 py-2 text-left text-xs transition disabled:opacity-60 active:scale-[0.98]"
+                style={{
+                  borderColor: active
+                    ? COLORS.borderTeal
+                    : COLORS.border,
+                  color: COLORS.ivory,
+                }}
+              >
+                <span
+                  className="absolute inset-y-0 left-0 opacity-20"
+                  style={{
+                    width: `${percentage}%`,
+                    background: COLORS.teal,
+                  }}
+                />
+
+                <span className="relative flex items-center justify-between gap-3">
+                  <span>
+                    {row.option_text}
+                    {active ? " ✓" : ""}
+                  </span>
+
+                  <span className="font-bold whitespace-nowrap">
+                    {percentage}% · {count}
+                  </span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="flex items-center justify-between gap-2 mt-2">
+          <p
+            className="text-[10px]"
+            style={{ color: COLORS.muted }}
+          >
+            {total} vote{total > 1 ? "s" : ""} · Vous pouvez changer votre vote
+          </p>
+
+          {total > 0 && isValidAuthUserId(user_id) && (
+            <button
+              type="button"
+              onClick={openVoters}
+              className="text-[10px] font-bold hover:underline transition-colors"
+              style={{ color: COLORS.teal }}
+            >
+              Voir les votants 👥
+            </button>
+          )}
+        </div>
+      </div>
+
+      {showVoters && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+          onClick={() => setShowVoters(false)}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Liste des votants"
+            onClick={(event) => event.stopPropagation()}
+            className="w-full max-w-md max-h-[80vh] overflow-hidden rounded-2xl border shadow-2xl flex flex-col"
+            style={{
+              background: COLORS.surface,
+              borderColor: COLORS.borderGold,
+            }}
+          >
+            <div
+              className="flex items-center justify-between p-4 border-b"
+              style={{ borderColor: COLORS.border }}
+            >
+              <h3
+                className="font-bold text-sm"
+                style={{ color: COLORS.ivory }}
+              >
+                Qui a voté ?
+              </h3>
+
+              <button
+                type="button"
+                aria-label="Fermer"
+                onClick={() => setShowVoters(false)}
+                className="p-1 rounded-lg hover:bg-white/5 transition-colors"
+                style={{ color: COLORS.muted }}
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+              {loadingVoters ? (
+                <div
+                  className="text-center py-8 text-xs"
+                  style={{ color: COLORS.muted }}
+                >
+                  Chargement...
+                </div>
+              ) : votersData.length === 0 ? (
+                <div
+                  className="text-center py-8 text-xs"
+                  style={{ color: COLORS.muted }}
+                >
+                  Aucun votant
+                </div>
+              ) : (
+                votersData.map((option) => {
+                  const voters = Array.isArray(option.voters)
+                    ? option.voters
+                    : [];
+
+                  return (
+                    <div key={option.option_id}>
+                      <div className="flex items-center justify-between mb-2 gap-2">
+                        <p
+                          className="font-bold text-xs"
+                          style={{ color: COLORS.ivory }}
+                        >
+                          {option.option_text}
+                        </p>
+
+                        <span
+                          className="text-[10px] whitespace-nowrap"
+                          style={{ color: COLORS.muted }}
+                        >
+                          {voters.length} vote{voters.length > 1 ? "s" : ""}
+                        </span>
+                      </div>
+
+                      {voters.length > 0 ? (
+                        <div className="flex flex-wrap gap-2">
+                          {voters.map((voter) => (
+                            <div
+                              key={voter.id}
+                              className="flex items-center gap-2 px-2 py-1 rounded-lg border"
+                              style={{
+                                borderColor: COLORS.border,
+                                background: COLORS.surface2,
+                              }}
+                            >
+                              <div
+                                className="w-6 h-6 rounded-full overflow-hidden border flex items-center justify-center text-[10px] font-bold"
+                                style={{ borderColor: COLORS.borderGold }}
+                              >
+                                {voter.avatar_url ? (
+                                  <img
+                                    src={voter.avatar_url}
+                                    alt=""
+                                    className="w-full h-full object-cover"
+                                    loading="lazy"
+                                  />
+                                ) : (
+                                  <span style={{ color: COLORS.gold }}>
+                                    {voter.display_name?.charAt(0) || "?"}
+                                  </span>
+                                )}
+                              </div>
+
+                              <span
+                                className="text-[10px]"
+                                style={{ color: COLORS.ivory }}
+                              >
+                                {voter.display_name || "Membre"}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p
+                          className="text-[10px] italic"
+                          style={{ color: COLORS.muted }}
+                        >
+                          Aucun vote pour cette option
+                        </p>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+});
+
+/* =========================================================
+   SOCIAL POST ENHANCEMENTS
+   ========================================================= */
+
+export const SocialPostEnhancements = memo(
+  function SocialPostEnhancements({ post, user_id, onLiked, onSaved, onShared }) {
+    const { showToast } = useToast();
+
+    const [reaction, setReaction] = useState(null);
+    const [reactionCount, setReactionCount] = useState(0);
+    const [saved, setSaved] = useState(false);
+    const [shareCount, setShareCount] = useState(0);
+    const [following, setFollowing] = useState(false);
+    const [busy, setBusy] = useState(false);
+    const [pop, setPop] = useState(false);
+
+    const load = useCallback(async () => {
+      if (!post?.id) return;
+
+      try {
+        const [
+          likesResult,
+          sharesResult,
+          bookmarkResult,
+          followResult,
+        ] = await Promise.all([
+          supabase
+            .from("post_likes")
+            .select("user_id")
+            .eq("post_id", post.id),
+
+          supabase
+            .from("post_shares")
+            .select("post_id", { count: "exact", head: true })
+            .eq("post_id", post.id),
+
+          isValidAuthUserId(user_id)
+            ? supabase
+                .from("post_bookmarks")
+                .select("post_id")
+                .eq("post_id", post.id)
+                .eq("user_id", user_id)
+                .maybeSingle()
+            : Promise.resolve({ data: null, error: null }),
+
+          isValidAuthUserId(user_id) &&
+          post.author_id &&
+          post.author_id !== user_id
+            ? supabase
+                .from("follows")
+                .select("followed_id")
+                .eq("follower_id", user_id)
+                .eq("followed_id", post.author_id)
+                .maybeSingle()
+            : Promise.resolve({ data: null, error: null }),
+        ]);
+
+        if (likesResult.error) throw likesResult.error;
+        if (sharesResult.error) throw sharesResult.error;
+        if (bookmarkResult.error) throw bookmarkResult.error;
+        if (followResult.error) throw followResult.error;
+
+        const likeRows = likesResult.data || [];
+
+        setReactionCount(likeRows.length);
+        setReaction(
+          isValidAuthUserId(user_id) &&
+            likeRows.some((row) => row.user_id === user_id)
+            ? "like"
+            : null
+        );
+        setSaved(!!bookmarkResult.data);
+        setShareCount(sharesResult.count || 0);
+        setFollowing(!!followResult.data);
+      } catch (error) {
+        console.error(
+          "[BAARO] Erreur chargement interactions :",
+          error
+        );
+      }
+    }, [post?.id, post?.author_id, user_id]);
+
+    useEffect(() => {
+      load();
+    }, [load]);
+
+    useEffect(() => {
+      if (!post?.id) return undefined;
+
+      const channel = supabase
+        .channel(`post-likes-${post.id}`)
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "post_likes",
+            filter: `post_id=eq.${post.id}`,
+          },
+          () => {
+            load();
+          }
+        )
+        .subscribe();
+
+      return () => {
+        supabase.removeChannel(channel);
+      };
+    }, [post?.id, load]);
+
+    const current = useMemo(
+      () => REACTIONS.find((item) => item.id === reaction),
+      [reaction]
+    );
+
+    const chooseReaction = async (value) => {
+      if (!isValidAuthUserId(user_id)) {
+        showToast("Connectez-vous pour réagir", "info");
+        return;
       }
 
-      const { data: newPost, error: postErr } = await supabase
-        .from("posts")
-        .insert([
-          {
-            author_id: activeUserId,
-            text: newText + (mood ? ` (Humeur: ${mood})` : ""),
-            media_url: mediaUrl,
-            media_type: mediaType,
-          },
-        ])
-        .select()
-        .single();
+      if (!post?.id || busy) return;
 
-      if (postErr) throw postErr;
-
-      if (hasPoll && newPost) {
-        const validOptions = (pollData.options || []).filter((opt) => opt.trim() !== "");
-        const { error: pollErr } = await supabase.from("polls").insert([
-          {
-            post_id: newPost.id,
-            question: pollData.question,
-            options: validOptions,
-          },
-        ]);
-        if (pollErr) {
-          console.warn("Erreur d'enregistrement du sondage:", pollErr.message);
-          showToast("Publication envoyée, mais le sondage n'a pas pu être créé", "error");
+      const isUnlike = reaction === "like" && value === "like";
+      if (!isUnlike) {
+        const limit = checkRateLimit("like", { max: 30, windowMs: 60_000 });
+        if (!limit.allowed) {
+          showToast(rateLimitMessage(limit.retryAfterSec), "error");
+          return;
         }
       }
 
-      setNewText("");
-      setMood("");
-      setPollData(null);
-      setMediaFile(null);
-      setMediaPreview(null);
-      onRewardPoints?.(
-        mediaUrl ? "publish_post_media" : "publish_post",
-        "Publication créée !",
-        newPost?.id
-      );
-      if (showPointsReward) {
-        showPointsReward(mediaUrl ? 8 : 5, "Publication créée !");
-      } else {
-        showToast("Perspective diffusée avec succès sur le réseau mondial !", "success");
-      }
-      refreshTop();
-    } catch (err) {
-      handleDbError(err, showToast, "Échec de la publication");
-    } finally {
-      setSubmitting(false);
-    }
-  };
+      setBusy(true);
+      setPop(true);
 
-  // Suppression
-  const handleDelete = async (postId) => {
-    setMenuOpenId(null);
-    if (!confirm("Supprimer la publication ?")) return;
-
-    const { error } = await supabase.from("posts").delete().eq("id", postId);
-    if (error) {
-      handleDbError(error, showToast, "Suppression impossible");
-      return;
-    }
-    setPosts((prev) => prev.filter((p) => p.id !== postId));
-    showToast("Publication supprimée", "info");
-  };
-
-  // Points gagnés quand SocialPostEnhancements enregistre un J'aime
-  const handleLiked = (postId) => {
-    onRewardPoints?.("like_post", "J'aime distribué", postId);
-    showPointsReward?.(2, "J'aime distribué");
-  };
-
-  // Commentaires
-  const loadComments = async (postId) => {
-    if (!postId) return;
-    try {
-      const { data, error } = await supabase
-        .from("comments")
-        .select("id, text, created_at, author_id, profiles:author_id (display_name, handle)")
-        .eq("post_id", postId)
-        .order("created_at", { ascending: true })
-        .limit(50);
-      if (error) throw error;
-      const rows = (data || []).map((c) => ({
-        id: c.id,
-        text: c.text,
-        author: c.profiles?.display_name || c.profiles?.handle || "Membre",
-        author_id: c.author_id,
-        created_at: c.created_at,
-      }));
-      setCommentsMap((prev) => ({ ...prev, [postId]: rows }));
-    } catch {
       try {
-        const { data } = await supabase
-          .from("comments")
-          .select("id, text, created_at, author_id")
-          .eq("post_id", postId)
-          .order("created_at", { ascending: true })
-          .limit(50);
-        setCommentsMap((prev) => ({
-          ...prev,
-          [postId]: (data || []).map((c) => ({
-            id: c.id,
-            text: c.text,
-            author: "Membre",
-            author_id: c.author_id,
-            created_at: c.created_at,
-          })),
-        }));
-      } catch (err) {
-        handleDbError(err, showToast, "Impossible de charger les commentaires");
+        if (reaction === "like" && value === "like") {
+          const { error } = await supabase
+            .from("post_likes")
+            .delete()
+            .eq("post_id", post.id)
+            .eq("user_id", user_id);
+
+          if (error) throw error;
+
+          setReaction(null);
+          setReactionCount((count) => Math.max(0, count - 1));
+
+          await load();
+          return;
+        }
+
+        const { error } = await supabase
+          .from("post_likes")
+          .upsert(
+            { post_id: post.id, user_id },
+            { onConflict: "post_id,user_id" }
+          );
+
+        if (error) throw error;
+
+        setReaction("like");
+        onLiked?.(post.id);
+
+        await load();
+      } catch (error) {
+        console.error("[BAARO] Erreur enregistrement like :", error);
+        showToast("Impossible d’enregistrer la réaction", "error");
+      } finally {
+        setBusy(false);
+        setTimeout(() => setPop(false), 300);
       }
-    }
-  };
+    };
 
-  const toggleComments = (postId) => {
-    const next = !commentOpen[postId];
-    setCommentOpen((prev) => ({ ...prev, [postId]: next }));
-    if (next) loadComments(postId);
-  };
+    const bookmark = async () => {
+      if (!isValidAuthUserId(user_id)) {
+        showToast("Connectez-vous pour enregistrer", "info");
+        return;
+      }
 
-  const handleAddComment = async (postId) => {
-    const text = (newCommentText[postId] || "").trim();
-    if (!text) return;
-    if (!activeUserId) {
-      showToast("Vous devez être connecté", "error");
-      return;
-    }
-    const limit = checkRateLimit("comment", { max: 20, windowMs: 60_000 });
-    if (!limit.allowed) {
-      showToast(rateLimitMessage(limit.retryAfterSec), "error");
-      return;
-    }
+      if (!post?.id || busy) return;
 
-    try {
-      const { data: created, error } = await supabase
-        .from("comments")
-        .insert({ post_id: postId, author_id: activeUserId, text })
-        .select("id")
-        .single();
-      if (error) throw error;
+      setBusy(true);
 
-      const newComment = {
-        id: created?.id || `c_${Date.now()}`,
-        author: "Vous",
-        text,
-        author_id: activeUserId,
-      };
-      setCommentsMap((prev) => ({ ...prev, [postId]: [...(prev[postId] || []), newComment] }));
-      setPosts((prev) =>
-        prev.map((p) =>
-          p.id === postId ? { ...p, comments_count: (p.comments_count || 0) + 1 } : p
-        )
-      );
-      setNewCommentText((prev) => ({ ...prev, [postId]: "" }));
+      try {
+        if (saved) {
+          const { error } = await supabase
+            .from("post_bookmarks")
+            .delete()
+            .eq("post_id", post.id)
+            .eq("user_id", user_id);
 
-      onRewardPoints?.("comment", "Commentaire ajouté", created?.id);
-      showPointsReward?.(1, "Commentaire ajouté");
-    } catch (error) {
-      handleDbError(error, showToast, "Impossible de commenter");
-    }
-  };
+          if (error) throw error;
 
-  const handleDeleteComment = async (postId, commentId) => {
-    if (!activeUserId) return;
-    if (!window.confirm("Supprimer ce commentaire ?")) return;
-    try {
-      const { error } = await supabase
-        .from("comments")
-        .delete()
-        .eq("id", commentId)
-        .eq("author_id", activeUserId);
-      if (error) throw error;
-      setCommentsMap((prev) => ({
-        ...prev,
-        [postId]: (prev[postId] || []).filter((c) => c.id !== commentId),
-      }));
-      setPosts((prev) =>
-        prev.map((p) =>
-          p.id === postId
-            ? { ...p, comments_count: Math.max(0, (p.comments_count || 1) - 1) }
-            : p
-        )
-      );
-      showToast("Commentaire supprimé", "success");
-    } catch (error) {
-      handleDbError(error, showToast, "Impossible de supprimer le commentaire");
-    }
-  };
+          setSaved(false);
+        } else {
+          const { error } = await supabase
+            .from("post_bookmarks")
+            .upsert(
+              { post_id: post.id, user_id },
+              { onConflict: "post_id,user_id" }
+            );
 
-  // Modification
-  const startEdit = (post) => {
-    setMenuOpenId(null);
-    setEditingId(post.id);
-    setEditText(typeof post.text === "string" ? post.text : "");
-  };
+          if (error) throw error;
 
-  const handleSaveEdit = async (post) => {
-    const text = editText.trim();
-    if (!text && !post.media_url) {
-      showToast("Le texte ne peut pas être vide", "error");
-      return;
-    }
-    setSavingEdit(true);
-    const { error } = await supabase
-      .from("posts")
-      .update({ text })
-      .eq("id", post.id)
-      .eq("author_id", activeUserId);
-    setSavingEdit(false);
-    if (error) {
-      handleDbError(error, showToast, "Modification impossible");
-      return;
-    }
-    setPosts((prev) => prev.map((p) => (p.id === post.id ? { ...p, text } : p)));
-    setEditingId(null);
-    showToast("Publication modifiée", "success");
-  };
+          setSaved(true);
+          onSaved?.(post.id);
+        }
+      } catch (error) {
+        console.error("[BAARO] Erreur favori :", error);
+        showToast("Impossible de modifier le favori", "error");
+      } finally {
+        setBusy(false);
+      }
+    };
 
-  // Signalement
-  const handleReport = async (reason) => {
-    const target = reportPost;
-    setReportPost(null);
-    if (!target || !activeUserId) return;
-    const { error } = await supabase.from("reports").insert([
-      { reporter_id: activeUserId, post_id: target.id, reason },
-    ]);
-    if (error) {
-      handleDbError(error, showToast, "Signalement impossible");
-      return;
-    }
-    showToast("Merci, le signalement a été envoyé", "success");
-  };
+    const share = async () => {
+      if (!post?.id || busy) return;
 
-  if (loading) {
+      if (typeof window === "undefined") {
+        showToast("Partage indisponible sur cet appareil", "error");
+        return;
+      }
+
+      setBusy(true);
+
+      try {
+        const url = new URL(window.location.href);
+        url.searchParams.set("post", post.id);
+
+        const shareUrl = url.toString();
+        let channelName = "copy";
+        let shared = false;
+
+        if (typeof navigator !== "undefined" && typeof navigator.share === "function") {
+          try {
+            await navigator.share({
+              title: "BAARO",
+              text: post?.text?.slice(0, 120) || "Publication BAARO",
+              url: shareUrl,
+            });
+
+            channelName = "native";
+            shared = true;
+          } catch (error) {
+            if (error?.name === "AbortError") return;
+
+            // Si le partage natif échoue, tenter la copie du lien.
+            console.warn(
+              "[BAARO] Partage natif indisponible :",
+              error
+            );
+          }
+        }
+
+        if (!shared) {
+          if (
+            typeof navigator !== "undefined" &&
+            navigator.clipboard &&
+            typeof navigator.clipboard.writeText === "function"
+          ) {
+            await navigator.clipboard.writeText(shareUrl);
+            showToast("Lien copié dans le presse-papiers !", "success");
+            shared = true;
+          } else {
+            showToast(
+              "Le partage et la copie du lien ne sont pas disponibles dans ce navigateur.",
+              "error"
+            );
+            return;
+          }
+        }
+
+        if (isValidAuthUserId(user_id)) {
+          const { error } = await supabase.from("post_shares").insert({
+            post_id: post.id,
+            id: user_id,
+            channel: channelName,
+          });
+
+          if (error) {
+            // Le suivi du partage est secondaire : le partage lui-même a réussi.
+            console.warn("[BAARO] Suivi du partage impossible :", error);
+          }
+        }
+
+        setShareCount((count) => count + 1);
+        onShared?.(post.id);
+      } catch (error) {
+        console.error("[BAARO] Erreur partage :", error);
+        showToast("Impossible de partager cette publication", "error");
+      } finally {
+        setBusy(false);
+      }
+    };
+
+    const follow = async () => {
+      if (!isValidAuthUserId(user_id)) {
+        showToast("Connectez-vous pour suivre", "info");
+        return;
+      }
+
+      if (!post?.author_id || user_id === post.author_id || busy) {
+        return;
+      }
+
+      setBusy(true);
+
+      const previousFollowing = following;
+      setFollowing(!previousFollowing);
+
+      try {
+        const { data, error } = await supabase.rpc("toggle_follow", {
+          p_target: post.author_id,
+        });
+
+        if (!error) {
+          const nextFollowing =
+            typeof data === "boolean" ? data : !previousFollowing;
+
+          setFollowing(nextFollowing);
+
+          showToast(
+            nextFollowing
+              ? "Vous suivez maintenant ce compte"
+              : "Vous ne suivez plus ce compte",
+            "success"
+          );
+
+          return;
+        }
+
+        if (previousFollowing) {
+          const { error: deleteError } = await supabase
+            .from("follows")
+            .delete()
+            .eq("follower_id", user_id)
+            .eq("followed_id", post.author_id);
+
+          if (deleteError) throw deleteError;
+
+          setFollowing(false);
+          showToast("Vous ne suivez plus ce compte", "success");
+        } else {
+          const { error: upsertError } = await supabase
+            .from("follows")
+            .upsert(
+              {
+                follower_id: user_id,
+                followed_id: post.author_id,
+                status: "accepted",
+                is_friend: false,
+              },
+              { onConflict: "follower_id,followed_id" }
+            );
+
+          if (upsertError) throw upsertError;
+
+          setFollowing(true);
+          showToast("Vous suivez maintenant ce compte", "success");
+        }
+      } catch (error) {
+        console.error("[BAARO] Erreur abonnement :", error);
+        setFollowing(previousFollowing);
+
+        showToast(
+          `Abonnement impossible : ${error?.message || "erreur inconnue"}`,
+          "error"
+        );
+      } finally {
+        setBusy(false);
+      }
+    };
+
     return (
-      <div className="text-center py-12 text-xs font-medium tracking-widest uppercase opacity-70">
-        Synchronisation du flux mondial et des analyses d'impact...
+      <div className="flex flex-wrap items-center gap-1.5 w-full">
+        {post?.author_id && post.author_id !== user_id && (
+          <button
+            type="button"
+            onClick={follow}
+            disabled={busy}
+            className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-[11px] font-bold border transition-all active:scale-95 disabled:opacity-50"
+            style={{
+              borderColor: following
+                ? COLORS.borderTeal
+                : COLORS.border,
+              color: following ? COLORS.teal : COLORS.muted,
+            }}
+          >
+            {following ? <Check size={13} /> : <UserPlus size={13} />}
+            {following ? "Abonné" : "Suivre"}
+          </button>
+        )}
+
+        <div className="relative">
+          <button
+            type="button"
+            onClick={() => chooseReaction("like")}
+            disabled={busy}
+            aria-pressed={reaction === "like"}
+            aria-label={reaction === "like" ? "Retirer mon J’aime" : "J’aime"}
+            className="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-xs border transition-all duration-200 active:scale-95 disabled:opacity-50"
+            style={{
+              borderColor: COLORS.border,
+              color: current ? COLORS.ivory : COLORS.muted,
+            }}
+          >
+            <span
+              className={`inline-block transition-transform duration-300 ${
+                pop ? "scale-150" : "scale-100"
+              }`}
+            >
+              {current?.label || "👍"}
+            </span>
+
+            <span
+              className={`transition-all duration-300 ${
+                pop ? "scale-110 font-bold" : "scale-100"
+              }`}
+            >
+              {reactionCount || "J’aime"}
+            </span>
+          </button>
+        </div>
+
+        <button
+          type="button"
+          onClick={bookmark}
+          disabled={busy}
+          aria-label={saved ? "Retirer des favoris" : "Enregistrer"}
+          className="flex shrink-0 items-center gap-1.5 rounded-lg border border-transparent px-2.5 py-1.5 text-xs transition-all active:scale-95 disabled:opacity-50"
+          style={{ color: saved ? COLORS.gold : COLORS.muted }}
+        >
+          <Bookmark
+            size={15}
+            fill={saved ? "currentColor" : "none"}
+          />
+          <span className="hidden sm:inline">
+            {saved ? "Enregistré" : "Enregistrer"}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={share}
+          disabled={busy}
+          aria-label="Partager cette publication"
+          className="flex shrink-0 items-center gap-1.5 rounded-lg border border-transparent px-2.5 py-1.5 text-xs ml-auto transition-all active:scale-95 disabled:opacity-50"
+          style={{ color: COLORS.muted }}
+        >
+          <Share2 size={15} />
+          {shareCount ? (
+            shareCount
+          ) : (
+            <span className="hidden sm:inline">Partager</span>
+          )}
+        </button>
       </div>
     );
   }
+);
 
-  return (
-    <div className="flex flex-col gap-6 max-w-2xl mx-auto w-full pb-20">
-      {/* MODULE DE RÉDACTION */}
-      {activeUserId && (
-        <div
-          className="glass-card rounded-2xl p-4 shadow-xl border flex flex-col gap-3 transition-all"
-          style={{ borderColor: COLORS.borderGold, background: COLORS.surface }}
-        >
-          <div
-            className="flex items-center gap-2 border-b pb-2 text-xs font-semibold"
-            style={{ borderColor: COLORS.border, color: COLORS.gold }}
-          >
-            <Sparkles size={15} />
-            <span>Créer une publication à fort impact</span>
-          </div>
+/* =========================================================
+   SOCIAL SUGGESTIONS
+   ========================================================= */
 
-          <RichTextComposer
-            value={newText}
-            onChange={setNewText}
-            pollData={pollData}
-            onPollChange={setPollData}
-            placeholder="Partagez une perspective, une analyse ou une innovation avec le monde..."
-            rows={3}
-            disabled={submitting}
-          />
+export const SocialSuggestions = memo(
+  function SocialSuggestions({ user_id, onOpenProfile }) {
+    const { showToast } = useToast();
 
-          {mediaPreview && (
-            <div
-              className="relative rounded-xl overflow-hidden max-h-60 border"
-              style={{ borderColor: COLORS.border }}
-            >
-              <button
-                type="button"
-                onClick={() => {
-                  setMediaFile(null);
-                  setMediaPreview(null);
-                }}
-                className="absolute top-2 right-2 z-10 p-1.5 rounded-full bg-black/60 text-white hover:bg-black transition-colors"
-                aria-label="Retirer le média"
-              >
-                <X size={14} />
-              </button>
-              {mediaFile?.type?.startsWith("video") ? (
-                <video src={mediaPreview} controls className="w-full h-full object-cover" />
-              ) : (
-                <img src={mediaPreview} alt="Aperçu" className="w-full h-full object-cover" />
-              )}
-            </div>
-          )}
+    const [items, setItems] = useState([]);
+    const [busyId, setBusyId] = useState(null);
 
-          <div
-            className="flex items-center justify-between border-t pt-3 flex-wrap gap-2"
-            style={{ borderColor: COLORS.border }}
-          >
-            <div className="flex items-center gap-2">
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*,video/*"
-                className="hidden"
-                onChange={handlePickFile}
-              />
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                title="Joindre un média"
-                className="p-1.5 rounded-lg hover:bg-white/10 transition-colors flex items-center gap-1.5 text-xs font-medium"
-                style={{ color: COLORS.gold }}
-              >
-                <ImageIcon size={16} />
-                <span>Média</span>
-              </button>
-              <button
-                type="button"
-                onClick={() =>
-                  window.dispatchEvent(
-                    new CustomEvent("baaro:ask-ai", {
-                      detail: {
-                        prompt: newText.trim()
-                          ? `Améliore ce brouillon de publication pour BAARO et rends-le plus engageant :\n"${newText.trim()}"\n\n`
-                          : "Rédige une publication engageante pour BAARO sur le thème : ",
-                      },
-                    })
-                  )
-                }
-                title="Rédiger avec l'IA"
-                className="p-1.5 rounded-lg hover:bg-white/10 transition-colors flex items-center gap-1.5 text-xs font-medium"
-                style={{ color: COLORS.teal }}
-              >
-                <Sparkles size={16} />
-                <span>IA</span>
-              </button>
-              <select
-                value={mood}
-                onChange={(e) => setMood(e.target.value)}
-                disabled={submitting}
-                className="bg-transparent text-xs p-1 rounded border outline-none"
-                style={{ borderColor: COLORS.border, color: COLORS.muted }}
-              >
-                <option value="">Humeur ?</option>
-                <option value="🔥 Inspiré">🔥 Inspiré</option>
-                <option value="💡 Innovant">💡 Innovant</option>
-                <option value="🎉 Joyeux">🎉 Joyeux</option>
-              </select>
-            </div>
+    const loadSuggestions = useCallback(async () => {
+      if (!isValidAuthUserId(user_id)) {
+        setItems([]);
+        return;
+      }
 
-            <button
-              type="button"
-              onClick={handlePublish}
-              disabled={submitting || (!newText.trim() && !mediaFile && !pollData?.question?.trim())}
-              className="px-4 py-1.5 rounded-xl text-xs font-bold transition-all shadow-md flex items-center gap-1.5 disabled:opacity-50"
-              style={{ background: COLORS.gold, color: "#000" }}
-            >
-              {submitting ? "Publication..." : "Publier"} <Send size={13} />
-            </button>
-          </div>
-        </div>
-      )}
+      try {
+        const { data, error } = await supabase.rpc("get_social_suggestions", {
+          p_limit: 6,
+        });
 
-      <GuestBanner
-        onUpgrade={() =>
-          showToast("Crée un compte depuis Réglages pour gagner des points", "info")
+        if (error) throw error;
+
+        setItems(Array.isArray(data) ? data : []);
+      } catch (error) {
+        console.error("[BAARO] Erreur chargement suggestions :", error);
+        setItems([]);
+      }
+    }, [user_id]);
+
+    useEffect(() => {
+      loadSuggestions();
+    }, [loadSuggestions]);
+
+    const follow = async (item) => {
+      const target = item?.id;
+
+      if (
+        !isValidAuthUserId(user_id) ||
+        !isValidAuthUserId(target) ||
+        target === user_id
+      ) {
+        return;
+      }
+
+      if (busyId) return;
+
+      setBusyId(target);
+
+      try {
+        const { data, error } = await supabase.rpc("toggle_follow", {
+          p_target: target,
+        });
+
+        if (error) {
+          // Repli sur l'insertion directe UNIQUEMENT si la fonction n'existe pas.
+          // Toute autre erreur (limite, règle de la base...) est affichée telle quelle.
+          const functionMissing =
+            error.code === "PGRST202" || error.code === "42883";
+          if (!functionMissing) throw error;
+
+          const { error: upsertError } = await supabase.from("follows").upsert(
+            {
+              follower_id: user_id,
+              followed_id: target,
+              status: "accepted",
+              is_friend: false,
+            },
+            { onConflict: "follower_id,followed_id" }
+          );
+
+          if (upsertError) throw upsertError;
+        } else if (data === false) {
+          // Le compte était déjà suivi : le toggle vient de le retirer, on le remet.
+          const { error: againError } = await supabase.rpc("toggle_follow", {
+            p_target: target,
+          });
+          if (againError) throw againError;
         }
-      />
 
-      {/* RECOMMANDATIONS D'ABONNEMENT */}
-      {activeUserId && <SocialSuggestions user_id={activeUserId} onOpenProfile={onOpenProfile} />}
+        const remaining = items.filter((entry) => entry.id !== target);
+        setItems(remaining);
+        showToast("Abonnement ajouté", "success");
 
-      {/* ÉTAT VIDE */}
-      {posts.length === 0 && (
-        <div className="text-center py-10 text-sm" style={{ color: COLORS.muted }}>
-          Aucune publication pour le moment. Sois le premier à partager quelque chose !
+        // Recharge de nouvelles suggestions quand la liste se vide
+        if (remaining.length < 3) loadSuggestions();
+      } catch (error) {
+        console.error("[BAARO] Erreur suggestion follow :", error);
+
+        showToast(
+          error?.message === "SOCIAL_RATE_LIMIT"
+            ? "Trop d'abonnements d'affilée, réessayez dans un instant."
+            : `Abonnement impossible : ${error?.message || "erreur inconnue"}`,
+          "error"
+        );
+      } finally {
+        setBusyId(null);
+      }
+    };
+
+    if (!items.length) return null;
+
+    return (
+      <section
+        className="glass-card rounded-2xl p-4 border"
+        style={{ borderColor: COLORS.border }}
+      >
+        <div className="flex items-center gap-2 mb-3">
+          <Zap size={16} style={{ color: COLORS.gold }} />
+
+          <h3 className="font-bold text-sm" style={{ color: COLORS.ivory }}>
+            Comptes à découvrir
+          </h3>
         </div>
-      )}
 
-      {/* FLUX DE PUBLICATIONS */}
-      <div className="flex flex-col gap-4">
-        {posts.map((post) => (
-          <article
-            key={post.id}
-            data-post-id={post.id}
-            ref={(el) => {
-              if (el) postViewRefs.current[post.id] = el;
-              else delete postViewRefs.current[post.id];
-            }}
-            className="glass-card rounded-2xl p-5 shadow-xl border flex flex-col gap-3"
-            style={{ borderColor: COLORS.border }}
-          >
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <button
-                  type="button"
-                  onClick={() => onOpenProfile?.(post.author_id)}
-                  className="w-10 h-10 rounded-full overflow-hidden border flex items-center justify-center font-bold text-sm shrink-0"
-                  style={{ borderColor: COLORS.borderGold, background: COLORS.surface }}
-                  aria-label={`Profil de ${post.display_name}`}
+        <div className="flex gap-3 overflow-x-auto pb-1">
+          {items.map((item) => (
+            <div
+              key={item.id}
+              className="min-w-[160px] rounded-xl border p-3 transition-all hover:border-amber-400/50"
+              style={{
+                borderColor: COLORS.border,
+                background: COLORS.surface,
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => onOpenProfile?.(item.id)}
+                className="flex items-center gap-2 text-left w-full"
+              >
+                <div
+                  className="w-9 h-9 rounded-full overflow-hidden border flex items-center justify-center shrink-0"
+                  style={{ borderColor: COLORS.borderGold }}
                 >
-                  {post.avatar ? (
-                    <img src={post.avatar} alt="" className="w-full h-full object-cover" />
+                  {item.avatar_url ? (
+                    <img
+                      src={item.avatar_url}
+                      alt=""
+                      loading="lazy"
+                      className="w-full h-full object-cover"
+                    />
                   ) : (
                     <span style={{ color: COLORS.gold }}>
-                      {post.display_name?.charAt(0) || "?"}
+                      {item.full_name?.charAt(0) || "?"}
                     </span>
                   )}
-                </button>
-                <div>
+                </div>
+
+                <div className="min-w-0">
                   <p
-                    className="font-bold text-sm flex items-center gap-1"
+                    className="font-semibold text-xs truncate"
                     style={{ color: COLORS.ivory }}
                   >
-                    {post.display_name} {post.flag}
+                    {item.full_name || "Membre"}
                   </p>
-                  <p className="text-xs" style={{ color: COLORS.muted }}>
-                    {post.handle} ·{" "}
-                    {new Date(post.created_at).toLocaleDateString("fr-FR", {
-                      day: "numeric",
-                      month: "short",
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })}
-                  </p>
-                </div>
-              </div>
 
-              {activeUserId && (
-                <div className="relative" data-post-menu>
-                  <button
-                    type="button"
-                    onClick={() => setMenuOpenId((cur) => (cur === post.id ? null : post.id))}
-                    className="p-2 rounded-lg hover:bg-white/5"
-                    aria-label="Options de la publication"
-                  >
-                    <MoreHorizontal size={18} />
-                  </button>
-                  {menuOpenId === post.id && (
-                    <div
-                      className="absolute right-0 top-9 z-20 min-w-[170px] rounded-xl border shadow-xl py-1"
-                      style={{ background: COLORS.surface, borderColor: COLORS.borderGold }}
-                    >
-                      {post.author_id === activeUserId ? (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() => startEdit(post)}
-                            className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-white/5"
-                            style={{ color: COLORS.ivory }}
-                          >
-                            <Pencil size={14} /> Modifier
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleDelete(post.id)}
-                            className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-white/5 text-red-400"
-                          >
-                            <Trash2 size={14} /> Supprimer
-                          </button>
-                        </>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setMenuOpenId(null);
-                            setReportPost(post);
-                          }}
-                          className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-white/5 text-red-400"
-                        >
-                          <Flag size={14} /> Signaler
-                        </button>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* TEXTE ENRICHI */}
-            {editingId === post.id ? (
-              <div className="flex flex-col gap-2">
-                <textarea
-                  value={editText}
-                  onChange={(e) => setEditText(e.target.value)}
-                  rows={4}
-                  autoFocus
-                  className="w-full px-3 py-2 rounded-xl border text-sm outline-none"
-                  style={{
-                    background: COLORS.surface2,
-                    borderColor: COLORS.borderGold,
-                    color: COLORS.ivory,
-                  }}
-                />
-                <div className="flex justify-end gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setEditingId(null)}
-                    className="px-3 py-1.5 rounded-xl text-xs border"
-                    style={{ borderColor: COLORS.border, color: COLORS.muted }}
-                  >
-                    Annuler
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleSaveEdit(post)}
-                    disabled={savingEdit}
-                    className="px-3 py-1.5 rounded-xl text-xs font-bold disabled:opacity-50"
-                    style={{ background: COLORS.gold, color: "#000" }}
-                  >
-                    {savingEdit ? "Enregistrement..." : "Enregistrer"}
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div
-                className="text-sm leading-relaxed whitespace-pre-wrap"
-                style={{ color: COLORS.ivory }}
-              >
-                {translatedMap[post.id] ? (
-                  translatedMap[post.id]
-                ) : (
-                  <RichTextRenderer content={post.text} />
-                )}
-              </div>
-            )}
-            {translatedMap[post.id] && (
-              <p className="text-[10px]" style={{ color: COLORS.muted }}>
-                Traduit par BAARO
-              </p>
-            )}
-
-            {/* MÉDIA */}
-            {post.media_url && (
-              <div
-                className="rounded-xl overflow-hidden border"
-                style={{ borderColor: COLORS.border }}
-              >
-                {post.media_type?.startsWith("video") ? (
-                  <video
-                    src={post.media_url}
-                    controls
-                    preload="metadata"
-                    className="w-full max-h-80 object-cover bg-black"
-                    onEnded={() => recordFeedEvent(post.id, "complete")}
-                  />
-                ) : (
-                  <img
-                    src={post.media_url}
-                    alt=""
-                    loading="lazy"
-                    className="w-full max-h-80 object-cover"
-                  />
-                )}
-              </div>
-            )}
-
-            {/* SONDAGES ET INTERACTIONS SOCIALES */}
-            <PollCard postId={post.id} user_id={activeUserId} />
-            <SocialPostEnhancements
-              post={post}
-              user_id={activeUserId}
-              onLiked={handleLiked}
-              onSaved={(postId) => recordFeedEvent(postId, "save")}
-              onShared={(postId) => recordFeedEvent(postId, "share")}
-            />
-
-            {/* BARRE D'ENGAGEMENT */}
-            <div
-              className="flex items-center justify-between gap-2 pt-2 border-t flex-wrap"
-              style={{ borderColor: COLORS.border }}
-            >
-              <div
-                className="flex items-center gap-3 text-[11px] font-medium flex-wrap"
-                style={{ color: COLORS.muted }}
-              >
-                <span className="flex items-center gap-1">
-                  👁️ {Number(post.views_count || 0)} vues certifiées
-                </span>
-                {post.author_id === activeUserId && (
-                  <button
-                    type="button"
-                    onClick={() => setEngagement({ type: "postLikes", id: post.id })}
-                    className="text-[10px] underline ml-2 hover:text-white transition-colors"
-                  >
-                    Audience détaillée
-                  </button>
-                )}
-              </div>
-
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => toggleComments(post.id)}
-                  className="flex items-center gap-1.5 text-xs transition hover:opacity-80"
-                  style={{ color: COLORS.muted }}
-                  aria-label="Commentaires"
-                >
-                  <MessageCircle size={16} />
-                  {post.comments_count || 0}
-                </button>
-
-                <TranslateButton
-                  text={typeof post.text === "string" ? post.text : ""}
-                  isTranslated={!!translatedMap[post.id]}
-                  preferredLang="fr"
-                  onTranslated={(translated) =>
-                    setTranslatedMap((prev) => ({ ...prev, [post.id]: translated }))
-                  }
-                  onClear={() => setTranslatedMap((prev) => ({ ...prev, [post.id]: null }))}
-                />
-
-                <AskAiButton text={typeof post.text === "string" ? post.text : ""} />
-
-                {post.author_id !== activeUserId && (
-                  <TipButton recipientId={post.author_id} postId={post.id} compact />
-                )}
-
-              </div>
-            </div>
-
-            {commentOpen[post.id] && (
-              <div
-                className="pt-3 border-t space-y-2"
-                style={{ borderColor: COLORS.border }}
-              >
-                {(commentsMap[post.id] || []).map((c) => (
-                  <div
-                    key={c.id}
-                    className="text-xs flex items-start justify-between gap-2"
+                  <p
+                    className="text-[10px] truncate"
                     style={{ color: COLORS.muted }}
                   >
-                    <div>
-                      <span className="font-bold" style={{ color: COLORS.ivory }}>
-                        {c.author}
-                      </span>{" "}
-                      : {c.text}
-                    </div>
-                    {c.author_id === activeUserId && (
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteComment(post.id, c.id)}
-                        className="shrink-0 p-1 text-red-400/80 hover:text-red-400"
-                        aria-label="Supprimer le commentaire"
-                      >
-                        <Trash2 size={12} />
-                      </button>
-                    )}
-                  </div>
-                ))}
-                {activeUserId && (
-                  <div className="flex gap-2">
-                    <input
-                      value={newCommentText[post.id] || ""}
-                      onChange={(e) =>
-                        setNewCommentText((prev) => ({ ...prev, [post.id]: e.target.value }))
-                      }
-                      onKeyDown={(e) => e.key === "Enter" && handleAddComment(post.id)}
-                      placeholder="Ajouter un commentaire..."
-                      className="flex-1 min-w-0 px-3 py-2 rounded-lg border text-xs outline-none"
-                      style={{
-                        background: COLORS.surface2,
-                        borderColor: COLORS.border,
-                        color: COLORS.ivory,
-                      }}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => handleAddComment(post.id)}
-                      className="p-2 rounded-lg"
-                      style={{ background: COLORS.gold, color: "#000" }}
-                      aria-label="Envoyer le commentaire"
-                    >
-                      <Send size={14} />
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
-          </article>
-        ))}
-
-        {hasMore && <div ref={sentinelRef} style={{ height: 1 }} />}
-        {loadingMore && (
-          <div className="text-center py-3 text-xs opacity-60">Chargement…</div>
-        )}
-      </div>
-
-      {reportPost && (
-        <div
-          className="fixed inset-0 z-[1100] flex items-end sm:items-center justify-center bg-black/70 p-3"
-          onClick={() => setReportPost(null)}
-        >
-          <div
-            className="w-full max-w-sm rounded-2xl border p-4 flex flex-col gap-2"
-            style={{ background: COLORS.surface, borderColor: COLORS.borderGold }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <p className="font-bold text-sm" style={{ color: COLORS.ivory }}>
-              Pourquoi signaler cette publication ?
-            </p>
-            {REPORT_REASONS.map((r) => (
-              <button
-                key={r}
-                type="button"
-                onClick={() => handleReport(r)}
-                className="w-full text-left px-3 py-2.5 rounded-xl border text-xs hover:bg-white/5"
-                style={{ borderColor: COLORS.border, color: COLORS.ivory }}
-              >
-                {r}
+                    {item.handle || ""}
+                  </p>
+                </div>
               </button>
-            ))}
-            <button
-              type="button"
-              onClick={() => setReportPost(null)}
-              className="mt-1 text-xs"
-              style={{ color: COLORS.muted }}
-            >
-              Annuler
-            </button>
-          </div>
+
+              <button
+                type="button"
+                onClick={() => follow(item)}
+                disabled={busyId !== null}
+                className="mt-2 w-full rounded-lg py-1.5 text-[11px] font-bold transition-all active:scale-95 disabled:opacity-50"
+                style={{
+                  background: COLORS.gold,
+                  color: COLORS.bg,
+                }}
+              >
+                {busyId === item.id ? "…" : "Suivre"}
+              </button>
+            </div>
+          ))}
         </div>
-      )}
-
-      {engagement && (
-        <EngagementList
-          type={engagement.type}
-          targetId={engagement.id}
-          ownerId={activeUserId}
-          viewerId={activeUserId}
-          onClose={() => setEngagement(null)}
-        />
-      )}
-    </div>
-  );
-}
-
-export default FeedTab;
+      </section>
+    );
+  }
+);
