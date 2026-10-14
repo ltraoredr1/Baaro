@@ -8,6 +8,8 @@ import {
   MessageSquare,
   Coins,
   Swords,
+  Mic,
+  Square,
   Volume2,
   VolumeX,
   PlusCircle,
@@ -45,11 +47,13 @@ export function AiAssistantTab({ userProfile, onPublishAction }) {
   const [loading, setLoading] = useState(false);
   const [provider, setProvider] = useState(null);
   
-  // État pour la gestion de la synthèse vocale active par message
+  // États vocaux
   const [speakingMessageId, setSpeakingMessageId] = useState(null);
+  const [isListening, setIsListening] = useState(false);
+  
   const bottomRef = useRef(null);
+  const recognitionRef = useRef(null);
 
-  // Annulation de la voix en cas de mise en veille, masquage ou démontage
   const stopSpeech = useCallback(() => {
     if (typeof window !== "undefined" && "speechSynthesis" in window) {
       window.speechSynthesis.cancel();
@@ -74,24 +78,57 @@ export function AiAssistantTab({ userProfile, onPublishAction }) {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, loading]);
 
+  // Gestion de la reconnaissance vocale (Micro)
+  const toggleListening = () => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      showToast("La dictée vocale n'est pas supportée par votre navigateur", "error");
+      return;
+    }
+
+    if (isListening) {
+      recognitionRef.current?.stop();
+      setIsListening(false);
+      return;
+    }
+
+    try {
+      const recognition = new SpeechRecognition();
+      recognition.lang = "fr-FR";
+      recognition.interimResults = false;
+      recognition.maxAlternatives = 1;
+
+      recognition.onstart = () => setIsListening(true);
+      recognition.onresult = (event) => {
+        const transcript = event.results[0][0].transcript;
+        setInput((prev) => (prev ? `${prev}${transcript}` : transcript));
+      };
+      recognition.onerror = () => setIsListening(false);
+      recognition.onend = () => setIsListening(false);
+
+      recognitionRef.current = recognition;
+      recognition.start();
+    } catch {
+      setIsListening(false);
+      showToast("Impossible d'activer le micro", "error");
+    }
+  };
+
   const handleSpeechToggle = (messageId, text) => {
     if (typeof window === "undefined" || !("speechSynthesis" in window)) {
-      showToast("La synthèse vocale n'est pas supportée par votre navigateur", "error");
+      showToast("La synthèse vocale n'est pas supportée", "error");
       return;
     }
 
     const synth = window.speechSynthesis;
 
-    // Si ce message est déjà en train d'être lu, on l'arrête
     if (speakingMessageId === messageId) {
       synth.cancel();
       setSpeakingMessageId(null);
       return;
     }
 
-    // Si une autre lecture est en cours, on l'interrompt d'abord
     synth.cancel();
-
     if (!text) return;
 
     const cleanText = text.replace(/[*#_`]/g, "");
@@ -99,13 +136,8 @@ export function AiAssistantTab({ userProfile, onPublishAction }) {
     utterance.lang = "fr-FR";
     utterance.rate = 1.0;
 
-    utterance.onend = () => {
-      setSpeakingMessageId(null);
-    };
-
-    utterance.onerror = () => {
-      setSpeakingMessageId(null);
-    };
+    utterance.onend = () => setSpeakingMessageId(null);
+    utterance.onerror = () => setSpeakingMessageId(null);
 
     setSpeakingMessageId(messageId);
     synth.speak(utterance);
@@ -115,8 +147,6 @@ export function AiAssistantTab({ userProfile, onPublishAction }) {
     const query = (customText || input).trim();
     if (!query || loading) return;
     setInput("");
-
-    // Arrêter toute lecture en cours lors de l'envoi d'un nouveau message
     stopSpeech();
 
     const userMsg = { id: `u_${Date.now()}`, role: "user", text: query };
@@ -211,7 +241,6 @@ export function AiAssistantTab({ userProfile, onPublishAction }) {
                     {m.text}
                   </div>
 
-                  {/* Boutons d'actions sous le message de l'assistant */}
                   {m.role === "assistant" && !m.isError && (
                     <div className="flex items-center gap-2 flex-wrap">
                       <button
@@ -252,10 +281,23 @@ export function AiAssistantTab({ userProfile, onPublishAction }) {
         </div>
 
         <form onSubmit={(e) => { e.preventDefault(); handleSend(); }} className="flex gap-2 pt-4 border-t mt-3" style={{ borderColor: COLORS.border }}>
+          <button
+            type="button"
+            onClick={toggleListening}
+            className={`p-2.5 rounded-xl border flex items-center justify-center transition-all ${isListening ? "animate-pulse" : ""}`}
+            style={{
+              background: isListening ? `${COLORS.teal}20` : COLORS.surface2,
+              borderColor: isListening ? COLORS.borderTeal : COLORS.border,
+              color: isListening ? COLORS.teal : COLORS.ivory,
+            }}
+            title="Dicter par la voix"
+          >
+            {isListening ? <Square size={16} /> : <Mic size={16} />}
+          </button>
           <input
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="Posez votre question ou demandez une action..."
+            placeholder={isListening ? "Écoute en cours..." : "Posez votre question ou demandez une action..."}
             className="flex-1 min-w-0 px-4 py-2.5 rounded-xl border text-sm outline-none"
             style={{ background: COLORS.surface2, borderColor: COLORS.border, color: COLORS.ivory }}
           />
