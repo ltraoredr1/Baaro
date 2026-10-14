@@ -12,17 +12,17 @@ const DEFAULT_ALLOWED = [
   "http://localhost:3000",
   "http://127.0.0.1:5173",
   "http://127.0.0.1:3000",
+  // App native Capacitor (Android : androidScheme "https" -> https://localhost)
+  "https://localhost",
+  "http://localhost",
+  "capacitor://localhost",
 ];
 
 function normalizeOrigin(value) {
   const raw = String(value || "").trim();
-
   if (!raw) return "";
-
   try {
-    return new URL(
-      raw.includes("://") ? raw : `https://${raw}`
-    ).origin;
+    return new URL(raw.includes("://") ? raw : `https://${raw}`).origin;
   } catch {
     return "";
   }
@@ -36,12 +36,9 @@ function getAllowedOrigins() {
 
   /*
    * Vercel fournit automatiquement certaines variables utiles :
-   *
-   * VERCEL_URL
-   * VERCEL_PROJECT_PRODUCTION_URL
-   *
-   * On les ajoute automatiquement afin d'éviter qu'une requête
-   * provenant du déploiement BAARO soit bloquée par CORS.
+   * VERCEL_URL, VERCEL_PROJECT_PRODUCTION_URL
+   * On les ajoute afin d'éviter qu'une requête du déploiement BAARO
+   * soit bloquée par CORS.
    */
   const vercelOrigins = [
     normalizeOrigin(process.env.VERCEL_URL),
@@ -49,13 +46,7 @@ function getAllowedOrigins() {
     normalizeOrigin(process.env.PUBLIC_APP_URL),
   ].filter(Boolean);
 
-  return [
-    ...new Set([
-      ...DEFAULT_ALLOWED,
-      ...fromEnv,
-      ...vercelOrigins,
-    ]),
-  ];
+  return [...new Set([...DEFAULT_ALLOWED, ...fromEnv, ...vercelOrigins])];
 }
 
 function isProduction() {
@@ -70,8 +61,7 @@ export function applyCors(req, res) {
   const allowed = getAllowedOrigins();
 
   /*
-   * Pas d'Origin :
-   * requête serveur, client natif ou appel direct.
+   * Pas d'Origin : requête serveur, client natif ou appel direct.
    */
   if (!origin) {
     // Pas besoin de bloquer.
@@ -79,11 +69,7 @@ export function applyCors(req, res) {
     res.setHeader("Access-Control-Allow-Origin", origin);
   } else if (isProduction()) {
     res.setHeader("Vary", "Origin");
-
-    return res.status(403).json({
-      ok: false,
-      error: "Origin not allowed",
-    });
+    return res.status(403).json({ ok: false, error: "Origin not allowed" });
   } else {
     /*
      * En développement, on laisse la requête continuer.
@@ -93,26 +79,12 @@ export function applyCors(req, res) {
     res.setHeader("Vary", "Origin");
   }
 
-  res.setHeader(
-    "Access-Control-Allow-Methods",
-    "GET, POST, PUT, PATCH, DELETE, OPTIONS"
-  );
-
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
   res.setHeader(
     "Access-Control-Allow-Headers",
-    [
-      "Content-Type",
-      "Authorization",
-      "X-Session-Id",
-      "X-BAARO-Country",
-    ].join(", ")
+    ["Content-Type", "Authorization", "X-Session-Id", "X-BAARO-Country"].join(", ")
   );
-
-  res.setHeader(
-    "Access-Control-Max-Age",
-    "86400"
-  );
-
+  res.setHeader("Access-Control-Max-Age", "86400");
   res.setHeader("Vary", "Origin");
 
   if (req.method === "OPTIONS") {
@@ -181,29 +153,15 @@ function clientIp(req) {
   );
 }
 
-function memoryLimit(
-  req,
-  {
-    key,
-    max = 20,
-    windowMs = 60_000,
-  }
-) {
+function memoryLimit(req, { key, max = 20, windowMs = 60_000 }) {
   const ip = clientIp(req);
   const bucketKey = `${key}:${ip}`;
   const now = Date.now();
 
   let bucket = store.get(bucketKey);
 
-  if (
-    !bucket ||
-    now - bucket.start >= windowMs
-  ) {
-    bucket = {
-      start: now,
-      count: 0,
-    };
-
+  if (!bucket || now - bucket.start >= windowMs) {
+    bucket = { start: now, count: 0 };
     store.set(bucketKey, bucket);
   }
 
@@ -211,27 +169,19 @@ function memoryLimit(
 
   if (store.size > 5000) {
     for (const [k, value] of store) {
-      if (
-        now - value.start >= windowMs
-      ) {
+      if (now - value.start >= windowMs) {
         store.delete(k);
       }
     }
   }
 
   if (bucket.count > max) {
-    const retryAfter = Math.ceil(
-      (windowMs - (now - bucket.start)) / 1000
-    );
+    const retryAfter = Math.ceil((windowMs - (now - bucket.start)) / 1000);
 
     return {
       ok: false,
       status: 429,
-      body: {
-        ok: false,
-        error: "Trop de requêtes",
-        retryAfter,
-      },
+      body: { ok: false, error: "Trop de requêtes", retryAfter },
       headers: {
         "Retry-After": String(retryAfter),
         "X-RateLimit-Limit": String(max),
@@ -240,10 +190,7 @@ function memoryLimit(
     };
   }
 
-  return {
-    ok: true,
-    remaining: max - bucket.count,
-  };
+  return { ok: true, remaining: max - bucket.count };
 }
 
 export function rateLimit(req, opts) {
@@ -257,69 +204,29 @@ function upstashConfigured() {
   );
 }
 
-export async function rateLimitAsync(
-  req,
-  {
-    key,
-    max = 20,
-    windowMs = 60_000,
-  }
-) {
+export async function rateLimitAsync(req, { key, max = 20, windowMs = 60_000 }) {
   if (!upstashConfigured()) {
-    return memoryLimit(req, {
-      key,
-      max,
-      windowMs,
-    });
+    return memoryLimit(req, { key, max, windowMs });
   }
 
   const ip = clientIp(req);
-
-  const redisKey =
-    `rl:${key}:${ip}`;
-
-  const url =
-    process.env.UPSTASH_REDIS_REST_URL
-      .replace(/\/$/, "");
-
-  const token =
-    process.env.UPSTASH_REDIS_REST_TOKEN;
-
-  const windowSec =
-    Math.max(
-      1,
-      Math.ceil(windowMs / 1000)
-    );
+  const redisKey = `rl:${key}:${ip}`;
+  const url = process.env.UPSTASH_REDIS_REST_URL.replace(/\/$/, "");
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+  const windowSec = Math.max(1, Math.ceil(windowMs / 1000));
 
   try {
-    const incrRes = await fetch(
-      `${url}/incr/${encodeURIComponent(redisKey)}`,
-      {
-        headers: {
-          Authorization:
-            `Bearer ${token}`,
-        },
-      }
-    );
+    const incrRes = await fetch(`${url}/incr/${encodeURIComponent(redisKey)}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
 
-    const incrData =
-      await incrRes.json();
-
-    const count =
-      Number(incrData?.result ?? 0);
+    const incrData = await incrRes.json();
+    const count = Number(incrData?.result ?? 0);
 
     if (count === 1) {
-      await fetch(
-        `${url}/expire/${encodeURIComponent(
-          redisKey
-        )}/${windowSec}`,
-        {
-          headers: {
-            Authorization:
-              `Bearer ${token}`,
-          },
-        }
-      );
+      await fetch(`${url}/expire/${encodeURIComponent(redisKey)}/${windowSec}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
     }
 
     if (count > max) {
@@ -328,38 +235,19 @@ export async function rateLimitAsync(
       return {
         ok: false,
         status: 429,
-        body: {
-          ok: false,
-          error: "Trop de requêtes",
-          retryAfter,
-        },
+        body: { ok: false, error: "Trop de requêtes", retryAfter },
         headers: {
-          "Retry-After":
-            String(retryAfter),
-          "X-RateLimit-Limit":
-            String(max),
-          "X-RateLimit-Remaining":
-            "0",
+          "Retry-After": String(retryAfter),
+          "X-RateLimit-Limit": String(max),
+          "X-RateLimit-Remaining": "0",
         },
       };
     }
 
-    return {
-      ok: true,
-      remaining:
-        Math.max(0, max - count),
-    };
+    return { ok: true, remaining: Math.max(0, max - count) };
   } catch (e) {
-    console.error(
-      "rateLimitAsync Upstash fallback memory:",
-      e?.message || e
-    );
-
-    return memoryLimit(req, {
-      key,
-      max,
-      windowMs,
-    });
+    console.error("rateLimitAsync Upstash fallback memory:", e?.message || e);
+    return memoryLimit(req, { key, max, windowMs });
   }
 }
 
@@ -372,18 +260,14 @@ let _stripe = null;
 export function getStripe() {
   if (_stripe) return _stripe;
 
-  const key =
-    process.env.STRIPE_SECRET_KEY;
+  const key = process.env.STRIPE_SECRET_KEY;
 
   if (!key) {
-    throw new Error(
-      "STRIPE_SECRET_KEY manquante"
-    );
+    throw new Error("STRIPE_SECRET_KEY manquante");
   }
 
   _stripe = new Stripe(key, {
-    apiVersion:
-      "2024-11-20.acacia",
+    apiVersion: "2024-11-20.acacia",
     maxNetworkRetries: 2,
   });
 
@@ -396,197 +280,126 @@ export function mapStripeError(err) {
     provider: "stripe",
     type: err?.type || "unknown",
     code: err?.code || null,
-    decline_code:
-      err?.decline_code || null,
+    decline_code: err?.decline_code || null,
     param: err?.param || null,
-    requestId:
-      err?.requestId ||
-      err?.raw?.requestId ||
-      null,
-    message:
-      "Erreur de paiement. Réessaie ou utilise un autre moyen.",
+    requestId: err?.requestId || err?.raw?.requestId || null,
+    message: "Erreur de paiement. Réessaie ou utilise un autre moyen.",
     status: 402,
   };
 
   switch (err?.type) {
     case "StripeCardError":
-      return {
-        ...base,
-        status: 402,
-        message:
-          humanCardMessage(err),
-      };
+      return { ...base, status: 402, message: humanCardMessage(err) };
 
     case "StripeRateLimitError":
       return {
         ...base,
         status: 429,
-        message:
-          "Trop de tentatives. Attends quelques secondes puis réessaie.",
+        message: "Trop de tentatives. Attends quelques secondes puis réessaie.",
       };
 
     case "StripeInvalidRequestError":
       return {
         ...base,
         status: 400,
-        message:
-          err.message ||
-          "Requête de paiement invalide.",
+        message: err.message || "Requête de paiement invalide.",
       };
 
     case "StripeAPIError":
       return {
         ...base,
         status: 502,
-        message:
-          "Service de paiement temporairement indisponible. Réessaie plus tard.",
+        message: "Service de paiement temporairement indisponible. Réessaie plus tard.",
       };
 
     case "StripeConnectionError":
       return {
         ...base,
         status: 503,
-        message:
-          "Impossible de joindre le service de paiement. Vérifie ta connexion.",
+        message: "Impossible de joindre le service de paiement. Vérifie ta connexion.",
       };
 
     case "StripeAuthenticationError":
-      console.error(
-        "[Stripe] Authentication error",
-        err.message
-      );
-
+      console.error("[Stripe] Authentication error", err.message);
       return {
         ...base,
         status: 500,
-        message:
-          "Configuration paiement invalide. Contacte le support.",
+        message: "Configuration paiement invalide. Contacte le support.",
       };
 
     case "StripePermissionError":
       return {
         ...base,
         status: 403,
-        message:
-          "Paiement non autorisé pour ce compte.",
+        message: "Paiement non autorisé pour ce compte.",
       };
 
     case "StripeIdempotencyError":
       return {
         ...base,
         status: 409,
-        message:
-          "Cette opération a déjà été traitée. Rafraîchis la page.",
+        message: "Cette opération a déjà été traitée. Rafraîchis la page.",
       };
 
     default:
-      if (
-        err?.code === "ETIMEDOUT" ||
-        err?.code === "ECONNRESET"
-      ) {
+      if (err?.code === "ETIMEDOUT" || err?.code === "ECONNRESET") {
         return {
           ...base,
           status: 503,
-          message:
-            "Délai dépassé avec le service de paiement. Réessaie.",
+          message: "Délai dépassé avec le service de paiement. Réessaie.",
         };
       }
 
-      console.error(
-        "[Stripe] Unhandled error",
-        err
-      );
+      console.error("[Stripe] Unhandled error", err);
 
       return {
         ...base,
         status: 500,
-        message:
-          err?.message ||
-          base.message,
+        message: err?.message || base.message,
       };
   }
 }
 
 function humanCardMessage(err) {
-  const code =
-    err.decline_code ||
-    err.code;
+  const code = err.decline_code || err.code;
 
   const map = {
-    card_declined:
-      "Carte refusée par ta banque.",
-    insufficient_funds:
-      "Fonds insuffisants.",
-    lost_card:
-      "Carte signalée comme perdue. Contacte ta banque.",
-    stolen_card:
-      "Carte signalée comme volée. Contacte ta banque.",
-    expired_card:
-      "Carte expirée.",
-    incorrect_cvc:
-      "Code de sécurité (CVC) incorrect.",
-    incorrect_number:
-      "Numéro de carte incorrect.",
-    invalid_expiry_month:
-      "Mois d’expiration invalide.",
-    invalid_expiry_year:
-      "Année d’expiration invalide.",
-    processing_error:
-      "Erreur de traitement. Réessaie dans un instant.",
-    fraudulent:
-      "Paiement bloqué pour suspicion de fraude.",
-    do_not_honor:
-      "Banque a refusé le paiement. Contacte ta banque.",
-    generic_decline:
-      "Paiement refusé. Essaie une autre carte.",
+    card_declined: "Carte refusée par ta banque.",
+    insufficient_funds: "Fonds insuffisants.",
+    lost_card: "Carte signalée comme perdue. Contacte ta banque.",
+    stolen_card: "Carte signalée comme volée. Contacte ta banque.",
+    expired_card: "Carte expirée.",
+    incorrect_cvc: "Code de sécurité (CVC) incorrect.",
+    incorrect_number: "Numéro de carte incorrect.",
+    invalid_expiry_month: "Mois d’expiration invalide.",
+    invalid_expiry_year: "Année d’expiration invalide.",
+    processing_error: "Erreur de traitement. Réessaie dans un instant.",
+    fraudulent: "Paiement bloqué pour suspicion de fraude.",
+    do_not_honor: "Banque a refusé le paiement. Contacte ta banque.",
+    generic_decline: "Paiement refusé. Essaie une autre carte.",
   };
 
-  if (
-    code &&
-    map[code]
-  ) {
+  if (code && map[code]) {
     return map[code];
   }
 
-  if (
-    err.message &&
-    err.message.length < 120
-  ) {
+  if (err.message && err.message.length < 120) {
     return err.message;
   }
 
   return "Paiement par carte refusé. Vérifie tes informations ou utilise un autre moyen.";
 }
 
-const ZERO_DECIMAL = new Set([
-  "XOF",
-  "XAF",
-  "JPY",
-  "KRW",
-  "VND",
-]);
+const ZERO_DECIMAL = new Set(["XOF", "XAF", "JPY", "KRW", "VND"]);
 
-export function toStripeAmount(
-  amount,
-  currency
-) {
-  const cur =
-    String(currency || "XOF")
-      .toUpperCase();
-
+export function toStripeAmount(amount, currency) {
+  const cur = String(currency || "XOF").toUpperCase();
   const n = Number(amount);
 
-  if (
-    !Number.isFinite(n) ||
-    n <= 0
-  ) {
-    throw Object.assign(
-      new Error("Montant invalide"),
-      {
-        type:
-          "StripeInvalidRequestError",
-      }
-    );
+  if (!Number.isFinite(n) || n <= 0) {
+    throw Object.assign(new Error("Montant invalide"), {
+      type: "StripeInvalidRequestError",
+    });
   }
 
   if (ZERO_DECIMAL.has(cur)) {
@@ -607,168 +420,94 @@ export async function createCheckoutSession({
   metadata = {},
 }) {
   const stripe = getStripe();
-
-  const unitAmount =
-    toStripeAmount(
-      amount,
-      currency
-    );
+  const unitAmount = toStripeAmount(amount, currency);
 
   try {
-    const session =
-      await stripe.checkout.sessions.create(
+    const session = await stripe.checkout.sessions.create({
+      mode: "payment",
+      payment_method_types: ["card"],
+      line_items: [
         {
-          mode: "payment",
-          payment_method_types: [
-            "card",
-          ],
-          line_items: [
-            {
-              quantity: 1,
-              price_data: {
-                currency:
-                  String(currency)
-                    .toLowerCase(),
-                unit_amount:
-                  unitAmount,
-                product_data: {
-                  name:
-                    description ||
-                    "Paiement BAARO",
-                },
-              },
+          quantity: 1,
+          price_data: {
+            currency: String(currency).toLowerCase(),
+            unit_amount: unitAmount,
+            product_data: {
+              name: description || "Paiement BAARO",
             },
-          ],
-          success_url:
-            successUrl,
-          cancel_url:
-            cancelUrl,
-          client_reference_id:
-            paymentRef,
-          customer_email:
-            customerEmail ||
-            undefined,
-          metadata: {
-            payment_ref:
-              paymentRef,
-            ...metadata,
           },
-        }
-      );
+        },
+      ],
+      success_url: successUrl,
+      cancel_url: cancelUrl,
+      client_reference_id: paymentRef,
+      customer_email: customerEmail || undefined,
+      metadata: {
+        payment_ref: paymentRef,
+        ...metadata,
+      },
+    });
 
     return {
       ok: true,
-      payment_url:
-        session.url,
-      session_id:
-        session.id,
-      transaction_id:
-        paymentRef,
+      payment_url: session.url,
+      session_id: session.id,
+      transaction_id: paymentRef,
     };
   } catch (err) {
     throw mapStripeError(err);
   }
 }
 
-export function constructStripeEvent(
-  rawBody,
-  signature
-) {
+export function constructStripeEvent(rawBody, signature) {
   const stripe = getStripe();
-
-  const secret =
-    process.env
-      .STRIPE_WEBHOOK_SECRET;
+  const secret = process.env.STRIPE_WEBHOOK_SECRET;
 
   if (!secret) {
-    throw new Error(
-      "STRIPE_WEBHOOK_SECRET manquante"
-    );
+    throw new Error("STRIPE_WEBHOOK_SECRET manquante");
   }
 
-  return stripe.webhooks.constructEvent(
-    rawBody,
-    signature,
-    secret
-  );
+  return stripe.webhooks.constructEvent(rawBody, signature, secret);
 }
 
 /* ==========================================================
  * SUPABASE
  * ========================================================== */
 
-const SUPABASE_URL =
-  process.env.VITE_SUPABASE_URL ||
-  process.env.SUPABASE_URL;
+const SUPABASE_URL = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
 
-const SERVICE_ROLE_KEY =
-  process.env.SUPABASE_SERVICE_ROLE_KEY;
+const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 export function getAdminClient() {
-  if (
-    !SUPABASE_URL ||
-    !SERVICE_ROLE_KEY
-  ) {
+  if (!SUPABASE_URL || !SERVICE_ROLE_KEY) {
     throw new Error(
       "Configuration serveur incomplète : VITE_SUPABASE_URL (ou SUPABASE_URL) et SUPABASE_SERVICE_ROLE_KEY doivent être définies."
     );
   }
 
-  return createClient(
-    SUPABASE_URL,
-    SERVICE_ROLE_KEY,
-    {
-      auth: {
-        autoRefreshToken: false,
-        persistSession: false,
-      },
-    }
-  );
+  return createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false,
+    },
+  });
 }
 
-export async function requireUser(
-  req,
-  admin
-) {
-  const header =
-    req.headers.authorization ||
-    "";
-
-  const token =
-    header.startsWith("Bearer ")
-      ? header.slice(7)
-      : null;
+export async function requireUser(req, admin) {
+  const header = req.headers.authorization || "";
+  const token = header.startsWith("Bearer ") ? header.slice(7) : null;
 
   if (!token) {
-    const err =
-      new Error(
-        "Authentification manquante"
-      );
-
+    const err = new Error("Authentification manquante");
     err.status = 401;
-
     throw err;
   }
 
-  const {
-    data,
-    error,
-  } =
-    await admin.auth.getUser(
-      token
-    );
+  const { data, error } = await admin.auth.getUser(token);
 
-  if (
-    error ||
-    !data?.user
-  ) {
-    const err =
-      new Error(
-        "Session invalide ou expirée"
-      );
-
+  if (error || !data?.user) {
+    const err = new Error("Session invalide ou expirée");
     err.status = 401;
-
     throw err;
   }
 
