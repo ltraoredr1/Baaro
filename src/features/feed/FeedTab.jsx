@@ -8,7 +8,7 @@ import {
   Sparkles,
 } from "lucide-react";
 
-// Correction stricte des chemins d'accès depuis src/features/feed/
+// Chemins d'accès corrigés depuis src/features/feed/
 import { COLORS } from "../../theme.js";
 import { useToast } from "../../components/ToastContext.jsx";
 import { supabase } from "../../supabaseClient.js";
