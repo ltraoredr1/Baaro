@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import {
   Sparkles,
   Send,
@@ -8,9 +8,8 @@ import {
   MessageSquare,
   Coins,
   Swords,
-  Mic,
-  Square,
   Volume2,
+  VolumeX,
   PlusCircle,
 } from "lucide-react";
 import { COLORS } from "../../theme.js";
@@ -45,27 +44,80 @@ export function AiAssistantTab({ userProfile, onPublishAction }) {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [provider, setProvider] = useState(null);
+  
+  // État pour la gestion de la synthèse vocale active par message
+  const [speakingMessageId, setSpeakingMessageId] = useState(null);
   const bottomRef = useRef(null);
 
-  // Annulation en cas de mise en veille/masquage de l'onglet
+  // Annulation de la voix en cas de mise en veille, masquage ou démontage
+  const stopSpeech = useCallback(() => {
+    if (typeof window !== "undefined" && "speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+    }
+    setSpeakingMessageId(null);
+  }, []);
+
   useEffect(() => {
     const handleVisibility = () => {
-      if (document.hidden && typeof window !== "undefined" && "speechSynthesis" in window) {
-        window.speechSynthesis.cancel();
+      if (document.hidden) {
+        stopSpeech();
       }
     };
     document.addEventListener("visibilitychange", handleVisibility);
-    return () => document.removeEventListener("visibilitychange", handleVisibility);
-  }, []);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibility);
+      stopSpeech();
+    };
+  }, [stopSpeech]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, loading]);
 
+  const handleSpeechToggle = (messageId, text) => {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+      showToast("La synthèse vocale n'est pas supportée par votre navigateur", "error");
+      return;
+    }
+
+    const synth = window.speechSynthesis;
+
+    // Si ce message est déjà en train d'être lu, on l'arrête
+    if (speakingMessageId === messageId) {
+      synth.cancel();
+      setSpeakingMessageId(null);
+      return;
+    }
+
+    // Si une autre lecture est en cours, on l'interrompt d'abord
+    synth.cancel();
+
+    if (!text) return;
+
+    const cleanText = text.replace(/[*#_`]/g, "");
+    const utterance = new SpeechSynthesisUtterance(cleanText);
+    utterance.lang = "fr-FR";
+    utterance.rate = 1.0;
+
+    utterance.onend = () => {
+      setSpeakingMessageId(null);
+    };
+
+    utterance.onerror = () => {
+      setSpeakingMessageId(null);
+    };
+
+    setSpeakingMessageId(messageId);
+    synth.speak(utterance);
+  };
+
   const handleSend = async (customText) => {
     const query = (customText || input).trim();
     if (!query || loading) return;
     setInput("");
+
+    // Arrêter toute lecture en cours lors de l'envoi d'un nouveau message
+    stopSpeech();
 
     const userMsg = { id: `u_${Date.now()}`, role: "user", text: query };
     setMessages((prev) => [...prev, userMsg]);
@@ -91,9 +143,10 @@ export function AiAssistantTab({ userProfile, onPublishAction }) {
       if (data.provider) setProvider(data.provider);
       const replyText = data.reply || "Voici une suggestion personnalisée.";
 
+      const assistantMsgId = `a_${Date.now()}`;
       setMessages((prev) => [
         ...prev,
-        { id: `a_${Date.now()}`, role: "assistant", text: replyText, canPublish: true },
+        { id: assistantMsgId, role: "assistant", text: replyText, canPublish: true },
       ]);
 
       if (showPointsReward) showPointsReward(2, "Échange avec l'IA");
@@ -145,27 +198,50 @@ export function AiAssistantTab({ userProfile, onPublishAction }) {
       {/* Zone Messages */}
       <div className="rounded-2xl border p-4 flex flex-col min-h-[380px]" style={{ background: COLORS.surface, borderColor: COLORS.border }}>
         <div className="flex-1 overflow-y-auto space-y-4 max-h-[360px] pr-1">
-          {messages.map((m) => (
-            <div key={m.id} className={`flex gap-3 ${m.role === "user" ? "flex-row-reverse" : ""}`}>
-              <div className="w-8 h-8 rounded-full flex items-center justify-center shrink-0" style={{ background: m.role === "assistant" ? COLORS.gold : COLORS.teal, color: "#000" }}>
-                {m.role === "assistant" ? <Bot size={15} /> : <User size={15} />}
-              </div>
-              <div className="max-w-[80%] flex flex-col gap-1">
-                <div className="px-4 py-3 rounded-2xl text-sm leading-relaxed whitespace-pre-line border" style={{ background: COLORS.surface2, color: COLORS.ivory, borderColor: COLORS.border }}>
-                  {m.text}
+          {messages.map((m) => {
+            const isSpeaking = speakingMessageId === m.id;
+
+            return (
+              <div key={m.id} className={`flex gap-3 ${m.role === "user" ? "flex-row-reverse" : ""}`}>
+                <div className="w-8 h-8 rounded-full flex items-center justify-center shrink-0" style={{ background: m.role === "assistant" ? COLORS.gold : COLORS.teal, color: "#000" }}>
+                  {m.role === "assistant" ? <Bot size={15} /> : <User size={15} />}
                 </div>
-                {m.canPublish && typeof onPublishAction === "function" && (
-                  <button
-                    onClick={() => onPublishAction(m.text)}
-                    className="self-start flex items-center gap-1 text-xs px-2 py-1 rounded-lg border mt-1"
-                    style={{ background: `${COLORS.teal}20`, borderColor: COLORS.borderTeal, color: COLORS.teal }}
-                  >
-                    <PlusCircle size={12} /> Publier cette idée
-                  </button>
-                )}
+                <div className="max-w-[80%] flex flex-col gap-1.5">
+                  <div className="px-4 py-3 rounded-2xl text-sm leading-relaxed whitespace-pre-line border" style={{ background: COLORS.surface2, color: COLORS.ivory, borderColor: COLORS.border }}>
+                    {m.text}
+                  </div>
+
+                  {/* Boutons d'actions sous le message de l'assistant */}
+                  {m.role === "assistant" && !m.isError && (
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <button
+                        onClick={() => handleSpeechToggle(m.id, m.text)}
+                        className="flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg border transition-all active:scale-95"
+                        style={{
+                          background: isSpeaking ? `${COLORS.teal}20` : COLORS.surface2,
+                          borderColor: isSpeaking ? COLORS.borderTeal : COLORS.border,
+                          color: isSpeaking ? COLORS.teal : COLORS.muted,
+                        }}
+                      >
+                        {isSpeaking ? <VolumeX size={13} /> : <Volume2 size={13} />}
+                        <span>{isSpeaking ? "Arrêter" : "Écouter"}</span>
+                      </button>
+
+                      {m.canPublish && typeof onPublishAction === "function" && (
+                        <button
+                          onClick={() => onPublishAction(m.text)}
+                          className="flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg border"
+                          style={{ background: `${COLORS.teal}20`, borderColor: COLORS.borderTeal, color: COLORS.teal }}
+                        >
+                          <PlusCircle size={13} /> Publier cette idée
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
           {loading && (
             <div className="flex items-center gap-2 text-xs" style={{ color: COLORS.gold }}>
               <Sparkles size={14} className="animate-spin" />
@@ -191,4 +267,5 @@ export function AiAssistantTab({ userProfile, onPublishAction }) {
     </div>
   );
 }
+
 export default AiAssistantTab;
