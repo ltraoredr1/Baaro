@@ -5,7 +5,7 @@ const ALLOWED = new Set([
 ]);
 
 export async function recordFeedEvent(postId, eventType, durationSeconds = 0) {
-  if (!postId || !ALLOWED.has(eventType)) return { data: null, error: null };
+  if (!postId ||!ALLOWED.has(eventType)) return { data: null, error: null };
   return supabase.rpc("record_feed_event", {
     p_post_id: postId,
     p_event_type: eventType,
