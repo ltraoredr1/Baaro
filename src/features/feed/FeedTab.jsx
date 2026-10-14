@@ -7,12 +7,15 @@ import {
   Send,
   Sparkles,
 } from "lucide-react";
+
+// Correction stricte des chemins d'accès depuis src/features/feed/
 import { COLORS } from "../../theme.js";
 import { useToast } from "../../components/ToastContext.jsx";
 import { supabase } from "../../supabaseClient.js";
 import { handleDbError } from "../../lib/dbErrors.js";
 import { fetchFeedPage } from "../../lib/feedLoader.js";
 import { recordFeedEvent } from "../../lib/feedEvents.js";
+
 import { PollCard, SocialPostEnhancements, SocialSuggestions } from "./SocialEnhancements.jsx";
 import { RichTextComposer } from "../../components/RichTextComposer.jsx";
 import { RichTextRenderer } from "../../components/RichTextRenderer.jsx";
