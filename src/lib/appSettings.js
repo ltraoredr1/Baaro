@@ -10,7 +10,7 @@ import { applyNativeSettings } from "./nativeSettings.js";
 export const STORAGE_KEY = "baaro_settings_v23";
 
 export const DEFAULT_SETTINGS = {
-  theme: "midnight",
+  theme: "light",
   lang: "fr",
   country: "ML",
   currency: "XOF",
@@ -62,7 +62,7 @@ export function loadLocalSettings() {
 export function saveLocalSettings(settings) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
-    localStorage.setItem("baaro_theme", settings.theme || "midnight");
+    localStorage.setItem("baaro_theme", settings.theme || "light");
   } catch (_) {}
 }
 
@@ -81,7 +81,7 @@ var THEME_MAP = {
   midnight: { bg: "#0B1220", surface: "#111A2C", surface2: "#1A2740", hover: "#203152", fg: "#F4EFE3", muted: "#8A93A6", border: "rgba(255,255,255,0.08)" },
   oled:     { bg: "#000000", surface: "#0A0A0A", surface2: "#151515", hover: "#1F1F1F", fg: "#FFFFFF", muted: "#8A8A8A", border: "rgba(255,255,255,0.10)" },
   emerald:  { bg: "#061A14", surface: "#0B2820", surface2: "#12382D", hover: "#184A3B", fg: "#D1FAE5", muted: "#7FA896", border: "rgba(255,255,255,0.08)" },
-  light:    { bg: "#F8FAFC", surface: "#FFFFFF", surface2: "#EEF2F7", hover: "#E2E8F0", fg: "#0F172A", muted: "#64748B", border: "rgba(15,23,42,0.12)" },
+  light:    { bg: "#FAF7F0", surface: "#FFFFFF", surface2: "#F3EEE2", hover: "#EDE6D5", fg: "#14213D", muted: "#6B7385", border: "rgba(20,33,61,0.10)" },
   sunset:   { bg: "#2A1215", surface: "#38191D", surface2: "#4A2227", hover: "#5C2C32", fg: "#FFE4E6", muted: "#C79AA0", border: "rgba(255,255,255,0.08)" },
   ocean:    { bg: "#0A1628", surface: "#102240", surface2: "#173158", hover: "#1E4070", fg: "#E0F2FE", muted: "#8FB0CC", border: "rgba(255,255,255,0.08)" },
   forest:   { bg: "#0E1F14", surface: "#15301F", surface2: "#1D4029", hover: "#265234", fg: "#DCFCE7", muted: "#86AE93", border: "rgba(255,255,255,0.08)" },
@@ -99,9 +99,11 @@ function buildTheme(themeId, s) {
       muted: dark ? "#9AA3B5" : "#64748B",
       border: dark ? "rgba(255,255,255,0.10)" : "rgba(15,23,42,0.12)",
       bgImage: c.bgImage || null,
+      dark: dark,
     };
   }
-  return THEME_MAP[themeId] || THEME_MAP.midnight;
+  var fixed = THEME_MAP[themeId] || THEME_MAP.light;
+  return Object.assign({ dark: themeId !== "light" && !!THEME_MAP[themeId] ? true : false }, fixed);
 }
 
 export function applySettingsToDom(settings) {
@@ -109,7 +111,7 @@ export function applySettingsToDom(settings) {
     var root = document.documentElement;
     var body = document.body;
     var s = settings || DEFAULT_SETTINGS;
-    var themeId = s.theme || "midnight";
+    var themeId = s.theme || "light";
 
     // 1. A11Y
     root.classList.toggle("baaro-large-text",!!s.large_text);
@@ -130,6 +132,9 @@ export function applySettingsToDom(settings) {
     if (body) body.dataset.theme = themeId;
 
     var t = buildTheme(themeId, s);
+    // Mode clair/sombre : pilote les couleurs dérivées dans index.css
+    var isDark = !!t.dark;
+    root.setAttribute("data-mode", isDark ? "dark" : "light");
     var set = function (k, v) { root.style.setProperty(k, v); };
     set("--bg", t.bg);
     set("--fg", t.fg);
@@ -140,7 +145,7 @@ export function applySettingsToDom(settings) {
     set("--muted-light", t.muted);
     set("--border", t.border);
     set("--accent", (themeId === "custom" && s.customTheme && s.customTheme.accent) || "#D9AE52");
-    root.style.colorScheme = themeId === "light" ? "light" : "dark";
+    root.style.colorScheme = isDark ? "dark" : "light";
     if (t.bgImage) {
       root.style.setProperty("--bg-image", 'url("' + t.bgImage + '")');
       if (body) body.style.backgroundImage = 'url("' + t.bgImage + '")';
@@ -152,6 +157,9 @@ export function applySettingsToDom(settings) {
       body.style.backgroundColor = t.bg;
       body.style.color = t.fg;
     }
+    // Barre d'état mobile / PWA alignée sur le thème actif
+    var metaTheme = document.querySelector('meta[name="theme-color"]');
+    if (metaTheme) metaTheme.setAttribute("content", t.bg);
 
     applyNativeSettings(s);
 
