@@ -20,6 +20,7 @@ import { handleDbError } from "@/lib/dbErrors.js";
 import { fetchFeedPage } from "@/lib/feedPagination.js";
 import { recordFeedEvent } from "@/lib/feedEvents.js";
 import { checkRateLimit, rateLimitMessage } from "@/lib/rateLimit.js";
+import { uploadExternalMedia } from "@/lib/externalMedia.js";
 
 import { PollCard, SocialPostEnhancements, SocialSuggestions } from "./SocialEnhancements.jsx";
 import { RichTextComposer } from "@/components/RichTextComposer.jsx";
@@ -204,7 +205,6 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
         pageSize: PAGE_SIZE,
       });
       const incoming = rows.map(formatPost);
-      // Évite les doublons si un post est apparu entre deux pages
       setPosts((prev) => {
         const seen = new Set(prev.map((p) => p.id));
         return [...prev, ...incoming.filter((p) => !seen.has(p.id))];
@@ -234,7 +234,6 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
     return () => observer.disconnect();
   }, [loadMorePosts, posts.length]);
 
-  // Rafraîchit le haut du fil sans perdre les pages déjà chargées
   const refreshTop = useCallback(async () => {
     try {
       const { rows } = await fetchFeedPage({ cursor: null, pageSize: PAGE_SIZE });
@@ -245,11 +244,10 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
         return fresh.length ? [...fresh, ...prev] : prev;
       });
     } catch {
-      // Rafraîchissement silencieux : on ignore l'erreur
+      // Ignorer
     }
   }, []);
 
-  // Temps réel : nouveaux posts et suppressions
   useEffect(() => {
     let timer = null;
     const channel = supabase
@@ -269,7 +267,6 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
     };
   }, [refreshTop]);
 
-  // Posts que l'utilisateur a déjà aimés
   const postIdsKey = posts.map((p) => p.id).join(",");
   useEffect(() => {
     if (!activeUserId || !postIdsKey) return;
@@ -289,7 +286,6 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
     };
   }, [activeUserId, postIdsKey]);
 
-  // Comptage des vues : un post compte quand il est visible à 50 %
   useEffect(() => {
     postsRef.current = posts;
   }, [posts]);
@@ -324,10 +320,9 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
     return () => observer.disconnect();
   }, [posts.length, activeUserId]);
 
-  // Choix d'un média
   const handlePickFile = (e) => {
     const file = e.target.files?.[0];
-    e.target.value = ""; // permet de re-choisir le même fichier
+    e.target.value = "";
     if (!file) return;
 
     if (file.size > MAX_MEDIA_BYTES) {
@@ -338,7 +333,7 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
     setMediaPreview(URL.createObjectURL(file));
   };
 
-  // 3. Publication
+  // 3. Publication avec Cloudflare R2 via uploadExternalMedia
   const handlePublish = async () => {
     const hasText = Boolean(newText.trim());
     const hasMedia = Boolean(mediaFile);
@@ -363,18 +358,15 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
       let mediaUrl = null;
       let mediaType = null;
 
+      // Téléversement vers Cloudflare R2
       if (mediaFile) {
-        const fileExt = mediaFile.name.split(".").pop();
-        const filePath = `${activeUserId}/${Date.now()}.${fileExt}`;
-        const { error: uploadErr } = await supabase.storage
-          .from("posts_media")
-          .upload(filePath, mediaFile);
-        if (uploadErr) throw uploadErr;
-        const {
-          data: { publicUrl },
-        } = supabase.storage.from("posts_media").getPublicUrl(filePath);
-        mediaUrl = publicUrl;
-        mediaType = mediaFile.type;
+        const uploadResult = await uploadExternalMedia(mediaFile, {
+          folder: "posts",
+          user_id: activeUserId,
+          maxBytes: MAX_MEDIA_BYTES,
+        });
+        mediaUrl = uploadResult.url;
+        mediaType = mediaFile.type.startsWith("video") ? "video" : "image";
       }
 
       const { data: newPost, error: postErr } = await supabase
@@ -430,7 +422,6 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
     }
   };
 
-  // Suppression
   const handleDelete = async (postId) => {
     setMenuOpenId(null);
     if (!confirm("Supprimer la publication ?")) return;
@@ -444,7 +435,6 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
     showToast("Publication supprimée", "info");
   };
 
-  // J'aime
   const handleLike = async (postId) => {
     if (!activeUserId) {
       showToast("Vous devez être connecté", "error");
@@ -482,7 +472,6 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
         showPointsReward?.(2, "J'aime distribué");
       }
     } catch (error) {
-      // Retour en arrière si la base a refusé
       setLikedPosts((prev) => ({ ...prev, [postId]: wasLiked }));
       setPosts((prev) =>
         prev.map((p) =>
@@ -493,7 +482,6 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
     }
   };
 
-  // Commentaires
   const loadComments = async (postId) => {
     if (!postId) return;
     try {
@@ -611,7 +599,6 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
     }
   };
 
-  // Modification
   const startEdit = (post) => {
     setMenuOpenId(null);
     setEditingId(post.id);
@@ -640,7 +627,6 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
     showToast("Publication modifiée", "success");
   };
 
-  // Signalement
   const handleReport = async (reason) => {
     const target = reportPost;
     setReportPost(null);
@@ -788,17 +774,14 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
         }
       />
 
-      {/* RECOMMANDATIONS D'ABONNEMENT */}
       {activeUserId && <SocialSuggestions user_id={activeUserId} onOpenProfile={onOpenProfile} />}
 
-      {/* ÉTAT VIDE */}
       {posts.length === 0 && (
         <div className="text-center py-10 text-sm" style={{ color: COLORS.muted }}>
           Aucune publication pour le moment. Sois le premier à partager quelque chose !
         </div>
       )}
 
-      {/* FLUX DE PUBLICATIONS */}
       <div className="flex flex-col gap-4">
         {posts.map((post) => (
           <article
@@ -898,7 +881,6 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
               )}
             </div>
 
-            {/* TEXTE ENRICHI */}
             {editingId === post.id ? (
               <div className="flex flex-col gap-2">
                 <textarea
@@ -951,7 +933,6 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
               </p>
             )}
 
-            {/* MÉDIA */}
             {post.media_url && (
               <div
                 className="rounded-xl overflow-hidden border"
@@ -976,11 +957,9 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
               </div>
             )}
 
-            {/* SONDAGES ET INTERACTIONS SOCIALES */}
             <PollCard postId={post.id} user_id={activeUserId} />
             <SocialPostEnhancements post={post} user_id={activeUserId} />
 
-            {/* BARRE D'ENGAGEMENT */}
             <div
               className="flex items-center justify-between gap-2 pt-2 border-t flex-wrap"
               style={{ borderColor: COLORS.border }}
@@ -1042,7 +1021,6 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
                 {post.author_id !== activeUserId && (
                   <TipButton recipientId={post.author_id} postId={post.id} compact />
                 )}
-
               </div>
             </div>
 
