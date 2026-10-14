@@ -1,4 +1,4 @@
-// src/features/feed/FeedTab.jsx - COMPLET CORRIGÉ BUILD OK
+// src/features/feed/FeedTab.jsx - CORRIGÉ FINAL BUILD OK
 import { useState, useRef, useEffect } from "react";
 import { supabase } from "../../supabaseClient.js";
 import { useCursorFeed } from "../../hooks/useCursorFeed.js";
@@ -6,7 +6,7 @@ import { recordFeedEvent } from "../../lib/feedEvents.js";
 import { uploadExternalMedia } from "../../lib/externalMedia.js";
 import { RichTextRenderer } from "../../components/RichTextRenderer.jsx";
 import { RichTextComposer } from "../../components/RichTextComposer.jsx";
-import SocialEnhancements from "./SocialEnhancements.jsx";
+import { SocialPostEnhancements } from "./SocialEnhancements.jsx";
 
 export default function FeedTab() {
   const { posts, loading, hasMore, loadMore, refresh } = useCursorFeed();
@@ -123,10 +123,10 @@ export default function FeedTab() {
                 </div>
               )}
               <div className="mt-3 ml-12">
-                <SocialEnhancements
+                <SocialPostEnhancements
                   post={post}
-                  onLike={() => recordFeedEvent(post.id, "like")}
-                  onComment={() => recordFeedEvent(post.id, "comment")}
+                  user_id={userId}
+                  onLiked={() => recordFeedEvent(post.id, "like")}
                 />
               </div>
             </div>
