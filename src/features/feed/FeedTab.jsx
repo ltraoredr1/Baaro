@@ -1,4 +1,3 @@
-import { ConnectionStatus } from "../../components/ConnectionStatus.jsx";
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
   X,
@@ -22,52 +21,51 @@ import { TipButton } from "../../components/TipButton.jsx";
 
 const PAGE_SIZE = 20;
 
-export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
+export function FeedTab({ userId, onOpenProfile }) {
   const { showToast } = useToast();
   const [posts, setPosts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
 
-  // Saisie enrichie & média
+  // Saisie enrichie, IA, sondages & médias
   const [newText, setNewText] = useState("");
+  const [pollData, setPollData] = useState(null);
   const [submitting, setSubmitting] = useState(false);
   const [mediaFile, setMediaFile] = useState(null);
   const [mediaPreview, setMediaPreview] = useState(null);
 
-  // États utilisateur et modales
+  // Session & modales
   const [user, setUser] = useState(null);
   const [menuOpenId, setMenuOpenId] = useState(null);
   const [engagement, setEngagement] = useState(null);
-  const [likedPosts, setLikedPosts] = useState({});
 
   const fileInputRef = useRef(null);
   const cursorRef = useRef(null);
   const sentinelRef = useRef(null);
-  const postViewRefs = useRef({});
   const meId = user?.id || userId;
 
-  // Récupération de la session utilisateur
+  // Récupération de la session Supabase
   useEffect(() => {
     const getUser = async () => {
       try {
         const { data: { user } } = await supabase.auth.getUser();
         setUser(user);
       } catch (error) {
-        handleDbError(error, showToast, "Erreur session");
+        handleDbError(error, showToast, "Erreur de session");
       }
     };
     getUser();
   }, [showToast]);
 
-  // Nettoyage de la mémoire de l'aperçu vidéo/image
+  // Nettoyage de l'URL d'aperçu média
   useEffect(() => {
     return () => {
       if (mediaPreview) URL.revokeObjectURL(mediaPreview);
     };
   }, [mediaPreview]);
 
-  // 1. Chargement initial du flux via fetchFeedPage
+  // 1. Chargement initial du flux
   const loadPosts = useCallback(async () => {
     setLoading(true);
     cursorRef.current = null;
@@ -99,17 +97,6 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
       setPosts(formattedRows);
       cursorRef.current = nextCursor;
       setHasMore(Boolean(nextCursor));
-
-      if (meId && formattedRows.length) {
-        const { data: likes } = await supabase
-          .from("post_likes")
-          .select("post_id")
-          .eq("user_id", meId)
-          .in("post_id", formattedRows.map((r) => r.id));
-        setLikedPosts(Object.fromEntries((likes || []).map((l) => [l.post_id, true])));
-      } else {
-        setLikedPosts({});
-      }
     } catch (error) {
       handleDbError(error, showToast, "Erreur lors du chargement du fil");
       setPosts([]);
@@ -117,9 +104,9 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
     } finally {
       setLoading(false);
     }
-  }, [meId, showToast]);
+  }, [showToast]);
 
-  // 2. Chargement des pages suivantes (Infinite Scroll)
+  // 2. Défilement infini (Infinite Scroll)
   const loadMorePosts = useCallback(async () => {
     if (loadingMore || !hasMore || loading || !cursorRef.current) return;
     setLoadingMore(true);
@@ -152,7 +139,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
       cursorRef.current = nextCursor;
       setHasMore(Boolean(nextCursor));
     } catch (error) {
-      handleDbError(error, showToast, "Erreur suite du fil");
+      handleDbError(error, showToast, "Erreur lors de la récupération de la suite du fil");
     } finally {
       setLoadingMore(false);
     }
@@ -162,7 +149,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
     loadPosts();
   }, [loadPosts]);
 
-  // Observer pour la détection de défilement infini
+  // Détection du bas de page via IntersectionObserver
   useEffect(() => {
     if (!sentinelRef.current) return;
     const observer = new IntersectionObserver(
@@ -175,9 +162,14 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
     return () => observer.disconnect();
   }, [loadMorePosts]);
 
-  // Publication d'un nouveau post
+  // 3. Publication d'un message avec Médias & Sondages
   const handlePublish = async () => {
-    if (!newText.trim() && !mediaFile) return;
+    const hasText = Boolean(newText.trim());
+    const hasMedia = Boolean(mediaFile);
+    const hasPoll = Boolean(pollData?.question?.trim());
+
+    if (!hasText && !hasMedia && !hasPoll) return;
+
     setSubmitting(true);
     try {
       let mediaUrl = null;
@@ -193,20 +185,40 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
         mediaType = mediaFile.type;
       }
 
-      const { error } = await supabase.from("posts").insert([
-        {
-          author_id: meId,
-          text: newText,
-          media_url: mediaUrl,
-          media_type: mediaType,
-        },
-      ]);
+      // Enregistrement du post principal
+      const { data: newPost, error: postErr } = await supabase
+        .from("posts")
+        .insert([
+          {
+            author_id: meId,
+            text: newText,
+            media_url: mediaUrl,
+            media_type: mediaType,
+          },
+        ])
+        .select()
+        .single();
 
-      if (error) throw error;
+      if (postErr) throw postErr;
+
+      // Enregistrement du sondage si présent
+      if (hasPoll && newPost) {
+        const validOptions = pollData.options.filter((opt) => opt.trim() !== "");
+        const { error: pollErr } = await supabase.from("polls").insert([
+          {
+            post_id: newPost.id,
+            question: pollData.question,
+            options: validOptions,
+          },
+        ]);
+        if (pollErr) console.warn("Erreur d'enregistrement du sondage:", pollErr.message);
+      }
+
       setNewText("");
+      setPollData(null);
       setMediaFile(null);
       setMediaPreview(null);
-      showToast("Perspective diffusée avec succès !", "success");
+      showToast("Perspective diffusée avec succès sur le réseau mondial !", "success");
       loadPosts();
     } catch (err) {
       handleDbError(err, showToast, "Échec de la publication");
@@ -225,7 +237,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
 
   return (
     <div className="flex flex-col gap-6 max-w-2xl mx-auto w-full pb-20">
-      {/* COMPOSITEUR DE PUBLICATION AVANCÉ */}
+      {/* MODULE DE RÉDACTION AVANCÉ (IA + SONDAGES + MÉDIAS) */}
       {meId && (
         <div
           className="glass-card rounded-2xl p-4 shadow-xl border flex flex-col gap-3 transition-all"
@@ -242,6 +254,8 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
           <RichTextComposer
             value={newText}
             onChange={setNewText}
+            pollData={pollData}
+            onPollChange={setPollData}
             placeholder="Partagez une perspective, une analyse ou une innovation avec le monde..."
             rows={3}
             disabled={submitting}
@@ -303,7 +317,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
             <button
               type="button"
               onClick={handlePublish}
-              disabled={submitting || (!newText.trim() && !mediaFile)}
+              disabled={submitting || (!newText.trim() && !mediaFile && !pollData?.question)}
               className="px-4 py-1.5 rounded-xl text-xs font-bold transition-all shadow-md flex items-center gap-1.5 disabled:opacity-50"
               style={{ background: COLORS.gold, color: "#000" }}
             >
@@ -384,11 +398,12 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
               )}
             </div>
 
-            {/* RENDU DU TEXTE ENRICHI */}
+            {/* TEXTE ENRICHI MARKDOWN */}
             <div className="text-sm leading-relaxed whitespace-pre-wrap" style={{ color: COLORS.ivory }}>
               <RichTextRenderer content={post.text} />
             </div>
 
+            {/* MÉDIA (IMAGE OU VIDÉO) */}
             {post.media_url && (
               <div className="rounded-xl overflow-hidden border" style={{ borderColor: COLORS.border }}>
                 {post.media_type?.startsWith("video") ? (
@@ -404,10 +419,11 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
               </div>
             )}
 
+            {/* SONDAGE & ACTIONS SOCIALES */}
             <PollCard postId={post.id} userId={meId} />
             <SocialPostEnhancements post={post} userId={meId} />
 
-            {/* BARRE FINALE PROFESSIONNELLE AVEC ENREGISTREMENT DES ÉVÉNEMENTS */}
+            {/* BARRE D'ENGAGEMENT HAUT DE GAMME */}
             <div
               className="flex items-center justify-between gap-2 pt-2 border-t flex-wrap"
               style={{ borderColor: COLORS.border }}
@@ -426,6 +442,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
                   </button>
                 )}
               </div>
+
               <div className="flex items-center gap-2">
                 {post.author_id !== meId && (
                   <TipButton
@@ -442,7 +459,10 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
                 )}
                 <button
                   title="Archiver"
-                  onClick={() => recordFeedEvent(post.id, "save")}
+                  onClick={() => {
+                    recordFeedEvent(post.id, "save");
+                    showToast("Publication archivée dans votre coffre-fort", "info");
+                  }}
                   className="w-8 h-8 rounded-full border flex items-center justify-center text-xs hover:bg-white/10 transition-colors"
                   style={{ background: COLORS.surface2, borderColor: COLORS.border }}
                 >
@@ -450,7 +470,14 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
                 </button>
                 <button
                   title="Diffuser à l'international"
-                  onClick={() => recordFeedEvent(post.id, "share")}
+                  onClick={() => {
+                    recordFeedEvent(post.id, "share");
+                    if (navigator.share) {
+                      navigator.share({ title: "BAARO", text: post.text, url: window.location.href });
+                    } else {
+                      showToast("Lien de diffusion copié !", "success");
+                    }
+                  }}
                   className="w-8 h-8 rounded-full border flex items-center justify-center text-xs hover:bg-white/10 transition-colors"
                   style={{ background: COLORS.surface2, borderColor: COLORS.border }}
                 >
