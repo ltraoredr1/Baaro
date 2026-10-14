@@ -9,6 +9,11 @@ const __dirname = dirname(__filename);
 
 export default defineConfig({
   base: './',
+  resolve: {
+    alias: {
+      '@': resolve(__dirname, 'src')
+    }
+  },
   plugins: [
     react(),
     VitePWA({
@@ -64,9 +69,6 @@ export default defineConfig({
           },
           {
             // Images du site UNIQUEMENT (même origine).
-            // Les images R2 (photos de profil, couverture, posts) ne passent
-            // plus par le service worker : le navigateur les charge directement,
-            // ce qui évite d'être bloqué par la règle connect-src de la CSP.
             urlPattern: ({ url, sameOrigin }) =>
               sameOrigin && /\.(?:png|jpg|jpeg|svg|gif|webp)$/i.test(url.pathname),
             handler: 'CacheFirst',
