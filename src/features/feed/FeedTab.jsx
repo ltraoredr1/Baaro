@@ -13,7 +13,6 @@ import { COLORS } from "@/theme.js";
 import { useToast } from "@/components/ToastContext.jsx";
 import { supabase } from "@/supabaseClient.js";
 import { handleDbError } from "@/lib/dbErrors.js";
-// Correction : pointe vers feedPagination.js au lieu de feedLoader.js
 import { fetchFeedPage } from "@/lib/feedPagination.js";
 import { recordFeedEvent } from "@/lib/feedEvents.js";
 
@@ -25,7 +24,7 @@ import { TipButton } from "@/components/TipButton.jsx";
 
 const PAGE_SIZE = 20;
 
-export function FeedTab({ userId, onOpenProfile }) {
+export function FeedTab({ userId: propUserId, onOpenProfile }) {
   const { showToast } = useToast();
   const [posts, setPosts] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -40,27 +39,40 @@ export function FeedTab({ userId, onOpenProfile }) {
   const [mediaPreview, setMediaPreview] = useState(null);
 
   // Session & modales
-  const [user, setUser] = useState(null);
+  const [currentUserId, setCurrentUserId] = useState(propUserId || null);
   const [menuOpenId, setMenuOpenId] = useState(null);
   const [engagement, setEngagement] = useState(null);
 
   const fileInputRef = useRef(null);
   const cursorRef = useRef(null);
   const sentinelRef = useRef(null);
-  const meId = user?.id || userId;
 
-  // Récupération de la session Supabase
+  // Identifiant actif sécurisé
+  const activeUserId = currentUserId || propUserId;
+
+  // Récupération synchrone et écoute de la session Supabase
   useEffect(() => {
-    const getUser = async () => {
-      try {
-        const { data: { user } } = await supabase.auth.getUser();
-        setUser(user);
-      } catch (error) {
-        handleDbError(error, showToast, "Erreur de session");
+    let mounted = true;
+
+    // 1. Récupération immédiate de la session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (mounted && session?.user?.id) {
+        setCurrentUserId(session.user.id);
       }
+    });
+
+    // 2. Écoute des changements d'état d'authentification en temps réel
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (mounted) {
+        setCurrentUserId(session?.user?.id || null);
+      }
+    });
+
+    return () => {
+      mounted = false;
+      subscription?.unsubscribe();
     };
-    getUser();
-  }, [showToast]);
+  }, []);
 
   // Nettoyage de l'URL d'aperçu média
   useEffect(() => {
@@ -174,6 +186,11 @@ export function FeedTab({ userId, onOpenProfile }) {
 
     if (!hasText && !hasMedia && !hasPoll) return;
 
+    if (!activeUserId) {
+      showToast("Veuillez vous connecter pour publier", "error");
+      return;
+    }
+
     setSubmitting(true);
     try {
       let mediaUrl = null;
@@ -181,7 +198,7 @@ export function FeedTab({ userId, onOpenProfile }) {
 
       if (mediaFile) {
         const fileExt = mediaFile.name.split(".").pop();
-        const filePath = `${meId}/${Date.now()}.${fileExt}`;
+        const filePath = `${activeUserId}/${Date.now()}.${fileExt}`;
         const { error: uploadErr } = await supabase.storage.from("posts_media").upload(filePath, mediaFile);
         if (uploadErr) throw uploadErr;
         const { data: { publicUrl } } = supabase.storage.from("posts_media").getPublicUrl(filePath);
@@ -194,7 +211,7 @@ export function FeedTab({ userId, onOpenProfile }) {
         .from("posts")
         .insert([
           {
-            author_id: meId,
+            author_id: activeUserId,
             text: newText,
             media_url: mediaUrl,
             media_type: mediaType,
@@ -242,7 +259,7 @@ export function FeedTab({ userId, onOpenProfile }) {
   return (
     <div className="flex flex-col gap-6 max-w-2xl mx-auto w-full pb-20">
       {/* MODULE DE RÉDACTION AVANCÉ (IA + SONDAGES + MÉDIAS) */}
-      {meId && (
+      {activeUserId && (
         <div
           className="glass-card rounded-2xl p-4 shadow-xl border flex flex-col gap-3 transition-all"
           style={{ borderColor: COLORS.borderGold, background: COLORS.surface }}
@@ -331,7 +348,7 @@ export function FeedTab({ userId, onOpenProfile }) {
         </div>
       )}
 
-      {meId && <SocialSuggestions userId={meId} onOpenProfile={onOpenProfile} />}
+      {activeUserId && <SocialSuggestions userId={activeUserId} onOpenProfile={onOpenProfile} />}
 
       {/* FLUX DE PUBLICATIONS */}
       <div className="flex flex-col gap-4">
@@ -369,7 +386,7 @@ export function FeedTab({ userId, onOpenProfile }) {
                 </div>
               </div>
 
-              {post.author_id === meId && (
+              {post.author_id === activeUserId && (
                 <div className="relative">
                   <button
                     type="button"
@@ -424,8 +441,8 @@ export function FeedTab({ userId, onOpenProfile }) {
             )}
 
             {/* SONDAGE & ACTIONS SOCIALES */}
-            <PollCard postId={post.id} userId={meId} />
-            <SocialPostEnhancements post={post} userId={meId} />
+            <PollCard postId={post.id} userId={activeUserId} />
+            <SocialPostEnhancements post={post} userId={activeUserId} />
 
             {/* BARRE D'ENGAGEMENT HAUT DE GAMME */}
             <div
@@ -436,7 +453,7 @@ export function FeedTab({ userId, onOpenProfile }) {
                 <span className="flex items-center gap-1">👁️ {Number(post.views_count || 0)} vues certifiées</span>
                 <span>·</span>
                 <span className="flex items-center gap-1">❤️ {Number(post.likes || 0)} approbations</span>
-                {post.author_id === meId && (
+                {post.author_id === activeUserId && (
                   <button
                     type="button"
                     onClick={() => setEngagement({ type: "postLikes", id: post.id })}
@@ -448,7 +465,7 @@ export function FeedTab({ userId, onOpenProfile }) {
               </div>
 
               <div className="flex items-center gap-2">
-                {post.author_id !== meId && (
+                {post.author_id !== activeUserId && (
                   <TipButton
                     recipientId={post.author_id}
                     postId={post.id}
@@ -499,8 +516,8 @@ export function FeedTab({ userId, onOpenProfile }) {
         <EngagementList
           type={engagement.type}
           targetId={engagement.id}
-          ownerId={meId}
-          viewerId={meId}
+          ownerId={activeUserId}
+          viewerId={activeUserId}
           onClose={() => setEngagement(null)}
         />
       )}
