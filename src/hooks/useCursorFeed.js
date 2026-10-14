@@ -1,10 +1,3 @@
-/**
- * Hook pagination curseur pour le fil.
- * Place : src/hooks/useCursorFeed.js
- *
- * Usage dans FeedTab :
- *   const { posts, loading, hasMore, loadMore, refresh, error } = useCursorFeed();
- */
 import { useState, useCallback, useEffect, useRef } from "react";
 import { fetchFeedPage } from "../lib/feedPagination.js";
 
@@ -23,14 +16,13 @@ export function useCursorFeed({ autoLoad = true } = {}) {
     setError(null);
     try {
       const { rows, nextCursor } = await fetchFeedPage({
-        cursor: reset ? null : cursor,
+        cursor: reset? null : cursor,
       });
-      setPosts((prev) => (reset ? rows : [...prev, ...rows]));
+      setPosts((prev) => (reset? rows : [...prev,...rows]));
       setCursor(nextCursor);
       setHasMore(!!nextCursor);
     } catch (e) {
-      setError(e?.message || "Erreur de chargement");
-      console.error("[useCursorFeed]", e);
+      setError(e?.message || "Erreur");
     } finally {
       loadingRef.current = false;
       setLoading(false);
@@ -39,17 +31,7 @@ export function useCursorFeed({ autoLoad = true } = {}) {
 
   const refresh = useCallback(() => loadMore(true), [loadMore]);
 
-  useEffect(() => {
-    if (autoLoad) loadMore(true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  useEffect(() => { if (autoLoad) loadMore(true); }, []);
 
-  return {
-    posts,
-    loading,
-    hasMore,
-    error,
-    loadMore: () => loadMore(false),
-    refresh,
-  };
+  return { posts, loading, hasMore, error, loadMore: () => loadMore(false), refresh, cursor };
 }
