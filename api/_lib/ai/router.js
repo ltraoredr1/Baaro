@@ -59,11 +59,11 @@ const DEFAULT_BASES = {
   mistral: "https://api.mistral.ai/v1",
 };
 
-// Modèles par défaut si non définis dans les variables d'environnement
+// Modèles de secours si aucune variable d'environnement n'est détectée
 const DEFAULT_MODELS = {
-  gemini: "gemini-1.5-flash",
-  groq: "llama-3.1-8b-instant",
-  mistral: "mistral-tiny",
+  gemini: "gemini-3.8-flash",
+  groq: "llama-3.3-70b-versatile",
+  mistral: "mistral-small-latest",
   openai: "gpt-4o-mini",
 };
 
@@ -112,7 +112,6 @@ function modelOf(provider) {
   if (single) return single;
   const list = csvKeepCase(envOf(provider, "MODELS"));
   if (list[0]) return list[0];
-  // Utilisation du modèle par défaut si aucune variable d'environnement n'est trouvée
   return DEFAULT_MODELS[provider] || "";
 }
 
