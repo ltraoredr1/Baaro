@@ -1,25 +1,32 @@
+
 name: BAARO - Dependencies and lockfile
 
-# Un seul workflow pour :
-#   1. installer tout ce qui est déclaré dans package.json,
-#   2. garder package-lock.json synchronisé (mis à jour et commité si besoin),
-#   3. vérifier que chaque dépendance est bien installée.
+# Fonctionnement :
+# 1. Installer les dépendances déclarées dans package.json.
+# 2. Générer ou actualiser package-lock.json.
+# 3. Vérifier que les dépendances déclarées sont installées.
+# 4. Committer uniquement package-lock.json si nécessaire.
+# 5. Lancer npm run ci uniquement sur demande manuelle.
+
 on:
   push:
     branches: [main, master]
     paths:
-      - 'package.json'
-      - 'package-lock.json'
-      - '.npmrc'
-      - '.github/workflows/install-dependencies.yml'
+      - package.json
+      - package-lock.json
+      - .npmrc
+      - .github/workflows/install-dependencies.yml
+
   pull_request:
     paths:
-      - 'package.json'
-      - 'package-lock.json'
+      - package.json
+      - package-lock.json
+      - .npmrc
+
   workflow_dispatch:
     inputs:
       run_ci:
-        description: "Lancer aussi npm run ci (vérifications + build)"
+        description: "Lancer aussi npm run ci (vérifications et build)"
         type: boolean
         default: false
 
@@ -27,12 +34,14 @@ concurrency:
   group: baaro-dependencies-${{ github.ref }}
   cancel-in-progress: false
 
+permissions:
+  contents: read
+
 jobs:
   dependencies:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    permissions:
-      contents: write   # nécessaire seulement pour commiter package-lock.json
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -43,48 +52,95 @@ jobs:
           node-version: 22
           cache: npm
 
-      # npm ci si le lockfile correspond à package.json ;
-      # sinon npm install met le lockfile à jour à partir de package.json.
-      - name: Install dependencies
+      # package.json est la référence.
+      # npm install installe les dépendances et génère/actualise le lockfile.
+      - name: Install dependencies and generate lockfile
         shell: bash
         run: |
-          if npm ci; then
-            echo "✅ Installation via package-lock.json (npm ci)"
-          else
-            echo "::warning::package-lock.json n'était pas synchronisé : mise à jour depuis package.json."
-            npm install
-          fi
+          set -euo pipefail
 
+          test -s package.json || {
+            echo "::error::package.json est absent ou vide."
+            exit 1
+          }
+
+          npm install
+
+          test -s package-lock.json || {
+            echo "::error::package-lock.json n'a pas été généré."
+            exit 1
+          }
+
+          echo "Installation et génération du lockfile terminées."
+
+      # Vérifie les dépendances déclarées dans package.json.
       - name: Verify declared dependencies are installed
         shell: bash
         run: |
-          node -e '
-            const fs = require("fs");
-            const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
-            const declared = ["dependencies", "devDependencies"].flatMap((g) => Object.keys(pkg[g] || {}));
-            const missing = declared.filter(
-              (name) => !fs.existsSync(`node_modules/${name}/package.json`)
-            );
-            if (missing.length) {
-              console.error("Dépendances déclarées mais non installées :\n- " + missing.join("\n- "));
-              process.exit(1);
-            }
-            console.log(`✅ ${declared.length} dépendances déclarées, toutes installées.`);
-          '
+          set -euo pipefail
 
-      # Commit du lockfile mis à jour : uniquement sur un push vers main/master
-      # (jamais sur une pull request). Sans changement, cette étape ne fait rien.
+          node <<'NODE'
+          const fs = require("node:fs");
+          const path = require("node:path");
+
+          const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+          const declared = [
+            ...Object.keys(pkg.dependencies || {}),
+            ...Object.keys(pkg.devDependencies || {}),
+          ];
+
+          const missing = declared.filter((name) => {
+            try {
+              const packagePath = path.join(
+                "node_modules",
+                name,
+                "package.json"
+              );
+              return !fs.statSync(packagePath).isFile();
+            } catch {
+              return true;
+            }
+          });
+
+          if (missing.length > 0) {
+            console.error(
+              "Dépendances déclarées mais non installées :\n- " +
+                missing.join("\n- ")
+            );
+            process.exit(1);
+          }
+
+          console.log(
+            `OK : ${declared.length} dépendances déclarées vérifiées.`
+          );
+          NODE
+
+      # Vérifie la cohérence de l'arbre installé.
+      - name: Verify dependency tree
+        run: npm ls --depth=0
+
+      # Commit uniquement du lockfile, jamais sur une pull request.
       - name: Commit updated package-lock.json
-        if: ${{ github.event_name == 'push' }}
+        if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') }}
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "chore: update package-lock.json [skip ci]"
           file_pattern: "package-lock.json"
 
-      - name: Run BAARO CI checks and build (optionnel)
+      # Exécution optionnelle des contrôles et du build.
+      - name: Run BAARO CI checks and build
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_ci }}
         run: npm run ci
 
       - name: Summary
         if: success()
-        run: echo "## Dépendances installées, vérifiées et lockfile synchronisé" >> "$GITHUB_STEP_SUMMARY"
+        shell: bash
+        run: |
+          {
+            echo "## BAARO - Dépendances"
+            echo ""
+            echo "- Installation via npm install."
+            echo "- package-lock.json généré ou actualisé."
+            echo "- Dépendances déclarées vérifiées."
+            echo "- Commit : ${GITHUB_SHA}"
+          } >> "$GITHUB_STEP_SUMMARY"
