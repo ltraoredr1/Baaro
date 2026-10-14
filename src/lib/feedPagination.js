@@ -1,18 +1,8 @@
-/**
- * Pagination curseur du fil + retry réseau.
- * Place : src/lib/feedPagination.js
- *
- * Adapte le .select() si ton schéma posts/profiles diffère.
- */
 import { supabase } from "../supabaseClient.js";
 import { withRetry } from "./perf.js";
 
-const PAGE_SIZE = 15;
+const PAGE_SIZE = 20;
 
-/**
- * @param {{ cursor?: string|null, pageSize?: number }} opts
- * @returns {Promise<{ rows: array, nextCursor: string|null }>}
- */
 export async function fetchFeedPage({
   cursor = null,
   pageSize = PAGE_SIZE,
@@ -20,23 +10,29 @@ export async function fetchFeedPage({
   return withRetry(
     async () => {
       let q = supabase
-        .from("posts")
-        .select(
+       .from("posts")
+       .select(
           `
           id,
-          content,
+          text,
           media_url,
+          media_type,
           created_at,
           author_id,
           likes_count,
-          profiles:author_id ( username, avatar_url, display_name )
+          comments_count,
+          views_count,
+          profiles:author_id ( display_name, handle, flag, avatar_url )
         `
         )
-        .order("created_at", { ascending: false })
-        .limit(pageSize);
+       .order("created_at", { ascending: false })
+       .order("id", { ascending: false })
+       .limit(pageSize);
 
-      if (cursor) {
-        q = q.lt("created_at", cursor);
+      if (cursor?.created_at && cursor?.id) {
+        q = q.or(`created_at.lt.${cursor.created_at},and(created_at.eq.${cursor.created_at},id.lt.${cursor.id})`);
+      } else if (cursor?.created_at) {
+        q = q.lt("created_at", cursor.created_at);
       }
 
       const { data, error } = await q;
@@ -44,7 +40,9 @@ export async function fetchFeedPage({
 
       const rows = data || [];
       const nextCursor =
-        rows.length === pageSize ? rows[rows.length - 1].created_at : null;
+        rows.length === pageSize
+         ? { created_at: rows[rows.length - 1].created_at, id: rows[rows.length - 1].id }
+          : null;
 
       return { rows, nextCursor };
     },
@@ -52,14 +50,9 @@ export async function fetchFeedPage({
   );
 }
 
-/**
- * Chargeur réutilisable (first / next page).
- */
 export function createFeedLoader(fetchPage = fetchFeedPage) {
   return {
-    firstPage() {
-      return fetchPage({ cursor: null });
-    },
+    firstPage() { return fetchPage({ cursor: null }); },
     nextPage(cursor) {
       if (!cursor) return Promise.resolve({ rows: [], nextCursor: null });
       return fetchPage({ cursor });
