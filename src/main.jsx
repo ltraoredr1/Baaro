@@ -15,6 +15,36 @@ import { bootstrapNative } from "./lib/nativeBootstrap.js";
 import { store } from "./store/index.js";
 import "./index.css";
 
+// FIX NATIF : API
+// Dans l'APK, l'app tourne sur https://localhost : les appels relatifs "/api/..."
+// reçoivent index.html (<!doctype) au lieu du JSON. On les redirige vers Vercel.
+// Sur le web, rien ne change.
+if (Capacitor.isNativePlatform() && !window.__baaroFetchPatched) {
+  window.__baaroFetchPatched = true;
+  const API_ORIGIN =
+    import.meta.env.VITE_API_BASE_URL || "https://baaro-xi.vercel.app";
+  const originalFetch = window.fetch.bind(window);
+
+  window.fetch = (input, init) => {
+    if (typeof input === "string" && input.startsWith("/api/")) {
+      return originalFetch(`${API_ORIGIN}${input}`, init);
+    }
+    if (input instanceof Request) {
+      const url = new URL(input.url);
+      if (
+        url.origin === window.location.origin &&
+        url.pathname.startsWith("/api/")
+      ) {
+        return originalFetch(
+          new Request(`${API_ORIGIN}${url.pathname}${url.search}`, input),
+          init
+        );
+      }
+    }
+    return originalFetch(input, init);
+  };
+}
+
 captureRefFromUrl();
 initPerf();
 
