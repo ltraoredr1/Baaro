@@ -3,50 +3,33 @@
  * Fichier : api/_shared.js
  */
 
-// ✅ TOUS LES IMPORTS DOIVENT ÊTRE TOUT EN HAUT
 import Stripe from "stripe";
 import { createClient } from "@supabase/supabase-js";
 
 const DEFAULT_ALLOWED = [
+  // Android / Capacitor WebView.
+  "https://localhost",
+  "capacitor://localhost",
+];
+
+const DEVELOPMENT_ALLOWED = [
   "http://localhost:5173",
   "http://localhost:3000",
   "http://127.0.0.1:5173",
   "http://127.0.0.1:3000",
-  // App native Capacitor (Android : androidScheme "https" -> https://localhost)
-  "https://localhost",
   "http://localhost",
-  "capacitor://localhost",
 ];
 
 function normalizeOrigin(value) {
   const raw = String(value || "").trim();
+
   if (!raw) return "";
+
   try {
     return new URL(raw.includes("://") ? raw : `https://${raw}`).origin;
   } catch {
     return "";
   }
-}
-
-function getAllowedOrigins() {
-  const fromEnv = (process.env.ALLOWED_ORIGINS || "")
-    .split(",")
-    .map(normalizeOrigin)
-    .filter(Boolean);
-
-  /*
-   * Vercel fournit automatiquement certaines variables utiles :
-   * VERCEL_URL, VERCEL_PROJECT_PRODUCTION_URL
-   * On les ajoute afin d'éviter qu'une requête du déploiement BAARO
-   * soit bloquée par CORS.
-   */
-  const vercelOrigins = [
-    normalizeOrigin(process.env.VERCEL_URL),
-    normalizeOrigin(process.env.VERCEL_PROJECT_PRODUCTION_URL),
-    normalizeOrigin(process.env.PUBLIC_APP_URL),
-  ].filter(Boolean);
-
-  return [...new Set([...DEFAULT_ALLOWED, ...fromEnv, ...vercelOrigins])];
 }
 
 function isProduction() {
@@ -56,34 +39,59 @@ function isProduction() {
   );
 }
 
+function getAllowedOrigins() {
+  const fromEnv = (process.env.ALLOWED_ORIGINS || "")
+    .split(",")
+    .map(normalizeOrigin)
+    .filter(Boolean);
+
+  const vercelOrigins = [
+    normalizeOrigin(process.env.VERCEL_URL),
+    normalizeOrigin(process.env.VERCEL_PROJECT_PRODUCTION_URL),
+    normalizeOrigin(process.env.PUBLIC_APP_URL),
+  ].filter(Boolean);
+
+  const defaults = isProduction()
+    ? DEFAULT_ALLOWED
+    : [...DEFAULT_ALLOWED, ...DEVELOPMENT_ALLOWED];
+
+  return [...new Set([...defaults, ...fromEnv, ...vercelOrigins])];
+}
+
 export function applyCors(req, res) {
   const origin = String(req.headers.origin || "").trim();
   const allowed = getAllowedOrigins();
 
-  /*
-   * Pas d'Origin : requête serveur, client natif ou appel direct.
-   */
-  if (!origin) {
-    // Pas besoin de bloquer.
-  } else if (allowed.includes(origin)) {
-    res.setHeader("Access-Control-Allow-Origin", origin);
-  } else if (isProduction()) {
-    res.setHeader("Vary", "Origin");
-    return res.status(403).json({ ok: false, error: "Origin not allowed" });
-  } else {
-    /*
-     * En développement, on laisse la requête continuer.
-     * On ne renvoie simplement pas Access-Control-Allow-Origin
-     * pour une origine inconnue.
-     */
-    res.setHeader("Vary", "Origin");
+  if (origin) {
+    if (allowed.includes(origin)) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+    } else if (isProduction()) {
+      res.setHeader("Vary", "Origin");
+
+      return res.status(403).json({
+        ok: false,
+        error: "Origin not allowed",
+      });
+    } else {
+      res.setHeader("Vary", "Origin");
+    }
   }
 
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
+  res.setHeader(
+    "Access-Control-Allow-Methods",
+    "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+  );
+
   res.setHeader(
     "Access-Control-Allow-Headers",
-    ["Content-Type", "Authorization", "X-Session-Id", "X-BAARO-Country"].join(", ")
+    [
+      "Content-Type",
+      "Authorization",
+      "X-Session-Id",
+      "X-BAARO-Country",
+    ].join(", ")
   );
+
   res.setHeader("Access-Control-Max-Age", "86400");
   res.setHeader("Vary", "Origin");
 
@@ -94,6 +102,10 @@ export function applyCors(req, res) {
 
   return false;
 }
+
+// ==========================================================
+// LOGGING
+// ==========================================================
 
 export function logInfo(context, message, extra = {}) {
   console.log(
@@ -139,18 +151,26 @@ export async function flushLogs(_timeoutMs = 1500) {
   // no-op
 }
 
-/* ==========================================================
- * RATE LIMITING
- * ========================================================== */
+// ==========================================================
+// RATE LIMITING
+// ==========================================================
 
 const store = new Map();
 
 function clientIp(req) {
-  return (
-    req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ||
-    req.headers["x-real-ip"] ||
-    "unknown"
-  );
+  const forwarded = req.headers["x-forwarded-for"];
+
+  if (typeof forwarded === "string" && forwarded.trim()) {
+    return forwarded.split(",")[0].trim();
+  }
+
+  const realIp = req.headers["x-real-ip"];
+
+  if (typeof realIp === "string" && realIp.trim()) {
+    return realIp.trim();
+  }
+
+  return "unknown";
 }
 
 function memoryLimit(req, { key, max = 20, windowMs = 60_000 }) {
@@ -168,20 +188,27 @@ function memoryLimit(req, { key, max = 20, windowMs = 60_000 }) {
   bucket.count += 1;
 
   if (store.size > 5000) {
-    for (const [k, value] of store) {
+    for (const [storedKey, value] of store) {
       if (now - value.start >= windowMs) {
-        store.delete(k);
+        store.delete(storedKey);
       }
     }
   }
 
   if (bucket.count > max) {
-    const retryAfter = Math.ceil((windowMs - (now - bucket.start)) / 1000);
+    const retryAfter = Math.max(
+      1,
+      Math.ceil((windowMs - (now - bucket.start)) / 1000)
+    );
 
     return {
       ok: false,
       status: 429,
-      body: { ok: false, error: "Trop de requêtes", retryAfter },
+      body: {
+        ok: false,
+        error: "Trop de requêtes",
+        retryAfter,
+      },
       headers: {
         "Retry-After": String(retryAfter),
         "X-RateLimit-Limit": String(max),
@@ -190,70 +217,219 @@ function memoryLimit(req, { key, max = 20, windowMs = 60_000 }) {
     };
   }
 
-  return { ok: true, remaining: max - bucket.count };
+  return {
+    ok: true,
+    remaining: Math.max(0, max - bucket.count),
+  };
 }
 
+/**
+ * Legacy synchronous limiter.
+ *
+ * This limiter is process-local. It is not a substitute for Upstash
+ * in a multi-instance serverless production environment.
+ * Production endpoints requiring a shared limit should use
+ * rateLimitAsync(req, opts).
+ */
 export function rateLimit(req, opts) {
   return memoryLimit(req, opts);
 }
 
 function upstashConfigured() {
-  return !!(
-    process.env.UPSTASH_REDIS_REST_URL &&
-    process.env.UPSTASH_REDIS_REST_TOKEN
+  return Boolean(
+    String(process.env.UPSTASH_REDIS_REST_URL || "").trim() &&
+      String(process.env.UPSTASH_REDIS_REST_TOKEN || "").trim()
   );
 }
 
-export async function rateLimitAsync(req, { key, max = 20, windowMs = 60_000 }) {
-  if (!upstashConfigured()) {
-    return memoryLimit(req, { key, max, windowMs });
-  }
+function rateLimitUnavailable() {
+  return {
+    ok: false,
+    status: 503,
+    body: {
+      ok: false,
+      error: "Protection anti-abus temporairement indisponible.",
+      code: "rate_limit_unavailable",
+    },
+    headers: {
+      "Retry-After": "5",
+      "Cache-Control": "no-store",
+    },
+  };
+}
 
-  const ip = clientIp(req);
-  const redisKey = `rl:${key}:${ip}`;
-  const url = process.env.UPSTASH_REDIS_REST_URL.replace(/\/$/, "");
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
-  const windowSec = Math.max(1, Math.ceil(windowMs / 1000));
+function getUpstashConfig() {
+  const rawUrl = String(
+    process.env.UPSTASH_REDIS_REST_URL || ""
+  ).trim();
+
+  const token = String(
+    process.env.UPSTASH_REDIS_REST_TOKEN || ""
+  ).trim();
+
+  let parsed;
 
   try {
-    const incrRes = await fetch(`${url}/incr/${encodeURIComponent(redisKey)}`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
+    parsed = new URL(rawUrl);
+  } catch {
+    throw new Error("URL Upstash invalide.");
+  }
 
-    const incrData = await incrRes.json();
-    const count = Number(incrData?.result ?? 0);
+  if (parsed.protocol !== "https:") {
+    throw new Error("Upstash doit utiliser HTTPS.");
+  }
 
-    if (count === 1) {
-      await fetch(`${url}/expire/${encodeURIComponent(redisKey)}/${windowSec}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+  if (!token) {
+    throw new Error("Jeton Upstash manquant.");
+  }
+
+  return {
+    url: rawUrl.replace(/\/+$/, ""),
+    token,
+  };
+}
+
+async function upstashCommand(url, token, command) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(command),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Upstash HTTP ${response.status}`);
+  }
+
+  const data = await response.json().catch(() => null);
+
+  if (!data || data.error) {
+    throw new Error("Réponse Upstash invalide.");
+  }
+
+  return data.result;
+}
+
+export async function rateLimitAsync(
+  req,
+  { key, max = 20, windowMs = 60_000 }
+) {
+  const safeKey = String(key || "").trim();
+
+  if (!safeKey || !Number.isFinite(max) || max < 1) {
+    return {
+      ok: false,
+      status: 500,
+      body: {
+        ok: false,
+        error: "Configuration de limitation invalide.",
+      },
+    };
+  }
+
+  const windowSec = Math.max(1, Math.ceil(windowMs / 1000));
+
+  if (!upstashConfigured()) {
+    if (isProduction()) {
+      console.error("[rate-limit] Upstash is not configured.");
+      return rateLimitUnavailable();
     }
 
-    if (count > max) {
-      const retryAfter = windowSec;
+    return memoryLimit(req, {
+      key: safeKey,
+      max,
+      windowMs,
+    });
+  }
 
+  try {
+    const { url, token } = getUpstashConfig();
+    const ip = clientIp(req);
+    const redisKey = `rl:${safeKey}:${ip}`;
+    const encodedKey = encodeURIComponent(redisKey);
+
+    const countResult = await upstashCommand(
+      `${url}/incr/${encodedKey}`,
+      token,
+      ["INCR", redisKey]
+    );
+
+    const count = Number(countResult);
+
+    if (!Number.isSafeInteger(count) || count < 1) {
+      throw new Error("Compteur Upstash invalide.");
+    }
+
+    /*
+     * Refresh the expiry on each request.
+     * The count still increases, so repeated requests cannot reset the
+     * counter. Refreshing TTL also prevents an accidental permanent key
+     * if the first EXPIRE command failed.
+     */
+    const expiryResult = await upstashCommand(
+      `${url}/expire/${encodedKey}/${windowSec}`,
+      token,
+      ["EXPIRE", redisKey, windowSec]
+    );
+
+    if (Number(expiryResult) !== 1) {
+      throw new Error("Expiration du compteur Upstash non confirmée.");
+    }
+
+    const headers = {
+      "X-RateLimit-Limit": String(max),
+      "X-RateLimit-Remaining": String(Math.max(0, max - count)),
+      "Cache-Control": "no-store",
+    };
+
+    if (count > max) {
       return {
         ok: false,
         status: 429,
-        body: { ok: false, error: "Trop de requêtes", retryAfter },
+        body: {
+          ok: false,
+          error: "Trop de requêtes",
+          retryAfter: windowSec,
+        },
         headers: {
-          "Retry-After": String(retryAfter),
-          "X-RateLimit-Limit": String(max),
+          ...headers,
+          "Retry-After": String(windowSec),
           "X-RateLimit-Remaining": "0",
         },
       };
     }
 
-    return { ok: true, remaining: Math.max(0, max - count) };
-  } catch (e) {
-    console.error("rateLimitAsync Upstash fallback memory:", e?.message || e);
-    return memoryLimit(req, { key, max, windowMs });
+    return {
+      ok: true,
+      remaining: Math.max(0, max - count),
+      headers,
+    };
+  } catch (error) {
+    console.error(
+      "[rate-limit] Distributed limiter unavailable; request blocked."
+    );
+
+    /*
+     * Do not silently switch to process-local counters in production.
+     * In development, a local fallback is useful for working offline.
+     */
+    if (isProduction()) {
+      return rateLimitUnavailable();
+    }
+
+    return memoryLimit(req, {
+      key: safeKey,
+      max,
+      windowMs,
+    });
   }
 }
 
-/* ==========================================================
- * STRIPE
- * ========================================================== */
+// ==========================================================
+// STRIPE
+// ==========================================================
 
 let _stripe = null;
 
@@ -289,7 +465,11 @@ export function mapStripeError(err) {
 
   switch (err?.type) {
     case "StripeCardError":
-      return { ...base, status: 402, message: humanCardMessage(err) };
+      return {
+        ...base,
+        status: 402,
+        message: humanCardMessage(err),
+      };
 
     case "StripeRateLimitError":
       return {
@@ -309,18 +489,21 @@ export function mapStripeError(err) {
       return {
         ...base,
         status: 502,
-        message: "Service de paiement temporairement indisponible. Réessaie plus tard.",
+        message:
+          "Service de paiement temporairement indisponible. Réessaie plus tard.",
       };
 
     case "StripeConnectionError":
       return {
         ...base,
         status: 503,
-        message: "Impossible de joindre le service de paiement. Vérifie ta connexion.",
+        message:
+          "Impossible de joindre le service de paiement. Vérifie ta connexion.",
       };
 
     case "StripeAuthenticationError":
-      console.error("[Stripe] Authentication error", err.message);
+      console.error("[Stripe] Authentication error.");
+
       return {
         ...base,
         status: 500,
@@ -338,7 +521,8 @@ export function mapStripeError(err) {
       return {
         ...base,
         status: 409,
-        message: "Cette opération a déjà été traitée. Rafraîchis la page.",
+        message:
+          "Cette opération a déjà été traitée. Rafraîchis la page.",
       };
 
     default:
@@ -346,24 +530,25 @@ export function mapStripeError(err) {
         return {
           ...base,
           status: 503,
-          message: "Délai dépassé avec le service de paiement. Réessaie.",
+          message:
+            "Délai dépassé avec le service de paiement. Réessaie.",
         };
       }
 
-      console.error("[Stripe] Unhandled error", err);
+      console.error("[Stripe] Unhandled error.");
 
       return {
         ...base,
         status: 500,
-        message: err?.message || base.message,
+        message: "Erreur interne du service de paiement.",
       };
   }
 }
 
 function humanCardMessage(err) {
-  const code = err.decline_code || err.code;
+  const code = err?.decline_code || err?.code;
 
-  const map = {
+  const messages = {
     card_declined: "Carte refusée par ta banque.",
     insufficient_funds: "Fonds insuffisants.",
     lost_card: "Carte signalée comme perdue. Contacte ta banque.",
@@ -379,11 +564,11 @@ function humanCardMessage(err) {
     generic_decline: "Paiement refusé. Essaie une autre carte.",
   };
 
-  if (code && map[code]) {
-    return map[code];
+  if (code && messages[code]) {
+    return messages[code];
   }
 
-  if (err.message && err.message.length < 120) {
+  if (err?.message && err.message.length < 120) {
     return err.message;
   }
 
@@ -394,19 +579,19 @@ const ZERO_DECIMAL = new Set(["XOF", "XAF", "JPY", "KRW", "VND"]);
 
 export function toStripeAmount(amount, currency) {
   const cur = String(currency || "XOF").toUpperCase();
-  const n = Number(amount);
+  const number = Number(amount);
 
-  if (!Number.isFinite(n) || n <= 0) {
+  if (!Number.isFinite(number) || number <= 0) {
     throw Object.assign(new Error("Montant invalide"), {
       type: "StripeInvalidRequestError",
     });
   }
 
   if (ZERO_DECIMAL.has(cur)) {
-    return Math.round(n);
+    return Math.round(number);
   }
 
-  return Math.round(n * 100);
+  return Math.round(number * 100);
 }
 
 export async function createCheckoutSession({
@@ -470,18 +655,19 @@ export function constructStripeEvent(rawBody, signature) {
   return stripe.webhooks.constructEvent(rawBody, signature, secret);
 }
 
-/* ==========================================================
- * SUPABASE
- * ========================================================== */
+// ==========================================================
+// SUPABASE
+// ==========================================================
 
-const SUPABASE_URL = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
+const SUPABASE_URL =
+  process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
 
 const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 export function getAdminClient() {
   if (!SUPABASE_URL || !SERVICE_ROLE_KEY) {
     throw new Error(
-      "Configuration serveur incomplète : VITE_SUPABASE_URL (ou SUPABASE_URL) et SUPABASE_SERVICE_ROLE_KEY doivent être définies."
+      "Configuration serveur incomplète : SUPABASE_URL (ou VITE_SUPABASE_URL) et SUPABASE_SERVICE_ROLE_KEY doivent être définies."
     );
   }
 
@@ -495,20 +681,20 @@ export function getAdminClient() {
 
 export async function requireUser(req, admin) {
   const header = req.headers.authorization || "";
-  const token = header.startsWith("Bearer ") ? header.slice(7) : null;
+  const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
 
   if (!token) {
-    const err = new Error("Authentification manquante");
-    err.status = 401;
-    throw err;
+    const error = new Error("Authentification manquante");
+    error.status = 401;
+    throw error;
   }
 
   const { data, error } = await admin.auth.getUser(token);
 
   if (error || !data?.user) {
-    const err = new Error("Session invalide ou expirée");
-    err.status = 401;
-    throw err;
+    const authError = new Error("Session invalide ou expirée");
+    authError.status = 401;
+    throw authError;
   }
 
   return data.user;
