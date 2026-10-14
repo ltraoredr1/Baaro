@@ -1,3 +1,4 @@
+
 /**
  * CORS partagé, Logging, Rate Limiting, Helpers Stripe & Supabase
  * Fichier : api/_shared.js
@@ -7,7 +8,6 @@ import Stripe from "stripe";
 import { createClient } from "@supabase/supabase-js";
 
 const DEFAULT_ALLOWED = [
-  // Android / Capacitor WebView.
   "https://localhost",
   "capacitor://localhost",
 ];
@@ -62,18 +62,16 @@ export function applyCors(req, res) {
   const origin = String(req.headers.origin || "").trim();
   const allowed = getAllowedOrigins();
 
+  res.setHeader("Vary", "Origin");
+
   if (origin) {
     if (allowed.includes(origin)) {
       res.setHeader("Access-Control-Allow-Origin", origin);
     } else if (isProduction()) {
-      res.setHeader("Vary", "Origin");
-
       return res.status(403).json({
         ok: false,
         error: "Origin not allowed",
       });
-    } else {
-      res.setHeader("Vary", "Origin");
     }
   }
 
@@ -93,7 +91,6 @@ export function applyCors(req, res) {
   );
 
   res.setHeader("Access-Control-Max-Age", "86400");
-  res.setHeader("Vary", "Origin");
 
   if (req.method === "OPTIONS") {
     res.status(204).end();
@@ -224,12 +221,11 @@ function memoryLimit(req, { key, max = 20, windowMs = 60_000 }) {
 }
 
 /**
- * Legacy synchronous limiter.
+ * Limiteur historique synchrone.
+ * Il utilise la mémoire du processus : il n'est pas partagé
+ * entre plusieurs instances serverless.
  *
- * This limiter is process-local. It is not a substitute for Upstash
- * in a multi-instance serverless production environment.
- * Production endpoints requiring a shared limit should use
- * rateLimitAsync(req, opts).
+ * En production, préférer rateLimitAsync().
  */
 export function rateLimit(req, opts) {
   return memoryLimit(req, opts);
@@ -289,14 +285,21 @@ function getUpstashConfig() {
   };
 }
 
-async function upstashCommand(url, token, command) {
+/**
+ * Exécute une commande via l'API REST Upstash.
+ *
+ * Les commandes sont intégrées au chemin URL :
+ * GET /incr/<clé>
+ * GET /expire/<clé>/<secondes>
+ */
+async function upstashCommand(url, token) {
   const response = await fetch(url, {
-    method: "POST",
+    method: "GET",
     headers: {
       Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
+      Accept: "application/json",
     },
-    body: JSON.stringify(command),
+    cache: "no-store",
   });
 
   if (!response.ok) {
@@ -314,11 +317,17 @@ async function upstashCommand(url, token, command) {
 
 export async function rateLimitAsync(
   req,
-  { key, max = 20, windowMs = 60_000 }
+  { key, max = 20, windowMs = 60_000 } = {}
 ) {
   const safeKey = String(key || "").trim();
 
-  if (!safeKey || !Number.isFinite(max) || max < 1) {
+  if (
+    !safeKey ||
+    !Number.isFinite(max) ||
+    max < 1 ||
+    !Number.isFinite(windowMs) ||
+    windowMs <= 0
+  ) {
     return {
       ok: false,
       status: 500,
@@ -352,8 +361,7 @@ export async function rateLimitAsync(
 
     const countResult = await upstashCommand(
       `${url}/incr/${encodedKey}`,
-      token,
-      ["INCR", redisKey]
+      token
     );
 
     const count = Number(countResult);
@@ -363,15 +371,14 @@ export async function rateLimitAsync(
     }
 
     /*
-     * Refresh the expiry on each request.
-     * The count still increases, so repeated requests cannot reset the
-     * counter. Refreshing TTL also prevents an accidental permanent key
-     * if the first EXPIRE command failed.
+     * L'expiration est rafraîchie à chaque requête.
+     * Cela évite de laisser un compteur sans expiration si une commande
+     * EXPIRE précédente a échoué. Cette stratégie correspond à une
+     * fenêtre glissante : l'expiration est prolongée par chaque requête.
      */
     const expiryResult = await upstashCommand(
       `${url}/expire/${encodedKey}/${windowSec}`,
-      token,
-      ["EXPIRE", redisKey, windowSec]
+      token
     );
 
     if (Number(expiryResult) !== 1) {
@@ -406,15 +413,12 @@ export async function rateLimitAsync(
       remaining: Math.max(0, max - count),
       headers,
     };
-  } catch (error) {
+  } catch {
     console.error(
       "[rate-limit] Distributed limiter unavailable; request blocked."
     );
 
-    /*
-     * Do not silently switch to process-local counters in production.
-     * In development, a local fallback is useful for working offline.
-     */
+    // En production, ne pas contourner Upstash avec un compteur local.
     if (isProduction()) {
       return rateLimitUnavailable();
     }
