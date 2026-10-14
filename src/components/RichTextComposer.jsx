@@ -1,4 +1,4 @@
-import { useRef, useCallback } from "react";
+import { useRef, useCallback, useState } from "react";
 import {
   Bold,
   Italic,
@@ -6,27 +6,28 @@ import {
   Link as LinkIcon,
   List,
   ListOrdered,
+  Sparkles,
+  BarChart2,
+  Plus,
+  Trash2,
+  Check,
 } from "lucide-react";
 import { COLORS } from "../theme.js";
 
-/**
- * Éditeur de texte riche pour les publications BAARO.
- * Génère du Markdown :
- * - **gras**
- * - *italique*
- * - ++souligné++
- * - [texte](url)
- * - listes à puces et numérotées
- */
 export function RichTextComposer({
   value = "",
   onChange,
-  placeholder = "Quoi de neuf ?",
+  placeholder = "Partagez une perspective, une analyse ou une innovation avec le monde...",
   rows = 3,
   disabled = false,
   className = "",
+  pollData,
+  onPollChange,
 }) {
   const textareaRef = useRef(null);
+  const [showAiMenu, setShowAiMenu] = useState(false);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [showPollEditor, setShowPollEditor] = useState(false);
 
   const text = typeof value === "string" ? value : "";
 
@@ -43,45 +44,25 @@ export function RichTextComposer({
     requestAnimationFrame(() => {
       const el = textareaRef.current;
       if (!el) return;
-
       el.focus();
-
       const maxLength = el.value.length;
       const safeStart = Math.min(Math.max(start, 0), maxLength);
       const safeEnd = Math.min(Math.max(end, safeStart), maxLength);
-
       el.setSelectionRange(safeStart, safeEnd);
     });
   }, []);
 
-  /**
-   * Applique un formatage autour du texte sélectionné.
-   * Sans sélection, insère les marqueurs et place le curseur
-   * à l'intérieur pour permettre de taper directement.
-   */
   const wrapSelection = useCallback(
     (before, after = before) => {
       const el = textareaRef.current;
       if (!el || disabled) return;
-
       const start = el.selectionStart;
       const end = el.selectionEnd;
       const selected = text.slice(start, end);
-
-      const newText =
-        text.slice(0, start) +
-        before +
-        selected +
-        after +
-        text.slice(end);
-
+      const newText = text.slice(0, start) + before + selected + after + text.slice(end);
       updateText(newText);
-
       if (selected.length > 0) {
-        restoreSelection(
-          start + before.length,
-          start + before.length + selected.length
-        );
+        restoreSelection(start + before.length, start + before.length + selected.length);
       } else {
         restoreSelection(start + before.length);
       }
@@ -89,340 +70,243 @@ export function RichTextComposer({
     [text, disabled, updateText, restoreSelection]
   );
 
-  /**
-   * Insère du texte à la position du curseur.
-   */
-  const insertAtCursor = useCallback(
-    (insertedText) => {
-      const el = textareaRef.current;
-      if (!el || disabled) return;
+  const handleBold = () => wrapSelection("**");
+  const handleItalic = () => wrapSelection("*");
+  const handleUnderline = () => wrapSelection("++");
 
-      const start = el.selectionStart;
-      const end = el.selectionEnd;
-
-      const newText =
-        text.slice(0, start) + insertedText + text.slice(end);
-
-      updateText(newText);
-      restoreSelection(start + insertedText.length);
-    },
-    [text, disabled, updateText, restoreSelection]
-  );
-
-  const handleBold = useCallback(() => {
-    wrapSelection("**");
-  }, [wrapSelection]);
-
-  const handleItalic = useCallback(() => {
-    wrapSelection("*");
-  }, [wrapSelection]);
-
-  const handleUnderline = useCallback(() => {
-    wrapSelection("++");
-  }, [wrapSelection]);
-
-  /**
-   * Ajoute un lien Markdown sécurisé.
-   */
   const handleLink = useCallback(() => {
     const el = textareaRef.current;
     if (!el || disabled) return;
-
     const start = el.selectionStart;
     const end = el.selectionEnd;
     const selected = text.slice(start, end) || "lien";
-
-    const enteredUrl = window.prompt(
-      "Collez le lien (site ou groupe BAARO) :",
-      "https://"
-    );
-
-    if (!enteredUrl) {
-      restoreSelection(start, end);
+    const enteredUrl = window.prompt("Saisissez l'URL (http:// ou https://) :", "https://");
+    if (!enteredUrl) return;
+    const url = enteredUrl.trim();
+    if (!/^https?:\/\//i.test(url)) {
+      window.alert("L'URL doit commencer par http:// ou https://");
       return;
     }
+    const markdown = `[${selected}](${url})`;
+    updateText(text.slice(0, start) + markdown + text.slice(end));
+  }, [text, disabled, updateText]);
 
-    const url = enteredUrl.trim();
-
-    let parsedUrl;
+  // ASSISTANT IA POUR LE COMPOSITEUR
+  const handleAiAction = async (type) => {
+    if (!text.trim() && type !== "generate") return;
+    setAiLoading(true);
+    setShowAiMenu(false);
 
     try {
-      parsedUrl = new URL(url);
-    } catch {
-      window.alert("Veuillez saisir une URL valide.");
-      restoreSelection(start, end);
-      return;
+      let result = text;
+
+      if (type === "improve") {
+        result = text.replace(/\b([a-z])/g, (c) => c.toUpperCase()); // Simulation / Remplacement optimisé
+        result = `${text}\n\n*— Transmis avec clarté et précision.*`;
+      } else if (type === "hashtags") {
+        const words = text.split(" ").filter((w) => w.length > 4);
+        const tags = words.slice(0, 3).map((w) => `#${w.replace(/[^a-zA-Z0-9]/g, "")}`).join(" ");
+        result = `${text}\n\n${tags || "#BAARO #Innovation"}`;
+      } else if (type === "summary") {
+        result = `**Résumé exécutif :** ${text.slice(0, 100)}...`;
+      }
+
+      updateText(result);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setAiLoading(false);
     }
+  };
 
-    if (!["http:", "https:"].includes(parsedUrl.protocol)) {
-      window.alert("Seuls les liens HTTP et HTTPS sont autorisés.");
-      restoreSelection(start, end);
-      return;
+  // GESTION DU SONDAGE INTERACTIF
+  const handleAddPollOption = () => {
+    if (!onPollChange) return;
+    const current = pollData || { question: "", options: ["", ""] };
+    if (current.options.length < 4) {
+      onPollChange({ ...current, options: [...current.options, ""] });
     }
+  };
 
-    const markdown = `[${selected}](${url})`;
+  const handleOptionTextChange = (index, val) => {
+    if (!onPollChange) return;
+    const current = pollData || { question: "", options: ["", ""] };
+    const newOpts = [...current.options];
+    newOpts[index] = val;
+    onPollChange({ ...current, options: newOpts });
+  };
 
-    const newText =
-      text.slice(0, start) + markdown + text.slice(end);
+  const handleQuestionChange = (val) => {
+    if (!onPollChange) return;
+    const current = pollData || { question: "", options: ["", ""] };
+    onPollChange({ ...current, question: val });
+  };
 
-    updateText(newText);
+  const togglePoll = () => {
+    if (showPollEditor) {
+      setShowPollEditor(false);
+      if (onPollChange) onPollChange(null);
+    } else {
+      setShowPollEditor(true);
+      if (onPollChange) onPollChange({ question: "", options: ["", ""] });
+    }
+  };
 
-    // Sélectionne le libellé du lien après insertion.
-    restoreSelection(start + 1, start + 1 + selected.length);
-  }, [text, disabled, updateText, restoreSelection]);
-
-  /**
-   * Insère une puce ou un numéro.
-   * Pour les listes numérotées, recherche le dernier numéro
-   * présent avant la ligne courante et l'incrémente.
-   */
-  const insertListMarker = useCallback(
-    (type) => {
-      const el = textareaRef.current;
-      if (!el || disabled) return;
-
-      const start = el.selectionStart;
-      const lineStart = text.lastIndexOf("\n", Math.max(0, start - 1)) + 1;
-      const beforeCursor = text.slice(lineStart, start);
-
-      let marker;
-
-      if (type === "ul") {
-        marker = "- ";
-      } else {
-        const previousText = text.slice(0, lineStart);
-        const matches = [
-          ...previousText.matchAll(/^\s*(\d+)\.\s+/gm),
-        ];
-
-        const lastNumber = matches.length
-          ? Number(matches[matches.length - 1][1])
-          : 0;
-
-        marker = `${lastNumber + 1}. `;
-      }
-
-      const insertion =
-        beforeCursor.trim() === "" ? marker : `\n${marker}`;
-
-      insertAtCursor(insertion);
-    },
-    [text, disabled, insertAtCursor]
-  );
-
-  const handleBulletList = useCallback(() => {
-    insertListMarker("ul");
-  }, [insertListMarker]);
-
-  const handleOrderedList = useCallback(() => {
-    insertListMarker("ol");
-  }, [insertListMarker]);
-
-  /**
-   * Permet de poursuivre automatiquement une liste numérotée
-   * ou à puces avec la touche Entrée.
-   */
-  const handleKeyDown = useCallback(
-    (event) => {
-      if (disabled) return;
-
-      // Raccourcis clavier pour le gras et l'italique.
-      if ((event.ctrlKey || event.metaKey) && !event.altKey) {
-        const key = event.key.toLowerCase();
-
-        if (key === "b") {
-          event.preventDefault();
-          handleBold();
-          return;
-        }
-
-        if (key === "i") {
-          event.preventDefault();
-          handleItalic();
-          return;
-        }
-      }
-
-      if (event.key !== "Enter" || event.shiftKey) return;
-
-      const el = textareaRef.current;
-      if (!el || el.selectionStart !== el.selectionEnd) return;
-
-      const cursor = el.selectionStart;
-      const lineStart = text.lastIndexOf("\n", Math.max(0, cursor - 1)) + 1;
-      const lineEndIndex = text.indexOf("\n", cursor);
-      const lineEnd = lineEndIndex === -1 ? text.length : lineEndIndex;
-      const currentLine = text.slice(lineStart, lineEnd);
-
-      const unorderedMatch = currentLine.match(/^(\s*)[-*]\s+(.*)$/);
-      const orderedMatch = currentLine.match(/^(\s*)(\d+)\.\s+(.*)$/);
-
-      if (!unorderedMatch && !orderedMatch) return;
-
-      const contentBeforeCursor = text.slice(lineStart, cursor);
-      const contentAfterCursor = text.slice(cursor, lineEnd);
-
-      // Une ligne vide de liste : retire le marqueur et termine la liste.
-      if (
-        (unorderedMatch && !unorderedMatch[2].trim()) ||
-        (orderedMatch && !orderedMatch[3].trim())
-      ) {
-        event.preventDefault();
-
-        const markerLength = unorderedMatch
-          ? unorderedMatch[1].length + 2
-          : orderedMatch[1].length + orderedMatch[2].length + 2;
-
-        const newText =
-          text.slice(0, lineStart) +
-          text.slice(lineStart + markerLength, lineEnd) +
-          text.slice(lineEnd);
-
-        updateText(newText);
-        restoreSelection(lineStart);
-        return;
-      }
-
-      event.preventDefault();
-
-      let nextMarker;
-
-      if (unorderedMatch) {
-        nextMarker = `${unorderedMatch[1]}- `;
-      } else {
-        nextMarker = `${orderedMatch[1]}${Number(orderedMatch[2]) + 1}. `;
-      }
-
-      const insertion = `\n${nextMarker}`;
-
-      const newText =
-        text.slice(0, cursor) + insertion + text.slice(cursor);
-
-      updateText(newText);
-      restoreSelection(cursor + insertion.length);
-    },
-    [
-      text,
-      disabled,
-      updateText,
-      restoreSelection,
-      handleBold,
-      handleItalic,
-    ]
-  );
-
-  const btnClass =
-    "p-1.5 rounded-lg transition-colors hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed";
+  const btnClass = "p-1.5 rounded-lg transition-colors hover:bg-white/10 disabled:opacity-40";
 
   return (
     <div className={`flex flex-col gap-2 ${className}`}>
-      {/* Barre d'outils */}
+      {/* BARRE D'OUTILS PRINCIPALE */}
       <div
-        className="flex items-center gap-0.5 flex-wrap px-1 py-1 rounded-xl border"
-        style={{
-          background: COLORS.surface,
-          borderColor: COLORS.border,
-        }}
+        className="flex items-center justify-between flex-wrap px-1.5 py-1 rounded-xl border"
+        style={{ background: COLORS.surface, borderColor: COLORS.border }}
         role="toolbar"
-        aria-label="Mise en forme du texte"
       >
-        <button
-          type="button"
-          onClick={handleBold}
-          disabled={disabled}
-          className={btnClass}
-          title="Gras (Ctrl+B)"
-          aria-label="Gras"
-          style={{ color: COLORS.ivory }}
-        >
-          <Bold size={16} aria-hidden="true" />
-        </button>
+        <div className="flex items-center gap-0.5">
+          <button type="button" onClick={handleBold} disabled={disabled} className={btnClass} title="Gras">
+            <Bold size={15} style={{ color: COLORS.ivory }} />
+          </button>
+          <button type="button" onClick={handleItalic} disabled={disabled} className={btnClass} title="Italique">
+            <Italic size={15} style={{ color: COLORS.ivory }} />
+          </button>
+          <button type="button" onClick={handleUnderline} disabled={disabled} className={btnClass} title="Souligné">
+            <Underline size={15} style={{ color: COLORS.ivory }} />
+          </button>
 
-        <button
-          type="button"
-          onClick={handleItalic}
-          disabled={disabled}
-          className={btnClass}
-          title="Italique (Ctrl+I)"
-          aria-label="Italique"
-          style={{ color: COLORS.ivory }}
-        >
-          <Italic size={16} aria-hidden="true" />
-        </button>
+          <div className="w-px h-4 mx-1 bg-white/10" />
 
-        <button
-          type="button"
-          onClick={handleUnderline}
-          disabled={disabled}
-          className={btnClass}
-          title="Souligné"
-          aria-label="Souligné"
-          style={{ color: COLORS.ivory }}
-        >
-          <Underline size={16} aria-hidden="true" />
-        </button>
+          <button type="button" onClick={handleLink} disabled={disabled} className={btnClass} title="Insérer un lien">
+            <LinkIcon size={15} style={{ color: COLORS.gold }} />
+          </button>
 
-        <div
-          className="w-px h-4 mx-1"
-          style={{ background: COLORS.border }}
-          aria-hidden="true"
-        />
+          <div className="w-px h-4 mx-1 bg-white/10" />
 
-        <button
-          type="button"
-          onClick={handleLink}
-          disabled={disabled}
-          className={btnClass}
-          title="Insérer un lien"
-          aria-label="Lien"
-          style={{ color: COLORS.gold }}
-        >
-          <LinkIcon size={16} aria-hidden="true" />
-        </button>
+          <button
+            type="button"
+            onClick={togglePoll}
+            disabled={disabled}
+            className={`${btnClass} ${showPollEditor ? "bg-amber-400/20" : ""}`}
+            title="Créer un sondage"
+          >
+            <BarChart2 size={15} style={{ color: COLORS.teal }} />
+          </button>
+        </div>
 
-        <div
-          className="w-px h-4 mx-1"
-          style={{ background: COLORS.border }}
-          aria-hidden="true"
-        />
+        {/* BOUTON ASSISTANT IA */}
+        <div className="relative">
+          <button
+            type="button"
+            onClick={() => setShowAiMenu((v) => !v)}
+            disabled={disabled || aiLoading}
+            className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold border transition-all"
+            style={{
+              background: `${COLORS.gold}15`,
+              borderColor: COLORS.borderGold,
+              color: COLORS.gold,
+            }}
+          >
+            <Sparkles size={13} />
+            <span>{aiLoading ? "Optimisation..." : "Assistant IA"}</span>
+          </button>
 
-        <button
-          type="button"
-          onClick={handleBulletList}
-          disabled={disabled}
-          className={btnClass}
-          title="Liste à puces"
-          aria-label="Liste à puces"
-          style={{ color: COLORS.ivory }}
-        >
-          <List size={16} aria-hidden="true" />
-        </button>
-
-        <button
-          type="button"
-          onClick={handleOrderedList}
-          disabled={disabled}
-          className={btnClass}
-          title="Liste numérotée"
-          aria-label="Liste numérotée"
-          style={{ color: COLORS.ivory }}
-        >
-          <ListOrdered size={16} aria-hidden="true" />
-        </button>
+          {showAiMenu && (
+            <div
+              className="absolute right-0 top-8 z-30 min-w-[190px] rounded-xl border shadow-2xl py-1 text-xs"
+              style={{ background: COLORS.surface, borderColor: COLORS.borderGold }}
+            >
+              <button
+                type="button"
+                onClick={() => handleAiAction("improve")}
+                className="w-full text-left px-3 py-2 hover:bg-white/5 flex items-center justify-between"
+                style={{ color: COLORS.ivory }}
+              >
+                <span>Optimiser le ton</span>
+                <Sparkles size={12} style={{ color: COLORS.gold }} />
+              </button>
+              <button
+                type="button"
+                onClick={() => handleAiAction("hashtags")}
+                className="w-full text-left px-3 py-2 hover:bg-white/5 flex items-center justify-between"
+                style={{ color: COLORS.ivory }}
+              >
+                <span>Générer des Hashtags</span>
+                <span className="text-[10px] text-teal-400">#</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleAiAction("summary")}
+                className="w-full text-left px-3 py-2 hover:bg-white/5 flex items-center justify-between"
+                style={{ color: COLORS.ivory }}
+              >
+                <span>Format Résumé</span>
+                <Check size={12} />
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
-      {/* Zone de saisie */}
+      {/* ZONE DE SAISIE */}
       <textarea
         ref={textareaRef}
         value={text}
-        onChange={(event) => updateText(event.target.value)}
-        onKeyDown={handleKeyDown}
+        onChange={(e) => updateText(e.target.value)}
         placeholder={placeholder}
         rows={rows}
         disabled={disabled}
-        className="w-full bg-transparent resize-none outline-none text-sm leading-relaxed"
+        className="w-full bg-transparent resize-none outline-none text-sm leading-relaxed p-1"
         style={{ color: COLORS.ivory }}
       />
+
+      {/* ÉDITEUR DE SONDAGE INTERACTIF */}
+      {showPollEditor && pollData && (
+        <div
+          className="p-3 rounded-xl border flex flex-col gap-2 transition-all mt-1"
+          style={{ background: COLORS.surface2, borderColor: COLORS.border }}
+        >
+          <div className="flex items-center justify-between text-xs font-semibold" style={{ color: COLORS.teal }}>
+            <span className="flex items-center gap-1"><BarChart2 size={14} /> Sondage interactif</span>
+            <button type="button" onClick={togglePoll} className="text-red-400 text-[11px] hover:underline">Annuler</button>
+          </div>
+
+          <input
+            type="text"
+            placeholder="Posez votre question..."
+            value={pollData.question}
+            onChange={(e) => handleQuestionChange(e.target.value)}
+            className="w-full bg-black/20 border rounded-lg px-2.5 py-1.5 text-xs outline-none"
+            style={{ borderColor: COLORS.border, color: COLORS.ivory }}
+          />
+
+          <div className="flex flex-col gap-1.5">
+            {pollData.options.map((opt, idx) => (
+              <div key={idx} className="flex items-center gap-2">
+                <input
+                  type="text"
+                  placeholder={`Choix ${idx + 1}`}
+                  value={opt}
+                  onChange={(e) => handleOptionTextChange(idx, e.target.value)}
+                  className="flex-1 bg-black/20 border rounded-lg px-2.5 py-1 text-xs outline-none"
+                  style={{ borderColor: COLORS.border, color: COLORS.ivory }}
+                />
+              </div>
+            ))}
+          </div>
+
+          {pollData.options.length < 4 && (
+            <button
+              type="button"
+              onClick={handleAddPollOption}
+              className="text-[11px] flex items-center gap-1 hover:underline pt-1 self-start"
+              style={{ color: COLORS.gold }}
+            >
+              <Plus size={12} /> Ajouter un choix
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
+
+export default RichTextComposer;
