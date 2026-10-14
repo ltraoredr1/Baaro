@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "424157546917",
+    "project_id": "baaro-3617e",
+    "storage_bucket": "baaro-3617e.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:424157546917:android:5a021d05cbc8589abe804c",
+        "android_client_info": {
+          "package_name": "com.baaro.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAvmTr-FjEnHjScQdG3teE3DpO30UE08fU"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
