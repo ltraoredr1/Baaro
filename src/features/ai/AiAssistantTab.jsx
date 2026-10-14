@@ -78,6 +78,40 @@ export function AiAssistantTab({ userProfile, onPublishAction }) {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, loading]);
 
+  // Fonction de lecture vocale (utilisée pour le clic manuel ET l'auto-lecture)
+  const speakText = useCallback((messageId, text) => {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+
+    const synth = window.speechSynthesis;
+
+    if (speakingMessageId === messageId) {
+      synth.cancel();
+      setSpeakingMessageId(null);
+      return;
+    }
+
+    synth.cancel();
+    if (!text) return;
+
+    const cleanText = text.replace(/[*#_`]/g, "");
+    const utterance = new SpeechSynthesisUtterance(cleanText);
+    
+    const voices = synth.getVoices();
+    const frenchVoice = voices.find((v) => v.lang.startsWith("fr") || v.lang.startsWith("FR"));
+    if (frenchVoice) {
+      utterance.voice = frenchVoice;
+    }
+
+    utterance.lang = "fr-FR";
+    utterance.rate = 1.0;
+
+    utterance.onend = () => setSpeakingMessageId(null);
+    utterance.onerror = () => setSpeakingMessageId(null);
+
+    setSpeakingMessageId(messageId);
+    synth.speak(utterance);
+  }, [speakingMessageId]);
+
   // Gestion de la reconnaissance vocale (Micro)
   const toggleListening = () => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -101,7 +135,7 @@ export function AiAssistantTab({ userProfile, onPublishAction }) {
       recognition.onstart = () => setIsListening(true);
       recognition.onresult = (event) => {
         const transcript = event.results[0][0].transcript;
-        setInput((prev) => (prev ? `${prev}${transcript}` : transcript));
+        setInput((prev) => (prev ? `${prev} ${transcript}` : transcript));
       };
       recognition.onerror = () => setIsListening(false);
       recognition.onend = () => setIsListening(false);
@@ -112,35 +146,6 @@ export function AiAssistantTab({ userProfile, onPublishAction }) {
       setIsListening(false);
       showToast("Impossible d'activer le micro", "error");
     }
-  };
-
-  const handleSpeechToggle = (messageId, text) => {
-    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
-      showToast("La synthèse vocale n'est pas supportée", "error");
-      return;
-    }
-
-    const synth = window.speechSynthesis;
-
-    if (speakingMessageId === messageId) {
-      synth.cancel();
-      setSpeakingMessageId(null);
-      return;
-    }
-
-    synth.cancel();
-    if (!text) return;
-
-    const cleanText = text.replace(/[*#_`]/g, "");
-    const utterance = new SpeechSynthesisUtterance(cleanText);
-    utterance.lang = "fr-FR";
-    utterance.rate = 1.0;
-
-    utterance.onend = () => setSpeakingMessageId(null);
-    utterance.onerror = () => setSpeakingMessageId(null);
-
-    setSpeakingMessageId(messageId);
-    synth.speak(utterance);
   };
 
   const handleSend = async (customText) => {
@@ -179,12 +184,19 @@ export function AiAssistantTab({ userProfile, onPublishAction }) {
         { id: assistantMsgId, role: "assistant", text: replyText, canPublish: true },
       ]);
 
+      // --- LECTURE AUTOMATIQUE DE LA RÉPONSE DE L'IA ---
+      setTimeout(() => {
+        speakText(assistantMsgId, replyText);
+      }, 250);
+
       if (showPointsReward) showPointsReward(2, "Échange avec l'IA");
     } catch (e) {
+      const errorMsgId = `err_${Date.now()}`;
       setMessages((prev) => [
         ...prev,
-        { id: `err_${Date.now()}`, role: "assistant", text: e.message, isError: true },
+        { id: errorMsgId, role: "assistant", text: e.message, isError: true },
       ]);
+      speakText(errorMsgId, e.message);
     } finally {
       setLoading(false);
     }
@@ -241,10 +253,10 @@ export function AiAssistantTab({ userProfile, onPublishAction }) {
                     {m.text}
                   </div>
 
-                  {m.role === "assistant" && !m.isError && (
+                  {m.role === "assistant" && (
                     <div className="flex items-center gap-2 flex-wrap">
                       <button
-                        onClick={() => handleSpeechToggle(m.id, m.text)}
+                        onClick={() => speakText(m.id, m.text)}
                         className="flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg border transition-all active:scale-95"
                         style={{
                           background: isSpeaking ? `${COLORS.teal}20` : COLORS.surface2,
