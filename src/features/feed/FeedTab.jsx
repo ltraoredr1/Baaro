@@ -1,20 +1,35 @@
-//... garde tout ton code, ajoute juste au dessus du return:
+// DANS FeedTab.jsx - remplace le menu ⋯ par celui-ci:
 
-const formatDate = (iso) => {
-  if (!iso) return "";
-  const d = new Date(iso);
-  const diff = Date.now() - d.getTime();
-  const m = Math.floor(diff/60000);
-  const h = Math.floor(diff/3600000);
-  if (m < 1) return "À l'instant";
-  if (m < 60) return `Il y a ${m}min`;
-  if (h < 24) return `Il y a ${h}h`;
-  return d.toLocaleDateString("fr-FR", { day:"2-digit", month:"short", hour:"2-digit", minute:"2-digit" });
-};
-
-// Et dans le map:
-<div className="flex gap-1.5 items-center">
-  <span className="font-bold text-[15px]" style={{color: COLORS.ivory}}>{p?.display_name}</span>
-  <span className="text-[13px]" style={{color: COLORS.muted}}>@{p?.handle}</span>
-  <span className="text-[11px] opacity-70" style={{color: COLORS.muted}}>· {formatDate(post.created_at)}</span>
+{/* MENU 3 POINTS */}
+<div className="relative">
+  <button onClick={() => setOpenMenuId(openMenuId === post.id ? null : post.id)} 
+    className="w-8 h-8 rounded-full flex items-center justify-center" 
+    style={{ background: COLORS.surface2 }}>⋯</button>
+  
+  {openMenuId === post.id && (
+    <div className="absolute right-0 top-10 z-20 w-44 rounded-xl border p-1 shadow-xl" 
+      style={{ background: COLORS.surface, borderColor: COLORS.border }}>
+      
+      {isOwn ? (
+        <>
+          <button onClick={() => { setEditingId(post.id); setEditText(displayText); setOpenMenuId(null); }} 
+            className="w-full text-left px-3 py-2.5 rounded-lg text-sm hover:bg-white/5" 
+            style={{ color: COLORS.ivory }}>✏️ Modifier</button>
+          <button onClick={async()=>{ setOpenMenuId(null); if(confirm("Supprimer ce post?")){await supabase.from("posts").delete().eq("id", post.id); refresh();}}} 
+            className="w-full text-left px-3 py-2.5 rounded-lg text-sm text-red-400 hover:bg-white/5">🗑️ Supprimer</button>
+        </>
+      ) : (
+        <>
+          <button onClick={async()=>{ setOpenMenuId(null); const raison=prompt("Pourquoi signaler?"); if(raison){await supabase.from("reports").insert({post_id: post.id, reason: raison}); alert("✅ Signalé, merci");}}} 
+            className="w-full text-left px-3 py-2.5 rounded-lg text-sm hover:bg-white/5" 
+            style={{ color: COLORS.ivory }}>🚩 Signaler</button>
+          <button onClick={()=>{setOpenMenuId(null); alert("Tu ne verras plus ce post");}} 
+            className="w-full text-left px-3 py-2.5 rounded-lg text-sm hover:bg-white/5" 
+            style={{ color: COLORS.muted }}>🙈 Ne plus voir</button>
+          <button onClick={()=>{setOpenMenuId(null); alert("Utilisateur bloqué");}} 
+            className="w-full text-left px-3 py-2.5 rounded-lg text-sm text-red-400 hover:bg-white/5">⛔ Bloquer</button>
+        </>
+      )}
+    </div>
+  )}
 </div>
