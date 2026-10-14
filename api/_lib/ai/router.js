@@ -1,17 +1,46 @@
 /**
- * BAARO AI Router — v3.1
- *  - ajoute groq et mistral (compatibles OpenAI)
- *  - BAARO_AI_PROVIDER_ORDER passe avant les listes par pays
- *  - adresses de base par défaut pour gemini / groq / mistral
- *  - CORRECTIF : providerConfig lit maintenant *_MODEL OU le premier élément de *_MODELS
- *    (avant, GROQ_MODELS était accepté par configured() mais ignoré à l'appel -> modèle vide -> erreur)
- *
- * Variables d'environnement (Vercel) :
- *   GEMINI_API_KEY  [GEMINI_API_BASE]  GEMINI_MODEL ou GEMINI_MODELS
- *   GROQ_API_KEY    [GROQ_API_BASE]    GROQ_MODEL   ou GROQ_MODELS
- *   MISTRAL_API_KEY [MISTRAL_API_BASE] MISTRAL_MODEL ou MISTRAL_MODELS
- *   BAARO_AI_PROVIDER_ORDER=gemini,groq,mistral,anthropic,n8n
+ * BAARO AI Router v3.2 - Circuit Breaker + Routing Prioritaire
+ * Priorité par défaut : Gemini -> Groq -> Mistral -> Anthropic -> OpenAI -> n8n
  */
+
+const failures = new Map(); // provider → { count, openUntil }
+const DEFAULT_COOLDOWN_MS = 60_000; // 1 minute
+const FAILURE_THRESHOLD = 3;
+
+export function isOpen(provider) {
+  if (!provider) return false;
+  const state = failures.get(provider);
+  if (!state) return false;
+  if (Date.now() > state.openUntil) {
+    failures.delete(provider);
+    return false;
+  }
+  return true;
+}
+
+export function recordFailure(provider, cooldownMs = DEFAULT_COOLDOWN_MS) {
+  if (!provider) return;
+  const state = failures.get(provider) || { count: 0, openUntil: 0 };
+  state.count += 1;
+  if (state.count >= FAILURE_THRESHOLD) {
+    state.openUntil = Date.now() + cooldownMs;
+  }
+  failures.set(provider, state);
+}
+
+export function recordSuccess(provider) {
+  if (!provider) return;
+  failures.delete(provider);
+}
+
+export function openProviders() {
+  const now = Date.now();
+  const result = [];
+  for (const [p, state] of failures) {
+    if (now <= state.openUntil) result.push(p);
+  }
+  return result;
+}
 
 const PROVIDERS = new Set([
   "n8n",
@@ -31,24 +60,23 @@ const DEFAULT_BASES = {
 };
 
 const REGION_DEFAULTS = {
-  CN: ["moonshot", "n8n", "anthropic"],
-  US: ["openai", "xai", "anthropic", "n8n"],
-  CA: ["openai", "anthropic", "n8n"],
-  FR: ["anthropic", "openai", "n8n"],
-  GB: ["anthropic", "openai", "n8n"],
-  DE: ["anthropic", "openai", "n8n"],
-  JP: ["openai", "anthropic", "n8n"],
-  KR: ["openai", "anthropic", "n8n"],
-  IN: ["openai", "gemini", "anthropic", "n8n"],
-  BR: ["openai", "anthropic", "n8n"],
-  NG: ["openai", "anthropic", "n8n"],
-  ML: ["anthropic", "openai", "n8n"],
-  SN: ["anthropic", "openai", "n8n"],
-  CI: ["anthropic", "openai", "n8n"],
-  BF: ["anthropic", "openai", "n8n"],
+  CN: ["groq", "gemini", "moonshot", "n8n", "anthropic"],
+  US: ["gemini", "groq", "mistral", "openai", "xai", "anthropic"],
+  CA: ["gemini", "groq", "mistral", "openai", "anthropic"],
+  FR: ["gemini", "groq", "mistral", "anthropic", "openai"],
+  GB: ["gemini", "groq", "mistral", "anthropic", "openai"],
+  DE: ["gemini", "groq", "mistral", "anthropic", "openai"],
+  JP: ["gemini", "groq", "mistral", "openai", "anthropic"],
+  KR: ["gemini", "groq", "mistral", "openai", "anthropic"],
+  IN: ["gemini", "groq", "mistral", "openai", "anthropic"],
+  BR: ["gemini", "groq", "mistral", "openai", "anthropic"],
+  NG: ["gemini", "groq", "mistral", "anthropic", "openai"],
+  ML: ["gemini", "groq", "mistral", "anthropic", "openai"],
+  SN: ["gemini", "groq", "mistral", "anthropic", "openai"],
+  CI: ["gemini", "groq", "mistral", "anthropic", "openai"],
+  BF: ["gemini", "groq", "mistral", "anthropic", "openai"],
 };
 
-// Liste de fournisseurs (en minuscules)
 function csv(value) {
   return String(value || "")
     .split(",")
@@ -56,7 +84,6 @@ function csv(value) {
     .filter(Boolean);
 }
 
-// Liste de modèles : on garde la casse exacte des noms de modèles
 function csvKeepCase(value) {
   return String(value || "")
     .split(",")
@@ -72,7 +99,6 @@ function baseOf(provider) {
   return envOf(provider, "API_BASE") || DEFAULT_BASES[provider] || "";
 }
 
-// Modèle à utiliser : *_MODEL, sinon le premier élément de *_MODELS
 function modelOf(provider) {
   const single = String(envOf(provider, "MODEL") || "").trim();
   if (single) return single;
@@ -80,7 +106,6 @@ function modelOf(provider) {
   return list[0] || "";
 }
 
-// Un modèle doit être défini (MODEL ou MODELS), sinon l'appel échouerait sans message clair
 function hasModel(provider) {
   return Boolean(modelOf(provider));
 }
@@ -91,81 +116,60 @@ function configured(provider) {
   if (provider === "openai")
     return Boolean(process.env.OPENAI_API_KEY && process.env.OPENAI_API_BASE);
   if (provider === "gemini")
-    return Boolean(
-      process.env.GEMINI_API_KEY && baseOf("gemini") && hasModel("gemini")
-    );
+    return Boolean(process.env.GEMINI_API_KEY && baseOf("gemini") && hasModel("gemini"));
   if (provider === "groq")
     return Boolean(process.env.GROQ_API_KEY && baseOf("groq") && hasModel("groq"));
   if (provider === "mistral")
-    return Boolean(
-      process.env.MISTRAL_API_KEY && baseOf("mistral") && hasModel("mistral")
-    );
+    return Boolean(process.env.MISTRAL_API_KEY && baseOf("mistral") && hasModel("mistral"));
   if (provider === "moonshot")
-    return Boolean(
-      process.env.MOONSHOT_API_KEY && process.env.MOONSHOT_API_BASE
-    );
+    return Boolean(process.env.MOONSHOT_API_KEY && process.env.MOONSHOT_API_BASE);
   if (provider === "xai")
     return Boolean(process.env.XAI_API_KEY && process.env.XAI_API_BASE);
   return false;
 }
 
 export function normalizeCountry(value) {
-  const country = String(value || "")
-    .trim()
-    .toUpperCase();
+  const country = String(value || "").trim().toUpperCase();
   return /^[A-Z]{2}$/.test(country) ? country : null;
 }
 
-/**
- * @param {object} opts
- * @param {string|null} opts.country
- * @param {string} [opts.requested]
- * @param {boolean} [opts.configuredOnly=true]
- * @param {string[]} [opts.exclude=[]]  providers à ignorer (fallback)
- */
 export function chooseProvider({
   country,
   requested,
   configuredOnly = true,
   exclude = [],
 } = {}) {
-  const excludeSet = new Set(
-    (exclude || []).map((p) => String(p).toLowerCase())
-  );
+  const excludeSet = new Set((exclude || []).map((p) => String(p).toLowerCase()));
 
-  const explicit = String(requested || "")
-    .trim()
-    .toLowerCase();
+  const explicit = String(requested || "").trim().toLowerCase();
   if (
     explicit &&
     PROVIDERS.has(explicit) &&
     !excludeSet.has(explicit) &&
-    (!configuredOnly || configured(explicit))
+    (!configuredOnly || configured(explicit)) &&
+    !isOpen(explicit)
   ) {
     return explicit;
   }
 
-  const envOrder = csv(process.env.BAARO_AI_PROVIDER_ORDER).filter((p) =>
-    PROVIDERS.has(p)
-  );
+  const envOrder = csv(process.env.BAARO_AI_PROVIDER_ORDER).filter((p) => PROVIDERS.has(p));
   const regionOrder = REGION_DEFAULTS[normalizeCountry(country)] || [];
   const globalOrder = [
-    "n8n",
-    "anthropic",
-    "openai",
     "gemini",
     "groq",
     "mistral",
+    "anthropic",
+    "openai",
+    "n8n",
     "moonshot",
     "xai",
   ];
 
-  // Si BAARO_AI_PROVIDER_ORDER est défini, il passe AVANT les listes par pays
   const ordered = envOrder.length
     ? [...envOrder, ...regionOrder, ...globalOrder]
     : [...regionOrder, ...globalOrder];
 
-  const candidates = [...new Set(ordered)].filter((p) => !excludeSet.has(p));
+  const candidates = [...new Set(ordered)].filter((p) => !excludeSet.has(p) && !isOpen(p));
 
   return candidates.find((p) => !configuredOnly || configured(p)) || null;
 }
@@ -204,9 +208,4 @@ export function providerConfig(provider) {
     },
   };
   return configs[provider] || null;
-}
-
-export function publicRoutingInfo(country, requested) {
-  const provider = chooseProvider({ country, requested });
-  return { country: normalizeCountry(country), provider };
 }
