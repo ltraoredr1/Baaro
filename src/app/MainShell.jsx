@@ -19,6 +19,7 @@ import { saveLastTab, loadLastTab } from "../lib/perf.js";
 import { useCryptoKeys } from "../hooks/useCryptoKeys.js";
 import { useIncomingCalls } from "../hooks/useIncomingCalls.js";
 import { ChatCallModal } from "../components/ChatCallModal.jsx";
+import FloatingAiAssistant from "../components/FloatingAiAssistant.jsx";
 
 const THEME_BG_MAP = {
   midnight: "#0B1220",
@@ -531,6 +532,16 @@ export function MainShell() {
           setActiveTab("shop")
         }
       />
+
+      {/* =====================================================
+          ASSISTANT IA FLOTTANT (visible sur tous les onglets)
+          ===================================================== */}
+      {!isAnonymous && !isImmersive && (
+        <FloatingAiAssistant
+          userProfile={userProfile}
+          hidden={activeTab === "assistant"}
+        />
+      )}
     </div>
   );
 }
