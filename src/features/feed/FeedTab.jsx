@@ -47,21 +47,19 @@ export function FeedTab({ userId: propUserId, onOpenProfile }) {
   const cursorRef = useRef(null);
   const sentinelRef = useRef(null);
 
-  // Identifiant actif sécurisé
-  const activeUserId = currentUserId || propUserId;
+  // Garantir un ID utilisateur UUID valide
+  const activeUserId = currentUserId || propUserId || null;
 
-  // Récupération synchrone et écoute de la session Supabase
+  // Récupération dynamique et synchrone de la session Supabase
   useEffect(() => {
     let mounted = true;
 
-    // 1. Récupération immédiate de la session
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (mounted && session?.user?.id) {
         setCurrentUserId(session.user.id);
       }
     });
 
-    // 2. Écoute des changements d'état d'authentification en temps réel
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       if (mounted) {
         setCurrentUserId(session?.user?.id || null);
@@ -165,7 +163,6 @@ export function FeedTab({ userId: propUserId, onOpenProfile }) {
     loadPosts();
   }, [loadPosts]);
 
-  // Détection du bas de page via IntersectionObserver
   useEffect(() => {
     if (!sentinelRef.current) return;
     const observer = new IntersectionObserver(
@@ -178,7 +175,7 @@ export function FeedTab({ userId: propUserId, onOpenProfile }) {
     return () => observer.disconnect();
   }, [loadMorePosts]);
 
-  // 3. Publication d'un message avec Médias & Sondages
+  // 3. Publication d'un message
   const handlePublish = async () => {
     const hasText = Boolean(newText.trim());
     const hasMedia = Boolean(mediaFile);
@@ -206,7 +203,6 @@ export function FeedTab({ userId: propUserId, onOpenProfile }) {
         mediaType = mediaFile.type;
       }
 
-      // Enregistrement du post principal
       const { data: newPost, error: postErr } = await supabase
         .from("posts")
         .insert([
@@ -222,7 +218,6 @@ export function FeedTab({ userId: propUserId, onOpenProfile }) {
 
       if (postErr) throw postErr;
 
-      // Enregistrement du sondage si présent
       if (hasPoll && newPost) {
         const validOptions = pollData.options.filter((opt) => opt.trim() !== "");
         const { error: pollErr } = await supabase.from("polls").insert([
@@ -258,7 +253,7 @@ export function FeedTab({ userId: propUserId, onOpenProfile }) {
 
   return (
     <div className="flex flex-col gap-6 max-w-2xl mx-auto w-full pb-20">
-      {/* MODULE DE RÉDACTION AVANCÉ (IA + SONDAGES + MÉDIAS) */}
+      {/* MODULE DE RÉDACTION */}
       {activeUserId && (
         <div
           className="glass-card rounded-2xl p-4 shadow-xl border flex flex-col gap-3 transition-all"
@@ -348,7 +343,8 @@ export function FeedTab({ userId: propUserId, onOpenProfile }) {
         </div>
       )}
 
-      {activeUserId && <SocialSuggestions userId={activeUserId} onOpenProfile={onOpenProfile} />}
+      {/* RECOMMANDATIONS D'ABONNEMENT AVEC L'ID CORRIGÉ (user_id) */}
+      {activeUserId && <SocialSuggestions user_id={activeUserId} onOpenProfile={onOpenProfile} />}
 
       {/* FLUX DE PUBLICATIONS */}
       <div className="flex flex-col gap-4">
@@ -419,12 +415,12 @@ export function FeedTab({ userId: propUserId, onOpenProfile }) {
               )}
             </div>
 
-            {/* TEXTE ENRICHI MARKDOWN */}
+            {/* TEXTE ENRICHI */}
             <div className="text-sm leading-relaxed whitespace-pre-wrap" style={{ color: COLORS.ivory }}>
               <RichTextRenderer content={post.text} />
             </div>
 
-            {/* MÉDIA (IMAGE OU VIDÉO) */}
+            {/* MÉDIA */}
             {post.media_url && (
               <div className="rounded-xl overflow-hidden border" style={{ borderColor: COLORS.border }}>
                 {post.media_type?.startsWith("video") ? (
@@ -440,11 +436,11 @@ export function FeedTab({ userId: propUserId, onOpenProfile }) {
               </div>
             )}
 
-            {/* SONDAGE & ACTIONS SOCIALES */}
-            <PollCard postId={post.id} userId={activeUserId} />
-            <SocialPostEnhancements post={post} userId={activeUserId} />
+            {/* SONDAGES ET INTERACTIONS SOCIALES (PASSAGE DE user_id ET NON userId) */}
+            <PollCard postId={post.id} user_id={activeUserId} />
+            <SocialPostEnhancements post={post} user_id={activeUserId} />
 
-            {/* BARRE D'ENGAGEMENT HAUT DE GAMME */}
+            {/* BARRE D'ENGAGEMENT */}
             <div
               className="flex items-center justify-between gap-2 pt-2 border-t flex-wrap"
               style={{ borderColor: COLORS.border }}
