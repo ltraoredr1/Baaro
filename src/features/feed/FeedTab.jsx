@@ -8,7 +8,7 @@ import {
   Sparkles,
 } from "lucide-react";
 
-// Utilisation des alias absolus (@/) pour garantir la résolution des chemins sur Vercel
+// Imports via l'alias absolu configuré (@/ -> src/)
 import { COLORS } from "@/theme.js";
 import { useToast } from "@/components/ToastContext.jsx";
 import { supabase } from "@/supabaseClient.js";
@@ -393,7 +393,7 @@ export function FeedTab({ userId, onOpenProfile }) {
                         }}
                         className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-white/5 text-red-400"
                       >
-                        <Trash2 size5={14} /> Supprimer
+                        <Trash2 size={14} /> Supprimer
                       </button>
                     </div>
                   )}
