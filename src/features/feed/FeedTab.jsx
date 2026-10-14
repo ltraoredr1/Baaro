@@ -12,7 +12,6 @@ import {
   Trash2,
   MoreHorizontal,
   Check,
-  Bell,
 } from "lucide-react";
 import { COLORS } from "../../theme.js";
 import { randomId } from "../../lib/id.js";
@@ -61,7 +60,6 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
   const [editingId, setEditingId] = useState(null);
   const [editText, setEditText] = useState("");
   const [savingEdit, setSavingEdit] = useState(false);
-  const [notifOpen, setNotifOpen] = useState(false);
   const [engagement, setEngagement] = useState(null);
   const [mediaFile, setMediaFile] = useState(null);
   const [mediaPreview, setMediaPreview] = useState(null);
@@ -132,12 +130,12 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
   }, [fetchPostsPage, fetchPostsPageFallback, showToast, meId]);
 
   const loadMorePosts = useCallback(async () => {
-    if (loadingMore ||!hasMore || loading ||!cursorRef.current) return;
+    if (loadingMore || !hasMore || loading || !cursorRef.current) return;
     setLoadingMore(true); const cursor = cursorRef.current;
     try {
-      const rows = await fetchPostsPage(cursor); setPosts((prev) => [...prev,...rows]); updateCursorFromRows(rows);
+      const rows = await fetchPostsPage(cursor); setPosts((prev) => [...prev, ...rows]); updateCursorFromRows(rows);
     } catch (error) {
-      try { const rows = await fetchPostsPageFallback(cursor); setPosts((prev) => [...prev,...rows]); updateCursorFromRows(rows); } catch (fallbackError) { handleDbError(fallbackError, showToast, "Erreur suite du fil"); }
+      try { const rows = await fetchPostsPageFallback(cursor); setPosts((prev) => [...prev, ...rows]); updateCursorFromRows(rows); } catch (fallbackError) { handleDbError(fallbackError, showToast, "Erreur suite du fil"); }
     } finally { setLoadingMore(false); }
   }, [fetchPostsPage, fetchPostsPageFallback, loadingMore, hasMore, loading, showToast]);
 
@@ -148,19 +146,18 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
 
   return (
     <div className="flex flex-col gap-4 max-w-2xl mx-auto w-full pb-20">
-      {meId && <div className="flex justify-end"><button onClick={() => setNotifOpen(true)} className="relative p-2 rounded-xl border" style={{ borderColor: COLORS.border, color: COLORS.ivory }}><Bell size={20} /></button><NotificationDrawer isOpen={notifOpen} onClose={() => setNotifOpen(false)} userId={meId} /></div>}
       {meId && <SocialSuggestions userId={meId} onOpenProfile={onOpenProfile} />}
       <div className="flex flex-col gap-4">
         {posts.map((post) => {
-          const isLiked =!!likedPosts[post.id];
+          const isLiked = !!likedPosts[post.id];
           return (
             <article key={post.id} data-post-id={post.id} ref={(el) => { if (el) postViewRefs.current[post.id] = el; }} className="glass-card rounded-2xl p-5 shadow-xl border flex flex-col gap-3" style={{ borderColor: COLORS.border }}>
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3"><div className="w-10 h-10 rounded-full overflow-hidden border flex items-center justify-center font-bold text-sm" style={{ borderColor: COLORS.borderGold, background: COLORS.surface }}>{post.avatar? <img src={post.avatar} alt="" className="w-full h-full object-cover" /> : <span style={{ color: COLORS.gold }}>{post.display_name?.charAt(0) || "?"}</span>}</div><div><p className="font-bold text-sm" style={{ color: COLORS.ivory }}>{post.display_name} {post.flag}</p><p className="text-xs" style={{ color: COLORS.muted }}>{post.handle} · {new Date(post.created_at).toLocaleDateString("fr-FR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</p></div></div>
-                {post.author_id === meId && (<div className="relative"><button type="button" onClick={() => setMenuOpenId((id) => (id === post.id? null : post.id))} className="p-2 rounded-lg hover:bg-white/5"><MoreHorizontal size={18} /></button>{menuOpenId === post.id && (<div className="absolute right-0 top-9 z-20 min-w-[160px] rounded-xl border shadow-xl py-1" style={{ background: COLORS.surface, borderColor: COLORS.borderGold }}><button type="button" onClick={() => { setMenuOpenId(null); setEditingId(post.id); setEditText(post.text); }} className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-white/5" style={{ color: COLORS.ivory }}><Pencil size={14} /> Modifier</button><button type="button" onClick={async () => { setMenuOpenId(null); if (confirm("Supprimer?")) { await supabase.from("posts").delete().eq("id", post.id); loadPosts(); } }} className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-white/5 text-red-400"><Trash2 size={14} /> Supprimer</button></div>)}</div>)}
+                <div className="flex items-center gap-3"><div className="w-10 h-10 rounded-full overflow-hidden border flex items-center justify-center font-bold text-sm" style={{ borderColor: COLORS.borderGold, background: COLORS.surface }}>{post.avatar ? <img src={post.avatar} alt="" className="w-full h-full object-cover" /> : <span style={{ color: COLORS.gold }}>{post.display_name?.charAt(0) || "?"}</span>}</div><div><p className="font-bold text-sm" style={{ color: COLORS.ivory }}>{post.display_name} {post.flag}</p><p className="text-xs" style={{ color: COLORS.muted }}>{post.handle} · {new Date(post.created_at).toLocaleDateString("fr-FR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</p></div></div>
+                {post.author_id === meId && (<div className="relative"><button type="button" onClick={() => setMenuOpenId((id) => (id === post.id ? null : post.id))} className="p-2 rounded-lg hover:bg-white/5"><MoreHorizontal size={18} /></button>{menuOpenId === post.id && (<div className="absolute right-0 top-9 z-20 min-w-[160px] rounded-xl border shadow-xl py-1" style={{ background: COLORS.surface, borderColor: COLORS.borderGold }}><button type="button" onClick={() => { setMenuOpenId(null); setEditingId(post.id); setEditText(post.text); }} className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-white/5" style={{ color: COLORS.ivory }}><Pencil size={14} /> Modifier</button><button type="button" onClick={async () => { setMenuOpenId(null); if (confirm("Supprimer?")) { await supabase.from("posts").delete().eq("id", post.id); loadPosts(); } }} className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-white/5 text-red-400"><Trash2 size={14} /> Supprimer</button></div>)}</div>)}
               </div>
               <p className="text-sm leading-relaxed whitespace-pre-wrap" style={{ color: COLORS.ivory }}><RichTextRenderer content={post.text} /></p>
-              {post.media_url && (<div className="rounded-xl overflow-hidden">{post.media_type?.startsWith("video")? <video src={post.media_url} controls className="w-full max-h-80 object-cover bg-black" /> : <img src={post.media_url} alt="" className="w-full max-h-80 object-cover" />}</div>)}
+              {post.media_url && (<div className="rounded-xl overflow-hidden">{post.media_type?.startsWith("video") ? <video src={post.media_url} controls className="w-full max-h-80 object-cover bg-black" /> : <img src={post.media_url} alt="" className="w-full max-h-80 object-cover" />}</div>)}
               <PollCard postId={post.id} userId={meId} />
               <SocialPostEnhancements post={post} userId={meId} />
 
@@ -173,7 +170,7 @@ export function FeedTab({ userId, onOpenProfile, onRewardPoints }) {
                   {post.author_id === meId && (<button type="button" onClick={() => setEngagement({ type: "postLikes", id: post.id })} className="text-[10px] underline ml-2">Voir les likes</button>)}
                 </div>
                 <div className="flex items-center gap-2">
-                  {post.author_id!== meId && <TipButton recipientId={post.author_id} postId={post.id} />}
+                  {post.author_id !== meId && <TipButton recipientId={post.author_id} postId={post.id} />}
                   <button className="w-8 h-8 rounded-full border flex items-center justify-center text-xs" style={{ background: COLORS.surface2, borderColor: COLORS.border }}>🔖</button>
                   <button className="w-8 h-8 rounded-full border flex items-center justify-center text-xs" style={{ background: COLORS.surface2, borderColor: COLORS.border }}>↗️</button>
                 </div>
