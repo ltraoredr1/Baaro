@@ -8,6 +8,8 @@ import {
   Sparkles,
   Pencil,
   Flag,
+  Heart,
+  MessageCircle,
 } from "lucide-react";
 
 // Imports via l'alias absolu (@/ -> src/)
@@ -17,6 +19,7 @@ import { supabase } from "@/supabaseClient.js";
 import { handleDbError } from "@/lib/dbErrors.js";
 import { fetchFeedPage } from "@/lib/feedPagination.js";
 import { recordFeedEvent } from "@/lib/feedEvents.js";
+import { checkRateLimit, rateLimitMessage } from "@/lib/rateLimit.js";
 
 import { PollCard, SocialPostEnhancements, SocialSuggestions } from "./SocialEnhancements.jsx";
 import { RichTextComposer } from "@/components/RichTextComposer.jsx";
@@ -24,6 +27,8 @@ import { RichTextRenderer } from "@/components/RichTextRenderer.jsx";
 import { EngagementList } from "@/components/EngagementList.jsx";
 import { TipButton } from "@/components/TipButton.jsx";
 import { AskAiButton } from "@/components/AskAiButton.jsx";
+import { TranslateButton } from "@/components/TranslateButton.jsx";
+import { GuestBanner } from "@/components/GuestBanner.jsx";
 
 const PAGE_SIZE = 20;
 const MAX_MEDIA_BYTES = 50 * 1024 * 1024; // 50 Mo
@@ -59,11 +64,11 @@ function formatPost(post) {
   };
 }
 
-export function FeedTab({ id, user_id, onOpenProfile }) {
+export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
   // MainShell envoie `id` et `user_id`
   const propUserId = id || user_id || null;
 
-  const { showToast } = useToast();
+  const { showToast, showPointsReward } = useToast();
   const [posts, setPosts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -72,6 +77,7 @@ export function FeedTab({ id, user_id, onOpenProfile }) {
   // Saisie enrichie, sondages & médias
   const [newText, setNewText] = useState("");
   const [pollData, setPollData] = useState(null);
+  const [mood, setMood] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [mediaFile, setMediaFile] = useState(null);
   const [mediaPreview, setMediaPreview] = useState(null);
@@ -87,9 +93,19 @@ export function FeedTab({ id, user_id, onOpenProfile }) {
   const [savingEdit, setSavingEdit] = useState(false);
   const [reportPost, setReportPost] = useState(null);
 
+  // J'aime, commentaires, traduction
+  const [likedPosts, setLikedPosts] = useState({});
+  const [commentOpen, setCommentOpen] = useState({});
+  const [commentsMap, setCommentsMap] = useState({});
+  const [newCommentText, setNewCommentText] = useState({});
+  const [translatedMap, setTranslatedMap] = useState({});
+
   const fileInputRef = useRef(null);
   const cursorRef = useRef(null);
   const sentinelRef = useRef(null);
+  const postViewRefs = useRef({});
+  const postViewedRef = useRef(new Set());
+  const postsRef = useRef([]);
 
   const activeUserId = currentUserId || propUserId || null;
 
@@ -218,6 +234,96 @@ export function FeedTab({ id, user_id, onOpenProfile }) {
     return () => observer.disconnect();
   }, [loadMorePosts, posts.length]);
 
+  // Rafraîchit le haut du fil sans perdre les pages déjà chargées
+  const refreshTop = useCallback(async () => {
+    try {
+      const { rows } = await fetchFeedPage({ cursor: null, pageSize: PAGE_SIZE });
+      const incoming = rows.map(formatPost);
+      setPosts((prev) => {
+        const seen = new Set(prev.map((p) => p.id));
+        const fresh = incoming.filter((p) => !seen.has(p.id));
+        return fresh.length ? [...fresh, ...prev] : prev;
+      });
+    } catch {
+      // Rafraîchissement silencieux : on ignore l'erreur
+    }
+  }, []);
+
+  // Temps réel : nouveaux posts et suppressions
+  useEffect(() => {
+    let timer = null;
+    const channel = supabase
+      .channel("posts_feed")
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "posts" }, () => {
+        clearTimeout(timer);
+        timer = setTimeout(refreshTop, 600);
+      })
+      .on("postgres_changes", { event: "DELETE", schema: "public", table: "posts" }, (payload) => {
+        const deletedId = payload.old?.id;
+        if (deletedId) setPosts((prev) => prev.filter((p) => p.id !== deletedId));
+      })
+      .subscribe();
+    return () => {
+      clearTimeout(timer);
+      supabase.removeChannel(channel);
+    };
+  }, [refreshTop]);
+
+  // Posts que l'utilisateur a déjà aimés
+  const postIdsKey = posts.map((p) => p.id).join(",");
+  useEffect(() => {
+    if (!activeUserId || !postIdsKey) return;
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase
+        .from("post_likes")
+        .select("post_id")
+        .eq("user_id", activeUserId)
+        .in("post_id", postIdsKey.split(","));
+      if (!cancelled && data) {
+        setLikedPosts(Object.fromEntries(data.map((l) => [l.post_id, true])));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeUserId, postIdsKey]);
+
+  // Comptage des vues : un post compte quand il est visible à 50 %
+  useEffect(() => {
+    postsRef.current = posts;
+  }, [posts]);
+
+  useEffect(() => {
+    if (!posts.length || !activeUserId) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (!entry.isIntersecting || entry.intersectionRatio < 0.5) return;
+          const postId = entry.target.dataset.postId;
+          if (!postId || postViewedRef.current.has(postId)) return;
+          const post = postsRef.current.find((item) => item.id === postId);
+          if (!post || post.author_id === activeUserId) return;
+
+          postViewedRef.current.add(postId);
+          supabase.rpc("register_post_view", { p_post_id: postId }).then(({ data, error }) => {
+            if (error) {
+              postViewedRef.current.delete(postId);
+              return;
+            }
+            const next = Number(data?.views || 0);
+            setPosts((prev) =>
+              prev.map((item) => (item.id === postId ? { ...item, views_count: next } : item))
+            );
+          });
+        });
+      },
+      { threshold: [0.5] }
+    );
+    Object.values(postViewRefs.current).forEach((el) => el && observer.observe(el));
+    return () => observer.disconnect();
+  }, [posts.length, activeUserId]);
+
   // Choix d'un média
   const handlePickFile = (e) => {
     const file = e.target.files?.[0];
@@ -246,6 +352,12 @@ export function FeedTab({ id, user_id, onOpenProfile }) {
       return;
     }
 
+    const limit = checkRateLimit("create_post", { max: 5, windowMs: 60_000 });
+    if (!limit.allowed) {
+      showToast(rateLimitMessage(limit.retryAfterSec), "error");
+      return;
+    }
+
     setSubmitting(true);
     try {
       let mediaUrl = null;
@@ -270,7 +382,7 @@ export function FeedTab({ id, user_id, onOpenProfile }) {
         .insert([
           {
             author_id: activeUserId,
-            text: newText,
+            text: newText + (mood ? ` (Humeur: ${mood})` : ""),
             media_url: mediaUrl,
             media_type: mediaType,
           },
@@ -296,11 +408,21 @@ export function FeedTab({ id, user_id, onOpenProfile }) {
       }
 
       setNewText("");
+      setMood("");
       setPollData(null);
       setMediaFile(null);
       setMediaPreview(null);
-      showToast("Perspective diffusée avec succès sur le réseau mondial !", "success");
-      loadPosts({ silent: true });
+      onRewardPoints?.(
+        mediaUrl ? "publish_post_media" : "publish_post",
+        "Publication créée !",
+        newPost?.id
+      );
+      if (showPointsReward) {
+        showPointsReward(mediaUrl ? 8 : 5, "Publication créée !");
+      } else {
+        showToast("Perspective diffusée avec succès sur le réseau mondial !", "success");
+      }
+      refreshTop();
     } catch (err) {
       handleDbError(err, showToast, "Échec de la publication");
     } finally {
@@ -320,6 +442,173 @@ export function FeedTab({ id, user_id, onOpenProfile }) {
     }
     setPosts((prev) => prev.filter((p) => p.id !== postId));
     showToast("Publication supprimée", "info");
+  };
+
+  // J'aime
+  const handleLike = async (postId) => {
+    if (!activeUserId) {
+      showToast("Vous devez être connecté", "error");
+      return;
+    }
+    const limit = checkRateLimit("like", { max: 30, windowMs: 60_000 });
+    if (!limit.allowed) {
+      showToast(rateLimitMessage(limit.retryAfterSec), "error");
+      return;
+    }
+
+    const wasLiked = !!likedPosts[postId];
+    const delta = wasLiked ? -1 : 1;
+    setLikedPosts((prev) => ({ ...prev, [postId]: !wasLiked }));
+    setPosts((prev) =>
+      prev.map((p) =>
+        p.id === postId ? { ...p, likes: Math.max(0, (p.likes || 0) + delta) } : p
+      )
+    );
+
+    try {
+      if (wasLiked) {
+        const { error } = await supabase
+          .from("post_likes")
+          .delete()
+          .eq("post_id", postId)
+          .eq("user_id", activeUserId);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase
+          .from("post_likes")
+          .insert({ post_id: postId, user_id: activeUserId });
+        if (error) throw error;
+        onRewardPoints?.("like_post", "J'aime distribué", postId);
+        showPointsReward?.(2, "J'aime distribué");
+      }
+    } catch (error) {
+      // Retour en arrière si la base a refusé
+      setLikedPosts((prev) => ({ ...prev, [postId]: wasLiked }));
+      setPosts((prev) =>
+        prev.map((p) =>
+          p.id === postId ? { ...p, likes: Math.max(0, (p.likes || 0) - delta) } : p
+        )
+      );
+      handleDbError(error, showToast, "Impossible d'aimer");
+    }
+  };
+
+  // Commentaires
+  const loadComments = async (postId) => {
+    if (!postId) return;
+    try {
+      const { data, error } = await supabase
+        .from("comments")
+        .select("id, text, created_at, author_id, profiles:author_id (display_name, handle)")
+        .eq("post_id", postId)
+        .order("created_at", { ascending: true })
+        .limit(50);
+      if (error) throw error;
+      const rows = (data || []).map((c) => ({
+        id: c.id,
+        text: c.text,
+        author: c.profiles?.display_name || c.profiles?.handle || "Membre",
+        author_id: c.author_id,
+        created_at: c.created_at,
+      }));
+      setCommentsMap((prev) => ({ ...prev, [postId]: rows }));
+    } catch {
+      try {
+        const { data } = await supabase
+          .from("comments")
+          .select("id, text, created_at, author_id")
+          .eq("post_id", postId)
+          .order("created_at", { ascending: true })
+          .limit(50);
+        setCommentsMap((prev) => ({
+          ...prev,
+          [postId]: (data || []).map((c) => ({
+            id: c.id,
+            text: c.text,
+            author: "Membre",
+            author_id: c.author_id,
+            created_at: c.created_at,
+          })),
+        }));
+      } catch (err) {
+        handleDbError(err, showToast, "Impossible de charger les commentaires");
+      }
+    }
+  };
+
+  const toggleComments = (postId) => {
+    const next = !commentOpen[postId];
+    setCommentOpen((prev) => ({ ...prev, [postId]: next }));
+    if (next) loadComments(postId);
+  };
+
+  const handleAddComment = async (postId) => {
+    const text = (newCommentText[postId] || "").trim();
+    if (!text) return;
+    if (!activeUserId) {
+      showToast("Vous devez être connecté", "error");
+      return;
+    }
+    const limit = checkRateLimit("comment", { max: 20, windowMs: 60_000 });
+    if (!limit.allowed) {
+      showToast(rateLimitMessage(limit.retryAfterSec), "error");
+      return;
+    }
+
+    try {
+      const { data: created, error } = await supabase
+        .from("comments")
+        .insert({ post_id: postId, author_id: activeUserId, text })
+        .select("id")
+        .single();
+      if (error) throw error;
+
+      const newComment = {
+        id: created?.id || `c_${Date.now()}`,
+        author: "Vous",
+        text,
+        author_id: activeUserId,
+      };
+      setCommentsMap((prev) => ({ ...prev, [postId]: [...(prev[postId] || []), newComment] }));
+      setPosts((prev) =>
+        prev.map((p) =>
+          p.id === postId ? { ...p, comments_count: (p.comments_count || 0) + 1 } : p
+        )
+      );
+      setNewCommentText((prev) => ({ ...prev, [postId]: "" }));
+
+      onRewardPoints?.("comment", "Commentaire ajouté", created?.id);
+      showPointsReward?.(1, "Commentaire ajouté");
+    } catch (error) {
+      handleDbError(error, showToast, "Impossible de commenter");
+    }
+  };
+
+  const handleDeleteComment = async (postId, commentId) => {
+    if (!activeUserId) return;
+    if (!window.confirm("Supprimer ce commentaire ?")) return;
+    try {
+      const { error } = await supabase
+        .from("comments")
+        .delete()
+        .eq("id", commentId)
+        .eq("author_id", activeUserId);
+      if (error) throw error;
+      setCommentsMap((prev) => ({
+        ...prev,
+        [postId]: (prev[postId] || []).filter((c) => c.id !== commentId),
+      }));
+      setPosts((prev) =>
+        prev.map((p) =>
+          p.id === postId
+            ? { ...p, comments_count: Math.max(0, (p.comments_count || 1) - 1) }
+            : p
+        )
+      );
+      showToast("Commentaire supprimé", "success");
+    } catch (error) {
+      handleDbError(error, showToast, "Impossible de supprimer le commentaire");
+    }
   };
 
   // Modification
@@ -466,6 +755,18 @@ export function FeedTab({ id, user_id, onOpenProfile }) {
                 <Sparkles size={16} />
                 <span>IA</span>
               </button>
+              <select
+                value={mood}
+                onChange={(e) => setMood(e.target.value)}
+                disabled={submitting}
+                className="bg-transparent text-xs p-1 rounded border outline-none"
+                style={{ borderColor: COLORS.border, color: COLORS.muted }}
+              >
+                <option value="">Humeur ?</option>
+                <option value="🔥 Inspiré">🔥 Inspiré</option>
+                <option value="💡 Innovant">💡 Innovant</option>
+                <option value="🎉 Joyeux">🎉 Joyeux</option>
+              </select>
             </div>
 
             <button
@@ -480,6 +781,12 @@ export function FeedTab({ id, user_id, onOpenProfile }) {
           </div>
         </div>
       )}
+
+      <GuestBanner
+        onUpgrade={() =>
+          showToast("Crée un compte depuis Réglages pour gagner des points", "info")
+        }
+      />
 
       {/* RECOMMANDATIONS D'ABONNEMENT */}
       {activeUserId && <SocialSuggestions user_id={activeUserId} onOpenProfile={onOpenProfile} />}
@@ -496,6 +803,11 @@ export function FeedTab({ id, user_id, onOpenProfile }) {
         {posts.map((post) => (
           <article
             key={post.id}
+            data-post-id={post.id}
+            ref={(el) => {
+              if (el) postViewRefs.current[post.id] = el;
+              else delete postViewRefs.current[post.id];
+            }}
             className="glass-card rounded-2xl p-5 shadow-xl border flex flex-col gap-3"
             style={{ borderColor: COLORS.border }}
           >
@@ -626,8 +938,17 @@ export function FeedTab({ id, user_id, onOpenProfile }) {
                 className="text-sm leading-relaxed whitespace-pre-wrap"
                 style={{ color: COLORS.ivory }}
               >
-                <RichTextRenderer content={post.text} />
+                {translatedMap[post.id] ? (
+                  translatedMap[post.id]
+                ) : (
+                  <RichTextRenderer content={post.text} />
+                )}
               </div>
+            )}
+            {translatedMap[post.id] && (
+              <p className="text-[10px]" style={{ color: COLORS.muted }}>
+                Traduit par BAARO
+              </p>
             )}
 
             {/* MÉDIA */}
@@ -672,9 +993,17 @@ export function FeedTab({ id, user_id, onOpenProfile }) {
                   👁️ {Number(post.views_count || 0)} vues certifiées
                 </span>
                 <span>·</span>
-                <span className="flex items-center gap-1">
-                  ❤️ {Number(post.likes || 0)} approbations
-                </span>
+                <button
+                  type="button"
+                  onClick={() => handleLike(post.id)}
+                  className="flex items-center gap-1 transition active:scale-95"
+                  style={{ color: likedPosts[post.id] ? "#F43F5E" : COLORS.muted }}
+                  aria-label="J'aime"
+                  aria-pressed={!!likedPosts[post.id]}
+                >
+                  <Heart size={15} fill={likedPosts[post.id] ? "currentColor" : "none"} />
+                  {Number(post.likes || 0)}
+                </button>
                 {post.author_id === activeUserId && (
                   <button
                     type="button"
@@ -687,6 +1016,27 @@ export function FeedTab({ id, user_id, onOpenProfile }) {
               </div>
 
               <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => toggleComments(post.id)}
+                  className="flex items-center gap-1.5 text-xs transition hover:opacity-80"
+                  style={{ color: COLORS.muted }}
+                  aria-label="Commentaires"
+                >
+                  <MessageCircle size={16} />
+                  {post.comments_count || 0}
+                </button>
+
+                <TranslateButton
+                  text={typeof post.text === "string" ? post.text : ""}
+                  isTranslated={!!translatedMap[post.id]}
+                  preferredLang="fr"
+                  onTranslated={(translated) =>
+                    setTranslatedMap((prev) => ({ ...prev, [post.id]: translated }))
+                  }
+                  onClear={() => setTranslatedMap((prev) => ({ ...prev, [post.id]: null }))}
+                />
+
                 <AskAiButton text={typeof post.text === "string" ? post.text : ""} />
 
                 {post.author_id !== activeUserId && (
@@ -695,6 +1045,65 @@ export function FeedTab({ id, user_id, onOpenProfile }) {
 
               </div>
             </div>
+
+            {commentOpen[post.id] && (
+              <div
+                className="pt-3 border-t space-y-2"
+                style={{ borderColor: COLORS.border }}
+              >
+                {(commentsMap[post.id] || []).map((c) => (
+                  <div
+                    key={c.id}
+                    className="text-xs flex items-start justify-between gap-2"
+                    style={{ color: COLORS.muted }}
+                  >
+                    <div>
+                      <span className="font-bold" style={{ color: COLORS.ivory }}>
+                        {c.author}
+                      </span>{" "}
+                      : {c.text}
+                    </div>
+                    {c.author_id === activeUserId && (
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteComment(post.id, c.id)}
+                        className="shrink-0 p-1 text-red-400/80 hover:text-red-400"
+                        aria-label="Supprimer le commentaire"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    )}
+                  </div>
+                ))}
+                {activeUserId && (
+                  <div className="flex gap-2">
+                    <input
+                      value={newCommentText[post.id] || ""}
+                      onChange={(e) =>
+                        setNewCommentText((prev) => ({ ...prev, [post.id]: e.target.value }))
+                      }
+                      onKeyDown={(e) => e.key === "Enter" && handleAddComment(post.id)}
+                      placeholder="Ajouter un commentaire..."
+                      className="flex-1 min-w-0 px-3 py-2 rounded-lg border text-xs outline-none"
+                      style={{
+                        background: COLORS.surface2,
+                        borderColor: COLORS.border,
+                        color: COLORS.ivory,
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => handleAddComment(post.id)}
+                      className="p-2 rounded-lg"
+                      style={{ background: COLORS.gold, color: "#000" }}
+                      aria-label="Envoyer le commentaire"
+                    >
+                      <Send size={14} />
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
           </article>
         ))}
 
