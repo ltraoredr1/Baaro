@@ -19,7 +19,7 @@ import {
 } from "./_shared.js";
 import { chooseProvider, normalizeCountry, providerConfig } from "./_lib/ai/router.js";
 import { callOpenAICompatible } from "./_lib/ai/openai-compatible.js";
-import { isOpen, recordFailure, recordSuccess } from "./_lib/ai/circuit.js";
+import { recordSuccess } from "./_lib/ai/circuit.js";
 
 // ============== DAILY CONFIG ==============
 const DAILY_API = "https://api.daily.co/v1";
@@ -89,7 +89,7 @@ async function createMeetingToken(roomName, { userId, userName, isOwner }) {
   return data.token;
 }
 
-// ============== AI GATEWAY v2 HELPERS (ton code exact) ==============
+// ============== AI GATEWAY v2 HELPERS ==============
 function safeMaxTokens(value) { return Math.min(Math.max(Number(value) || 1200, 1), 2000); }
 function safeCountry(req, context) {
   return normalizeCountry(context?.country) || normalizeCountry(req.headers["x-baaro-country"]) || null;
@@ -152,12 +152,11 @@ const lastDebateCall = new Map();
 async function handleAiRouting(req, res, user) {
   if (req.method !== "GET") return res.status(405).json({ error: "Méthode non autorisée" });
   const country = normalizeCountry(req.query?.country || req.headers["x-baaro-country"]);
-  const provider = chooseProvider({ country, requested: req.query?.provider });
+  const provider = chooseProvider({ country, requested: req.query?.provider, configuredOnly: false });
   return res.status(200).json({ country, provider });
 }
 
 async function handleAiDebateLegacy(req, res, admin, user) {
-  // Ton ancien ai.js - gardé pour compatibilité
   if (req.method !== "POST") return res.status(405).json({ error: "Méthode non autorisée" });
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return res.status(500).json({ error: "ANTHROPIC_API_KEY manquante" });
@@ -190,7 +189,6 @@ async function handleAiDebateLegacy(req, res, admin, user) {
 }
 
 async function handleAiGateway(req, res, admin, user) {
-  // Ton BAARO AI Gateway v2 exact
   const body = req.body || {};
   const { messages, context, max_tokens, mode, system: customSystem, model: requestedModel, provider: requestedProvider } = body;
   if (!Array.isArray(messages) || messages.length < 1 || messages.length > 30) {
@@ -205,17 +203,42 @@ async function handleAiGateway(req, res, admin, user) {
   const sessionId = String(req.headers["x-session-id"] || body.sessionId || `user-${user.id}`).slice(0, 160);
   const publicModel = requestedModel && requestedProvider ? String(requestedModel).slice(0, 120) : undefined;
   const ctx = { normalizedMessages, system, maxTokens, sessionId, country, profile, mode, publicModel, userId: user.id };
-  const start = Date.now(); const tried = []; let lastError = null; let result = null; let usedProvider = null;
+  
+  const start = Date.now(); 
+  const tried = []; 
+  let lastError = null; 
+  let result = null; 
+  let usedProvider = null;
+
+  // Tentative directe sans blocage du Circuit Breaker
   for (let i = 0; i < 4; i++) {
-    const provider = chooseProvider({ country, requested: i === 0 ? requestedProvider || requestedModel : undefined, exclude: tried });
+    const provider = chooseProvider({ 
+      country, 
+      requested: i === 0 ? requestedProvider || requestedModel : undefined, 
+      exclude: tried,
+      configuredOnly: false
+    });
+    
     if (!provider) break;
-    if (isOpen(provider)) { tried.push(provider); logWarn("chat", `Circuit open for ${provider}`, { userId: user.id }); continue; }
     tried.push(provider);
-    try { result = await invokeProvider(provider, ctx); recordSuccess(provider); usedProvider = result.provider || provider; break; }
-    catch (err) { lastError = err; recordFailure(provider); logWarn("chat", `Provider ${provider} failed`, { userId: user.id, status: err?.status, message: err?.message }); }
+
+    try { 
+      result = await invokeProvider(provider, ctx); 
+      recordSuccess(provider); 
+      usedProvider = result.provider || provider; 
+      break; 
+    } catch (err) { 
+      lastError = err; 
+      logWarn("chat", `Provider ${provider} failed`, { userId: user.id, status: err?.status, message: err?.message }); 
+    }
   }
+
   const latency = Date.now() - start;
-  if (!result) { logError("chat", lastError || new Error("No provider"), { userId: user.id, country, tried }); return res.status(502).json({ error: "Fournisseur IA temporairement indisponible", tried }); }
+  if (!result) { 
+    logError("chat", lastError || new Error("No provider"), { userId: user.id, country, tried }); 
+    return res.status(502).json({ error: "Fournisseur IA temporairement indisponible", tried }); 
+  }
+
   res.setHeader("X-BAARO-AI-Provider", usedProvider);
   res.setHeader("X-BAARO-AI-Country", country || "unknown");
   res.setHeader("X-BAARO-AI-Latency-Ms", String(latency));
@@ -261,14 +284,13 @@ async function handleToken(req, res, user, admin) {
   return res.status(200).json({ ok: true, token, roomName, url: roomUrl(roomName), isOwner });
 }
 
-// ============== MAIN HANDLER - FUSION ==============
+// ============== MAIN HANDLER ==============
 export default async function handler(req, res) {
   if (applyCors(req, res)) return;
 
   const urlPath = (req.url || "").split("?")[0];
   const isRouting = req.method === "GET" || urlPath.includes("ai-routing") || urlPath.includes("routing");
 
-  // Rate limit différent selon type
   const rateKey = isRouting ? "ai-routing" : urlPath.includes("live") || req.body?.liveId ? "live" : "chat";
   const limit = await rateLimitAsync(req, { key: rateKey, max: rateKey === "chat" ? 20 : 30, windowMs: 60_000 });
   if (!limit.ok) {
@@ -285,13 +307,11 @@ export default async function handler(req, res) {
   }
 
   try {
-    // 1. Routing IA (GET)
     if (isRouting) return await handleAiRouting(req, res, user);
 
     const body = req.body || {};
     const action = (body.action || "").toLowerCase();
 
-    // 2. Live Daily
     if (urlPath.includes("create-room") || action === "create-room" || action === "create_room") {
       return await handleCreateRoom(req, res, user, admin);
     }
@@ -300,16 +320,13 @@ export default async function handler(req, res) {
       return res.status(200).json({ ok: true, message: "Utilise les RPC Supabase pour les rôles" });
     }
     if (body.liveId || body.roomName || action === "token" || urlPath.includes("live")) {
-      // Si c'est un token Daily (a liveId) on priorise token, sauf si messages présent
       if (!body.messages) return await handleToken(req, res, user, admin);
     }
 
-    // 3. AI Gateway v2 (messages array)
     if (Array.isArray(body.messages)) {
       return await handleAiGateway(req, res, admin, user);
     }
 
-    // 4. Legacy debate (roomId + question)
     if (body.roomId && body.question) {
       return await handleAiDebateLegacy(req, res, admin, user);
     }
