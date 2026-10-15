@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { supabase } from '../../supabaseClient.js';
 import { COLORS as C } from '../../theme.js';
-import { Plus, Eye, Heart, Send, Trash2, Image as ImageIcon, X, HelpCircle, ShoppingBag, History, Sparkles } from 'lucide-react';
+import { Plus, Eye, Heart, Send, Trash2, Image as ImageIcon, X, HelpCircle, ShoppingBag, History } from 'lucide-react';
 import { EngagementList } from '../../components/EngagementList.jsx';
 import { uploadExternalMedia } from '../../lib/externalMedia.js';
 
@@ -26,9 +26,9 @@ export function StoriesTab({ id, onOpenProfile }) {
   const [loading, setLoading] = useState(true);
   const [caption, setCaption] = useState('');
   
-  // --- ÉTAT DE VISIBILITÉ DU FORMULAIRE DE CRÉATION (Bouton Unique) ---
+  // --- BOUTON FIXE & PANNEAU DE CRÉATION DE STORY ---
   const [isCreateOpen, setIsCreateOpen] = useState(false);
-  
+
   // --- CARROUSEL MULTI-MÉDIAS ---
   const [mediaItems, setMediaItems] = useState([]); 
   const [selectedMediaIndex, setSelectedMediaIndex] = useState(0);
@@ -66,9 +66,6 @@ export function StoriesTab({ id, onOpenProfile }) {
   const progressTimer = useRef(null);
   const videoRef = useRef(null);
 
-  // ------------------------------------------------------------------
-  // Chargement des Stories
-  // ------------------------------------------------------------------
   const load = async (initial = false) => {
     if (initial) setLoading(true);
     try {
@@ -153,9 +150,6 @@ export function StoriesTab({ id, onOpenProfile }) {
     return () => supabase.removeChannel(ch);
   }, []);
 
-  // ------------------------------------------------------------------
-  // Carrousel de Médias
-  // ------------------------------------------------------------------
   const handleAddMediaFiles = (e) => {
     const files = Array.from(e.target.files || []);
     if (!files.length) return;
@@ -185,9 +179,6 @@ export function StoriesTab({ id, onOpenProfile }) {
     setMediaItems(prev => prev.filter(m => m.id !== mediaId));
   };
 
-  // ------------------------------------------------------------------
-  // Visionneuse de Story
-  // ------------------------------------------------------------------
   const currentStory = selectedStoryIndex !== null ? stories[selectedStoryIndex] : null;
 
   const handleNext = useCallback(() => {
@@ -257,9 +248,6 @@ export function StoriesTab({ id, onOpenProfile }) {
     setTranslatedCaption(null);
   };
 
-  // ------------------------------------------------------------------
-  // Création
-  // ------------------------------------------------------------------
   const create = async () => {
     setError('');
     const hasPoll = pollData?.question && pollData?.options?.some(o => o.trim());
@@ -306,7 +294,7 @@ export function StoriesTab({ id, onOpenProfile }) {
       setSelectedProduct(null);
       setShowPollComposer(false);
       setShowProductPicker(false);
-      setIsCreateOpen(false); // Fermer le formulaire après publication
+      setIsCreateOpen(false);
       await load();
     } catch (e) {
       setError('Erreur : ' + (e.message || 'Impossible de créer la story'));
@@ -315,9 +303,6 @@ export function StoriesTab({ id, onOpenProfile }) {
     }
   };
 
-  // ------------------------------------------------------------------
-  // Actions
-  // ------------------------------------------------------------------
   const react = async (s) => {
     if (!id) { setModalMsg({ type: 'error', text: 'Connecte-toi pour réagir.' }); return; }
     if (busy) return;
@@ -393,20 +378,28 @@ export function StoriesTab({ id, onOpenProfile }) {
           <h2 className="text-xl font-bold" style={{ color: C.ivory }}>Stories</h2>
           <p className="text-xs" style={{ color: C.muted }}>24 h · texte, média, produit, sondage et musique</p>
         </div>
+      </div>
 
-        {/* BOUTON UNIQUE DE CRÉATION DE STORY */}
-        {id && (
+      {/* 📌 BOUTON ACTION FIXE EN BAS À DROITE (FAB) */}
+      {id && (
+        <div className="fixed bottom-20 right-5 z-40">
           <button
             type="button"
-            onClick={() => setIsCreateOpen(!isCreateOpen)}
-            className="flex items-center gap-2 px-4 py-2 rounded-full font-bold text-xs shadow-lg transition-all active:scale-95"
+            onClick={() => {
+              const nextState = !isCreateOpen;
+              setIsCreateOpen(nextState);
+              if (nextState) {
+                window.scrollTo({ top: 0, behavior: "smooth" });
+              }
+            }}
+            className="flex items-center gap-2 px-5 py-3 rounded-full font-bold text-xs shadow-2xl transition-all active:scale-95 border border-amber-400/40 backdrop-blur-md"
             style={{ background: C.gold || '#f59e0b', color: '#000' }}
           >
-            <History size={16} />
+            {isCreateOpen ? <X size={18} /> : <History size={18} />}
             <span>{isCreateOpen ? "Fermer" : "Créer une story"}</span>
           </button>
-        )}
-      </div>
+        </div>
+      )}
 
       {error && (
         <div className="p-3 rounded-xl border" style={{ background: 'rgba(239, 68, 68, 0.1)', borderColor: 'rgba(239, 68, 68, 0.3)', color: '#fca5a5' }}>
@@ -417,7 +410,7 @@ export function StoriesTab({ id, onOpenProfile }) {
         </div>
       )}
 
-      {/* FORMULAIRE DE CRÉATION DE STORY (AFFICHÉ SI isCreateOpen EST VRAI) */}
+      {/* FORMULAIRE DE CRÉATION DE STORY AFFICHÉ SI LE BOUTON EST CLIQUÉ */}
       {isCreateOpen && (
         <div className="rounded-2xl p-4 border shadow-xl backdrop-blur-md space-y-4 animate-in fade-in slide-in-from-top-3 duration-200" style={{ background: C.surface, borderColor: C.border }}>
           <div className="flex items-center justify-between border-b pb-2">
@@ -427,7 +420,6 @@ export function StoriesTab({ id, onOpenProfile }) {
             </button>
           </div>
 
-          {/* ÉDITEUR DE TEXTE ENRICHI */}
           <RichTextComposer
             value={caption}
             onChange={setCaption}
@@ -435,7 +427,6 @@ export function StoriesTab({ id, onOpenProfile }) {
             rows={3}
           />
 
-          {/* CARROUSEL DE MÉDIAS */}
           {mediaItems.length > 0 && (
             <MediaCarousel
               mediaItems={mediaItems}
@@ -446,7 +437,6 @@ export function StoriesTab({ id, onOpenProfile }) {
             />
           )}
 
-          {/* PRODUIT ÉPINGLÉ PRÉVISUALISATION */}
           {selectedProduct && (
             <div className="relative border rounded-xl p-2 bg-white/5">
               <button
@@ -464,7 +454,6 @@ export function StoriesTab({ id, onOpenProfile }) {
             </div>
           )}
 
-          {/* SÉLECTION DE PRODUIT BOUTIQUE */}
           {showProductPicker && (
             <div className="p-3 rounded-xl border space-y-2 bg-black/30 border-amber-500/30">
               <div className="flex justify-between items-center">
@@ -493,7 +482,6 @@ export function StoriesTab({ id, onOpenProfile }) {
             </div>
           )}
 
-          {/* SONDAGE */}
           {showPollComposer && (
             <PollComposer
               value={pollData}
@@ -539,7 +527,6 @@ export function StoriesTab({ id, onOpenProfile }) {
             </button>
           </div>
 
-          {/* MUSIQUE */}
           <AudioPicker
             selectedAudio={selectedAudio}
             onSelectAudio={setSelectedAudio}
@@ -665,7 +652,6 @@ export function StoriesTab({ id, onOpenProfile }) {
                 </div>
 
                 <div className="flex items-center gap-2">
-                  {/* CONTRÔLES DE TRADUCTION VIDÉO (SOUS-TITRES & VOIX DUB) */}
                   {currentStory.media_type === 'video' && currentStory.media_url && (
                     <div onClick={(e) => e.stopPropagation()}>
                       <VideoTranslateControls
@@ -712,7 +698,6 @@ export function StoriesTab({ id, onOpenProfile }) {
                 )
               ) : (
                 <div className="p-8 text-center w-full space-y-3">
-                  {/* TRADUCTION AUTOMATIQUE OU MANUELLE */}
                   <AutoTranslate text={currentStory.caption}>
                     {(autoTranslatedTxt) => (
                       <RichTextRenderer 
@@ -722,7 +707,6 @@ export function StoriesTab({ id, onOpenProfile }) {
                     )}
                   </AutoTranslate>
 
-                  {/* BOUTON DE TRADUCTION MANUELLE */}
                   {currentStory.caption && (
                     <div className="flex justify-center" onClick={(e) => e.stopPropagation()}>
                       <TranslateButton
@@ -736,7 +720,6 @@ export function StoriesTab({ id, onOpenProfile }) {
                 </div>
               )}
 
-              {/* PRODUCT CARD DANS LA STORY */}
               {currentStory.product && (
                 <div 
                   className="absolute top-20 inset-x-6 z-30"
@@ -751,7 +734,6 @@ export function StoriesTab({ id, onOpenProfile }) {
                 </div>
               )}
 
-              {/* SONDAGE POLLDISPLAY DANS LA STORY */}
               {currentStory.poll?.question && (
                 <div 
                   className="absolute bottom-20 inset-x-6 z-30"
