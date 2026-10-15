@@ -329,7 +329,7 @@ export function MainShell() {
       style={{
         background: isImmersive ? "#000" : "transparent",
         color: COLORS.ivory,
-        paddingTop: "env(safe-area-inset-top)",
+        paddingTop: isImmersive ? "0px" : "env(safe-area-inset-top)",
       }}
     >
       {incoming && <ChatCallModal mode="incoming" {...incoming} onClose={clearIncoming} />}
@@ -341,38 +341,42 @@ export function MainShell() {
       />
 
       {/* =====================================================
-          HEADER UNIFIÉ (PRESENT SUR TOUS LES ONGLETS)
+          HEADER (MASQUÉ EN MODE VIDÉOS POUR IMMERSION TOTALE)
           ===================================================== */}
-      <Header
-        lang={lang}
-        setLang={setLang}
-        userProfile={userProfile}
-        onOpenProfile={() => setInspectingProfileId(id)}
-        onOpenNotifications={() => setNotifDrawerOpen(true)}
-        onOpenSearch={() => setSearchModalOpen(true)}
-        isCreateOpen={activeTab === "feed" ? isFeedCreateOpen : false}
-        onToggleCreate={() => {
-          if (activeTab !== "feed") {
-            setActiveTab("feed");
-          }
-          setIsFeedCreateOpen((prev) => !prev);
-        }}
-      />
+      {!isImmersive && (
+        <Header
+          lang={lang}
+          setLang={setLang}
+          userProfile={userProfile}
+          onOpenProfile={() => setInspectingProfileId(id)}
+          onOpenNotifications={() => setNotifDrawerOpen(true)}
+          onOpenSearch={() => setSearchModalOpen(true)}
+          isCreateOpen={activeTab === "feed" ? isFeedCreateOpen : false}
+          onToggleCreate={() => {
+            if (activeTab !== "feed") {
+              setActiveTab("feed");
+            }
+            setIsFeedCreateOpen((prev) => !prev);
+          }}
+        />
+      )}
 
       {/* =====================================================
           CONTENU PRINCIPAL
           ===================================================== */}
-      <div className="max-w-7xl mx-auto w-full px-3 sm:px-6 pt-4 sm:pt-6 flex-1 grid grid-cols-1 md:grid-cols-4 gap-6">
-        <div className="hidden md:block md:col-span-1">
-          <Navigation
-            activeTab={activeTab}
-            setActiveTab={setActiveTab}
-          />
-        </div>
+      <div className={`mx-auto w-full flex-1 ${isImmersive ? "max-w-none px-0 pt-0 flex flex-col" : "max-w-7xl px-3 sm:px-6 pt-4 sm:pt-6 grid grid-cols-1 md:grid-cols-4 gap-6"}`}>
+        {!isImmersive && (
+          <div className="hidden md:block md:col-span-1">
+            <Navigation
+              activeTab={activeTab}
+              setActiveTab={setActiveTab}
+            />
+          </div>
+        )}
 
         <main
           id="main-content"
-          className="col-span-1 md:col-span-3 mobile-nav-spacer"
+          className={isImmersive ? "w-full flex-1 flex flex-col" : "col-span-1 md:col-span-3 mobile-nav-spacer"}
           tabIndex={-1}
         >
           <ErrorBoundary>
@@ -383,13 +387,15 @@ export function MainShell() {
                     key={activeTab}
                     {...(tabProps[activeTab] || {})}
                   />
-                  <FutureModulePanel moduleId={activeTab} onNavigate={(moduleId, action) => {
-                    if (/IA|intelligent|montage|traduction|mémoire/i.test(action)) setActiveTab("assistant");
-                    else if (/sécurité|confidentialité|appareils|contrôles|export|privacy/i.test(action)) setActiveTab("settings");
-                    else if (/communauté|modération/i.test(action)) setActiveTab("community");
-                    else if (/recherche|historique/i.test(action)) setSearchModalOpen(true);
-                    else if (/vidéo|Story/i.test(action)) setActiveTab(action.includes("Story") ? "stories" : "videos");
-                  }} />
+                  {!isImmersive && (
+                    <FutureModulePanel moduleId={activeTab} onNavigate={(moduleId, action) => {
+                      if (/IA|intelligent|montage|traduction|mémoire/i.test(action)) setActiveTab("assistant");
+                      else if (/sécurité|confidentialité|appareils|contrôles|export|privacy/i.test(action)) setActiveTab("settings");
+                      else if (/communauté|modération/i.test(action)) setActiveTab("community");
+                      else if (/recherche|historique/i.test(action)) setSearchModalOpen(true);
+                      else if (/vidéo|Story/i.test(action)) setActiveTab(action.includes("Story") ? "stories" : "videos");
+                    }} />
+                  )}
                 </>
               ) : null}
             </Suspense>
@@ -397,13 +403,15 @@ export function MainShell() {
         </main>
       </div>
 
-      {/* NAVIGATION MOBILE UNIQUE */}
-      <div className="md:hidden">
-        <Navigation
-          activeTab={activeTab}
-          setActiveTab={setActiveTab}
-        />
-      </div>
+      {/* NAVIGATION MOBILE (MASQUÉE EN MODE VIDÉOS) */}
+      {!isImmersive && (
+        <div className="md:hidden">
+          <Navigation
+            activeTab={activeTab}
+            setActiveTab={setActiveTab}
+          />
+        </div>
+      )}
 
       {/* MODALES ET ASSISTANT */}
       {inspectingProfileId && (
