@@ -1,6 +1,5 @@
 import { useState } from "react";
 import CommentsSheet from "./composent/CommentsSheet.jsx";
-import FeedHeader from "./composent/FeedHeader.jsx";
 import { FeedEmpty, FeedError, FeedLoading } from "./composent/FeedStatus.jsx";
 import UploadModal from "./composent/UploadModal.jsx";
 import VideoCard from "./composent/VideoCard.jsx";
@@ -15,6 +14,7 @@ import { useVideoFeed } from "./hooks/useVideoFeed.js";
 import VideoNextGenStudio from "./VideoNextGenStudio.jsx";
 import { useToast } from "../../components/ToastContext.jsx";
 import { EngagementList } from "../../components/EngagementList.jsx";
+import { TipButton } from "../../components/TipButton.jsx";
 
 export function VideosTab({ onRewardPoints, onExit }) {
   const feed = useVideoFeed();
@@ -26,8 +26,6 @@ export function VideosTab({ onRewardPoints, onExit }) {
     loadVideos,
     likedMap,
     setLikedMap,
-    mode,
-    setMode,
     visibleVideos,
   } = feed;
 
@@ -98,42 +96,40 @@ export function VideosTab({ onRewardPoints, onExit }) {
 
   return (
     <>
-      <div
-        className="fixed inset-0 z-40 bg-black text-white overflow-y-auto snap-y snap-mandatory no-scrollbar"
-        style={{
-          paddingBottom: "calc(4.5rem + env(safe-area-inset-bottom, 0px))",
-        }}
-      >
-        <FeedHeader
-          onExit={onExit}
-          muted={playback.muted}
-          onToggleMute={playback.toggleMute}
-          onOpenUpload={openUpload}
-          onOpenStudio={() => setStudioOpen(true)}
-          mode={mode}
-          setMode={setMode}
-        />
-
+      {/* CONTENEUR PRINCIPAL NET ALIGNÉ SUR LE HEADER GLOBAL */}
+      <div className="w-full max-w-2xl mx-auto flex flex-col gap-6 pb-20 pt-2">
+        {/* LISTE DES VIDÉOS */}
         {loadError ? (
           <FeedError message={loadError} onRetry={loadVideos} />
         ) : visibleVideos.length === 0 ? (
           <FeedEmpty onPublish={openUpload} />
         ) : (
-          visibleVideos.map((video) => (
-            <VideoCard
-              key={video.id}
-              video={video}
-              sound={getVideoSound(video)}
-              liked={!!likedMap[video.id]}
-              user={user}
-              playback={playback}
-              actions={actions}
-              onShowViewers={() => setViewersVideoId(video.id)}
-            />
-          ))
+          <div className="flex flex-col gap-6">
+            {visibleVideos.map((video) => (
+              <div key={video.id} className="relative rounded-2xl overflow-hidden border border-white/10 bg-black shadow-xl">
+                <VideoCard
+                  video={video}
+                  sound={getVideoSound(video)}
+                  liked={!!likedMap[video.id]}
+                  user={user}
+                  playback={playback}
+                  actions={actions}
+                  onShowViewers={() => setViewersVideoId(video.id)}
+                />
+
+                {/* BOUTON POURBOIRE (TIP) */}
+                {user?.id && video.user_id && video.user_id !== user.id && (
+                  <div className="absolute bottom-4 right-4 z-30">
+                    <TipButton recipientId={video.user_id} videoId={video.id} compact />
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
         )}
       </div>
 
+      {/* MODALES & OVERLAYS */}
       {commentsState.showComments && (
         <CommentsSheet
           comments={
