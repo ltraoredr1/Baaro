@@ -663,7 +663,7 @@ export function FeedTab({
   return (
     <div className="flex flex-col gap-6 max-w-2xl mx-auto w-full pb-20">
       
-      {/* 🌟 MODALE DE CRÉATION AVEC BOUTON DE TEXTE PLIABLE ET IA FIXE */}
+      {/* 🌟 MODALE DE CRÉATION CORRIGÉE (SANS DOUBLON DE BARRE D'OUTILS) */}
       {activeUserId && isCreateOpen && (
         <div 
           className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200"
@@ -692,10 +692,10 @@ export function FeedTab({
               </button>
             </div>
 
-            {/* Corps défilable (Outils pliables + Texte + Média) */}
+            {/* Corps défilable */}
             <div className="p-4 flex-1 overflow-y-auto flex flex-col gap-3">
               
-              {/* Ligne d'outils haut : Bouton Pliable "Mise en forme" + Bouton IA toujours visible */}
+              {/* Ligne d'outils haut : Bouton Pliable de formatage + Bouton IA */}
               <div className="flex items-center justify-between gap-2">
                 <button
                   type="button"
@@ -729,7 +729,7 @@ export function FeedTab({
                 </button>
               </div>
 
-              {/* Panneau pliable des outils de formatage de texte */}
+              {/* Si ouvert, on affiche un seul RichTextComposer dédié aux outils */}
               {textToolsOpen && (
                 <div
                   className="p-3 rounded-xl border flex flex-col gap-2 animate-in fade-in duration-150"
@@ -740,22 +740,27 @@ export function FeedTab({
                     onChange={setNewText}
                     pollData={pollData}
                     onPollChange={setPollData}
-                    onlyTools={true} // Mode restreint aux boutons de style si supporté, sinon gère l'affichage des outils
+                    rows={1}
                   />
                 </div>
               )}
 
-              {/* Zone de saisie principale du texte */}
-              <RichTextComposer
-                value={newText}
-                onChange={setNewText}
-                pollData={pollData}
-                onPollChange={setPollData}
-                placeholder="Partagez une perspective, une analyse ou une innovation avec le monde..."
-                rows={4}
-                disabled={submitting}
-                hideToolbar={true} // Masque la barre d'outils native pour utiliser le menu pliable
-              />
+              {/* Zone de saisie principale propre (sans la barre d'outils dupliquée en bas) */}
+              <div className="relative">
+                <textarea
+                  value={newText}
+                  onChange={(e) => setNewText(e.target.value)}
+                  disabled={submitting}
+                  placeholder="Partagez une perspective, une analyse ou une innovation avec le monde..."
+                  rows={5}
+                  className="w-full p-3 rounded-xl border text-sm outline-none resize-none"
+                  style={{
+                    background: COLORS.surface2,
+                    borderColor: COLORS.border,
+                    color: COLORS.ivory,
+                  }}
+                />
+              </div>
 
               {mediaPreview && (
                 <div
