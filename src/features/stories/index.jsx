@@ -13,7 +13,7 @@ import { MediaCarousel } from '../../components/MediaCarousel.jsx';
 import { PollComposer } from '../../components/PollComposer.jsx';
 import { PollDisplay } from '../../components/PollDisplay.jsx';
 import ProductCard from '../../components/ProductCard.jsx';
-import { RichTextComposer } from '../../components/RichTextComposer.jsx';
+import RichTextComposer from '../../components/RichTextComposer.jsx';
 import { RichTextRenderer } from '../../components/RichTextRenderer.jsx';
 import { TranslateButton } from '../../components/TranslateButton.jsx';
 import { AutoTranslate } from '../../components/TranslatedText.jsx';
