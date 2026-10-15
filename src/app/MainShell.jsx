@@ -86,8 +86,9 @@ export function MainShell() {
   const [searchModalOpen, setSearchModalOpen] = useState(false);
   const [forceOnboarding, setForceOnboarding] = useState(false);
 
-  // --- ÉTAT GLOBAL POUR LA MODALE DE CRÉATION ---
+  // --- ÉTAT GLOBAL POUR LA MODALE DE CRÉATION & L'AFFICHAGE UI IMMERSIF ---
   const [isFeedCreateOpen, setIsFeedCreateOpen] = useState(false);
+  const [showUi, setShowUi] = useState(false);
 
   const COLORS = {
     ...FALLBACK_COLORS,
@@ -325,11 +326,11 @@ export function MainShell() {
 
   return (
     <div
-      className="min-h-screen min-h-[100dvh] flex flex-col transition-colors duration-500"
+      className="min-h-screen min-h-[100dvh] flex flex-col transition-colors duration-500 relative"
       style={{
         background: isImmersive ? "#000" : "transparent",
         color: COLORS.ivory,
-        paddingTop: isImmersive ? "0px" : "env(safe-area-inset-top)",
+        paddingTop: isImmersive && !showUi ? "0px" : "env(safe-area-inset-top)",
       }}
     >
       {incoming && <ChatCallModal mode="incoming" {...incoming} onClose={clearIncoming} />}
@@ -341,9 +342,9 @@ export function MainShell() {
       />
 
       {/* =====================================================
-          HEADER (MASQUÉ EN MODE VIDÉOS POUR IMMERSION TOTALE)
+          HEADER (AFFICHÉ SI NON IMMERSIF OU SI SHOWUI EST ACTIF)
           ===================================================== */}
-      {!isImmersive && (
+      {(!isImmersive || showUi) && (
         <Header
           lang={lang}
           setLang={setLang}
@@ -362,10 +363,36 @@ export function MainShell() {
       )}
 
       {/* =====================================================
+          BOUTON FLOTTANT TRANSPARENT & POUVOIR (MODE VIDÉO)
+          ===================================================== */}
+      {isImmersive && (
+        <div className="fixed top-4 left-4 z-[70] flex items-center gap-2">
+          {/* Petit bouton transparent pour afficher/masquer la navigation */}
+          <button
+            onClick={() => setShowUi((prev) => !prev)}
+            className="px-3 py-1.5 rounded-full bg-black/40 backdrop-blur-xl border border-white/20 text-white text-xs font-semibold shadow-lg hover:bg-black/60 transition-all flex items-center gap-1.5"
+            title={showUi ? "Masquer les menus" : "Afficher les menus"}
+          >
+            <span>{showUi ? "✕ Fermer" : "☰ Menus"}</span>
+          </button>
+
+          {/* Bouton Pouvoir / Quitter vers le fil */}
+          <button
+            onClick={() => setActiveTab("feed")}
+            className="p-2 rounded-full bg-amber-500/20 backdrop-blur-xl border border-amber-500/40 text-amber-400 shadow-lg hover:bg-amber-500/30 transition-all flex items-center justify-center"
+            title="Quitter vers le Fil"
+            aria-label="Alimentation / Retour fil"
+          >
+            ⏻
+          </button>
+        </div>
+      )}
+
+      {/* =====================================================
           CONTENU PRINCIPAL
           ===================================================== */}
-      <div className={`mx-auto w-full flex-1 ${isImmersive ? "max-w-none px-0 pt-0 flex flex-col" : "max-w-7xl px-3 sm:px-6 pt-4 sm:pt-6 grid grid-cols-1 md:grid-cols-4 gap-6"}`}>
-        {!isImmersive && (
+      <div className={`mx-auto w-full flex-1 ${isImmersive && !showUi ? "max-w-none px-0 pt-0 flex flex-col" : "max-w-7xl px-3 sm:px-6 pt-4 sm:pt-6 grid grid-cols-1 md:grid-cols-4 gap-6"}`}>
+        {(!isImmersive || showUi) && (
           <div className="hidden md:block md:col-span-1">
             <Navigation
               activeTab={activeTab}
@@ -376,7 +403,7 @@ export function MainShell() {
 
         <main
           id="main-content"
-          className={isImmersive ? "w-full flex-1 flex flex-col" : "col-span-1 md:col-span-3 mobile-nav-spacer"}
+          className={isImmersive && !showUi ? "w-full flex-1 flex flex-col" : "col-span-1 md:col-span-3 mobile-nav-spacer"}
           tabIndex={-1}
         >
           <ErrorBoundary>
@@ -387,7 +414,7 @@ export function MainShell() {
                     key={activeTab}
                     {...(tabProps[activeTab] || {})}
                   />
-                  {!isImmersive && (
+                  {(!isImmersive || showUi) && (
                     <FutureModulePanel moduleId={activeTab} onNavigate={(moduleId, action) => {
                       if (/IA|intelligent|montage|traduction|mémoire/i.test(action)) setActiveTab("assistant");
                       else if (/sécurité|confidentialité|appareils|contrôles|export|privacy/i.test(action)) setActiveTab("settings");
@@ -403,8 +430,8 @@ export function MainShell() {
         </main>
       </div>
 
-      {/* NAVIGATION MOBILE (MASQUÉE EN MODE VIDÉOS) */}
-      {!isImmersive && (
+      {/* NAVIGATION MOBILE (AFFICHÉE SI NON IMMERSIF OU SI SHOWUI EST ACTIF) */}
+      {(!isImmersive || showUi) && (
         <div className="md:hidden">
           <Navigation
             activeTab={activeTab}
