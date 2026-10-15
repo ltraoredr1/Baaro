@@ -111,16 +111,27 @@ try {
 
 // 6. SW push handler
 try {
-  const sw = resolve(root, "public/service-worker.js");
+  // Le service worker réellement enregistré est /sw.js, généré par
+  // vite-plugin-pwa ; il charge public/push-sw.js via workbox.importScripts.
+  const sw = resolve(root, "public/push-sw.js");
   if (existsSync(sw)) {
     const src = readFileSync(sw, "utf8");
     if (src.includes('addEventListener("push"') || src.includes("addEventListener('push'")) {
-      ok("service-worker gère l'événement push");
+      ok("push-sw gère l'événement push");
     } else {
-      fail("service-worker sans handler push");
+      fail("push-sw sans handler push");
     }
-    if (src.includes("notificationclick")) ok("service-worker gère notificationclick");
+    if (src.includes("notificationclick")) ok("push-sw gère notificationclick");
     else warn("notificationclick manquant");
+  } else {
+    fail("public/push-sw.js absent : aucune notification Web Push ne s'affichera");
+  }
+
+  const viteConfig = readFileSync(resolve(root, "vite.config.js"), "utf8");
+  if (viteConfig.includes("importScripts") && viteConfig.includes("push-sw.js")) {
+    ok("vite.config.js charge push-sw.js dans /sw.js");
+  } else {
+    fail("vite.config.js ne charge pas push-sw.js (workbox.importScripts)");
   }
 } catch {
   /* ignore */
