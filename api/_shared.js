@@ -290,6 +290,8 @@ function getUpstashConfig() {
  *
  * GET /incr/<clé>
  * GET /expire/<clé>/<secondes>
+ *
+ * Ne journalise jamais l'URL complète ni le jeton.
  */
 async function upstashCommand(url, token) {
   const response = await fetch(url, {
@@ -341,7 +343,10 @@ export async function rateLimitAsync(
 
   if (!upstashConfigured()) {
     if (isProduction()) {
-      console.error("[rate-limit] Upstash is not configured.");
+      console.error(
+        "[rate-limit] Upstash is not configured; stage=configuration; request blocked."
+      );
+
       return rateLimitUnavailable();
     }
 
@@ -352,11 +357,16 @@ export async function rateLimitAsync(
     });
   }
 
+  // Permet d'identifier l'étape qui échoue sans exposer de secret.
+  let upstashStage = "configuration";
+
   try {
     const { url, token } = getUpstashConfig();
     const ip = clientIp(req);
     const redisKey = `rl:${safeKey}:${ip}`;
     const encodedKey = encodeURIComponent(redisKey);
+
+    upstashStage = "INCR";
 
     const countResult = await upstashCommand(
       `${url}/incr/${encodedKey}`,
@@ -373,6 +383,8 @@ export async function rateLimitAsync(
      * L'expiration est rafraîchie à chaque requête.
      * Cette stratégie prolonge l'expiration à chaque appel.
      */
+    upstashStage = "EXPIRE";
+
     const expiryResult = await upstashCommand(
       `${url}/expire/${encodedKey}/${windowSec}`,
       token
@@ -413,8 +425,7 @@ export async function rateLimitAsync(
   } catch (err) {
     /*
      * Ne jamais écrire le jeton ou l'URL Upstash dans les logs.
-     * Seuls les messages internes connus ou le nom du type
-     * d'erreur sont autorisés.
+     * Seuls les messages internes connus ou le statut HTTP sont autorisés.
      */
     const safeMessages = new Set([
       "URL Upstash invalide.",
@@ -435,7 +446,7 @@ export async function rateLimitAsync(
         : `Erreur réseau ou technique (${err instanceof Error && err.name ? err.name : "inconnue"})`;
 
     console.error(
-      `[rate-limit] ${safeDiagnostic}; request blocked.`
+      `[rate-limit] ${safeDiagnostic}; stage=${upstashStage}; request blocked.`
     );
 
     // En production, ne pas contourner Upstash avec un compteur local.
