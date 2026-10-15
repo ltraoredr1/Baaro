@@ -1,6 +1,5 @@
 import { applyCors, getAdminClient, requireUser, rateLimitAsync } from "./_shared.js";
-import { chooseProvider, providerConfig } from "./_lib/ai/router.js";
-import { callOpenAICompatible } from "./_lib/ai/openai-compatible.js";
+import { GoogleGenAI } from "@google/genai";
 
 const JOB_TYPES = new Set(["transcode","thumbnail","captions","translate","dub","moderate","features","highlights","edit_plan"]);
 const WORKER_SECRET = process.env.BAARO_WORKER_SECRET || "";
@@ -13,32 +12,46 @@ async function aiEditPlan(admin, id, body) {
   const transcript = cleanText(body.transcript, 12000);
   if (!prompt && !transcript) throw Object.assign(new Error("prompt ou transcript requis"), {status:400});
   
-  const system = `Tu es le moteur de montage IA de BAARO. Retourne uniquement du JSON valide avec: hook, cuts:[{start_ms,end_ms,reason}], captions_style, music_mood, title_variants:[string], thumbnail_ideas:[string], aspect_ratios:[string].`;
+  const systemInstruction = `Tu es le moteur de montage IA de BAARO. Retourne uniquement du JSON valide (sans aucun bloc markdown autour si possible) avec cette structure exacte:
+{
+  "hook": "...",
+  "cuts": [{"start_ms": 0, "end_ms": 1000, "reason": "..."}],
+  "captions_style": "dynamic",
+  "music_mood": "neutral",
+  "title_variants": ["..."],
+  "thumbnail_ideas": ["..."],
+  "aspect_ratios": ["9:16", "1:1", "16:9"]
+}`;
+
   const input = `${prompt ? "OBJECTIF:\n"+prompt+"\n" : ""}${transcript ? "TRANSCRIPT:\n"+transcript : ""}`;
   
-  const provider = chooseProvider({ requested: body.provider });
-  const cfg = providerConfig(provider);
+  const apiKey = process.env.GEMINI_API_KEY || process.env.API_KEY;
+  if (!apiKey) throw new Error("Clé API Gemini manquante sur le serveur");
 
-  if (cfg?.key && cfg?.base) {
-    try {
-      const res = await callOpenAICompatible({
-        base: cfg.base,
-        key: cfg.key,
-        model: cfg.model,
-        system,
-        messages: [{ role: "user", content: input }],
-        maxTokens: 2000
-      });
-      let plan; 
-      try { plan = JSON.parse(res.reply.replace(/^```json\s*|\s*```$/g, "")); } 
-      catch { plan = { raw: res.reply }; }
-      return { ok: true, provider, plan };
-    } catch (e) {
-      console.warn("Échec IA plan de montage:", e.message);
+  const ai = new GoogleGenAI({ apiKey });
+
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: `${systemInstruction}\n\nDONNÉES D'ENTRÉE:\n${input}`,
+    });
+
+    const rawReply = String(response.text || "").trim();
+    let plan; 
+    try { 
+      // Nettoyage des balises markdown si présentes
+      const cleanedJson = rawReply.replace(/^```json\s*|\s*```$/g, "").trim();
+      plan = JSON.parse(cleanedJson); 
+    } 
+    catch { 
+      plan = { raw: rawReply }; 
     }
-  }
 
-  return { ok: true, plan: { hook: "Créer une accroche à partir du premier moment fort.", cuts: [], captions_style: "dynamic", music_mood: "neutral", title_variants: [], thumbnail_ideas: [], aspect_ratios: ["9:16", "1:1", "16:9"], queued: true } };
+    return { ok: true, provider: "gemini", plan };
+  } catch (e) {
+    console.error("Erreur Gemini plan de montage:", e.message);
+    throw Object.assign(new Error("Erreur de génération du plan par Gemini"), { status: 502 });
+  }
 }
 
 export default async function handler(req, res) {
