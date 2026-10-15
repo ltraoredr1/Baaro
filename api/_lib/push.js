@@ -13,6 +13,8 @@
  * - FIREBASE_SERVICE_ACCOUNT (JSON complet)
  * - FCM_ANDROID_CHANNEL_ID (facultatif)
  *
+ * Changements : les abonnements Web Push refusés (401/403, ex. ancienne clé
+ * VAPID) et les jetons FCM SENDER_ID_MISMATCH sont maintenant supprimés.
  * Aucun changement SQL prévu par ce fichier.
  */
 
@@ -246,7 +248,15 @@ async function sendWebPush(subscriptionJson, payload) {
   } catch (error) {
     const status = error?.statusCode || error?.status;
 
-    if (status === 404 || status === 410) {
+    // 404/410 : abonnement expiré ou supprimé.
+    // 401/403 : abonnement créé avec une autre clé VAPID, inutilisable
+    // avec la clé actuelle. Le client se réabonne à sa prochaine ouverture.
+    if (
+      status === 404 ||
+      status === 410 ||
+      status === 401 ||
+      status === 403
+    ) {
       return {
         ok: false,
         dead: true,
@@ -444,8 +454,8 @@ async function sendFcm(token, payload) {
               notification: {
                 tag: payload.tag || undefined,
 
-                // Ce canal doit être créé dans l'application Android.
-                // Son son dépend de la configuration native du canal.
+                // Ce canal est créé par l'application Android
+                // (pushNotifications.js, createChannel).
                 channel_id: ANDROID_CHANNEL_ID,
               },
             },
@@ -473,14 +483,22 @@ async function sendFcm(token, payload) {
     const message =
       result?.error?.message || response.statusText;
 
+    // Le code précis de l'erreur FCM est dans error.details[].errorCode.
+    const errorCode = Array.isArray(result?.error?.details)
+      ? result.error.details.find((detail) => detail?.errorCode)
+          ?.errorCode
+      : null;
+
     if (
       status === "NOT_FOUND" ||
-      status === "UNREGISTERED"
+      status === "UNREGISTERED" ||
+      errorCode === "UNREGISTERED" ||
+      errorCode === "SENDER_ID_MISMATCH"
     ) {
       return {
         ok: false,
         dead: true,
-        error: status,
+        error: errorCode || status,
       };
     }
 
