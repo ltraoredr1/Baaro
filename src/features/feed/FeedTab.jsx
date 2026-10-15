@@ -24,7 +24,7 @@ import { checkRateLimit, rateLimitMessage } from "@/lib/rateLimit.js";
 import { uploadExternalMedia } from "@/lib/externalMedia.js";
 
 import { PollCard, SocialPostEnhancements, SocialSuggestions } from "./SocialEnhancements.jsx";
-import { RichTextComposer } from "@/components/RichTextComposer.jsx";
+import RichTextComposer from "@/components/RichTextComposer.jsx";
 import { RichTextRenderer } from "@/components/RichTextRenderer.jsx";
 import { EngagementList } from "@/components/EngagementList.jsx";
 import { TipButton } from "@/components/TipButton.jsx";
@@ -189,7 +189,7 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
         handleDbError(error, showToast, "Erreur lors du chargement du fil");
         if (!silent) setPosts([]);
         setHasMore(false);
-      } finally {
+      } font-medium {
         setLoading(false);
       }
     },
@@ -985,21 +985,24 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
                   {Number(post.likes || 0)}
                 </button>
                 {post.author_id === activeUserId && (
-                  <button
-                    type="button"
-                    onClick={() => setEngagement({ type: "postLikes", id: post.id })}
-                    className="text-[10px] underline ml-2 hover:text-white transition-colors"
-                  >
+                  <div className="flex items-center gap-2 ml-2">
                     <button
-  type="button"
-  onClick={() => setEngagement({ type: "postViews", id: post.id })}
-  className="text-[10px] underline ml-2 hover:text-white transition-colors inline-flex items-center gap-1"
-  aria-label="Voir les personnes qui ont vu la publication"
->
-  <Eye size={12} /> Voir les vues
-</button>
-                    Audience détaillée
-                  </button>
+                      type="button"
+                      onClick={() => setEngagement({ type: "postLikes", id: post.id })}
+                      className="text-[10px] underline hover:text-white transition-colors"
+                    >
+                      J'aime
+                    </button>
+                    <span>·</span>
+                    <button
+                      type="button"
+                      onClick={() => setEngagement({ type: "postViews", id: post.id })}
+                      className="text-[10px] underline hover:text-white transition-colors inline-flex items-center gap-1"
+                      aria-label="Voir les personnes qui ont vu la publication"
+                    >
+                      <Eye size={12} /> Vues
+                    </button>
+                  </div>
                 )}
               </div>
 
