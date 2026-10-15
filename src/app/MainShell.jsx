@@ -86,7 +86,8 @@ export function MainShell() {
   const [searchModalOpen, setSearchModalOpen] = useState(false);
   const [forceOnboarding, setForceOnboarding] = useState(false);
 
-  // --- ÉTAT GLOBAL POUR L'AFFICHAGE UI IMMERSIF ---
+  // --- ÉTAT GLOBAL POUR LA MODALE DE CRÉATION DU FIL & UI ---
+  const [isFeedCreateOpen, setIsFeedCreateOpen] = useState(false);
   const [showUi, setShowUi] = useState(false);
 
   const COLORS = {
@@ -144,13 +145,15 @@ export function MainShell() {
               notifDrawerOpen ||
               searchModalOpen ||
               inspectingProfileId ||
-              forceOnboarding
+              forceOnboarding ||
+              isFeedCreateOpen
             ) {
               setNotifDrawerOpen(false);
               setSearchModalOpen(false);
               setInspectingProfileId(null);
               setProfileReadOnly(false);
               setForceOnboarding(false);
+              setIsFeedCreateOpen(false);
               return;
             }
 
@@ -190,6 +193,7 @@ export function MainShell() {
     searchModalOpen,
     inspectingProfileId,
     forceOnboarding,
+    isFeedCreateOpen,
   ]);
 
   /* =========================================================
@@ -245,6 +249,8 @@ export function MainShell() {
       user_id: id,
       onOpenProfile: setInspectingProfileId,
       onOpenDebates: () => setActiveTab("debates"),
+      isCreateOpen: isFeedCreateOpen,
+      setIsCreateOpen: setIsFeedCreateOpen,
     },
 
     friends: {
@@ -336,7 +342,7 @@ export function MainShell() {
       />
 
       {/* =====================================================
-          HEADER (SANS INTERFÉRENCE AVEC LA CRÉATION GLOBALE)
+          HEADER (BOUTON CRÉER INTELLIGENT SELON L'ONGLET)
           ===================================================== */}
       {(!isImmersive || showUi) && (
         <Header
@@ -346,6 +352,14 @@ export function MainShell() {
           onOpenProfile={() => setInspectingProfileId(id)}
           onOpenNotifications={() => setNotifDrawerOpen(true)}
           onOpenSearch={() => setSearchModalOpen(true)}
+          isCreateOpen={activeTab === "feed" ? isFeedCreateOpen : false}
+          onToggleCreate={() => {
+            if (activeTab === "feed") {
+              setIsFeedCreateOpen((prev) => !prev);
+            } else if (activeTab === "videos") {
+              window.dispatchEvent(new CustomEvent("baaro:open-video-create"));
+            }
+          }}
         />
       )}
 
