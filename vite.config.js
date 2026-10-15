@@ -1,4 +1,3 @@
-
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
@@ -9,9 +8,10 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 export default defineConfig({
-  // Conserve les chemins relatifs pour la compatibilité Capacitor.
+  // Chemins relatifs pour conserver la compatibilité avec Capacitor.
   base: './',
 
+  // Alias utilisé par les imports tels que "@/theme.js".
   resolve: {
     alias: {
       '@': resolve(__dirname, 'src'),
@@ -68,14 +68,14 @@ export default defineConfig({
           'workbox-*.js',
         ],
 
-        // Ne pas intercepter les navigations avec un fallback personnalisé.
+        // Pas de fallback de navigation personnalisé.
         navigateFallback: null,
 
         clientsClaim: true,
         skipWaiting: true,
         cleanupOutdatedCaches: true,
 
-        // Aucun cache runtime pour Supabase ou les réponses API.
+        // Ne pas mettre les API ou les données Supabase en cache.
         runtimeCaching: [
           {
             urlPattern: ({ url, sameOrigin }) =>
