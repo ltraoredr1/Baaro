@@ -5,6 +5,7 @@ import {
   Expand,
   Heart,
   MessageCircle,
+  Eye,
   Music2,
   Play,
   Repeat2,
@@ -44,6 +45,7 @@ export default function VideoCard({
     toggleFullscreen,
     handleTimeUpdate,
   } = playback;
+    const [showViewers, setShowViewers] = useState(false);
   const {
     handleLike,
     openComments,
@@ -322,6 +324,15 @@ export default function VideoCard({
           <Clock3 size={12} />
           {video.duration || "00:00"}
         </span>
+        {video.author_id === user?.id && (
+  <button
+    type="button"
+    onClick={() => setShowViewers(true)}
+    className="underline text-white"
+  >
+    <Eye size={13} /> Voir les spectateurs
+  </button>
+)}
 
         <div className="flex items-center gap-2">
           <span>{formatCount(video.views)} vues</span>
