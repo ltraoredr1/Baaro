@@ -1,5 +1,3 @@
-export { PollDisplay } from "../../components/PollDisplay.jsx";
-
 import { useCallback, useEffect, useMemo, useState, memo } from "react";
 import { Bookmark, Check, Share2, UserPlus, X, Zap } from "lucide-react";
 import { COLORS } from "../../theme.js";
@@ -28,7 +26,7 @@ const REACTIONS = [
 ];
 
 /* =========================================================
-   POLL CARD
+   1. POLL CARD (Sondages)
    ========================================================= */
 
 export const PollCard = memo(function PollCard({ postId, user_id }) {
@@ -415,7 +413,7 @@ export const PollCard = memo(function PollCard({ postId, user_id }) {
 });
 
 /* =========================================================
-   SOCIAL POST ENHANCEMENTS
+   2. SOCIAL POST ENHANCEMENTS (Interactions & Notifications corrigées + Boutons alignés)
    ========================================================= */
 
 export const SocialPostEnhancements = memo(
@@ -429,6 +427,32 @@ export const SocialPostEnhancements = memo(
     const [following, setFollowing] = useState(false);
     const [busy, setBusy] = useState(false);
     const [pop, setPop] = useState(false);
+
+    // Fonction d'envoi de notification vers /api/social
+    const sendNotification = async (interactionType) => {
+      if (!post?.id || !isValidAuthUserId(user_id)) return;
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session?.access_token) return;
+
+        await fetch("/api/social", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({
+            action: "notify_interaction",
+            content_type: "post",
+            interaction_type: interactionType,
+            target_id: post.id,
+            recipient_id: post.author_id,
+          }),
+        });
+      } catch (err) {
+        console.warn("[post-notification]", err);
+      }
+    };
 
     const load = useCallback(async () => {
       if (!post?.id) return;
@@ -578,6 +602,8 @@ export const SocialPostEnhancements = memo(
         setReaction("like");
         onLiked?.(post.id);
 
+        await sendNotification("like");
+
         await load();
       } catch (error) {
         console.error("[BAARO] Erreur enregistrement like :", error);
@@ -661,11 +687,7 @@ export const SocialPostEnhancements = memo(
           } catch (error) {
             if (error?.name === "AbortError") return;
 
-            // Si le partage natif échoue, tenter la copie du lien.
-            console.warn(
-              "[BAARO] Partage natif indisponible :",
-              error
-            );
+            console.warn("[BAARO] Partage natif indisponible :", error);
           }
         }
 
@@ -695,9 +717,10 @@ export const SocialPostEnhancements = memo(
           });
 
           if (error) {
-            // Le suivi du partage est secondaire : le partage lui-même a réussi.
             console.warn("[BAARO] Suivi du partage impossible :", error);
           }
+
+          await sendNotification("share");
         }
 
         setShareCount((count) => count + 1);
@@ -743,6 +766,10 @@ export const SocialPostEnhancements = memo(
             "success"
           );
 
+          if (nextFollowing) {
+            await sendNotification("follow");
+          }
+
           return;
         }
 
@@ -774,6 +801,8 @@ export const SocialPostEnhancements = memo(
 
           setFollowing(true);
           showToast("Vous suivez maintenant ce compte", "success");
+
+          await sendNotification("follow");
         }
       } catch (error) {
         console.error("[BAARO] Erreur abonnement :", error);
@@ -789,36 +818,38 @@ export const SocialPostEnhancements = memo(
     };
 
     return (
-      <div className="flex flex-wrap items-center gap-1.5 w-full">
-        {post?.author_id && post.author_id !== user_id && (
+      <div className="flex items-center justify-between w-full gap-2 pt-1">
+        {post?.author_id && post.author_id !== user_id ? (
           <button
             type="button"
             onClick={follow}
             disabled={busy}
-            className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-[11px] font-bold border transition-all active:scale-95 disabled:opacity-50"
+            className="flex items-center justify-center gap-1 px-3 py-1.5 rounded-lg text-xs font-bold border transition-all active:scale-95 disabled:opacity-50"
             style={{
-              borderColor: following
-                ? COLORS.borderTeal
-                : COLORS.border,
+              borderColor: following ? COLORS.borderTeal : COLORS.border,
               color: following ? COLORS.teal : COLORS.muted,
+              background: COLORS.surface2,
             }}
           >
-            {following ? <Check size={13} /> : <UserPlus size={13} />}
-            {following ? "Abonné" : "Suivre"}
+            {following ? <Check size={14} /> : <UserPlus size={14} />}
+            <span>{following ? "Abonné" : "Suivre"}</span>
           </button>
+        ) : (
+          <div />
         )}
 
-        <div className="relative">
+        <div className="flex items-center gap-2">
           <button
             type="button"
             onClick={() => chooseReaction("like")}
             disabled={busy}
             aria-pressed={reaction === "like"}
             aria-label={reaction === "like" ? "Retirer mon J’aime" : "J’aime"}
-            className="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-xs border transition-all duration-200 active:scale-95 disabled:opacity-50"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border transition-all duration-200 active:scale-95 disabled:opacity-50"
             style={{
               borderColor: COLORS.border,
               color: current ? COLORS.ivory : COLORS.muted,
+              background: COLORS.surface2,
             }}
           >
             <span
@@ -828,7 +859,6 @@ export const SocialPostEnhancements = memo(
             >
               {current?.label || "👍"}
             </span>
-
             <span
               className={`transition-all duration-300 ${
                 pop ? "scale-110 font-bold" : "scale-100"
@@ -837,47 +867,48 @@ export const SocialPostEnhancements = memo(
               {reactionCount || "J’aime"}
             </span>
           </button>
+
+          <button
+            type="button"
+            onClick={bookmark}
+            disabled={busy}
+            aria-label={saved ? "Retirer des favoris" : "Enregistrer"}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border transition-all active:scale-95 disabled:opacity-50"
+            style={{
+              borderColor: COLORS.border,
+              color: saved ? COLORS.gold : COLORS.muted,
+              background: COLORS.surface2,
+            }}
+          >
+            <Bookmark size={14} fill={saved ? "currentColor" : "none"} />
+            <span className="hidden sm:inline">
+              {saved ? "Enregistré" : "Favori"}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={share}
+            disabled={busy}
+            aria-label="Partager cette publication"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border transition-all active:scale-95 disabled:opacity-50"
+            style={{
+              borderColor: COLORS.border,
+              color: COLORS.muted,
+              background: COLORS.surface2,
+            }}
+          >
+            <Share2 size={14} />
+            <span>{shareCount > 0 ? shareCount : "Partager"}</span>
+          </button>
         </div>
-
-        <button
-          type="button"
-          onClick={bookmark}
-          disabled={busy}
-          aria-label={saved ? "Retirer des favoris" : "Enregistrer"}
-          className="flex shrink-0 items-center gap-1.5 rounded-lg border border-transparent px-2.5 py-1.5 text-xs transition-all active:scale-95 disabled:opacity-50"
-          style={{ color: saved ? COLORS.gold : COLORS.muted }}
-        >
-          <Bookmark
-            size={15}
-            fill={saved ? "currentColor" : "none"}
-          />
-          <span className="hidden sm:inline">
-            {saved ? "Enregistré" : "Enregistrer"}
-          </span>
-        </button>
-
-        <button
-          type="button"
-          onClick={share}
-          disabled={busy}
-          aria-label="Partager cette publication"
-          className="flex shrink-0 items-center gap-1.5 rounded-lg border border-transparent px-2.5 py-1.5 text-xs ml-auto transition-all active:scale-95 disabled:opacity-50"
-          style={{ color: COLORS.muted }}
-        >
-          <Share2 size={15} />
-          {shareCount ? (
-            shareCount
-          ) : (
-            <span className="hidden sm:inline">Partager</span>
-          )}
-        </button>
       </div>
     );
   }
 );
 
 /* =========================================================
-   SOCIAL SUGGESTIONS
+   3. SOCIAL SUGGESTIONS (Suggestions de comptes)
    ========================================================= */
 
 export const SocialSuggestions = memo(
@@ -932,8 +963,6 @@ export const SocialSuggestions = memo(
         });
 
         if (error) {
-          // Repli sur l'insertion directe UNIQUEMENT si la fonction n'existe pas.
-          // Toute autre erreur (limite, règle de la base...) est affichée telle quelle.
           const functionMissing =
             error.code === "PGRST202" || error.code === "42883";
           if (!functionMissing) throw error;
@@ -950,7 +979,6 @@ export const SocialSuggestions = memo(
 
           if (upsertError) throw upsertError;
         } else if (data === false) {
-          // Le compte était déjà suivi : le toggle vient de le retirer, on le remet.
           const { error: againError } = await supabase.rpc("toggle_follow", {
             p_target: target,
           });
@@ -961,7 +989,6 @@ export const SocialSuggestions = memo(
         setItems(remaining);
         showToast("Abonnement ajouté", "success");
 
-        // Recharge de nouvelles suggestions quand la liste se vide
         if (remaining.length < 3) loadSuggestions();
       } catch (error) {
         console.error("[BAARO] Erreur suggestion follow :", error);
