@@ -1,4 +1,3 @@
-
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "../supabaseClient";
 
@@ -55,6 +54,10 @@ function messageForNotification(notification, profile) {
     case "like":
     case "reaction":
       return `${label} a aimé votre publication`;
+
+    case "repost":
+    case "post_repost":
+      return `${label} a républié votre publication`;
 
     case "comment":
       return `${label} a commenté votre publication`;
@@ -515,3 +518,5 @@ export function NotificationDrawer({ user_id, isOpen, onClose }) {
     </div>
   );
 }
+
+export default NotificationDrawer;
