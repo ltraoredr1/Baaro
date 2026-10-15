@@ -1,8 +1,49 @@
+
 import { useState } from "react";
 import { supabase } from "../../../supabaseClient.js";
 import { useToast } from "../../../components/ToastContext.jsx";
 
-// Feuille de commentaires : ouverture, lecture, envoi.
+async function notifyVideoComment(videoId) {
+  if (!videoId) return;
+
+  try {
+    const {
+      data: { session },
+      error: sessionError,
+    } = await supabase.auth.getSession();
+
+    if (sessionError || !session?.access_token) return;
+
+    const response = await fetch("/api/social", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({
+        action: "notify_interaction",
+        content_type: "video",
+        interaction_type: "comment",
+        content_id: videoId,
+      }),
+    });
+
+    if (!response.ok) {
+      const result = await response.json().catch(() => ({}));
+      console.warn(
+        "[video-comment-notification]",
+        result.error || response.status,
+      );
+    }
+  } catch (error) {
+    // Une erreur de notification ne doit pas annuler le commentaire.
+    console.warn(
+      "[video-comment-notification]",
+      error?.message || error,
+    );
+  }
+}
+
 export function useVideoComments({ user, setVideos, onRewardPoints }) {
   const { showToast, showPointsReward } = useToast();
 
@@ -32,13 +73,14 @@ export function useVideoComments({ user, setVideos, onRewardPoints }) {
   const sendComment = async () => {
     if (!user || !showComments || !newComment.trim()) return;
 
+    const videoId = showComments;
     const text = newComment.trim();
 
     try {
       const { data, error } = await supabase
         .from("video_comments")
         .insert({
-          video_id: showComments,
+          video_id: videoId,
           author_id: user.id,
           content: text,
         })
@@ -48,11 +90,14 @@ export function useVideoComments({ user, setVideos, onRewardPoints }) {
       if (error) throw error;
 
       setNewComment("");
-      await openComments(showComments);
+
+      // Le commentaire est enregistré avant l'envoi de la notification.
+      await notifyVideoComment(videoId);
+      await openComments(videoId);
 
       setVideos((prev) =>
         prev.map((video) =>
-          video.id === showComments
+          video.id === videoId
             ? {
                 ...video,
                 comments_count: Number(video.comments_count || 0) + 1,
@@ -64,7 +109,7 @@ export function useVideoComments({ user, setVideos, onRewardPoints }) {
       onRewardPoints?.("comment_video", "Commentaire", data?.id);
       showPointsReward?.(2, "Commentaire");
     } catch (error) {
-      console.error(error);
+      console.error("[video-comment]", error);
       showToast("Impossible d'envoyer le commentaire.", "error");
     }
   };
