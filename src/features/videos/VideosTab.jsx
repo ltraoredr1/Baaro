@@ -15,6 +15,7 @@ import VideoNextGenStudio from "./VideoNextGenStudio.jsx";
 import { useToast } from "../../components/ToastContext.jsx";
 import { EngagementList } from "../../components/EngagementList.jsx";
 import { TipButton } from "../../components/TipButton.jsx";
+import { Volume2, VolumeX } from "lucide-react";
 
 export function VideosTab({ onRewardPoints, onExit }) {
   const feed = useVideoFeed();
@@ -95,9 +96,22 @@ export function VideosTab({ onRewardPoints, onExit }) {
   if (loading) return <FeedLoading />;
 
   return (
-    <>
+    <div className="relative w-full h-[calc(100vh-env(safe-area-inset-top))] overflow-hidden bg-black flex flex-col">
+      
+      {/* BOUTON HAUT-PARLEUR FIXÉ EN HAUT À DROITE */}
+      <div className="absolute top-4 right-4 z-[70] flex items-center">
+        <button
+          onClick={playback.toggleMute}
+          className="h-9 w-9 rounded-full bg-black/40 backdrop-blur-xl border border-white/20 flex items-center justify-center text-white shadow-lg hover:bg-black/60 transition-all active:scale-95"
+          aria-label={playback.muted ? "Activer le son" : "Couper le son"}
+          title={playback.muted ? "Activer le son" : "Couper le son"}
+        >
+          {playback.muted ? <VolumeX size={17} /> : <Volume2 size={17} />}
+        </button>
+      </div>
+
       {/* CONTENEUR MAGNÉTIQUE PLEIN ÉCRAN (SNAP VERTICAL) */}
-      <div className="w-full h-[calc(100vh-env(safe-area-inset-top))] overflow-y-scroll snap-y snap-mandatory scrollbar-none flex flex-col bg-black">
+      <div className="w-full h-full overflow-y-scroll snap-y snap-mandatory scrollbar-none flex flex-col bg-black">
         {loadError ? (
           <div className="flex items-center justify-center h-full">
             <FeedError message={loadError} onRetry={loadVideos} />
@@ -110,7 +124,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
           visibleVideos.map((video) => (
             <div 
               key={video.id} 
-              className="relative w-full h-[calc(100vh-env(safe-area-inset-top))] shrink-0 snap-start snap-always flex items-center justify-center bg-black"
+              className="relative w-full h-full shrink-0 snap-start snap-always flex items-center justify-center bg-black"
             >
               <div className="w-full h-full max-w-2xl relative flex items-center justify-center overflow-hidden">
                 <VideoCard
@@ -169,7 +183,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
           onClose={() => setViewersVideoId(null)}
         />
       )}
-    </>
+    </div>
   );
 }
 
