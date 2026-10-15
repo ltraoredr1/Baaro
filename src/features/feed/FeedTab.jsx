@@ -11,6 +11,7 @@ import {
   Heart,
   MessageCircle,
   Eye,
+  Plus,
 } from "lucide-react";
 
 // Imports via l'alias absolu (@/ -> src/)
@@ -75,6 +76,9 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
+
+  // --- ÉTAT DU BOUTON ET DU MODULE DE CRÉATION ---
+  const [isCreateOpen, setIsCreateOpen] = useState(false);
 
   // Saisie enrichie, sondages & médias
   const [newText, setNewText] = useState("");
@@ -153,6 +157,7 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
     const apply = (text) => {
       if (!text) return;
       setNewText(text);
+      setIsCreateOpen(true);
       window.scrollTo({ top: 0, behavior: "smooth" });
     };
     try {
@@ -172,7 +177,7 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
     return () => window.removeEventListener("baaro:ai-draft", onDraft);
   }, []);
 
-  // 1. Chargement du flux (silent = rafraîchir sans écran de chargement)
+  // 1. Chargement du flux
   const loadPosts = useCallback(
     async ({ silent = false } = {}) => {
       if (!silent) setLoading(true);
@@ -334,7 +339,7 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
     setMediaPreview(URL.createObjectURL(file));
   };
 
-  // 3. Publication avec Cloudflare R2 via uploadExternalMedia
+  // 3. Publication
   const handlePublish = async () => {
     const hasText = Boolean(newText.trim());
     const hasMedia = Boolean(mediaFile);
@@ -405,6 +410,8 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
       setPollData(null);
       setMediaFile(null);
       setMediaPreview(null);
+      setIsCreateOpen(false); // Masquer le panneau après publication
+      
       onRewardPoints?.(
         mediaUrl ? "publish_post_media" : "publish_post",
         "Publication créée !",
@@ -652,18 +659,47 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
 
   return (
     <div className="flex flex-col gap-6 max-w-2xl mx-auto w-full pb-20">
-      {/* MODULE DE RÉDACTION */}
+      
+      {/* BARRE D'ACTION ET BOUTON UNIQUE DE CRÉATION */}
       {activeUserId && (
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-2 text-sm font-bold" style={{ color: COLORS.ivory }}>
+            <Sparkles size={18} style={{ color: COLORS.gold }} />
+            <span>Fil d'actualité</span>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setIsCreateOpen(!isCreateOpen)}
+            className="flex items-center gap-2 px-4 py-2 rounded-full font-bold text-xs shadow-lg transition-all active:scale-95"
+            style={{ background: COLORS.gold, color: "#000" }}
+          >
+            {isCreateOpen ? <X size={16} /> : <Plus size={16} />}
+            <span>{isCreateOpen ? "Fermer" : "Créer un post"}</span>
+          </button>
+        </div>
+      )}
+
+      {/* MODULE DE RÉDACTION S'AFFICHANT SUR ACTION DU BOUTON */}
+      {activeUserId && isCreateOpen && (
         <div
-          className="glass-card rounded-2xl p-4 shadow-xl border flex flex-col gap-3 transition-all"
+          className="glass-card rounded-2xl p-4 shadow-xl border flex flex-col gap-3 transition-all animate-in fade-in slide-in-from-top-3 duration-200"
           style={{ borderColor: COLORS.borderGold, background: COLORS.surface }}
         >
           <div
-            className="flex items-center gap-2 border-b pb-2 text-xs font-semibold"
+            className="flex items-center justify-between border-b pb-2 text-xs font-semibold"
             style={{ borderColor: COLORS.border, color: COLORS.gold }}
           >
-            <Sparkles size={15} />
-            <span>Créer une publication à fort impact</span>
+            <div className="flex items-center gap-2">
+              <Sparkles size={15} />
+              <span>Créer une publication à fort impact</span>
+            </div>
+            <button
+              onClick={() => setIsCreateOpen(false)}
+              className="text-slate-400 hover:text-white"
+            >
+              <X size={16} />
+            </button>
           </div>
 
           <RichTextComposer
