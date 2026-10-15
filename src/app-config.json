@@ -1,0 +1,54 @@
+{
+  "version": "2.0.0",
+  "features": {
+    "ai_editing": [
+      "smart_hooks",
+      "highlight_candidates",
+      "chapters",
+      "captions",
+      "translation",
+      "dubbing",
+      "thumbnail_variants",
+      "smart_reframe"
+    ],
+    "social": [
+      "remix",
+      "duet",
+      "collaboration",
+      "video_replies",
+      "reactions"
+    ],
+    "interactive": [
+      "polls",
+      "questions",
+      "challenges",
+      "leaderboards",
+      "series"
+    ],
+    "creator": [
+      "analytics",
+      "creator_coach",
+      "monetization_hooks"
+    ],
+    "recommendation": [
+      "hybrid_ranking",
+      "exploration",
+      "diversity",
+      "negative_feedback",
+      "explanations"
+    ],
+    "media": [
+      "cloudflare_r2",
+      "signed_uploads",
+      "processing_pipeline",
+      "hls",
+      "cdn_delivery"
+    ],
+    "safety": [
+      "moderation_gate",
+      "rate_limits",
+      "privacy_controls",
+      "audit_logs"
+    ]
+  }
+}
