@@ -93,6 +93,22 @@ export function VideosTab({ onRewardPoints, onExit }) {
     openUpload();
   };
 
+  // Gestion de la pause/lecture manuelle
+  const handleVideoClick = (videoId) => {
+    if (playback?.togglePlayPause) {
+      playback.togglePlayPause(videoId);
+    } else if (playback?.togglePlay) {
+      playback.togglePlay(videoId);
+    } else if (playback?.videoRefs?.current?.[videoId]) {
+      const el = playback.videoRefs.current[videoId];
+      if (el.paused) {
+        el.play().catch(() => {});
+      } else {
+        el.pause();
+      }
+    }
+  };
+
   if (loading) return <FeedLoading />;
 
   return (
@@ -126,7 +142,10 @@ export function VideosTab({ onRewardPoints, onExit }) {
               key={video.id} 
               className="relative w-full h-full shrink-0 snap-start snap-always flex items-center justify-center bg-black"
             >
-              <div className="w-full h-full max-w-2xl relative flex items-center justify-center overflow-hidden">
+              <div 
+                className="w-full h-full max-w-2xl relative flex items-center justify-center overflow-hidden cursor-pointer"
+                onClick={() => handleVideoClick(video.id)}
+              >
                 <VideoCard
                   video={video}
                   sound={getVideoSound(video)}
@@ -139,7 +158,10 @@ export function VideosTab({ onRewardPoints, onExit }) {
 
                 {/* BOUTON POURBOIRE (TIP) */}
                 {user?.id && video.user_id && video.user_id !== user.id && (
-                  <div className="absolute bottom-20 right-4 z-30">
+                  <div 
+                    className="absolute bottom-20 right-4 z-30"
+                    onClick={(e) => e.stopPropagation()} // Empêche le clic du bouton de faire pause/play
+                  >
                     <TipButton recipientId={video.user_id} videoId={video.id} compact />
                   </div>
                 )}
