@@ -84,6 +84,7 @@ export default function VideoCard({
         className="absolute inset-0 h-full w-full object-cover"
         playsInline
         loop
+        crossOrigin="anonymous"
         muted={muted || !!video.mute_original}
         data-mute-original={video.mute_original ? "1" : "0"}
         preload="metadata"
@@ -223,6 +224,7 @@ export default function VideoCard({
           <VideoTranslateControls
             mediaUrl={video.media_url || video.video_url}
             videoId={video.id}
+            videoRef={{ current: videoRefs.current[video.id] }}
           />
         </div>
 
