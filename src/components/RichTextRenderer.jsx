@@ -1,18 +1,3 @@
-/**
- * Rendu léger du Markdown BAARO, sans dépendance react-markdown.
- *
- * Formats pris en charge :
- * - **gras**
- * - *italique*
- * - ++souligné++
- * - Mentions @pseudo (sans doublons @@)
- * - Hashtags #tendance
- * - Extrait de code `code`
- * - Citations > texte
- * - Listes à puces et numérotées
- * - Liens [texte](url)
- * - URL HTTP/HTTPS nues
- */
 
 import { COLORS } from "../theme.js";
 
@@ -25,118 +10,83 @@ function escapeHtml(value) {
     .replace(/'/g, "&#39;");
 }
 
-function isSafeUrl(value) {
-  if (typeof value !== "string") return false;
-
-  const url = value.trim();
-
-  if (!url || /[\u0000-\u0020\u007f]/.test(url)) {
-    return false;
-  }
-
+function safeUrl(value) {
   try {
-    const parsed = new URL(url);
-
-    return (
-      ["http:", "https:"].includes(parsed.protocol) &&
-      Boolean(parsed.hostname)
-    );
+    const url = new URL(String(value ?? "").trim());
+    return ["https:", "http:"].includes(url.protocol) &&
+      Boolean(url.hostname) &&
+      !/[\u0000-\u0020\u007f]/.test(String(value))
+      ? url.href
+      : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
-function escapeRegExp(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-/**
- * Convertit les éléments Markdown en HTML.
- * Le texte utilisateur est échappé avant toute génération de balises.
- */
 function formatInline(value) {
-  let source = String(value ?? "");
-
-  // 0. Nettoyage des doublons d'arobases (ex: @@pseudo -> @pseudo)
-  source = source.replace(/@@+/g, "@");
-
   const tokens = [];
+  const protect = (html) => {
+    const token = `BAAROTOKEN${tokens.length}END`;
+    tokens.push(html);
+    return token;
+  };
 
-  // 1. Protège les liens Markdown avant les autres transformations.
-  const markdownLinkPattern = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g;
+  let text = String(value ?? "").replace(/@@+/g, "@");
 
-  let html = source.replace(
-    markdownLinkPattern,
-    (match, label, url) => {
-      if (!isSafeUrl(url)) return match;
-
-      const token = `BAAROMARKDOWNLINK${tokens.length}TOKEN`;
-
-      tokens.push(
-        `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" class="underline font-semibold hover:opacity-80 transition-opacity" style="color:#2DBFA6">${escapeHtml(label)}</a>`
-      );
-
-      return token;
-    }
+  // Protéger le code avant les autres transformations.
+  text = text.replace(/`([^`\n]+)`/g, (_, code) =>
+    protect(
+      `<code class="rounded px-1 py-0.5 text-xs font-mono" style="background:rgba(255,255,255,.08);color:#D9AE52">${escapeHtml(code)}</code>`
+    )
   );
 
-  // 2. Échappe le texte pour empêcher l'injection de HTML.
-  html = escapeHtml(html);
+  // Liens Markdown : seuls HTTP et HTTPS sont autorisés.
+  text = text.replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/gi, (match, label, rawUrl) => {
+    const url = safeUrl(rawUrl);
+    if (!url) return escapeHtml(match);
 
-  // 3. Transforme les URL nues en liens sécurisés.
-  html = html.replace(
-    /(^|[\s(])((?:https?):\/\/[^\s<>"']+)/gi,
-    (match, prefix, rawUrl) => {
-      const url = rawUrl.replace(/[.,!?;:]+$/, "");
-      const suffix = rawUrl.slice(url.length);
-
-      if (!isSafeUrl(url)) {
-        return match;
-      }
-
-      const safeUrl = escapeHtml(url);
-
-      return (
-        `${prefix}<a href="${safeUrl}" ` +
-        'target="_blank" rel="noopener noreferrer" ' +
-        'class="underline font-semibold hover:opacity-80 transition-opacity" style="color:#2DBFA6">' +
-        `${safeUrl}</a>${suffix}`
-      );
-    }
-  );
-
-  // 4. Applique les mises en forme Markdown standards
-  html = html.replace(/\*\*([^*\n]+)\*\*/g, "<strong className='font-bold' style='color:#F5F3EF'>$1</strong>");
-  html = html.replace(/\*([^*\n]+)\*/g, "<em className='italic'>$1</em>");
-  html = html.replace(/\+\+([^+\n]+)\+\+/g, "<u className='underline decoration-amber-400/50'>$1</u>");
-
-  // 5. Code en ligne `code`
-  html = html.replace(/`([^`\n]+)`/g, "<code className='px-1.5 py-0.5 rounded text-xs font-mono border' style='background:rgba(255,255,255,0.06); border-color:rgba(255,255,255,0.1); color:#D9AE52'>$1</code>");
-
-  // 6. Mentions @pseudo et Hashtags #tendance
-  html = html.replace(/(^|[\s(])@([a-zA-Z0-9_]+)/g, "$1<span className='font-bold cursor-pointer hover:underline' style='color:#D9AE52'>@$2</span>");
-  html = html.replace(/(^|[\s(])#([a-zA-Z0-9_]+)/g, "$1<span className='font-semibold cursor-pointer hover:underline' style='color:#2DBFA6'>#$2</span>");
-
-  // 7. Restaure les liens Markdown protégés.
-  tokens.forEach((tokenHtml, index) => {
-    const token = `BAAROMARKDOWNLINK${index}TOKEN`;
-
-    html = html.replace(
-      new RegExp(escapeRegExp(token), "g"),
-      tokenHtml
+    return protect(
+      `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" class="underline font-semibold" style="color:#2DBFA6">${escapeHtml(label)}</a>`
     );
   });
 
-  return html;
+  // Échapper le texte utilisateur avant de créer les autres balises.
+  text = escapeHtml(text);
+
+  // URL nues. La ponctuation finale reste hors du lien.
+  text = text.replace(/https?:\/\/[^\s<>"']+/gi, (rawUrl) => {
+    const match = rawUrl.match(/[.,!?;:)]+$/);
+    const suffix = match ? match[0] : "";
+    const candidate = suffix ? rawUrl.slice(0, -suffix.length) : rawUrl;
+    const url = safeUrl(candidate);
+
+    if (!url) return rawUrl;
+
+    return protect(
+      `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" class="underline font-semibold" style="color:#2DBFA6">${escapeHtml(candidate)}</a>`
+    ) + suffix;
+  });
+
+  // Mise en forme textuelle.
+  text = text.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+  text = text.replace(/~~([^~\n]+)~~/g, "<del>$1</del>");
+  text = text.replace(/\+\+([^+\n]+)\+\+/g, "<u>$1</u>");
+  text = text.replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
+  text = text.replace(/(^|[\s(])@([a-zA-Z0-9_]{1,40})/g,
+    '$1<span class="font-bold" style="color:#D9AE52">@$2</span>');
+  text = text.replace(/(^|[\s(])#([a-zA-Z0-9_]{1,80})/g,
+    '$1<span class="font-semibold" style="color:#2DBFA6">#$2</span>');
+
+  // Restaurer les fragments HTML préalablement sécurisés.
+  tokens.forEach((html, index) => {
+    text = text.replaceAll(`BAAROTOKEN${index}END`, html);
+  });
+
+  return text;
 }
 
-/**
- * Convertit le texte en paragraphes, citations et listes HTML.
- */
 function toHtml(content) {
-  const lines = String(content ?? "").split(/\r?\n/);
   const output = [];
-
   let listType = null;
 
   const closeList = () => {
@@ -145,36 +95,32 @@ function toHtml(content) {
     listType = null;
   };
 
-  for (const line of lines) {
+  for (const line of String(content ?? "").split(/\r?\n/)) {
     const unordered = line.match(/^\s*[-*]\s+(.+)$/);
-    const ordered = line.match(/^\s*(\d+)\.\s+(.+)$/);
-    const quote = line.match(/^\s*&gt;\s+(.+)$/) || line.match(/^\s*>\s+(.+)$/);
+    const ordered = line.match(/^\s*\d+\.\s+(.+)$/);
+    const quote = line.match(/^\s*&gt;\s+(.+)$/) ||
+      line.match(/^\s*>\s+(.+)$/);
 
     if (quote) {
       closeList();
       output.push(
-        `<blockquote class="border-l-2 pl-3 my-1 italic text-xs py-1 rounded-r opacity-90" style="border-color:#D9AE52; background:rgba(217,174,82,0.05); color:#F5F3EF">${formatInline(quote[1])}</blockquote>`
+        `<blockquote class="my-2 rounded-r border-l-2 py-1 pl-3 italic" style="border-color:#D9AE52;background:rgba(217,174,82,.06)">${formatInline(quote[1])}</blockquote>`
       );
       continue;
     }
 
-    if (unordered) {
-      if (listType !== "ul") {
+    if (unordered || ordered) {
+      const type = unordered ? "ul" : "ol";
+      if (listType !== type) {
         closeList();
-        output.push('<ul class="list-disc list-inside mb-2 space-y-1 pl-1">');
-        listType = "ul";
+        output.push(
+          type === "ul"
+            ? '<ul class="mb-2 list-disc list-inside space-y-1">'
+            : '<ol class="mb-2 list-decimal list-inside space-y-1">'
+        );
+        listType = type;
       }
-      output.push(`<li>${formatInline(unordered[1])}</li>`);
-      continue;
-    }
-
-    if (ordered) {
-      if (listType !== "ol") {
-        closeList();
-        output.push('<ol class="list-decimal list-inside mb-2 space-y-1 pl-1">');
-        listType = "ol";
-      }
-      output.push(`<li>${formatInline(ordered[2])}</li>`);
+      output.push(`<li>${formatInline((unordered || ordered)[1])}</li>`);
       continue;
     }
 
@@ -182,23 +128,19 @@ function toHtml(content) {
 
     if (!line.trim()) {
       output.push('<div class="h-2" aria-hidden="true"></div>');
-      continue;
+    } else {
+      output.push(
+        `<p class="mb-2 whitespace-pre-wrap leading-relaxed">${formatInline(line)}</p>`
+      );
     }
-
-    output.push(
-      `<p class="mb-2 last:mb-0 whitespace-pre-wrap leading-relaxed">${formatInline(line)}</p>`
-    );
   }
 
   closeList();
-
   return output.join("");
 }
 
 export function RichTextRenderer({ content, className = "" }) {
-  if (content == null || content === "") {
-    return null;
-  }
+  if (content == null || content === "") return null;
 
   return (
     <div
