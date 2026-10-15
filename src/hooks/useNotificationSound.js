@@ -50,13 +50,21 @@ export const BAARO_SOUNDS = {
 
 const DEFAULT_SOUND_ID = "baaro_pulse";
 
+const DEFAULT_PREFS = {
+  enabled: true,
+  muted: false,
+  volume: 70,
+  soundId: DEFAULT_SOUND_ID,
+};
+
 function loadPrefs() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) {
-      return { enabled: true, muted: false, volume: 70, soundId: DEFAULT_SOUND_ID };
-    }
+
+    if (!raw) return { ...DEFAULT_PREFS };
+
     const parsed = JSON.parse(raw);
+
     return {
       enabled: parsed.enabled !== false,
       muted: !!parsed.muted,
@@ -67,7 +75,7 @@ function loadPrefs() {
           : DEFAULT_SOUND_ID,
     };
   } catch {
-    return { enabled: true, muted: false, volume: 70, soundId: DEFAULT_SOUND_ID };
+    return { ...DEFAULT_PREFS };
   }
 }
 
@@ -79,21 +87,55 @@ function savePrefs(prefs) {
   }
 }
 
+// -----------------------------------------------------------------------------
+// État partagé : toutes les instances du hook voient les mêmes réglages.
+// (Avant : chaque composant avait sa propre copie, donc changer le son ou
+// couper le son dans les Réglages n'avait aucun effet là où il est joué.)
+// -----------------------------------------------------------------------------
+
+let sharedPrefs = loadPrefs();
+const subscribers = new Set();
+
+function updateSharedPrefs(patch) {
+  sharedPrefs = { ...sharedPrefs, ...patch };
+  savePrefs(sharedPrefs);
+  subscribers.forEach((notify) => notify(sharedPrefs));
+}
+
+// Synchronisation entre onglets / fenêtres.
+if (typeof window !== "undefined") {
+  window.addEventListener("storage", (event) => {
+    if (event.key !== STORAGE_KEY) return;
+
+    sharedPrefs = loadPrefs();
+    subscribers.forEach((notify) => notify(sharedPrefs));
+  });
+}
+
+// -----------------------------------------------------------------------------
+// Lecture audio
+// -----------------------------------------------------------------------------
+
 /** Fallback Web Audio si le fichier n'est pas encore chargé */
 function playBeep(volumePercent) {
   try {
     const Ctx = window.AudioContext || window.webkitAudioContext;
     if (!Ctx) return;
+
     const ctx = new Ctx();
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
+
     osc.type = "sine";
     osc.frequency.value = 880;
+
     const vol = Math.max(0, Math.min(1, (volumePercent || 70) / 100)) * 0.25;
+
     gain.gain.value = vol;
     osc.connect(gain);
     gain.connect(ctx.destination);
     osc.start();
+
     setTimeout(() => {
       try {
         osc.stop();
@@ -110,55 +152,124 @@ function playBeep(volumePercent) {
 const audioCache = new Map();
 
 function getAudio(path) {
-  let a = audioCache.get(path);
-  if (!a) {
-    a = new Audio(path);
-    a.preload = "auto";
-    audioCache.set(path, a);
+  let audio = audioCache.get(path);
+
+  if (!audio) {
+    audio = new Audio(path);
+    audio.preload = "auto";
+    audioCache.set(path, audio);
   }
-  return a;
+
+  return audio;
 }
 
 function playSoundFile(soundId, volumePercent) {
   const meta = BAARO_SOUNDS[soundId] || BAARO_SOUNDS[DEFAULT_SOUND_ID];
+
   try {
     const audio = getAudio(meta.path);
+
     audio.volume = Math.max(0, Math.min(1, (volumePercent || 70) / 100));
     audio.currentTime = 0;
-    const p = audio.play();
-    if (p && typeof p.catch === "function") {
-      p.catch(() => playBeep(volumePercent));
+
+    const promise = audio.play();
+
+    if (promise && typeof promise.catch === "function") {
+      promise.catch(() => playBeep(volumePercent));
     }
   } catch {
     playBeep(volumePercent);
   }
 }
 
-export function useNotificationSound() {
-  const initial = loadPrefs();
+/**
+ * Les navigateurs bloquent l'audio tant que l'utilisateur n'a pas touché la
+ * page. Au premier geste, on "amorce" le son choisi (muet) pour que les
+ * notifications suivantes puissent être jouées automatiquement.
+ */
+let audioPrimed = false;
 
-  const [enabled, setEnabledState] = useState(initial.enabled);
-  const [muted, setMutedState] = useState(initial.muted);
-  const [volume, setVolumeState] = useState(initial.volume);
-  const [soundId, setSoundIdState] = useState(initial.soundId);
+function primeAudioOnFirstGesture() {
+  if (typeof window === "undefined") return;
+
+  const prime = () => {
+    if (audioPrimed) return;
+
+    audioPrimed = true;
+
+    window.removeEventListener("pointerdown", prime, true);
+    window.removeEventListener("keydown", prime, true);
+
+    try {
+      const meta = BAARO_SOUNDS[sharedPrefs.soundId] || BAARO_SOUNDS[DEFAULT_SOUND_ID];
+      const audio = getAudio(meta.path);
+
+      audio.muted = true;
+
+      const promise = audio.play();
+
+      const restore = () => {
+        try {
+          audio.pause();
+          audio.currentTime = 0;
+        } catch {
+          /* ignore */
+        }
+
+        audio.muted = false;
+      };
+
+      if (promise && typeof promise.then === "function") {
+        promise.then(restore).catch(restore);
+      } else {
+        restore();
+      }
+    } catch {
+      /* ignore */
+    }
+  };
+
+  window.addEventListener("pointerdown", prime, true);
+  window.addEventListener("keydown", prime, true);
+}
+
+primeAudioOnFirstGesture();
+
+// -----------------------------------------------------------------------------
+// Hook
+// -----------------------------------------------------------------------------
+
+export function useNotificationSound() {
+  const [prefs, setPrefs] = useState(sharedPrefs);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    subscribers.add(setPrefs);
+
+    // Rattrape un changement survenu entre le rendu et l'abonnement.
+    setPrefs(sharedPrefs);
     setLoading(false);
+
+    return () => {
+      subscribers.delete(setPrefs);
+    };
   }, []);
 
-  useEffect(() => {
-    savePrefs({ enabled, muted, volume, soundId });
-  }, [enabled, muted, volume, soundId]);
+  const { enabled, muted, volume, soundId } = prefs;
 
-  const setEnabled = useCallback((v) => setEnabledState(!!v), []);
-  const setMuted = useCallback((v) => setMutedState(!!v), []);
+  const setEnabled = useCallback((v) => updateSharedPrefs({ enabled: !!v }), []);
+  const setMuted = useCallback((v) => updateSharedPrefs({ muted: !!v }), []);
+
   const setVolume = useCallback((v) => {
     const n = Number(v);
-    setVolumeState(Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : 70);
+
+    updateSharedPrefs({
+      volume: Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : 70,
+    });
   }, []);
+
   const setSoundId = useCallback((id) => {
-    if (BAARO_SOUNDS[id]) setSoundIdState(id);
+    if (BAARO_SOUNDS[id]) updateSharedPrefs({ soundId: id });
   }, []);
 
   const playTest = useCallback(() => {
