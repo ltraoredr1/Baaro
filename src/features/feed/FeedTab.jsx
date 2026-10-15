@@ -10,6 +10,8 @@ import {
   Flag,
   Heart,
   MessageCircle,
+    MessageCircle,
+  Eye,
 } from "lucide-react";
 
 // Imports via l'alias absolu (@/ -> src/)
@@ -989,6 +991,14 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
                     onClick={() => setEngagement({ type: "postLikes", id: post.id })}
                     className="text-[10px] underline ml-2 hover:text-white transition-colors"
                   >
+                    <button
+  type="button"
+  onClick={() => setEngagement({ type: "postViews", id: post.id })}
+  className="text-[10px] underline ml-2 hover:text-white transition-colors inline-flex items-center gap-1"
+  aria-label="Voir les personnes qui ont vu la publication"
+>
+  <Eye size={12} /> Voir les vues
+</button>
                     Audience détaillée
                   </button>
                 )}
