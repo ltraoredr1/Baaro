@@ -11,6 +11,8 @@ import {
   Heart,
   MessageCircle,
   Eye,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 
 // Imports via l'alias absolu (@/ -> src/)
@@ -90,6 +92,7 @@ export function FeedTab({
   const [submitting, setSubmitting] = useState(false);
   const [mediaFile, setMediaFile] = useState(null);
   const [mediaPreview, setMediaPreview] = useState(null);
+  const [textToolsOpen, setTextToolsOpen] = useState(false);
 
   // Session & modales
   const [currentUserId, setCurrentUserId] = useState(propUserId);
@@ -409,6 +412,7 @@ export function FeedTab({
       setPollData(null);
       setMediaFile(null);
       setMediaPreview(null);
+      setTextToolsOpen(false);
       setIsCreateOpen?.(false); // Ferme la modale
       
       onRewardPoints?.(
@@ -659,14 +663,14 @@ export function FeedTab({
   return (
     <div className="flex flex-col gap-6 max-w-2xl mx-auto w-full pb-20">
       
-      {/* 🌟 MODALE / OVERLAY DE CRÉATION AJUSTÉE AU-DESSUS DE LA BARRE MOBILE */}
+      {/* 🌟 MODALE DE CRÉATION AVEC BOUTON DE TEXTE PLIABLE ET IA FIXE */}
       {activeUserId && isCreateOpen && (
         <div 
           className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200"
           onClick={() => setIsCreateOpen?.(false)}
         >
           <div
-            className="w-full max-w-lg rounded-t-3xl sm:rounded-2xl border shadow-2xl flex flex-col max-h-[65vh] sm:max-h-[80vh] mb-20 sm:mb-0 overflow-hidden"
+            className="w-full max-w-lg rounded-t-3xl sm:rounded-2xl border shadow-2xl flex flex-col max-h-[70vh] sm:max-h-[85vh] mb-20 sm:mb-0 overflow-hidden"
             style={{ borderColor: COLORS.borderGold, background: COLORS.surface }}
             onClick={(e) => e.stopPropagation()}
           >
@@ -688,8 +692,60 @@ export function FeedTab({
               </button>
             </div>
 
-            {/* Corps défilable (Texte + Sondage + Média) */}
+            {/* Corps défilable (Outils pliables + Texte + Média) */}
             <div className="p-4 flex-1 overflow-y-auto flex flex-col gap-3">
+              
+              {/* Ligne d'outils haut : Bouton Pliable "Mise en forme" + Bouton IA toujours visible */}
+              <div className="flex items-center justify-between gap-2">
+                <button
+                  type="button"
+                  onClick={() => setTextToolsOpen(!textToolsOpen)}
+                  className="px-3 py-1.5 rounded-xl border text-xs font-medium flex items-center gap-1.5 transition-colors"
+                  style={{ borderColor: COLORS.border, color: COLORS.ivory, background: COLORS.surface2 }}
+                >
+                  <span>Mise en forme du texte</span>
+                  {textToolsOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    window.dispatchEvent(
+                      new CustomEvent("baaro:ai-draft", {
+                        detail: {
+                          prompt: newText.trim()
+                            ? `Améliore ce brouillon de publication pour BAARO et rends-le plus engageant :\n"${newText.trim()}"\n\n`
+                            : "Rédige une publication engageante pour BAARO sur le thème : ",
+                        },
+                      })
+                    )
+                  }
+                  title="Rédiger avec l'IA"
+                  className="px-3 py-1.5 rounded-xl transition-colors flex items-center gap-1.5 text-xs font-medium shadow-sm shrink-0"
+                  style={{ background: "rgba(20, 184, 166, 0.15)", color: COLORS.teal, border: `1px solid ${COLORS.teal}40` }}
+                >
+                  <Sparkles size={14} />
+                  <span>IA</span>
+                </button>
+              </div>
+
+              {/* Panneau pliable des outils de formatage de texte */}
+              {textToolsOpen && (
+                <div
+                  className="p-3 rounded-xl border flex flex-col gap-2 animate-in fade-in duration-150"
+                  style={{ background: COLORS.surface2, borderColor: COLORS.border }}
+                >
+                  <RichTextComposer
+                    value={newText}
+                    onChange={setNewText}
+                    pollData={pollData}
+                    onPollChange={setPollData}
+                    onlyTools={true} // Mode restreint aux boutons de style si supporté, sinon gère l'affichage des outils
+                  />
+                </div>
+              )}
+
+              {/* Zone de saisie principale du texte */}
               <RichTextComposer
                 value={newText}
                 onChange={setNewText}
@@ -698,6 +754,7 @@ export function FeedTab({
                 placeholder="Partagez une perspective, une analyse ou une innovation avec le monde..."
                 rows={4}
                 disabled={submitting}
+                hideToolbar={true} // Masque la barre d'outils native pour utiliser le menu pliable
               />
 
               {mediaPreview && (
@@ -747,26 +804,6 @@ export function FeedTab({
                 >
                   <ImageIcon size={16} />
                   <span>Média</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() =>
-                    window.dispatchEvent(
-                      new CustomEvent("baaro:ai-draft", {
-                        detail: {
-                          prompt: newText.trim()
-                            ? `Améliore ce brouillon de publication pour BAARO et rends-le plus engageant :\n"${newText.trim()}"\n\n`
-                            : "Rédige une publication engageante pour BAARO sur le thème : ",
-                        },
-                      })
-                    )
-                  }
-                  title="Rédiger avec l'IA"
-                  className="p-1.5 rounded-lg hover:bg-white/10 transition-colors flex items-center gap-1.5 text-xs font-medium"
-                  style={{ color: COLORS.teal }}
-                >
-                  <Sparkles size={16} />
-                  <span>IA</span>
                 </button>
                 <select
                   value={mood}
