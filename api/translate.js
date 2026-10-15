@@ -3,7 +3,7 @@ import { GoogleGenAI } from "@google/genai";
 
 const MAX_CHARS = 4000;
 
-// Liste élargie à 30 langues internationales et régionales
+// Strictement aligné sur les 30 langues retenues
 const ALLOWED_LANGS = new Set([
   "fr", "en", "es", "pt", "ar", "zh", "hi", "ru", "ja", "de",
   "sw", "it", "ko", "tr", "nl", "pl", "uk", "vi", "id", "th",
