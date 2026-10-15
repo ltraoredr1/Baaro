@@ -10,7 +10,6 @@ import {
   Flag,
   Heart,
   MessageCircle,
-    MessageCircle,
   Eye,
 } from "lucide-react";
 
