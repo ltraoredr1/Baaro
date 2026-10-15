@@ -8,10 +8,10 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 export default defineConfig({
-  // Chemins relatifs pour conserver la compatibilité avec Capacitor.
+  // Chemins relatifs pour la compatibilité avec Capacitor.
   base: './',
 
-  // Alias utilisé par les imports tels que "@/theme.js".
+  // Résout les imports utilisant @/, par exemple "@/theme.js".
   resolve: {
     alias: {
       '@': resolve(__dirname, 'src'),
@@ -41,8 +41,12 @@ export default defineConfig({
         background_color: '#FAF7F0',
         display: 'standalone',
         orientation: 'portrait',
+
+        // Configuration PWA pour un site hébergé à la racine.
+        // Vérifier séparément la compatibilité avec base: './'.
         scope: '/',
         start_url: '/',
+
         icons: [
           {
             src: '/icon-192.png',
@@ -60,7 +64,9 @@ export default defineConfig({
       },
 
       workbox: {
-        globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
+        globPatterns: [
+          '**/*.{js,css,html,ico,png,svg,woff2}',
+        ],
 
         globIgnores: [
           '**/node_modules/**/*',
@@ -68,24 +74,28 @@ export default defineConfig({
           'workbox-*.js',
         ],
 
-        // Pas de fallback de navigation personnalisé.
+        // Laisser Vite PWA gérer la génération du service worker
+        // sans définir de fallback de navigation personnalisé.
         navigateFallback: null,
 
         clientsClaim: true,
         skipWaiting: true,
         cleanupOutdatedCaches: true,
 
-        // Ne pas mettre les API ou les données Supabase en cache.
+        // Mettre en cache uniquement les images de même origine.
+        // Ne pas mettre en cache les API ou les réponses Supabase.
         runtimeCaching: [
           {
             urlPattern: ({ url, sameOrigin }) =>
               sameOrigin &&
-              /\.(?:png|jpg|jpeg|svg|gif|webp)$/i.test(url.pathname),
+              /\.(?:png|jpg|jpeg|svg|gif|webp)$/i.test(
+                url.pathname,
+              ),
 
             handler: 'CacheFirst',
 
             options: {
-              cacheName: 'images-cache-v2',
+              cacheName: 'baaro-images-v2',
 
               expiration: {
                 maxEntries: 100,
@@ -108,14 +118,21 @@ export default defineConfig({
 
   build: {
     outDir: 'dist',
+    emptyOutDir: true,
 
     rollupOptions: {
       input: resolve(__dirname, 'index.html'),
 
       output: {
         manualChunks: {
-          vendor: ['react', 'react-dom', 'react-router-dom'],
-          supabase: ['@supabase/supabase-js'],
+          vendor: [
+            'react',
+            'react-dom',
+            'react-router-dom',
+          ],
+          supabase: [
+            '@supabase/supabase-js',
+          ],
         },
       },
     },
