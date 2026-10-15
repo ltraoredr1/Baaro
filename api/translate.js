@@ -2,6 +2,8 @@ import { getAdminClient, requireUser, rateLimit, applyCors } from "./_shared.js"
 import { GoogleGenAI } from "@google/genai";
 
 const MAX_CHARS = 4000;
+
+// Liste élargie à 30 langues internationales et régionales
 const ALLOWED_LANGS = new Set([
   "fr", "en", "es", "pt", "ar", "zh", "hi", "ru", "ja", "de",
   "sw", "it", "ko", "tr", "nl", "pl", "uk", "vi", "id", "th",
@@ -16,7 +18,7 @@ const LANG_NAMES = {
   uk: "українська", vi: "Tiếng Việt", id: "Bahasa Indonesia",
   th: "ไทย", bn: "বাংলা", ha: "Hausa", yo: "Yorùbá",
   ig: "Igbo", am: "አማርኛ", zu: "isiZulu", af: "Afrikaans",
-  fa: "فارسی", he: "עบริת", sv: "svenska",
+  fa: "فارسی", he: "עברית", sv: "svenska",
 };
 
 function jsonError(res, status, message) {
