@@ -11,7 +11,6 @@ import {
   Heart,
   MessageCircle,
   Eye,
-  Plus,
 } from "lucide-react";
 
 // Imports via l'alias absolu (@/ -> src/)
@@ -67,7 +66,15 @@ function formatPost(post) {
   };
 }
 
-export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
+export function FeedTab({
+  id,
+  user_id,
+  onOpenProfile,
+  onRewardPoints,
+  isCreateOpen,
+  setIsCreateOpen,
+}) {
+  // MainShell envoie `id` et `user_id`
   const propUserId = id || user_id || null;
 
   const { showToast, showPointsReward } = useToast();
@@ -75,9 +82,6 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
-
-  // --- ÉTAT DU BOUTON COMPACT & DE LA MODALE OVERLAY ---
-  const [isCreateOpen, setIsCreateOpen] = useState(false);
 
   // Saisie enrichie, sondages & médias
   const [newText, setNewText] = useState("");
@@ -156,7 +160,7 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
     const apply = (text) => {
       if (!text) return;
       setNewText(text);
-      setIsCreateOpen(true);
+      setIsCreateOpen?.(true);
     };
     try {
       const draft = sessionStorage.getItem("baaro:ai_draft");
@@ -164,16 +168,14 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
         sessionStorage.removeItem("baaro:ai_draft");
         apply(draft);
       }
-    } catch {
-      // sessionStorage indisponible
-    }
+    } catch {}
     const onDraft = (e) => {
       try { sessionStorage.removeItem("baaro:ai_draft"); } catch {}
       apply(e.detail?.text);
     };
     window.addEventListener("baaro:ai-draft", onDraft);
     return () => window.removeEventListener("baaro:ai-draft", onDraft);
-  }, []);
+  }, [setIsCreateOpen]);
 
   // 1. Chargement du flux
   const loadPosts = useCallback(
@@ -407,7 +409,7 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
       setPollData(null);
       setMediaFile(null);
       setMediaPreview(null);
-      setIsCreateOpen(false); // Ferme la modale
+      setIsCreateOpen?.(false); // Ferme la modale
       
       onRewardPoints?.(
         mediaUrl ? "publish_post_media" : "publish_post",
@@ -657,31 +659,11 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
   return (
     <div className="flex flex-col gap-6 max-w-2xl mx-auto w-full pb-20">
       
-      {/* 📌 EN-TÊTE DU FLUX AVEC LE BOUTON COMPACT EN HAUT À DROITE */}
-      {activeUserId && (
-        <div className="flex items-center justify-between px-1">
-          <div className="flex items-center gap-2 text-xs font-bold" style={{ color: COLORS.ivory }}>
-            <Sparkles size={15} style={{ color: COLORS.gold }} />
-            <span>Fil d'actualité</span>
-          </div>
-
-          <button
-            type="button"
-            onClick={() => setIsCreateOpen(!isCreateOpen)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full font-bold text-[11px] shadow-md transition-all active:scale-95 border border-amber-400/30 hover:brightness-110"
-            style={{ background: COLORS.gold, color: "#000" }}
-          >
-            {isCreateOpen ? <X size={14} /> : <Plus size={14} />}
-            <span>{isCreateOpen ? "Fermer" : "Créer un post"}</span>
-          </button>
-        </div>
-      )}
-
-      {/* 🌟 MODALE / OVERLAY FIXE SUR ÉCRAN POUR LA CRÉATION DE POST */}
+      {/* 🌟 MODALE / OVERLAY DE CRÉATION QUI S'AFFICHE AU PREMIER PLAN (SUR L'ÉCRAN VISIBLE) */}
       {activeUserId && isCreateOpen && (
         <div 
           className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200"
-          onClick={() => setIsCreateOpen(false)}
+          onClick={() => setIsCreateOpen?.(false)}
         >
           <div
             className="w-full max-w-lg rounded-t-3xl sm:rounded-2xl p-4 border shadow-2xl flex flex-col gap-3 max-h-[90vh] overflow-y-auto"
@@ -698,8 +680,8 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
               </div>
               <button
                 type="button"
-                onClick={() => setIsCreateOpen(false)}
-                className="p-1 rounded-full text-slate-400 hover:text-white hover:bg-white/10"
+                onClick={() => setIsCreateOpen?.(false)}
+                className="p-1 rounded-full text-slate-400 hover:text-white hover:bg-white/10 transition-colors"
               >
                 <X size={16} />
               </button>
