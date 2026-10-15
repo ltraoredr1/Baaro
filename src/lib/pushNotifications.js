@@ -1,17 +1,28 @@
 /**
  * BAARO — Notifications push (Web Push + Capacitor natif)
- * Version corrigée :
- * - Listeners installés avant register()
- * - Nettoyage ciblé des listeners (sans removeAllListeners)
- * - Gestion fiable du timeout et des erreurs
- * - Persistance via RPC upsert_push_token
- * - Compatibilité Web, Android et iOS
+ *
+ * Corrections :
+ * - Listeners installés avant register().
+ * - Listeners de réception et d'action conservés pendant la vie du module.
+ * - Évite de multiplier les listeners permanents.
+ * - Nettoyage ciblé des listeners temporaires.
+ * - Gestion du timeout et des erreurs.
+ * - Persistance via RPC upsert_push_token.
+ * - Compatibilité Web, Android et iOS.
  */
 
 import { supabase } from "../supabaseClient.js";
 
 const VAPID_PUBLIC = import.meta.env.VITE_VAPID_PUBLIC_KEY || "";
 const NATIVE_REGISTRATION_TIMEOUT_MS = 20000;
+
+// Listeners permanents : réception et action utilisateur.
+let nativeEventListenersPromise = null;
+const nativeEventListenerHandles = [];
+
+// -----------------------------------------------------------------------------
+// Utilitaires Web Push
+// -----------------------------------------------------------------------------
 
 function urlBase64ToUint8Array(base64String) {
   const normalized = String(base64String || "").trim();
@@ -34,6 +45,10 @@ function urlBase64ToUint8Array(base64String) {
 
   return output;
 }
+
+// -----------------------------------------------------------------------------
+// Utilitaires Capacitor
+// -----------------------------------------------------------------------------
 
 async function getCapacitor() {
   try {
@@ -75,7 +90,8 @@ export function getPermissionState() {
 
   try {
     if (window.Capacitor?.isNativePlatform?.()) {
-      // L'état natif doit être vérifié avec le plugin Capacitor.
+      // Pour le natif, utiliser checkPermissions() afin
+      // d'obtenir l'état réel fourni par Capacitor.
       return "default";
     }
   } catch {
@@ -90,6 +106,10 @@ export function getPermissionState() {
     return "unsupported";
   }
 }
+
+// -----------------------------------------------------------------------------
+// Authentification et sauvegarde des jetons
+// -----------------------------------------------------------------------------
 
 async function getAuthenticatedUser() {
   const { data, error } = await supabase.auth.getUser();
@@ -127,24 +147,85 @@ async function savePushToken({ token, platform }) {
   return user;
 }
 
+// -----------------------------------------------------------------------------
+// Listeners natifs permanents
+// -----------------------------------------------------------------------------
+
 /**
- * Active les notifications natives.
+ * Installe les listeners de réception et d'action une seule fois.
  *
- * Important : les listeners sont installés AVANT register(),
- * car l'événement registration peut être émis très rapidement.
- *
- * On retire uniquement les listeners créés ici : on ne doit pas
- * appeler removeAllListeners(), qui peut perturber d'autres composants.
+ * Ces listeners ne font pas partie du cycle d'enregistrement du jeton :
+ * ils ne doivent donc pas être supprimés lorsque register() réussit.
  */
+async function ensureNativeEventListeners(PushNotifications) {
+  if (nativeEventListenersPromise) {
+    return nativeEventListenersPromise;
+  }
+
+  nativeEventListenersPromise = (async () => {
+    const handles = [];
+
+    try {
+      handles.push(
+        await PushNotifications.addListener(
+          "pushNotificationReceived",
+          (notification) => {
+            console.log(
+              "[push] Notification reçue :",
+              notification
+            );
+          }
+        )
+      );
+
+      handles.push(
+        await PushNotifications.addListener(
+          "pushNotificationActionPerformed",
+          (action) => {
+            console.log(
+              "[push] Action utilisateur :",
+              action
+            );
+          }
+        )
+      );
+
+      nativeEventListenerHandles.push(...handles);
+
+      return true;
+    } catch (error) {
+      await Promise.allSettled(
+        handles.map((handle) => handle?.remove?.())
+      );
+
+      throw error;
+    }
+  })().catch((error) => {
+    // Autorise une nouvelle tentative si l'installation échoue.
+    nativeEventListenersPromise = null;
+    throw error;
+  });
+
+  return nativeEventListenersPromise;
+}
+
+// -----------------------------------------------------------------------------
+// Enregistrement natif Android / iOS
+// -----------------------------------------------------------------------------
+
 async function enableNativePush() {
   let PushNotifications;
 
   try {
-    ({ PushNotifications } = await import("@capacitor/push-notifications"));
+    ({ PushNotifications } = await import(
+      "@capacitor/push-notifications"
+    ));
   } catch (error) {
     return {
       ok: false,
-      error: error?.message || "Plugin push natif indisponible",
+      error:
+        error?.message ||
+        "Plugin push natif indisponible.",
     };
   }
 
@@ -157,7 +238,8 @@ async function enableNativePush() {
       permission.receive === "prompt" ||
       permission.receive === "prompt-with-rationale"
     ) {
-      permission = await PushNotifications.requestPermissions();
+      permission =
+        await PushNotifications.requestPermissions();
     }
   } catch (error) {
     return {
@@ -171,7 +253,7 @@ async function enableNativePush() {
   if (permission?.receive !== "granted") {
     return {
       ok: false,
-      error: "Permission notifications refusée",
+      error: "Permission notifications refusée.",
       permission: permission?.receive || "denied",
     };
   }
@@ -181,23 +263,47 @@ async function enableNativePush() {
   let platform = "android";
 
   try {
-    platform = Capacitor?.getPlatform?.() === "ios" ? "ios" : "android";
+    platform =
+      Capacitor?.getPlatform?.() === "ios"
+        ? "ios"
+        : "android";
   } catch {
     // Garde la valeur par défaut.
+  }
+
+  try {
+    // Ces listeners restent actifs après l'enregistrement du jeton.
+    await ensureNativeEventListeners(PushNotifications);
+  } catch (error) {
+    console.error(
+      "[push] Installation des listeners permanents :",
+      error
+    );
+
+    return {
+      ok: false,
+      error:
+        error?.message ||
+        "Impossible d'installer les listeners de notification.",
+    };
   }
 
   return new Promise((resolve) => {
     let settled = false;
     let timeoutId = null;
-    const listenerHandles = [];
+    const registrationHandles = [];
 
-    const cleanup = async () => {
+    /**
+     * Ne nettoie que les listeners temporaires d'enregistrement.
+     * Les listeners de réception et d'action restent actifs.
+     */
+    const cleanupRegistrationListeners = async () => {
       if (timeoutId !== null) {
         clearTimeout(timeoutId);
         timeoutId = null;
       }
 
-      const handles = listenerHandles.splice(0);
+      const handles = registrationHandles.splice(0);
 
       await Promise.allSettled(
         handles.map((handle) => handle?.remove?.())
@@ -208,14 +314,20 @@ async function enableNativePush() {
       if (settled) return;
 
       settled = true;
-      await cleanup();
+
+      await cleanupRegistrationListeners();
+
       resolve(result);
     };
 
     const onRegistration = async (registration) => {
+      if (settled) return;
+
       try {
         if (!registration?.value) {
-          throw new Error("Le système n'a fourni aucun jeton push.");
+          throw new Error(
+            "Le système n'a fourni aucun jeton push."
+          );
         }
 
         await savePushToken({
@@ -229,7 +341,10 @@ async function enableNativePush() {
           platform,
         });
       } catch (error) {
-        console.error("[push] Enregistrement du jeton natif :", error);
+        console.error(
+          "[push] Enregistrement du jeton natif :",
+          error
+        );
 
         await finish({
           ok: false,
@@ -241,7 +356,12 @@ async function enableNativePush() {
     };
 
     const onRegistrationError = async (error) => {
-      console.error("[push] Erreur d'enregistrement natif :", error);
+      if (settled) return;
+
+      console.error(
+        "[push] Erreur d'enregistrement natif :",
+        error
+      );
 
       await finish({
         ok: false,
@@ -254,42 +374,30 @@ async function enableNativePush() {
 
     const setup = async () => {
       try {
-        // Les listeners doivent exister avant l'appel à register().
-        listenerHandles.push(
+        // Les listeners temporaires doivent être installés avant register().
+        registrationHandles.push(
           await PushNotifications.addListener(
             "registration",
             onRegistration
           )
         );
 
-        listenerHandles.push(
+        if (settled) {
+          await cleanupRegistrationListeners();
+          return;
+        }
+
+        registrationHandles.push(
           await PushNotifications.addListener(
             "registrationError",
             onRegistrationError
           )
         );
 
-        // Ces deux listeners servent à observer les événements.
-        // Ils ne retirent pas les listeners des autres composants.
-        listenerHandles.push(
-          await PushNotifications.addListener(
-            "pushNotificationReceived",
-            (notification) => {
-              console.log("[push] Notification reçue :", notification);
-            }
-          )
-        );
-
-        listenerHandles.push(
-          await PushNotifications.addListener(
-            "pushNotificationActionPerformed",
-            (action) => {
-              console.log("[push] Action utilisateur :", action);
-            }
-          )
-        );
-
-        if (settled) return;
+        if (settled) {
+          await cleanupRegistrationListeners();
+          return;
+        }
 
         timeoutId = setTimeout(() => {
           void finish({
@@ -302,7 +410,10 @@ async function enableNativePush() {
 
         await PushNotifications.register();
       } catch (error) {
-        console.error("[push] Activation native :", error);
+        console.error(
+          "[push] Activation native :",
+          error
+        );
 
         await finish({
           ok: false,
@@ -317,6 +428,10 @@ async function enableNativePush() {
   });
 }
 
+// -----------------------------------------------------------------------------
+// Activation des notifications Web ou natives
+// -----------------------------------------------------------------------------
+
 export async function enablePushNotifications() {
   try {
     if (await isNativePlatform()) {
@@ -326,7 +441,8 @@ export async function enablePushNotifications() {
     if (!isPushSupported()) {
       return {
         ok: false,
-        error: "Notifications non supportées sur cet appareil.",
+        error:
+          "Notifications non supportées sur cet appareil.",
       };
     }
 
@@ -347,7 +463,8 @@ export async function enablePushNotifications() {
       };
     }
 
-    const permission = await Notification.requestPermission();
+    const permission =
+      await Notification.requestPermission();
 
     if (permission !== "granted") {
       return {
@@ -360,12 +477,14 @@ export async function enablePushNotifications() {
     // Le service worker doit être enregistré par l'application.
     const registration = await navigator.serviceWorker.ready;
 
-    let subscription = await registration.pushManager.getSubscription();
+    let subscription =
+      await registration.pushManager.getSubscription();
 
     if (!subscription) {
       subscription = await registration.pushManager.subscribe({
         userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC),
+        applicationServerKey:
+          urlBase64ToUint8Array(VAPID_PUBLIC),
       });
     }
 
@@ -386,10 +505,16 @@ export async function enablePushNotifications() {
 
     return {
       ok: false,
-      error: error?.message || "Erreur lors de l'activation des notifications.",
+      error:
+        error?.message ||
+        "Erreur lors de l'activation des notifications.",
     };
   }
 }
+
+// -----------------------------------------------------------------------------
+// Désactivation des notifications
+// -----------------------------------------------------------------------------
 
 export async function disablePushNotifications() {
   try {
@@ -398,11 +523,14 @@ export async function disablePushNotifications() {
 
     if (native) {
       const Capacitor = await getCapacitor();
-      const platform =
-        Capacitor?.getPlatform?.() === "ios" ? "ios" : "android";
 
-      // Ne pas appeler removeAllListeners() ici : les listeners
-      // peuvent appartenir à d'autres parties de l'application.
+      const platform =
+        Capacitor?.getPlatform?.() === "ios"
+          ? "ios"
+          : "android";
+
+      // Supprime les jetons du compte côté serveur.
+      // Les permissions système restent gérées par Android/iOS.
       const { error } = await supabase
         .from("push_tokens")
         .delete()
@@ -418,10 +546,14 @@ export async function disablePushNotifications() {
       };
     }
 
-    if (!isPushSupported()) return { ok: true };
+    if (!isPushSupported()) {
+      return { ok: true };
+    }
 
     const registration = await navigator.serviceWorker.ready;
-    const subscription = await registration.pushManager.getSubscription();
+
+    const subscription =
+      await registration.pushManager.getSubscription();
 
     let token = null;
 
@@ -433,13 +565,13 @@ export async function disablePushNotifications() {
       if (!unsubscribed) {
         return {
           ok: false,
-          error: "Le navigateur n'a pas pu désactiver l'abonnement push.",
+          error:
+            "Le navigateur n'a pas pu désactiver l'abonnement push.",
         };
       }
     }
 
-    // Supprime le jeton correspondant même si l'abonnement navigateur
-    // a déjà disparu.
+    // Supprime uniquement le jeton Web correspondant.
     if (token) {
       const { error } = await supabase
         .from("push_tokens")
@@ -457,10 +589,16 @@ export async function disablePushNotifications() {
 
     return {
       ok: false,
-      error: error?.message || "Erreur lors de la désactivation des notifications.",
+      error:
+        error?.message ||
+        "Erreur lors de la désactivation des notifications.",
     };
   }
 }
+
+// -----------------------------------------------------------------------------
+// Nettoyage des anciens jetons Web
+// -----------------------------------------------------------------------------
 
 export async function pruneCurrentUserPushTokens() {
   try {
@@ -474,12 +612,14 @@ export async function pruneCurrentUserPushTokens() {
     }
 
     const user = await getAuthenticatedUser();
+
     const registration = await navigator.serviceWorker.ready;
-    const subscription = await registration.pushManager.getSubscription();
+
+    const subscription =
+      await registration.pushManager.getSubscription();
 
     if (!subscription) {
-      // Aucun abonnement actif : on ne supprime pas arbitrairement
-      // tous les jetons de l'utilisateur.
+      // Sans abonnement actif, ne supprime pas arbitrairement les jetons.
       return { ok: true };
     }
 
@@ -500,7 +640,9 @@ export async function pruneCurrentUserPushTokens() {
 
     return {
       ok: false,
-      error: error?.message || "Erreur lors du nettoyage des jetons push.",
+      error:
+        error?.message ||
+        "Erreur lors du nettoyage des jetons push.",
     };
   }
 }
