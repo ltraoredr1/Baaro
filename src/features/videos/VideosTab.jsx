@@ -96,17 +96,23 @@ export function VideosTab({ onRewardPoints, onExit }) {
 
   return (
     <>
-      {/* CONTENEUR PRINCIPAL NET ALIGNÉ SUR LE HEADER GLOBAL */}
-      <div className="w-full max-w-2xl mx-auto flex flex-col gap-6 pb-20 pt-2">
-        {/* LISTE DES VIDÉOS */}
+      {/* CONTENEUR MAGNÉTIQUE PLEIN ÉCRAN (SNAP VERTICAL) */}
+      <div className="w-full h-[calc(100vh-env(safe-area-inset-top))] overflow-y-scroll snap-y snap-mandatory scrollbar-none flex flex-col bg-black">
         {loadError ? (
-          <FeedError message={loadError} onRetry={loadVideos} />
+          <div className="flex items-center justify-center h-full">
+            <FeedError message={loadError} onRetry={loadVideos} />
+          </div>
         ) : visibleVideos.length === 0 ? (
-          <FeedEmpty onPublish={openUpload} />
+          <div className="flex items-center justify-center h-full">
+            <FeedEmpty onPublish={openUpload} />
+          </div>
         ) : (
-          <div className="flex flex-col gap-6">
-            {visibleVideos.map((video) => (
-              <div key={video.id} className="relative rounded-2xl overflow-hidden border border-white/10 bg-black shadow-xl">
+          visibleVideos.map((video) => (
+            <div 
+              key={video.id} 
+              className="relative w-full h-[calc(100vh-env(safe-area-inset-top))] shrink-0 snap-start snap-always flex items-center justify-center bg-black"
+            >
+              <div className="w-full h-full max-w-2xl relative flex items-center justify-center overflow-hidden">
                 <VideoCard
                   video={video}
                   sound={getVideoSound(video)}
@@ -119,13 +125,13 @@ export function VideosTab({ onRewardPoints, onExit }) {
 
                 {/* BOUTON POURBOIRE (TIP) */}
                 {user?.id && video.user_id && video.user_id !== user.id && (
-                  <div className="absolute bottom-4 right-4 z-30">
+                  <div className="absolute bottom-20 right-4 z-30">
                     <TipButton recipientId={video.user_id} videoId={video.id} compact />
                   </div>
                 )}
               </div>
-            ))}
-          </div>
+            </div>
+          ))
         )}
       </div>
 
