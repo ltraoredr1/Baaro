@@ -363,27 +363,16 @@ export function MainShell() {
       )}
 
       {/* =====================================================
-          BOUTON FLOTTANT TRANSPARENT & POUVOIR (MODE VIDÉO)
+          BOUTON FLOTTANT TRANSPARENT (MODE VIDÉO)
           ===================================================== */}
       {isImmersive && (
-        <div className="fixed top-4 left-4 z-[70] flex items-center gap-2">
-          {/* Petit bouton transparent pour afficher/masquer la navigation */}
+        <div className="fixed top-4 left-4 z-[70] flex items-center">
           <button
             onClick={() => setShowUi((prev) => !prev)}
-            className="px-3 py-1.5 rounded-full bg-black/40 backdrop-blur-xl border border-white/20 text-white text-xs font-semibold shadow-lg hover:bg-black/60 transition-all flex items-center gap-1.5"
+            className="px-3.5 py-1.5 rounded-full bg-black/40 backdrop-blur-xl border border-white/20 text-white text-xs font-semibold shadow-lg hover:bg-black/60 transition-all flex items-center gap-1.5"
             title={showUi ? "Masquer les menus" : "Afficher les menus"}
           >
             <span>{showUi ? "✕ Fermer" : "☰ Menus"}</span>
-          </button>
-
-          {/* Bouton Pouvoir / Quitter vers le fil */}
-          <button
-            onClick={() => setActiveTab("feed")}
-            className="p-2 rounded-full bg-amber-500/20 backdrop-blur-xl border border-amber-500/40 text-amber-400 shadow-lg hover:bg-amber-500/30 transition-all flex items-center justify-center"
-            title="Quitter vers le Fil"
-            aria-label="Alimentation / Retour fil"
-          >
-            ⏻
           </button>
         </div>
       )}
@@ -484,7 +473,7 @@ export function MainShell() {
       {!isAnonymous && (
         <FloatingAiAssistant
           userProfile={userProfile}
-          hidden={activeTab === "assistant"}
+          hidden={activeTab === "assistant" || activeTab === "videos"}
         />
       )}
     </div>
