@@ -86,8 +86,7 @@ export function MainShell() {
   const [searchModalOpen, setSearchModalOpen] = useState(false);
   const [forceOnboarding, setForceOnboarding] = useState(false);
 
-  // --- ÉTAT GLOBAL POUR LA MODALE DE CRÉATION & L'AFFICHAGE UI IMMERSIF ---
-  const [isFeedCreateOpen, setIsFeedCreateOpen] = useState(false);
+  // --- ÉTAT GLOBAL POUR L'AFFICHAGE UI IMMERSIF ---
   const [showUi, setShowUi] = useState(false);
 
   const COLORS = {
@@ -145,15 +144,13 @@ export function MainShell() {
               notifDrawerOpen ||
               searchModalOpen ||
               inspectingProfileId ||
-              forceOnboarding ||
-              isFeedCreateOpen
+              forceOnboarding
             ) {
               setNotifDrawerOpen(false);
               setSearchModalOpen(false);
               setInspectingProfileId(null);
               setProfileReadOnly(false);
               setForceOnboarding(false);
-              setIsFeedCreateOpen(false);
               return;
             }
 
@@ -193,7 +190,6 @@ export function MainShell() {
     searchModalOpen,
     inspectingProfileId,
     forceOnboarding,
-    isFeedCreateOpen,
   ]);
 
   /* =========================================================
@@ -249,8 +245,6 @@ export function MainShell() {
       user_id: id,
       onOpenProfile: setInspectingProfileId,
       onOpenDebates: () => setActiveTab("debates"),
-      isCreateOpen: isFeedCreateOpen,
-      setIsCreateOpen: setIsFeedCreateOpen,
     },
 
     friends: {
@@ -342,7 +336,7 @@ export function MainShell() {
       />
 
       {/* =====================================================
-          HEADER (AFFICHÉ SI NON IMMERSIF OU SI SHOWUI EST ACTIF)
+          HEADER (SANS INTERFÉRENCE AVEC LA CRÉATION GLOBALE)
           ===================================================== */}
       {(!isImmersive || showUi) && (
         <Header
@@ -352,13 +346,6 @@ export function MainShell() {
           onOpenProfile={() => setInspectingProfileId(id)}
           onOpenNotifications={() => setNotifDrawerOpen(true)}
           onOpenSearch={() => setSearchModalOpen(true)}
-          isCreateOpen={activeTab === "feed" ? isFeedCreateOpen : false}
-          onToggleCreate={() => {
-            if (activeTab !== "feed") {
-              setActiveTab("feed");
-            }
-            setIsFeedCreateOpen((prev) => !prev);
-          }}
         />
       )}
 
