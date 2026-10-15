@@ -86,6 +86,9 @@ export function MainShell() {
   const [searchModalOpen, setSearchModalOpen] = useState(false);
   const [forceOnboarding, setForceOnboarding] = useState(false);
 
+  // --- ÉTAT GLOBAL POUR LA MODALE DE CRÉATION DE POST ---
+  const [isFeedCreateOpen, setIsFeedCreateOpen] = useState(false);
+
   const COLORS = {
     ...FALLBACK_COLORS,
     ...(THEME_COLORS || {}),
@@ -137,26 +140,22 @@ export function MainShell() {
         backListener = await CapApp.addListener(
           "backButton",
           ({ canGoBack }) => {
-            /*
-             * Fermer les overlays/modales en priorité.
-             */
             if (
               notifDrawerOpen ||
               searchModalOpen ||
               inspectingProfileId ||
-              forceOnboarding
+              forceOnboarding ||
+              isFeedCreateOpen
             ) {
               setNotifDrawerOpen(false);
               setSearchModalOpen(false);
               setInspectingProfileId(null);
               setProfileReadOnly(false);
               setForceOnboarding(false);
+              setIsFeedCreateOpen(false);
               return;
             }
 
-            /*
-             * Retour depuis une page secondaire.
-             */
             if (
               activeTab === "videos" ||
               activeTab === "privacy"
@@ -165,25 +164,16 @@ export function MainShell() {
               return;
             }
 
-            /*
-             * Retour général vers le Fil.
-             */
             if (activeTab !== "feed") {
               setActiveTab("feed");
               return;
             }
 
-            /*
-             * Déjà sur le Fil : fermeture de l'application native.
-             */
             CapApp.exitApp();
           }
         );
       } catch {
-        /*
-         * Web : Capacitor n'est pas disponible,
-         * aucune action nécessaire.
-         */
+        // Web
       }
     };
 
@@ -191,7 +181,6 @@ export function MainShell() {
 
     return () => {
       cancelled = true;
-
       if (backListener) {
         backListener.remove();
       }
@@ -203,30 +192,23 @@ export function MainShell() {
     searchModalOpen,
     inspectingProfileId,
     forceOnboarding,
+    isFeedCreateOpen,
   ]);
 
   /* =========================================================
      WELCOME TOAST
      ========================================================= */
   useEffect(() => {
-    if (!id) {
-      return;
-    }
+    if (!id) return;
 
     try {
-      if (localStorage.getItem(WELCOME_TOAST_KEY)) {
-        return;
-      }
-    } catch {
-      // localStorage indisponible
-    }
+      if (localStorage.getItem(WELCOME_TOAST_KEY)) return;
+    } catch {}
 
     const timer = setTimeout(() => {
       try {
         localStorage.setItem(WELCOME_TOAST_KEY, "1");
-      } catch {
-        // localStorage indisponible
-      }
+      } catch {}
 
       if (isAnonymous) {
         showToast(
@@ -241,31 +223,14 @@ export function MainShell() {
           4500
         );
       }
-
     }, 900);
 
-    return () => {
-      clearTimeout(timer);
-    };
-  }, [
-    id,
-    isAnonymous,
-    showToast,
-  ]);
+    return () => clearTimeout(timer);
+  }, [id, isAnonymous, showToast]);
 
-  /* =========================================================
-     LAST TAB
-     ========================================================= */
   useEffect(() => {
     saveLastTab(activeTab);
   }, [activeTab]);
-
-  /* =========================================================
-     THEME / ACTIVE TAB
-     ========================================================= */
-  const themeBg =
-    THEME_BG_MAP[currentTheme] ||
-    THEME_BG_MAP.midnight;
 
   const isImmersive = activeTab === "videos";
 
@@ -283,6 +248,8 @@ export function MainShell() {
       user_id: id,
       onOpenProfile: setInspectingProfileId,
       onOpenDebates: () => setActiveTab("debates"),
+      isCreateOpen: isFeedCreateOpen,
+      setIsCreateOpen: setIsFeedCreateOpen,
     },
 
     friends: {
@@ -331,8 +298,7 @@ export function MainShell() {
       onOpenProfile: setInspectingProfileId,
     },
 
-    offline: {
-    },
+    offline: {},
 
     assistant: {
       id,
@@ -345,10 +311,8 @@ export function MainShell() {
       setUserProfile,
       currentTheme,
       onSelectTheme: setCurrentTheme,
-      onReplayOnboarding: () =>
-        setForceOnboarding(true),
-      onOpenPrivacy: () =>
-        setActiveTab("privacy"),
+      onReplayOnboarding: () => setForceOnboarding(true),
+      onOpenPrivacy: () => setActiveTab("privacy"),
     },
 
     shop: {
@@ -359,9 +323,6 @@ export function MainShell() {
     economy: { id },
   };
 
-  /* =========================================================
-     RENDER
-     ========================================================= */
   return (
     <div
       className="min-h-screen min-h-[100dvh] flex flex-col transition-colors duration-500"
@@ -380,27 +341,28 @@ export function MainShell() {
       />
 
       {/* =====================================================
-          HEADER
+          HEADER AVEC CONTRÔLE DE CRÉATION INTÉGRÉ
           ===================================================== */}
       {!isImmersive && (
         <Header
           lang={lang}
           setLang={setLang}
           userProfile={userProfile}
-          onOpenProfile={() =>
-            setInspectingProfileId(id)
-          }
-          onOpenNotifications={() =>
-            setNotifDrawerOpen(true)
-          }
-          onOpenSearch={() =>
-            setSearchModalOpen(true)
-          }
+          onOpenProfile={() => setInspectingProfileId(id)}
+          onOpenNotifications={() => setNotifDrawerOpen(true)}
+          onOpenSearch={() => setSearchModalOpen(true)}
+          isCreateOpen={activeTab === "feed" ? isFeedCreateOpen : false}
+          onToggleCreate={() => {
+            if (activeTab !== "feed") {
+              setActiveTab("feed");
+            }
+            setIsFeedCreateOpen((prev) => !prev);
+          }}
         />
       )}
 
       {/* =====================================================
-          MODE IMMERSIF
+          MODE IMMERSIF OU NORMAL
           ===================================================== */}
       {isImmersive ? (
         <main
@@ -429,9 +391,6 @@ export function MainShell() {
           </ErrorBoundary>
         </main>
       ) : (
-        /* ===================================================
-           MODE NORMAL
-           =================================================== */
         <div className="max-w-7xl mx-auto w-full px-3 sm:px-6 pt-4 sm:pt-6 flex-1 grid grid-cols-1 md:grid-cols-4 gap-6">
           <div className="md:col-span-1">
             <Navigation
@@ -468,9 +427,6 @@ export function MainShell() {
         </div>
       )}
 
-      {/* =====================================================
-          NAVIGATION MOBILE EN MODE IMMERSIF
-          ===================================================== */}
       {isImmersive && (
         <div className="md:hidden">
           <Navigation
@@ -480,9 +436,6 @@ export function MainShell() {
         </div>
       )}
 
-      {/* =====================================================
-          PROFILE MODAL
-          ===================================================== */}
       {inspectingProfileId && (
         <ProfileModal
           id={inspectingProfileId}
@@ -506,18 +459,12 @@ export function MainShell() {
         />
       )}
 
-      {/* =====================================================
-          NOTIFICATIONS
-          ===================================================== */}
       <NotificationDrawer
         isOpen={notifDrawerOpen}
         onClose={() => setNotifDrawerOpen(false)}
         user_id={id}
       />
 
-      {/* =====================================================
-          GLOBAL SEARCH
-          ===================================================== */}
       <GlobalSearchModal
         isOpen={searchModalOpen}
         onClose={() => setSearchModalOpen(false)}
@@ -525,17 +472,10 @@ export function MainShell() {
           setProfileReadOnly(true);
           setInspectingProfileId(pid);
         }}
-        onSelectTab={(tid) =>
-          setActiveTab(tid)
-        }
-        onSelectShop={() =>
-          setActiveTab("shop")
-        }
+        onSelectTab={(tid) => setActiveTab(tid)}
+        onSelectShop={() => setActiveTab("shop")}
       />
 
-      {/* =====================================================
-          ASSISTANT IA FLOTTANT (visible sur tous les onglets)
-          ===================================================== */}
       {!isAnonymous && !isImmersive && (
         <FloatingAiAssistant
           userProfile={userProfile}
