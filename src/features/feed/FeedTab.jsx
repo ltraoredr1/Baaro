@@ -936,7 +936,7 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
 
             {post.media_url && (
               <div
-                className="rounded-xl overflow-hidden border"
+                className="rounded-xl overflow-hidden border bg-black/40 flex items-center justify-center"
                 style={{ borderColor: COLORS.border }}
               >
                 {post.media_type?.startsWith("video") ? (
@@ -944,7 +944,7 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
                     src={post.media_url}
                     controls
                     preload="metadata"
-                    className="w-full max-h-80 object-cover bg-black"
+                    className="w-full max-h-[500px] object-contain"
                     onEnded={() => recordFeedEvent(post.id, "complete")}
                   />
                 ) : (
@@ -952,7 +952,7 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
                     src={post.media_url}
                     alt=""
                     loading="lazy"
-                    className="w-full max-h-80 object-cover"
+                    className="w-full max-h-[500px] object-contain"
                   />
                 )}
               </div>
