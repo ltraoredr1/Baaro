@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "../../../supabaseClient.js";
 
-// Lecture du flux : vidéo visible, son, progression, gestion éco-données.
+// Lecture du flux : vidéo visible, son, progression, gestion éco-données et arrêt automatique.
 export function useFeedPlayback({ visibleVideos }) {
   const [playingId, setPlayingId] = useState(null);
   const [muted, setMuted] = useState(true);
@@ -18,43 +18,45 @@ export function useFeedPlayback({ visibleVideos }) {
 
     const observer = new IntersectionObserver(
       (entries) => {
-        const visible = entries
-          .filter(
-            (entry) => entry.isIntersecting && entry.intersectionRatio >= 0.75,
-          )
-          .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+        entries.forEach((entry) => {
+          const video = entry.target;
+          const id = video.dataset.id;
 
-        // 1. ARRÊTER ET COUPER LE FLUX NETWORK DE TOUTES LES VIDÉOS NON VISIBLES
-        Object.values(videoRefs.current).forEach((el) => {
-          if (!el) return;
-          if (visible?.target === el) return;
-
-          el.pause();
-
-          // ÉCONOMIE DE DONNÉES : Si la vidéo sort complètement de l'écran, couper la requête réseau
-          const isFar = !entries.some(
-            (entry) => entry.target === el && entry.isIntersecting
-          );
-          if (isFar && el.src) {
-            el.dataset.savedSrc = el.src; // Sauvegarder l'URL d'origine
-            el.removeAttribute("src"); // Interrompt le téléchargement en cours
-            el.load(); // Libère le buffer réseau
+          // Si la vidéo n'est plus suffisamment visible, on la met en pause et on coupe son src pour économiser la data
+          if (!entry.isIntersecting || entry.intersectionRatio < 0.6) {
+            video.pause();
+            if (video.src) {
+              video.dataset.savedSrc = video.src;
+              video.removeAttribute("src");
+              video.load();
+            }
+            if (playingId === id) {
+              setPlayingId(null);
+            }
           }
         });
+
+        // Trouver la vidéo la plus visible à l'écran
+        const visible = entries
+          .filter(
+            (entry) => entry.isIntersecting && entry.intersectionRatio >= 0.6,
+          )
+          .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
 
         if (!visible) return;
 
         const video = visible.target;
         const id = video.dataset.id;
-        setPlayingId(id);
 
-        // 2. RESTAURER LA VIDÉO LORSQU'ELLE REVIENT À L'ÉCRAN
+        // Restaurer le src si nécessaire
         if (!video.src && video.dataset.savedSrc) {
           video.src = video.dataset.savedSrc;
           video.load();
         }
 
-        // Compteur de vues
+        setPlayingId(id);
+
+        // Compteur de vues unique
         if (id && !viewedRef.current.has(id)) {
           viewedRef.current.add(id);
           supabase
@@ -64,6 +66,7 @@ export function useFeedPlayback({ visibleVideos }) {
             });
         }
 
+        // Gestion de l'autoplay sécurisé (forcé en muted si requis par le navigateur)
         video.muted = mutedRef.current || video.dataset.muteOriginal === "1";
         video.play().catch(() => {
           video.muted = true;
@@ -72,7 +75,7 @@ export function useFeedPlayback({ visibleVideos }) {
           video.play().catch(() => {});
         });
       },
-      { threshold: [0.2, 0.75, 1.0] }
+      { threshold: [0.3, 0.6, 0.9] },
     );
 
     Object.values(videoRefs.current).forEach((el) => {
@@ -80,7 +83,7 @@ export function useFeedPlayback({ visibleVideos }) {
     });
 
     return () => observer.disconnect();
-  }, [visibleVideos]);
+  }, [visibleVideos, playingId]);
 
   const syncAudioTime = (videoEl, audio) => {
     if (!videoEl || !audio) return;
@@ -91,7 +94,7 @@ export function useFeedPlayback({ visibleVideos }) {
       try {
         audio.currentTime = t;
       } catch {
-        // Métadonnées pas encore chargées
+        // métadonnées pas encore chargées
       }
     }
   };
@@ -145,7 +148,7 @@ export function useFeedPlayback({ visibleVideos }) {
         await video.requestFullscreen();
       }
     } catch {
-      // Fullscreen bloqué par le navigateur
+      // Plein écran bloqué par le navigateur
     }
   };
 
