@@ -14,6 +14,7 @@ import { useVideoCreator } from "./hooks/useVideoCreator.js";
 import { useVideoFeed } from "./hooks/useVideoFeed.js";
 import VideoNextGenStudio from "./VideoNextGenStudio.jsx";
 import { useToast } from "../../components/ToastContext.jsx";
+import { EngagementList } from "../../components/EngagementList.jsx";
 
 export function VideosTab({ onRewardPoints, onExit }) {
   const feed = useVideoFeed();
@@ -53,22 +54,28 @@ export function VideosTab({ onRewardPoints, onExit }) {
     videoRefs: playback.videoRefs,
     onRewardPoints,
   });
-  const commentsState = useVideoComments({ user, setVideos, onRewardPoints });
+
+  const commentsState = useVideoComments({
+    user,
+    setVideos,
+    onRewardPoints,
+  });
+
   const { showToast } = useToast();
 
   const openUpload = () => creator.setShowUpload(true);
 
-  // « Utiliser ce son » : crée une vidéo avec le son de la vidéo vue.
-  // Son choisi de la vidéo si elle en a un, sinon l'audio de la vidéo elle-même.
   const handleUseSound = (video, sound) => {
     const handle = video.profiles?.handle?.replace(/^@/, "") || "membre";
     const title = sound?.title || `Son original · @${handle}`;
+
     soundPicker.chooseSound({
       id: video.sound_id || null,
       title,
       artist: sound?.artist || `@${handle}`,
       audio_url: sound?.url || video.video_url,
     });
+
     openUpload();
     showToast(`Son « ${title} » sélectionné`, "success");
   };
@@ -79,9 +86,9 @@ export function VideosTab({ onRewardPoints, onExit }) {
     onUseSound: handleUseSound,
   };
 
-  // Studio NextGen : « Continuer » ferme le studio et ouvre la publication.
-  // tools = clés des outils cochés (ex. ["ai", "remix"]) ; pas encore exploitées.
   const [studioOpen, setStudioOpen] = useState(false);
+  const [viewersVideoId, setViewersVideoId] = useState(null);
+
   const handleStudioCreate = () => {
     setStudioOpen(false);
     openUpload();
@@ -121,6 +128,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
               user={user}
               playback={playback}
               actions={actions}
+              onShowViewers={() => setViewersVideoId(video.id)}
             />
           ))
         )}
@@ -128,7 +136,9 @@ export function VideosTab({ onRewardPoints, onExit }) {
 
       {commentsState.showComments && (
         <CommentsSheet
-          comments={commentsState.comments[commentsState.showComments] || []}
+          comments={
+            commentsState.comments[commentsState.showComments] || []
+          }
           newComment={commentsState.newComment}
           setNewComment={commentsState.setNewComment}
           onSend={commentsState.sendComment}
@@ -147,6 +157,16 @@ export function VideosTab({ onRewardPoints, onExit }) {
         onClose={() => setStudioOpen(false)}
         onCreate={handleStudioCreate}
       />
+
+      {viewersVideoId && (
+        <EngagementList
+          type="videoViews"
+          targetId={viewersVideoId}
+          ownerId={user?.id}
+          viewerId={user?.id}
+          onClose={() => setViewersVideoId(null)}
+        />
+      )}
     </>
   );
 }
