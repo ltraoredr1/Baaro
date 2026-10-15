@@ -267,14 +267,13 @@ export function FeedTab({
           .insert({ post_id: postId, user_id: activeUserId });
         if (error) throw error;
 
-        // Notification envoyée au créateur de la publication
         if (post.author_id && post.author_id !== activeUserId) {
           await supabase.from("notifications").insert({
             user_id: post.author_id,
             actor_id: activeUserId,
             type: "repost",
-            post_id: postId,
-            content: "a républié votre publication.",
+            source_id: postId,
+            message: "a républié votre publication.",
           });
         }
 
@@ -337,6 +336,95 @@ export function FeedTab({
         )
       );
       handleDbError(error, showToast, "Impossible d'aimer");
+    }
+  };
+
+  // Gestion des commentaires
+  const loadComments = async (postId) => {
+    if (!postId) return;
+    try {
+      const { data, error } = await supabase
+        .from("comments")
+        .select("id, text, created_at, author_id, profiles:author_id (display_name, handle)")
+        .eq("post_id", postId)
+        .order("created_at", { ascending: true })
+        .limit(50);
+      if (error) throw error;
+      const rows = (data || []).map((c) => ({
+        id: c.id,
+        text: c.text,
+        author: c.profiles?.display_name || c.profiles?.handle || "Membre",
+        author_id: c.author_id,
+        created_at: c.created_at,
+      }));
+      setCommentsMap((prev) => ({ ...prev, [postId]: rows }));
+    } catch (err) {
+      handleDbError(err, showToast, "Impossible de charger les commentaires");
+    }
+  };
+
+  const toggleComments = (postId) => {
+    const next = !commentOpen[postId];
+    setCommentOpen((prev) => ({ ...prev, [postId]: next }));
+    if (next) loadComments(postId);
+  };
+
+  const handleAddComment = async (postId) => {
+    const text = (newCommentText[postId] || "").trim();
+    if (!text) return;
+    if (!activeUserId) {
+      showToast("Vous devez être connecté", "error");
+      return;
+    }
+    try {
+      const { data: created, error } = await supabase
+        .from("comments")
+        .insert({ post_id: postId, author_id: activeUserId, text })
+        .select("id")
+        .single();
+      if (error) throw error;
+
+      const newComment = {
+        id: created?.id || `c_${Date.now()}`,
+        author: "Vous",
+        text,
+        author_id: activeUserId,
+      };
+      setCommentsMap((prev) => ({ ...prev, [postId]: [...(prev[postId] || []), newComment] }));
+      setPosts((prev) =>
+        prev.map((p) =>
+          p.id === postId ? { ...p, comments_count: (p.comments_count || 0) + 1 } : p
+        )
+      );
+      setNewCommentText((prev) => ({ ...prev, [postId]: "" }));
+      showPointsReward?.(1, "Commentaire ajouté");
+    } catch (error) {
+      handleDbError(error, showToast, "Impossible de commenter");
+    }
+  };
+
+  const handleDeleteComment = async (postId, commentId) => {
+    if (!activeUserId) return;
+    if (!window.confirm("Supprimer ce commentaire ?")) return;
+    try {
+      const { error } = await supabase
+        .from("comments")
+        .delete()
+        .eq("id", commentId)
+        .eq("author_id", activeUserId);
+      if (error) throw error;
+      setCommentsMap((prev) => ({
+        ...prev,
+        [postId]: (prev[postId] || []).filter((c) => c.id !== commentId),
+      }));
+      setPosts((prev) =>
+        prev.map((p) =>
+          p.id === postId ? { ...p, comments_count: Math.max(0, (p.comments_count || 1) - 1) } : p
+        )
+      );
+      showToast("Commentaire supprimé", "success");
+    } catch (error) {
+      handleDbError(error, showToast, "Suppression impossible");
     }
   };
 
@@ -424,7 +512,7 @@ export function FeedTab({
   return (
     <div className="flex flex-col gap-6 max-w-2xl mx-auto w-full pb-20">
       
-      {/* Modale de création */}
+      {/* Modale de création avec bouton pliable pour le texte et IA */}
       {activeUserId && isCreateOpen && (
         <div 
           className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200"
@@ -607,8 +695,11 @@ export function FeedTab({
             </div>
 
             <div className="text-base leading-relaxed whitespace-pre-wrap" style={{ color: COLORS.ivory }}>
-              <RichTextRenderer content={post.text} />
+              {translatedMap[post.id] ? translatedMap[post.id] : <RichTextRenderer content={post.text} />}
             </div>
+            {translatedMap[post.id] && (
+              <p className="text-[10px]" style={{ color: COLORS.muted }}>Traduit par BAARO</p>
+            )}
 
             {post.media_url && (
               <div className="rounded-xl overflow-hidden border bg-black/40 flex items-center justify-center">
@@ -616,66 +707,106 @@ export function FeedTab({
               </div>
             )}
 
-            {/* Actions : Like & Repost avec compteurs */}
+            <PollCard postId={post.id} user_id={activeUserId} />
+            <SocialPostEnhancements post={post} user_id={activeUserId} />
+
+            {/* Barre d'actions complète (Likes, Reposts, Commentaires, Traduction, IA, Tip) */}
             <div className="flex items-center justify-between gap-2 pt-2 border-t flex-wrap" style={{ borderColor: COLORS.border }}>
-              <div className="flex items-center gap-4 text-[11px] font-medium" style={{ color: COLORS.muted }}>
+              <div className="flex items-center gap-3 text-[11px] font-medium flex-wrap" style={{ color: COLORS.muted }}>
+                
+                {/* Bouton Like */}
                 <button
                   type="button"
                   onClick={() => handleLike(post.id)}
                   className="flex items-center gap-1 transition active:scale-95"
                   style={{ color: likedPosts[post.id] ? "#F43F5E" : COLORS.muted }}
                 >
-                  <Heart size={16} fill={likedPosts[post.id] ? "currentColor" : "none"} />
+                  <Heart size={15} fill={likedPosts[post.id] ? "currentColor" : "none"} />
                   {Number(post.likes || 0)}
                 </button>
 
+                {/* Bouton Repost */}
                 <button
                   type="button"
                   onClick={() => handleRepost(post)}
                   className="flex items-center gap-1 transition active:scale-95"
                   style={{ color: repostedPosts[post.id] ? "#10B981" : COLORS.muted }}
-                  title="Républier cette publication"
                 >
-                  <Repeat2 size={16} />
+                  <Repeat2 size={15} />
                   {Number(post.reposts_count || 0)}
                 </button>
 
                 {post.author_id === activeUserId && (
-                  <div className="flex items-center gap-2 ml-2">
-                    <button
-                      type="button"
-                      onClick={() => setEngagement({ type: "postLikes", id: post.id })}
-                      className="text-[10px] underline hover:text-white"
-                    >
-                      J'aime
-                    </button>
+                  <div className="flex items-center gap-1.5 ml-1">
+                    <button type="button" onClick={() => setEngagement({ type: "postLikes", id: post.id })} className="text-[10px] underline hover:text-white">J'aime</button>
                     <span>·</span>
-                    <button
-                      type="button"
-                      onClick={() => setEngagement({ type: "postReposts", id: post.id })}
-                      className="text-[10px] underline hover:text-white"
-                    >
-                      Reposts
-                    </button>
+                    <button type="button" onClick={() => setEngagement({ type: "postReposts", id: post.id })} className="text-[10px] underline hover:text-white">Reposts</button>
                     <span>·</span>
-                    <button
-                      type="button"
-                      onClick={() => setEngagement({ type: "postViews", id: post.id })}
-                      className="text-[10px] underline hover:text-white flex items-center gap-1"
-                    >
-                      <Eye size={12} /> Vues
-                    </button>
+                    <button type="button" onClick={() => setEngagement({ type: "postViews", id: post.id })} className="text-[10px] underline hover:text-white flex items-center gap-0.5"><Eye size={11} /> Vues</button>
                   </div>
                 )}
               </div>
 
+              {/* Boutons secondaires (Commentaires, Traduction, IA, Tip) */}
               <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => toggleComments(post.id)}
+                  className="flex items-center gap-1 text-xs transition hover:opacity-80"
+                  style={{ color: COLORS.muted }}
+                >
+                  <MessageCircle size={15} />
+                  {post.comments_count || 0}
+                </button>
+
+                <TranslateButton
+                  text={typeof post.text === "string" ? post.text : ""}
+                  isTranslated={!!translatedMap[post.id]}
+                  preferredLang="fr"
+                  onTranslated={(translated) => setTranslatedMap((prev) => ({ ...prev, [post.id]: translated }))}
+                  onClear={() => setTranslatedMap((prev) => ({ ...prev, [post.id]: null }))}
+                />
+
                 <AskAiButton text={typeof post.text === "string" ? post.text : ""} />
+
                 {post.author_id !== activeUserId && (
                   <TipButton recipientId={post.author_id} postId={post.id} compact />
                 )}
               </div>
             </div>
+
+            {/* Section des commentaires déroulante */}
+            {commentOpen[post.id] && (
+              <div className="pt-3 border-t space-y-2" style={{ borderColor: COLORS.border }}>
+                {(commentsMap[post.id] || []).map((c) => (
+                  <div key={c.id} className="text-xs flex items-start justify-between gap-2" style={{ color: COLORS.muted }}>
+                    <div>
+                      <span className="font-bold" style={{ color: COLORS.ivory }}>{c.author}</span> : {c.text}
+                    </div>
+                    {c.author_id === activeUserId && (
+                      <button type="button" onClick={() => handleDeleteComment(post.id, c.id)} className="shrink-0 p-1 text-red-400 hover:text-red-300">
+                        <Trash2 size={12} />
+                      </button>
+                    )}
+                  </div>
+                ))}
+                {activeUserId && (
+                  <div className="flex gap-2 pt-1">
+                    <input
+                      value={newCommentText[post.id] || ""}
+                      onChange={(e) => setNewCommentText((prev) => ({ ...prev, [post.id]: e.target.value }))}
+                      onKeyDown={(e) => e.key === "Enter" && handleAddComment(post.id)}
+                      placeholder="Ajouter un commentaire..."
+                      className="flex-1 min-w-0 px-3 py-1.5 rounded-lg border text-xs outline-none"
+                      style={{ background: COLORS.surface2, borderColor: COLORS.border, color: COLORS.ivory }}
+                    />
+                    <button type="button" onClick={() => handleAddComment(post.id)} className="p-1.5 rounded-lg" style={{ background: COLORS.gold, color: "#000" }}>
+                      <Send size={13} />
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
           </article>
         ))}
       </div>
