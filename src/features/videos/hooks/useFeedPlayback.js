@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "../../../supabaseClient.js";
 
-// Lecture du flux : vidéo visible, son, progression, plein écran.
+// Lecture du flux : vidéo visible, son, progression, gestion éco-données.
 export function useFeedPlayback({ visibleVideos }) {
   const [playingId, setPlayingId] = useState(null);
   const [muted, setMuted] = useState(true);
@@ -20,14 +20,26 @@ export function useFeedPlayback({ visibleVideos }) {
       (entries) => {
         const visible = entries
           .filter(
-            (entry) => entry.isIntersecting && entry.intersectionRatio >= 0.7,
+            (entry) => entry.isIntersecting && entry.intersectionRatio >= 0.75,
           )
           .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
 
+        // 1. ARRÊTER ET COUPER LE FLUX NETWORK DE TOUTES LES VIDÉOS NON VISIBLES
         Object.values(videoRefs.current).forEach((el) => {
           if (!el) return;
           if (visible?.target === el) return;
+
           el.pause();
+
+          // ÉCONOMIE DE DONNÉES : Si la vidéo sort complètement de l'écran, couper la requête réseau
+          const isFar = !entries.some(
+            (entry) => entry.target === el && entry.isIntersecting
+          );
+          if (isFar && el.src) {
+            el.dataset.savedSrc = el.src; // Sauvegarder l'URL d'origine
+            el.removeAttribute("src"); // Interrompt le téléchargement en cours
+            el.load(); // Libère le buffer réseau
+          }
         });
 
         if (!visible) return;
@@ -36,6 +48,13 @@ export function useFeedPlayback({ visibleVideos }) {
         const id = video.dataset.id;
         setPlayingId(id);
 
+        // 2. RESTAURER LA VIDÉO LORSQU'ELLE REVIENT À L'ÉCRAN
+        if (!video.src && video.dataset.savedSrc) {
+          video.src = video.dataset.savedSrc;
+          video.load();
+        }
+
+        // Compteur de vues
         if (id && !viewedRef.current.has(id)) {
           viewedRef.current.add(id);
           supabase
@@ -53,7 +72,7 @@ export function useFeedPlayback({ visibleVideos }) {
           video.play().catch(() => {});
         });
       },
-      { threshold: [0.7, 0.85, 1] },
+      { threshold: [0.2, 0.75, 1.0] }
     );
 
     Object.values(videoRefs.current).forEach((el) => {
@@ -72,7 +91,7 @@ export function useFeedPlayback({ visibleVideos }) {
       try {
         audio.currentTime = t;
       } catch {
-        // métadonnées pas encore chargées
+        // Métadonnées pas encore chargées
       }
     }
   };
@@ -109,7 +128,6 @@ export function useFeedPlayback({ visibleVideos }) {
       if (audio) audio.muted = next;
     });
 
-    // Le geste utilisateur autorise enfin la lecture du son.
     if (!next && playingId) {
       const current = videoRefs.current[playingId];
       if (current && !current.paused) playAudioFor(playingId, current);
@@ -127,7 +145,7 @@ export function useFeedPlayback({ visibleVideos }) {
         await video.requestFullscreen();
       }
     } catch {
-      // Fullscreen can be blocked by the browser/webview.
+      // Fullscreen bloqué par le navigateur
     }
   };
 
