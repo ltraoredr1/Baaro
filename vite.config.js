@@ -43,7 +43,6 @@ export default defineConfig({
         orientation: 'portrait',
 
         // Configuration PWA pour un site hébergé à la racine.
-        // Vérifier séparément la compatibilité avec base: './'.
         scope: '/',
         start_url: '/',
 
@@ -64,8 +63,9 @@ export default defineConfig({
       },
 
       workbox: {
+        // Cible uniquement les fichiers présents par défaut pour éviter les alertes de glob
         globPatterns: [
-          '**/*.{js,css,html,ico,png,svg,woff2}',
+          '**/*.{js,css,html,ico,png,svg}',
         ],
 
         globIgnores: [
@@ -74,8 +74,6 @@ export default defineConfig({
           'workbox-*.js',
         ],
 
-        // Laisser Vite PWA gérer la génération du service worker
-        // sans définir de fallback de navigation personnalisé.
         navigateFallback: null,
 
         clientsClaim: true,
@@ -83,7 +81,6 @@ export default defineConfig({
         cleanupOutdatedCaches: true,
 
         // Mettre en cache uniquement les images de même origine.
-        // Ne pas mettre en cache les API ou les réponses Supabase.
         runtimeCaching: [
           {
             urlPattern: ({ url, sameOrigin }) =>
