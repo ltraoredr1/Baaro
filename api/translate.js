@@ -16,7 +16,7 @@ const LANG_NAMES = {
   uk: "українська", vi: "Tiếng Việt", id: "Bahasa Indonesia",
   th: "ไทย", bn: "বাংলা", ha: "Hausa", yo: "Yorùbá",
   ig: "Igbo", am: "አማርኛ", zu: "isiZulu", af: "Afrikaans",
-  fa: "فارسی", he: "עברית", sv: "svenska",
+  fa: "فارسی", he: "עบริת", sv: "svenska",
 };
 
 function jsonError(res, status, message) {
@@ -82,7 +82,6 @@ export default async function handler(req, res) {
     if (!apiKey) throw new Error("Clé API Gemini manquante sur le serveur");
 
     const ai = new GoogleGenAI({ apiKey });
-    // Utilisation du modèle gemini-2.5-flash ou gemini-1.5-flash par défaut
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash",
       contents: prompt,
