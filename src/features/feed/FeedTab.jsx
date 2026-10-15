@@ -44,6 +44,7 @@ const REPORT_REASONS = [
   "Autre",
 ];
 
+/** Transforme une ligne Supabase en objet post prêt à afficher */
 function formatPost(post) {
   const profile = post.profiles || {};
   const rawHandle = profile.handle || "membre";
@@ -75,7 +76,7 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
 
-  // --- BOUTON FIXE & PANNEAU DE CRÉATION ---
+  // --- ÉTAT DU BOUTON COMPACT & DE LA MODALE OVERLAY ---
   const [isCreateOpen, setIsCreateOpen] = useState(false);
 
   // Saisie enrichie, sondages & médias
@@ -113,6 +114,7 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
 
   const activeUserId = currentUserId || propUserId || null;
 
+  // Session Supabase
   useEffect(() => {
     let mounted = true;
 
@@ -132,12 +134,14 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
     };
   }, []);
 
+  // Libération de l'URL d'aperçu média
   useEffect(() => {
     return () => {
       if (mediaPreview) URL.revokeObjectURL(mediaPreview);
     };
   }, [mediaPreview]);
 
+  // Fermer le menu "..." en touchant ailleurs
   useEffect(() => {
     if (!menuOpenId) return;
     const close = (e) => {
@@ -147,12 +151,12 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
     return () => document.removeEventListener("pointerdown", close);
   }, [menuOpenId]);
 
+  // Texte rédigé par l'IA
   useEffect(() => {
     const apply = (text) => {
       if (!text) return;
       setNewText(text);
       setIsCreateOpen(true);
-      window.scrollTo({ top: 0, behavior: "smooth" });
     };
     try {
       const draft = sessionStorage.getItem("baaro:ai_draft");
@@ -160,7 +164,9 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
         sessionStorage.removeItem("baaro:ai_draft");
         apply(draft);
       }
-    } catch {}
+    } catch {
+      // sessionStorage indisponible
+    }
     const onDraft = (e) => {
       try { sessionStorage.removeItem("baaro:ai_draft"); } catch {}
       apply(e.detail?.text);
@@ -169,6 +175,7 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
     return () => window.removeEventListener("baaro:ai-draft", onDraft);
   }, []);
 
+  // 1. Chargement du flux
   const loadPosts = useCallback(
     async ({ silent = false } = {}) => {
       if (!silent) setLoading(true);
@@ -192,6 +199,7 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
     [showToast]
   );
 
+  // 2. Défilement infini
   const loadMorePosts = useCallback(async () => {
     if (loadingMore || !hasMore || loading || !cursorRef.current) return;
     setLoadingMore(true);
@@ -239,7 +247,9 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
         const fresh = incoming.filter((p) => !seen.has(p.id));
         return fresh.length ? [...fresh, ...prev] : prev;
       });
-    } catch {}
+    } catch {
+      // Ignorer
+    }
   }, []);
 
   useEffect(() => {
@@ -327,6 +337,7 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
     setMediaPreview(URL.createObjectURL(file));
   };
 
+  // 3. Publication
   const handlePublish = async () => {
     const hasText = Boolean(newText.trim());
     const hasMedia = Boolean(mediaFile);
@@ -396,7 +407,7 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
       setPollData(null);
       setMediaFile(null);
       setMediaPreview(null);
-      setIsCreateOpen(false);
+      setIsCreateOpen(false); // Ferme la modale
       
       onRewardPoints?.(
         mediaUrl ? "publish_post_media" : "publish_post",
@@ -644,150 +655,156 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
   }
 
   return (
-    <div className="flex flex-col gap-6 max-w-2xl mx-auto w-full pb-20 relative">
+    <div className="flex flex-col gap-6 max-w-2xl mx-auto w-full pb-20">
       
-      {/* 📌 BOUTON ACTION FIXE EN BAS À DROITE (FAB) */}
+      {/* 📌 EN-TÊTE DU FLUX AVEC LE BOUTON COMPACT EN HAUT À DROITE */}
       {activeUserId && (
-        <div className="fixed bottom-20 right-5 z-40">
+        <div className="flex items-center justify-between px-1">
+          <div className="flex items-center gap-2 text-xs font-bold" style={{ color: COLORS.ivory }}>
+            <Sparkles size={15} style={{ color: COLORS.gold }} />
+            <span>Fil d'actualité</span>
+          </div>
+
           <button
             type="button"
-            onClick={() => {
-              const nextState = !isCreateOpen;
-              setIsCreateOpen(nextState);
-              if (nextState) {
-                window.scrollTo({ top: 0, behavior: "smooth" });
-              }
-            }}
-            className="flex items-center gap-2 px-5 py-3 rounded-full font-bold text-xs shadow-2xl transition-all active:scale-95 border border-amber-400/40 backdrop-blur-md"
+            onClick={() => setIsCreateOpen(!isCreateOpen)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full font-bold text-[11px] shadow-md transition-all active:scale-95 border border-amber-400/30 hover:brightness-110"
             style={{ background: COLORS.gold, color: "#000" }}
           >
-            {isCreateOpen ? <X size={18} /> : <Plus size={18} />}
+            {isCreateOpen ? <X size={14} /> : <Plus size={14} />}
             <span>{isCreateOpen ? "Fermer" : "Créer un post"}</span>
           </button>
         </div>
       )}
 
-      {/* MODULE DE RÉDACTION AFFICHÉ SI LE BOUTON EST CLIQUÉ */}
+      {/* 🌟 MODALE / OVERLAY FIXE SUR ÉCRAN POUR LA CRÉATION DE POST */}
       {activeUserId && isCreateOpen && (
-        <div
-          className="glass-card rounded-2xl p-4 shadow-xl border flex flex-col gap-3 transition-all animate-in fade-in slide-in-from-top-3 duration-200"
-          style={{ borderColor: COLORS.borderGold, background: COLORS.surface }}
+        <div 
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200"
+          onClick={() => setIsCreateOpen(false)}
         >
           <div
-            className="flex items-center justify-between border-b pb-2 text-xs font-semibold"
-            style={{ borderColor: COLORS.border, color: COLORS.gold }}
+            className="w-full max-w-lg rounded-t-3xl sm:rounded-2xl p-4 border shadow-2xl flex flex-col gap-3 max-h-[90vh] overflow-y-auto"
+            style={{ borderColor: COLORS.borderGold, background: COLORS.surface }}
+            onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center gap-2">
-              <Sparkles size={15} />
-              <span>Créer une publication à fort impact</span>
-            </div>
-            <button
-              onClick={() => setIsCreateOpen(false)}
-              className="text-slate-400 hover:text-white"
-            >
-              <X size={16} />
-            </button>
-          </div>
-
-          <RichTextComposer
-            value={newText}
-            onChange={setNewText}
-            pollData={pollData}
-            onPollChange={setPollData}
-            placeholder="Partagez une perspective, une analyse ou une innovation avec le monde..."
-            rows={3}
-            disabled={submitting}
-          />
-
-          {mediaPreview && (
             <div
-              className="relative rounded-xl overflow-hidden max-h-60 border"
+              className="flex items-center justify-between border-b pb-2 text-xs font-semibold"
+              style={{ borderColor: COLORS.border, color: COLORS.gold }}
+            >
+              <div className="flex items-center gap-2">
+                <Sparkles size={14} />
+                <span>Créer une publication à fort impact</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsCreateOpen(false)}
+                className="p-1 rounded-full text-slate-400 hover:text-white hover:bg-white/10"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <RichTextComposer
+              value={newText}
+              onChange={setNewText}
+              pollData={pollData}
+              onPollChange={setPollData}
+              placeholder="Partagez une perspective, une analyse ou une innovation avec le monde..."
+              rows={4}
+              disabled={submitting}
+            />
+
+            {mediaPreview && (
+              <div
+                className="relative rounded-xl overflow-hidden max-h-60 border"
+                style={{ borderColor: COLORS.border }}
+              >
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMediaFile(null);
+                    setMediaPreview(null);
+                  }}
+                  className="absolute top-2 right-2 z-10 p-1.5 rounded-full bg-black/60 text-white hover:bg-black transition-colors"
+                  aria-label="Retirer le média"
+                >
+                  <X size={14} />
+                </button>
+                {mediaFile?.type?.startsWith("video") ? (
+                  <video src={mediaPreview} controls className="w-full h-full object-cover" />
+                ) : (
+                  <img src={mediaPreview} alt="Aperçu" className="w-full h-full object-cover" />
+                )}
+              </div>
+            )}
+
+            <div
+              className="flex items-center justify-between border-t pt-3 flex-wrap gap-2"
               style={{ borderColor: COLORS.border }}
             >
-              <button
-                type="button"
-                onClick={() => {
-                  setMediaFile(null);
-                  setMediaPreview(null);
-                }}
-                className="absolute top-2 right-2 z-10 p-1.5 rounded-full bg-black/60 text-white hover:bg-black transition-colors"
-                aria-label="Retirer le média"
-              >
-                <X size={14} />
-              </button>
-              {mediaFile?.type?.startsWith("video") ? (
-                <video src={mediaPreview} controls className="w-full h-full object-cover" />
-              ) : (
-                <img src={mediaPreview} alt="Aperçu" className="w-full h-full object-cover" />
-              )}
-            </div>
-          )}
+              <div className="flex items-center gap-2">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*,video/*"
+                  className="hidden"
+                  onChange={handlePickFile}
+                />
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  title="Joindre un média"
+                  className="p-1.5 rounded-lg hover:bg-white/10 transition-colors flex items-center gap-1.5 text-xs font-medium"
+                  style={{ color: COLORS.gold }}
+                >
+                  <ImageIcon size={16} />
+                  <span>Média</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    window.dispatchEvent(
+                      new CustomEvent("baaro:ask-ai", {
+                        detail: {
+                          prompt: newText.trim()
+                            ? `Améliore ce brouillon de publication pour BAARO et rends-le plus engageant :\n"${newText.trim()}"\n\n`
+                            : "Rédige une publication engageante pour BAARO sur le thème : ",
+                        },
+                      })
+                    )
+                  }
+                  title="Rédiger avec l'IA"
+                  className="p-1.5 rounded-lg hover:bg-white/10 transition-colors flex items-center gap-1.5 text-xs font-medium"
+                  style={{ color: COLORS.teal }}
+                >
+                  <Sparkles size={16} />
+                  <span>IA</span>
+                </button>
+                <select
+                  value={mood}
+                  onChange={(e) => setMood(e.target.value)}
+                  disabled={submitting}
+                  className="bg-transparent text-xs p-1 rounded border outline-none"
+                  style={{ borderColor: COLORS.border, color: COLORS.muted }}
+                >
+                  <option value="">Humeur ?</option>
+                  <option value="🔥 Inspiré">🔥 Inspiré</option>
+                  <option value="💡 Innovant">💡 Innovant</option>
+                  <option value="🎉 Joyeux">🎉 Joyeux</option>
+                </select>
+              </div>
 
-          <div
-            className="flex items-center justify-between border-t pt-3 flex-wrap gap-2"
-            style={{ borderColor: COLORS.border }}
-          >
-            <div className="flex items-center gap-2">
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*,video/*"
-                className="hidden"
-                onChange={handlePickFile}
-              />
               <button
                 type="button"
-                onClick={() => fileInputRef.current?.click()}
-                title="Joindre un média"
-                className="p-1.5 rounded-lg hover:bg-white/10 transition-colors flex items-center gap-1.5 text-xs font-medium"
-                style={{ color: COLORS.gold }}
+                onClick={handlePublish}
+                disabled={submitting || (!newText.trim() && !mediaFile && !pollData?.question?.trim())}
+                className="px-4 py-1.5 rounded-xl text-xs font-bold transition-all shadow-md flex items-center gap-1.5 disabled:opacity-50"
+                style={{ background: COLORS.gold, color: "#000" }}
               >
-                <ImageIcon size={16} />
-                <span>Média</span>
+                {submitting ? "Publication..." : "Publier"} <Send size={13} />
               </button>
-              <button
-                type="button"
-                onClick={() =>
-                  window.dispatchEvent(
-                    new CustomEvent("baaro:ask-ai", {
-                      detail: {
-                        prompt: newText.trim()
-                          ? `Améliore ce brouillon de publication pour BAARO et rends-le plus engageant :\n"${newText.trim()}"\n\n`
-                          : "Rédige une publication engageante pour BAARO sur le thème : ",
-                      },
-                    })
-                  )
-                }
-                title="Rédiger avec l'IA"
-                className="p-1.5 rounded-lg hover:bg-white/10 transition-colors flex items-center gap-1.5 text-xs font-medium"
-                style={{ color: COLORS.teal }}
-              >
-                <Sparkles size={16} />
-                <span>IA</span>
-              </button>
-              <select
-                value={mood}
-                onChange={(e) => setMood(e.target.value)}
-                disabled={submitting}
-                className="bg-transparent text-xs p-1 rounded border outline-none"
-                style={{ borderColor: COLORS.border, color: COLORS.muted }}
-              >
-                <option value="">Humeur ?</option>
-                <option value="🔥 Inspiré">🔥 Inspiré</option>
-                <option value="💡 Innovant">💡 Innovant</option>
-                <option value="🎉 Joyeux">🎉 Joyeux</option>
-              </select>
             </div>
-
-            <button
-              type="button"
-              onClick={handlePublish}
-              disabled={submitting || (!newText.trim() && !mediaFile && !pollData?.question?.trim())}
-              className="px-4 py-1.5 rounded-xl text-xs font-bold transition-all shadow-md flex items-center gap-1.5 disabled:opacity-50"
-              style={{ background: COLORS.gold, color: "#000" }}
-            >
-              {submitting ? "Publication..." : "Publier"} <Send size={13} />
-            </button>
           </div>
         </div>
       )}
