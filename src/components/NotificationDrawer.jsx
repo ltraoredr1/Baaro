@@ -1,3 +1,4 @@
+
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "../supabaseClient";
 
@@ -9,7 +10,7 @@ function isValidAuthUserId(value) {
   }
 
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-    value
+    value,
   );
 }
 
@@ -28,9 +29,7 @@ function actorLabel(profile) {
   const displayName = String(profile.display_name || "").trim();
   if (displayName) return displayName;
 
-  const username = String(
-    profile.username || profile.handle || ""
-  ).trim();
+  const username = String(profile.username || profile.handle || "").trim();
 
   if (username) {
     return username.startsWith("@") ? username : `@${username}`;
@@ -39,10 +38,7 @@ function actorLabel(profile) {
   return "Quelqu'un";
 }
 
-/**
- * Reconstruit les messages sociaux à partir du profil de l'acteur.
- * Les types inconnus conservent leur message existant.
- */
+/** Messages adaptés aux types de notifications BAARO. */
 function messageForNotification(notification, profile) {
   const label = actorLabel(profile);
 
@@ -64,7 +60,26 @@ function messageForNotification(notification, profile) {
       return `${label} a commenté votre publication`;
 
     case "share":
+    case "post_share":
       return `${label} a partagé votre publication`;
+
+    case "video_like":
+      return `${label} a aimé votre vidéo`;
+
+    case "video_share":
+      return `${label} a partagé votre vidéo`;
+
+    case "video_repost":
+      return `${label} a reposté votre vidéo`;
+
+    case "video_comment":
+      return `${label} a commenté votre vidéo`;
+
+    case "story_reaction":
+      return `${label} a réagi à votre story`;
+
+    case "story_share":
+      return `${label} a partagé votre story`;
 
     case "mention":
       return `${label} vous a mentionné`;
@@ -96,7 +111,6 @@ async function attachActorProfiles(notifications) {
   if (error) {
     console.error("Erreur chargement profils des notifications:", error);
 
-    // Si les profils ne sont pas disponibles, conserver les messages existants.
     return items.map((item) => ({
       ...item,
       message: messageForNotification(item, null),
@@ -104,7 +118,7 @@ async function attachActorProfiles(notifications) {
   }
 
   const profilesById = new Map(
-    (profiles || []).map((profile) => [profile.id, profile])
+    (profiles || []).map((profile) => [profile.id, profile]),
   );
 
   return items.map((item) => {
@@ -138,7 +152,7 @@ export function NotificationDrawer({ user_id, isOpen, onClose }) {
       const { data, error: fetchError } = await supabase
         .from("notifications")
         .select(
-          "notification_id,user_id,type,message,source_id,actor_id,read,read_at,created_at"
+          "notification_id,user_id,type,message,source_id,actor_id,read,read_at,created_at",
         )
         .eq("user_id", user_id)
         .order("created_at", { ascending: false })
@@ -178,7 +192,7 @@ export function NotificationDrawer({ user_id, isOpen, onClose }) {
         },
         () => {
           load();
-        }
+        },
       )
       .subscribe((status) => {
         if (status === "CHANNEL_ERROR") {
@@ -212,7 +226,7 @@ export function NotificationDrawer({ user_id, isOpen, onClose }) {
 
   const unreadCount = useMemo(
     () => notifs.filter((notification) => !notification.read).length,
-    [notifs]
+    [notifs],
   );
 
   const markAsRead = async (notificationId) => {
@@ -224,8 +238,8 @@ export function NotificationDrawer({ user_id, isOpen, onClose }) {
       previous.map((notification) =>
         notification.notification_id === notificationId
           ? { ...notification, read: true, read_at: now }
-          : notification
-      )
+          : notification,
+      ),
     );
 
     const { error: updateError } = await supabase
@@ -250,7 +264,7 @@ export function NotificationDrawer({ user_id, isOpen, onClose }) {
         ...notification,
         read: true,
         read_at: notification.read_at || now,
-      }))
+      })),
     );
 
     const { error: updateError } = await supabase
@@ -272,8 +286,8 @@ export function NotificationDrawer({ user_id, isOpen, onClose }) {
 
     setNotifs((items) =>
       items.filter(
-        (notification) => notification.notification_id !== notificationId
-      )
+        (notification) => notification.notification_id !== notificationId,
+      ),
     );
 
     const { error: deleteError } = await supabase
