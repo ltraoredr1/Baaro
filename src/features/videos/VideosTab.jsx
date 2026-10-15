@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import CommentsSheet from "./composent/CommentsSheet.jsx";
 import { FeedEmpty, FeedError, FeedLoading } from "./composent/FeedStatus.jsx";
 import UploadModal from "./composent/UploadModal.jsx";
@@ -63,6 +63,17 @@ export function VideosTab({ onRewardPoints, onExit }) {
   const { showToast } = useToast();
 
   const openUpload = () => creator.setShowUpload(true);
+
+  // Écouter le clic sur le bouton "+" du Header lorsque l'onglet actif est Vidéos
+  useEffect(() => {
+    const handleGlobalVideoCreate = () => {
+      openUpload();
+    };
+    window.addEventListener("baaro:open-video-create", handleGlobalVideoCreate);
+    return () => {
+      window.removeEventListener("baaro:open-video-create", handleGlobalVideoCreate);
+    };
+  }, [creator]);
 
   const handleUseSound = (video, sound) => {
     const handle = video.profiles?.handle?.replace(/^@/, "") || "membre";
@@ -160,7 +171,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
                 {user?.id && video.user_id && video.user_id !== user.id && (
                   <div 
                     className="absolute bottom-20 right-4 z-30"
-                    onClick={(e) => e.stopPropagation()} // Empêche le clic du bouton de faire pause/play
+                    onClick={(e) => e.stopPropagation()}
                   >
                     <TipButton recipientId={video.user_id} videoId={video.id} compact />
                   </div>
