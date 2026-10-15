@@ -59,7 +59,9 @@ export function AiAssistantTab({ userProfile, onPublishAction, prefill }) {
 
   const stopSpeech = useCallback(() => {
     if (typeof window !== "undefined" && "speechSynthesis" in window) {
-      window.speechSynthesis.cancel();
+      try {
+        window.speechSynthesis.cancel();
+      } catch {}
     }
     setSpeakingMessageId(null);
   }, []);
@@ -89,10 +91,13 @@ export function AiAssistantTab({ userProfile, onPublishAction, prefill }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prefill?.key]);
 
-  // Lecture vocale (clic manuel ET auto-lecture)
+  // Lecture vocale robuste (WebView native & Web + correction phonétique "BAARO" -> "Bâro")
   const speakText = useCallback(
     (messageId, text) => {
-      if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+      if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+        showToast("La synthèse vocale n'est pas disponible sur cet appareil", "error");
+        return;
+      }
 
       const synth = window.speechSynthesis;
 
@@ -102,25 +107,58 @@ export function AiAssistantTab({ userProfile, onPublishAction, prefill }) {
         return;
       }
 
-      synth.cancel();
+      try {
+        synth.cancel();
+      } catch {}
+
       if (!text) return;
 
-      const cleanText = text.replace(/[*#_`]/g, "");
+      // Correction phonétique pour une prononciation parfaite de BAARO
+      const cleanText = text
+        .replace(/[*#_`]/g, "")
+        .replace(/\bBAARO\b/gi, "Bâro")
+        .replace(/\bBaaro\b/g, "Bâro");
+
       const utterance = new SpeechSynthesisUtterance(cleanText);
 
-      const voices = synth.getVoices();
-      const frenchVoice = voices.find((v) => v.lang.toLowerCase().startsWith("fr"));
-      if (frenchVoice) utterance.voice = frenchVoice;
+      const setupAndSpeak = () => {
+        const voices = synth.getVoices();
+        const frenchVoice = voices.find(
+          (v) => v.lang && v.lang.toLowerCase().replace("_", "-").startsWith("fr")
+        );
+        if (frenchVoice) {
+          utterance.voice = frenchVoice;
+        }
 
-      utterance.lang = "fr-FR";
-      utterance.rate = 1.0;
-      utterance.onend = () => setSpeakingMessageId(null);
-      utterance.onerror = () => setSpeakingMessageId(null);
+        utterance.lang = "fr-FR";
+        utterance.rate = 1.0;
+        utterance.pitch = 1.0;
 
-      setSpeakingMessageId(messageId);
-      synth.speak(utterance);
+        utterance.onend = () => setSpeakingMessageId(null);
+        utterance.onerror = (e) => {
+          console.debug("Speech synthesis error:", e);
+          setSpeakingMessageId(null);
+        };
+
+        setSpeakingMessageId(messageId);
+        synth.speak(utterance);
+      };
+
+      if (synth.getVoices().length > 0) {
+        setupAndSpeak();
+      } else {
+        synth.onvoiceschanged = () => {
+          synth.onvoiceschanged = null;
+          setupAndSpeak();
+        };
+        setTimeout(() => {
+          if (speakingMessageId === messageId || synth.speaking === false) {
+            setupAndSpeak();
+          }
+        }, 150);
+      }
     },
-    [speakingMessageId]
+    [speakingMessageId, showToast]
   );
 
   // Reconnaissance vocale (micro)
@@ -168,7 +206,6 @@ export function AiAssistantTab({ userProfile, onPublishAction, prefill }) {
 
     const userMsg = { id: `u_${Date.now()}`, role: "user", text: query };
 
-    // Historique envoyé à l'IA (mémoire de la conversation)
     const history = [...messages, userMsg]
       .filter((m) => !m.isError && m.id !== "welcome")
       .slice(-HISTORY_LIMIT)
@@ -207,7 +244,7 @@ export function AiAssistantTab({ userProfile, onPublishAction, prefill }) {
       ]);
 
       // Lecture automatique de la réponse
-      setTimeout(() => speakText(assistantMsgId, replyText), 250);
+      setTimeout(() => speakText(assistantMsgId, replyText), 300);
 
       if (showPointsReward) showPointsReward(2, "Échange avec l'IA");
     } catch (e) {
