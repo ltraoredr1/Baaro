@@ -1,26 +1,63 @@
 /**
- * BAARO push helpers — Web Push (VAPID) + FCM HTTP v1
- * Aucun changement SQL requis.
- * Env requis pour Android/iOS : FIREBASE_SERVICE_ACCOUNT (JSON complet du compte de service)
+ * BAARO — Notifications push
+ * Web Push (VAPID) + FCM HTTP v1 (Android/iOS)
+ *
+ * Tables utilisées :
+ * - push_tokens
+ * - notification_preferences
+ *
+ * Variables serveur :
+ * - VAPID_PUBLIC_KEY ou VITE_VAPID_PUBLIC_KEY
+ * - VAPID_PRIVATE_KEY
+ * - VAPID_SUBJECT (facultatif)
+ * - FIREBASE_SERVICE_ACCOUNT (JSON complet)
+ * - FCM_ANDROID_CHANNEL_ID (facultatif)
+ *
+ * Aucun changement SQL prévu par ce fichier.
  */
+
 import webpush from "web-push";
 import crypto from "node:crypto";
 
 const VAPID_PUBLIC =
-  process.env.VITE_VAPID_PUBLIC_KEY || process.env.VAPID_PUBLIC_KEY || "";
-const VAPID_PRIVATE = process.env.VAPID_PRIVATE_KEY || "";
-const VAPID_SUBJECT = process.env.VAPID_SUBJECT || "mailto:support@baaro.app";
+  process.env.VAPID_PUBLIC_KEY ||
+  process.env.VITE_VAPID_PUBLIC_KEY ||
+  "";
 
-let vapidReady = null;
+const VAPID_PRIVATE = process.env.VAPID_PRIVATE_KEY || "";
+
+const VAPID_SUBJECT =
+  process.env.VAPID_SUBJECT || "mailto:support@baaro.app";
+
+const ANDROID_CHANNEL_ID =
+  process.env.FCM_ANDROID_CHANNEL_ID || "baaro_notifications";
+
+let vapidReady = false;
+let vapidChecked = false;
+
 function initWebPush() {
-  if (vapidReady !== null) return vapidReady;
+  if (vapidChecked) return vapidReady;
+
+  vapidChecked = true;
+
   if (!VAPID_PUBLIC || !VAPID_PRIVATE) {
-    vapidReady = false;
+    console.warn("[push] Clés VAPID manquantes.");
     return false;
   }
-  webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC, VAPID_PRIVATE);
-  vapidReady = true;
-  return true;
+
+  try {
+    webpush.setVapidDetails(
+      VAPID_SUBJECT,
+      VAPID_PUBLIC,
+      VAPID_PRIVATE
+    );
+
+    vapidReady = true;
+  } catch (error) {
+    console.error("[push] Configuration VAPID invalide :", error.message);
+  }
+
+  return vapidReady;
 }
 
 /* ---------------- Préférences ---------------- */
@@ -28,147 +65,365 @@ function initWebPush() {
 function allowsCategory(prefs, category) {
   if (!prefs) return true;
   if (prefs.push_enabled === false) return false;
-  const earnings = prefs.earnings !== undefined ? prefs.earnings : prefs.wallet;
+
+  const earnings =
+    prefs.earnings !== undefined ? prefs.earnings : prefs.wallet;
+
   switch (category) {
     case "message":
       return prefs.messages !== false;
+
     case "social":
       return prefs.social !== false;
+
     case "live":
       return prefs.live !== false;
+
     case "earnings":
     case "wallet":
       return earnings !== false;
+
     case "marketing":
       return prefs.marketing === true;
+
     default:
       return true;
   }
 }
 
-// select("*") : pas d'erreur si une colonne n'existe pas
 async function loadPrefs(admin, userIds) {
   const map = new Map();
+
   if (!userIds.length) return map;
+
   const { data, error } = await admin
     .from("notification_preferences")
     .select("*")
     .in("user_id", userIds);
-  if (error) console.warn("[push][prefs]", error.message);
-  for (const row of data || []) map.set(row.user_id, row);
+
+  if (error) {
+    console.warn("[push][prefs]", error.message);
+    return map;
+  }
+
+  for (const row of data || []) {
+    map.set(row.user_id, row);
+  }
+
   return map;
 }
 
 async function loadTokens(admin, userIds) {
   const map = new Map();
+
   if (!userIds.length) return map;
+
   const { data, error } = await admin
     .from("push_tokens")
     .select("id, user_id, token, platform")
     .in("user_id", userIds);
-  if (error) console.warn("[push][tokens]", error.message);
+
+  if (error) {
+    console.warn("[push][tokens]", error.message);
+    return map;
+  }
+
   for (const row of data || []) {
-    if (!map.has(row.user_id)) map.set(row.user_id, []);
+    if (!map.has(row.user_id)) {
+      map.set(row.user_id, []);
+    }
+
     map.get(row.user_id).push(row);
   }
+
   return map;
+}
+
+/* ---------------- Validation des données ---------------- */
+
+function safeNotificationUrl(value) {
+  if (typeof value !== "string" || !value.startsWith("/")) {
+    return "/";
+  }
+
+  // Refuse les URL externes, les chemins protocol-relative
+  // et les séparateurs ambigus.
+  if (
+    value.startsWith("//") ||
+    value.includes("\\") ||
+    /[\u0000-\u001f]/.test(value)
+  ) {
+    return "/";
+  }
+
+  try {
+    const parsed = new URL(value, "https://baaro.invalid");
+
+    if (parsed.origin !== "https://baaro.invalid") {
+      return "/";
+    }
+
+    return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+  } catch {
+    return "/";
+  }
+}
+
+function normalizeCategory(category) {
+  if (typeof category !== "string") return null;
+  return category === "wallet" ? "earnings" : category;
+}
+
+function buildPayload(opts = {}) {
+  const extraData =
+    opts.data && typeof opts.data === "object" && !Array.isArray(opts.data)
+      ? opts.data
+      : {};
+
+  return {
+    title: String(opts.title || "").trim().slice(0, 80),
+    body: String(opts.body || "").trim().slice(0, 240),
+    url: safeNotificationUrl(opts.url),
+    category: normalizeCategory(opts.category),
+    tag:
+      typeof opts.tag === "string"
+        ? opts.tag.slice(0, 100)
+        : "baaro-notification",
+    icon: "/icons/icon-192.png",
+    badge: "/icons/icon-192.png",
+    data: extraData,
+  };
 }
 
 /* ---------------- Web Push ---------------- */
 
 async function sendWebPush(subscriptionJson, payload) {
-  if (!initWebPush()) return { ok: false, error: "VAPID keys manquantes" };
-  let sub;
+  if (!initWebPush()) {
+    return {
+      ok: false,
+      error: "Clés VAPID manquantes ou invalides.",
+    };
+  }
+
+  let subscription;
+
   try {
-    sub =
+    subscription =
       typeof subscriptionJson === "string"
         ? JSON.parse(subscriptionJson)
         : subscriptionJson;
   } catch {
-    return { ok: false, dead: true, error: "token web invalide" };
+    return {
+      ok: false,
+      dead: true,
+      error: "Jeton Web Push JSON invalide.",
+    };
   }
-  if (!sub?.endpoint) return { ok: false, dead: true, error: "endpoint manquant" };
+
+  if (
+    !subscription ||
+    typeof subscription.endpoint !== "string" ||
+    !subscription.endpoint.startsWith("https://")
+  ) {
+    return {
+      ok: false,
+      dead: true,
+      error: "Endpoint Web Push invalide.",
+    };
+  }
+
   try {
-    await webpush.sendNotification(sub, JSON.stringify(payload), {
-      TTL: 60 * 60 * 12,
-      urgency: payload.category === "message" ? "high" : "normal",
-    });
+    await webpush.sendNotification(
+      subscription,
+      JSON.stringify(payload),
+      {
+        TTL: 60 * 60 * 12,
+        urgency: payload.category === "message" ? "high" : "normal",
+      }
+    );
+
     return { ok: true };
-  } catch (err) {
-    const status = err?.statusCode || err?.status;
-    if (status === 410 || status === 404) return { ok: false, dead: true, error: String(status) };
-    return { ok: false, error: err?.message || "webpush failed" };
+  } catch (error) {
+    const status = error?.statusCode || error?.status;
+
+    if (status === 404 || status === 410) {
+      return {
+        ok: false,
+        dead: true,
+        error: String(status),
+      };
+    }
+
+    return {
+      ok: false,
+      error: error?.message || "Échec Web Push.",
+    };
   }
 }
 
 /* ---------------- FCM HTTP v1 ---------------- */
 
-let cachedSA = null;
+let cachedServiceAccount = null;
+
 function getServiceAccount() {
-  if (cachedSA !== null) return cachedSA || null;
+  if (cachedServiceAccount !== null) {
+    return cachedServiceAccount || null;
+  }
+
   try {
     const raw = process.env.FIREBASE_SERVICE_ACCOUNT || "";
-    cachedSA = raw ? JSON.parse(raw) : false;
-    if (cachedSA && cachedSA.private_key) {
-      cachedSA.private_key = cachedSA.private_key.replace(/\\n/g, "\n");
+
+    if (!raw) {
+      cachedServiceAccount = false;
+      return null;
     }
-  } catch (e) {
-    console.error("[push] FIREBASE_SERVICE_ACCOUNT invalide:", e.message);
-    cachedSA = false;
+
+    const serviceAccount = JSON.parse(raw);
+
+    if (
+      !serviceAccount.project_id ||
+      !serviceAccount.client_email ||
+      !serviceAccount.private_key
+    ) {
+      throw new Error(
+        "Le JSON Firebase doit contenir project_id, client_email et private_key."
+      );
+    }
+
+    serviceAccount.private_key =
+      serviceAccount.private_key.replace(/\\n/g, "\n");
+
+    cachedServiceAccount = serviceAccount;
+
+    return serviceAccount;
+  } catch (error) {
+    console.error(
+      "[push] FIREBASE_SERVICE_ACCOUNT invalide :",
+      error.message
+    );
+
+    cachedServiceAccount = false;
+
+    return null;
   }
-  return cachedSA || null;
 }
 
-let tokenCache = { value: null, exp: 0 };
-async function getFcmAccessToken(sa) {
-  const now = Math.floor(Date.now() / 1000);
-  if (tokenCache.value && tokenCache.exp - 60 > now) return tokenCache.value;
+let tokenCache = {
+  value: null,
+  exp: 0,
+};
 
-  const b64 = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
-  const header = b64({ alg: "RS256", typ: "JWT" });
-  const claim = b64({
-    iss: sa.client_email,
+async function getFcmAccessToken(serviceAccount) {
+  const now = Math.floor(Date.now() / 1000);
+
+  if (tokenCache.value && tokenCache.exp - 60 > now) {
+    return tokenCache.value;
+  }
+
+  const encode = (value) =>
+    Buffer.from(JSON.stringify(value)).toString("base64url");
+
+  const header = encode({
+    alg: "RS256",
+    typ: "JWT",
+  });
+
+  const claims = encode({
+    iss: serviceAccount.client_email,
     scope: "https://www.googleapis.com/auth/firebase.messaging",
     aud: "https://oauth2.googleapis.com/token",
     iat: now,
     exp: now + 3600,
   });
-  const signer = crypto.createSign("RSA-SHA256");
-  signer.update(`${header}.${claim}`);
-  const signature = signer.sign(sa.private_key).toString("base64url");
 
-  const res = await fetch("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
-      assertion: `${header}.${claim}.${signature}`,
-    }),
-  });
-  const json = await res.json();
-  if (!res.ok || !json.access_token) {
-    throw new Error(json.error_description || "oauth FCM impossible");
+  const signer = crypto.createSign("RSA-SHA256");
+  signer.update(`${header}.${claims}`);
+
+  const signature = signer
+    .sign(serviceAccount.private_key)
+    .toString("base64url");
+
+  const assertion = `${header}.${claims}.${signature}`;
+
+  const response = await fetch(
+    "https://oauth2.googleapis.com/token",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({
+        grant_type:
+          "urn:ietf:params:oauth:grant-type:jwt-bearer",
+        assertion,
+      }),
+    }
+  );
+
+  const result = await response.json().catch(() => ({}));
+
+  if (!response.ok || !result.access_token) {
+    throw new Error(
+      result.error_description ||
+        result.error ||
+        "Impossible d'obtenir le jeton OAuth FCM."
+    );
   }
-  tokenCache = { value: json.access_token, exp: now + (json.expires_in || 3600) };
+
+  tokenCache = {
+    value: result.access_token,
+    exp: now + (result.expires_in || 3600),
+  };
+
   return tokenCache.value;
 }
 
-function toStringMap(obj) {
-  const out = {};
-  for (const [k, v] of Object.entries(obj || {})) {
-    if (v === undefined || v === null) continue;
-    out[k] = typeof v === "string" ? v : JSON.stringify(v);
+function toStringMap(value) {
+  const result = {};
+
+  for (const [key, item] of Object.entries(value || {})) {
+    if (item === undefined || item === null) continue;
+
+    // Les clés et valeurs FCM data doivent être des chaînes.
+    result[String(key)] =
+      typeof item === "string" ? item : JSON.stringify(item);
   }
-  return out;
+
+  return result;
 }
 
 async function sendFcm(token, payload) {
-  const sa = getServiceAccount();
-  if (!sa) return { ok: false, error: "FIREBASE_SERVICE_ACCOUNT absente" };
+  if (typeof token !== "string" || !token.trim()) {
+    return {
+      ok: false,
+      dead: true,
+      error: "Jeton FCM vide.",
+    };
+  }
+
+  const serviceAccount = getServiceAccount();
+
+  if (!serviceAccount) {
+    return {
+      ok: false,
+      error: "FIREBASE_SERVICE_ACCOUNT absente ou invalide.",
+    };
+  }
+
   try {
-    const accessToken = await getFcmAccessToken(sa);
-    const res = await fetch(
-      `https://fcm.googleapis.com/v1/projects/${sa.project_id}/messages:send`,
+    const accessToken = await getFcmAccessToken(serviceAccount);
+
+    const data = toStringMap({
+      ...(payload.data || {}),
+      url: payload.url || "/",
+      category: payload.category || "",
+      tag: payload.tag || "",
+    });
+
+    const response = await fetch(
+      `https://fcm.googleapis.com/v1/projects/${encodeURIComponent(
+        serviceAccount.project_id
+      )}/messages:send`,
       {
         method: "POST",
         headers: {
@@ -178,120 +433,214 @@ async function sendFcm(token, payload) {
         body: JSON.stringify({
           message: {
             token,
-            notification: { title: payload.title, body: payload.body },
-            data: toStringMap({
-              url: payload.url || "/",
-              category: payload.category || "",
-              tag: payload.tag || "",
-              ...(payload.data || {}),
-            }),
-            android: {
-              priority: payload.category === "message" ? "HIGH" : "NORMAL",
-              notification: { tag: payload.tag || undefined },
+            notification: {
+              title: payload.title,
+              body: payload.body,
             },
-            apns: { headers: { "apns-priority": "10" }, payload: { aps: { sound: "default" } } },
+            data,
+            android: {
+              priority:
+                payload.category === "message" ? "HIGH" : "NORMAL",
+              notification: {
+                tag: payload.tag || undefined,
+
+                // Ce canal doit être créé dans l'application Android.
+                // Son son dépend de la configuration native du canal.
+                channel_id: ANDROID_CHANNEL_ID,
+              },
+            },
+            apns: {
+              headers: {
+                "apns-priority": "10",
+              },
+              payload: {
+                aps: {
+                  sound: "default",
+                },
+              },
+            },
           },
         }),
       }
     );
-    if (res.ok) return { ok: true };
-    const json = await res.json().catch(() => ({}));
-    const status = json?.error?.status;
-    const msg = json?.error?.message || res.statusText;
-    if (status === "NOT_FOUND" || status === "UNREGISTERED") {
-      return { ok: false, dead: true, error: status };
+
+    if (response.ok) {
+      return { ok: true };
     }
-    if (status === "INVALID_ARGUMENT" && /registration token/i.test(msg)) {
-      return { ok: false, dead: true, error: msg };
+
+    const result = await response.json().catch(() => ({}));
+    const status = result?.error?.status;
+    const message =
+      result?.error?.message || response.statusText;
+
+    if (
+      status === "NOT_FOUND" ||
+      status === "UNREGISTERED"
+    ) {
+      return {
+        ok: false,
+        dead: true,
+        error: status,
+      };
     }
-    return { ok: false, error: msg };
-  } catch (e) {
-    return { ok: false, error: e.message };
+
+    if (
+      status === "INVALID_ARGUMENT" &&
+      /registration token/i.test(message)
+    ) {
+      return {
+        ok: false,
+        dead: true,
+        error: message,
+      };
+    }
+
+    return {
+      ok: false,
+      error: message || "Échec FCM.",
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error?.message || "Erreur d'envoi FCM.",
+    };
   }
 }
 
-/* ---------------- Envoi vers une liste de tokens (parallèle) ---------------- */
+/* ---------------- Envoi par lots ---------------- */
 
 async function deliver(tokens, payload) {
   let sent = 0;
+
   const dead = [];
   const errors = [];
-  for (let i = 0; i < tokens.length; i += 20) {
-    const chunk = tokens.slice(i, i + 20);
+
+  for (let index = 0; index < tokens.length; index += 20) {
+    const chunk = tokens.slice(index, index + 20);
+
     const results = await Promise.all(
-      chunk.map((t) => {
-        if (t.platform === "web") return sendWebPush(t.token, payload);
-        if (t.platform === "android" || t.platform === "ios") return sendFcm(t.token, payload);
-        return Promise.resolve({ ok: false, error: "plateforme inconnue" });
+      chunk.map((tokenRow) => {
+        if (tokenRow.platform === "web") {
+          return sendWebPush(tokenRow.token, payload);
+        }
+
+        if (
+          tokenRow.platform === "android" ||
+          tokenRow.platform === "ios"
+        ) {
+          return sendFcm(tokenRow.token, payload);
+        }
+
+        return Promise.resolve({
+          ok: false,
+          error: `Plateforme inconnue : ${tokenRow.platform}`,
+        });
       })
     );
-    results.forEach((r, idx) => {
-      if (r.ok) sent += 1;
-      else {
-        if (r.dead) dead.push(chunk[idx].id);
-        else if (r.error) errors.push(r.error);
+
+    results.forEach((result, resultIndex) => {
+      if (result.ok) {
+        sent += 1;
+        return;
+      }
+
+      if (result.dead) {
+        dead.push(chunk[resultIndex].id);
+      } else if (result.error) {
+        errors.push(result.error);
       }
     });
   }
-  if (errors.length) console.warn("[push][deliver] erreurs:", [...new Set(errors)].join(" | "));
-  return { sent, dead };
-}
 
-function buildPayload(opts) {
-  const url = typeof opts.url === "string" && opts.url.startsWith("/") ? opts.url : "/";
-  let category = opts.category || null;
-  if (category === "wallet") category = "earnings";
+  if (errors.length) {
+    console.warn(
+      "[push][deliver] Erreurs :",
+      [...new Set(errors)].join(" | ")
+    );
+  }
+
   return {
-    title: String(opts.title || "").trim().slice(0, 80),
-    body: String(opts.body || "").trim().slice(0, 240),
-    url,
-    category,
-    tag: opts.tag,
-    sound:
-      typeof opts.sound === "string" && opts.sound.startsWith("/")
-        ? opts.sound
-        : "/sounds/baaro_pulse.mp3",
-    icon: "/icon-192.png",
-    badge: "/icon-192.png",
-    ...(opts.data && typeof opts.data === "object" ? { data: opts.data } : {}),
+    sent,
+    dead: [...new Set(dead)],
   };
 }
 
+/* ---------------- API principale ---------------- */
+
 /**
- * Envoie une push à une liste d'utilisateurs (préférences respectées).
+ * Envoie une notification aux utilisateurs ciblés.
+ * Respecte leurs préférences et nettoie les jetons expirés.
  */
-export async function sendPushToUsers(admin, opts) {
+export async function sendPushToUsers(admin, opts = {}) {
+  if (!admin) {
+    return {
+      ok: false,
+      error: "Client Supabase admin requis.",
+    };
+  }
+
   const payload = buildPayload(opts);
+
   const userIds = [
-    ...new Set((opts.userIds || []).filter((id) => typeof id === "string" && id.length > 10)),
+    ...new Set(
+      (Array.isArray(opts.userIds) ? opts.userIds : []).filter(
+        (id) => typeof id === "string" && id.length > 10
+      )
+    ),
   ].slice(0, 500);
 
   if (!payload.title || !payload.body || !userIds.length) {
-    return { ok: false, error: "title, body, userIds requis" };
+    return {
+      ok: false,
+      error: "title, body et userIds sont requis.",
+    };
   }
 
-  const [prefs, tokensByUser] = await Promise.all([
+  const [preferences, tokensByUser] = await Promise.all([
     loadPrefs(admin, userIds),
     loadTokens(admin, userIds),
   ]);
 
   let skipped = 0;
   const targets = [];
-  for (const uid of userIds) {
-    if (!allowsCategory(prefs.get(uid), payload.category)) {
+
+  for (const userId of userIds) {
+    if (!allowsCategory(preferences.get(userId), payload.category)) {
       skipped += 1;
       continue;
     }
-    const tokens = tokensByUser.get(uid);
+
+    const tokens = tokensByUser.get(userId);
+
     if (!tokens?.length) {
       skipped += 1;
       continue;
     }
+
     targets.push(...tokens);
   }
 
   const { sent, dead } = await deliver(targets, payload);
-  if (dead.length) await admin.from("push_tokens").delete().in("id", dead);
 
-  return { ok: true, sent, skipped, pruned: dead.length };
+  let pruneError = null;
+
+  if (dead.length) {
+    const { error } = await admin
+      .from("push_tokens")
+      .delete()
+      .in("id", dead);
+
+    if (error) {
+      pruneError = error.message;
+      console.warn("[push] Nettoyage des jetons expirés :", error.message);
+    }
+  }
+
+  return {
+    ok: true,
+    sent,
+    skipped,
+    pruned: dead.length,
+    ...(pruneError ? { pruneError } : {}),
+  };
 }
