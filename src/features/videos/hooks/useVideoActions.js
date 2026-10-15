@@ -3,7 +3,61 @@ import { supabase } from "../../../supabaseClient.js";
 import { useToast } from "../../../components/ToastContext.jsx";
 import { insertVideo } from "../utils/videosApi.js";
 
-// Actions sur une vidéo : like, partage, repost, suppression.
+// Actions vidéo : likes, partages, reposts et suppression.
+// Les notifications utilisent l'API existante /api/social.
+// Aucun nouvel endpoint Serverless n'est ajouté.
+
+async function notifyVideoInteraction({
+  contentId,
+  interactionType,
+}) {
+  if (!contentId || !interactionType) return;
+
+  try {
+    const {
+      data: { session },
+      error: sessionError,
+    } = await supabase.auth.getSession();
+
+    if (sessionError || !session?.access_token) {
+      console.warn(
+        "[video-notification] Session indisponible.",
+      );
+      return;
+    }
+
+    const response = await fetch("/api/social", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({
+        action: "notify_interaction",
+        content_type: "video",
+        interaction_type: interactionType,
+        content_id: contentId,
+      }),
+    });
+
+    if (!response.ok) {
+      const result = await response.json().catch(() => ({}));
+
+      console.warn(
+        "[video-notification] Notification non envoyée :",
+        result.error || response.status,
+      );
+    }
+  } catch (error) {
+    // Une erreur de notification ne doit pas annuler
+    // un like, un partage ou un repost déjà réussi.
+    console.warn(
+      "[video-notification]",
+      error?.message || error,
+    );
+  }
+}
+
 export function useVideoActions({
   user,
   setVideos,
@@ -24,7 +78,12 @@ export function useVideoActions({
 
     const wasLiked = !!likedMap[videoId];
 
-    setLikedMap((prev) => ({ ...prev, [videoId]: !wasLiked }));
+    // Mise à jour optimiste de l'interface.
+    setLikedMap((prev) => ({
+      ...prev,
+      [videoId]: !wasLiked,
+    }));
+
     setVideos((prev) =>
       prev.map((video) =>
         video.id === videoId
@@ -51,16 +110,35 @@ export function useVideoActions({
       } else {
         const { error } = await supabase
           .from("video_likes")
-          .insert({ video_id: videoId, user_id: user.id });
+          .insert({
+            video_id: videoId,
+            user_id: user.id,
+          });
 
         if (error) throw error;
 
-        onRewardPoints?.("like_video", "Vidéo aimée", videoId);
+        // Notifier l'auteur après l'enregistrement du like.
+        await notifyVideoInteraction({
+          contentId: videoId,
+          interactionType: "like",
+        });
+
+        onRewardPoints?.(
+          "like_video",
+          "Vidéo aimée",
+          videoId,
+        );
+
         showPointsReward?.(2, "Vidéo aimée");
       }
     } catch (error) {
-      console.error(error);
-      setLikedMap((prev) => ({ ...prev, [videoId]: wasLiked }));
+      console.error("[video-like]", error);
+
+      setLikedMap((prev) => ({
+        ...prev,
+        [videoId]: wasLiked,
+      }));
+
       setVideos((prev) =>
         prev.map((video) =>
           video.id === videoId
@@ -74,12 +152,16 @@ export function useVideoActions({
             : video,
         ),
       );
+
       showToast("Impossible de modifier le like.", "error");
     }
   };
 
   const handleShare = async (video) => {
-    const url = `${window.location.origin}?video=${encodeURIComponent(video.id)}`;
+    if (!video?.id) return;
+
+    const url =
+      `${window.location.origin}?video=${encodeURIComponent(video.id)}`;
 
     try {
       if (navigator.share) {
@@ -89,13 +171,39 @@ export function useVideoActions({
           url,
         });
       } else {
+        if (!navigator.clipboard?.writeText) {
+          showToast(
+            "Impossible de copier le lien sur cet appareil.",
+            "error",
+          );
+          return;
+        }
+
         await navigator.clipboard.writeText(url);
         setShareId(video.id);
         showToast("Lien copié !", "success");
-        setTimeout(() => setShareId(null), 1800);
+
+        window.setTimeout(() => {
+          setShareId((current) =>
+            current === video.id ? null : current,
+          );
+        }, 1800);
       }
-    } catch {
-      // User cancelled the native share sheet.
+
+      // Une notification est demandée uniquement après
+      // le succès du partage ou de la copie du lien.
+      if (user) {
+        await notifyVideoInteraction({
+          contentId: video.id,
+          interactionType: "share",
+        });
+      }
+    } catch (error) {
+      // Annulation du menu de partage : aucune notification.
+      if (error?.name !== "AbortError") {
+        console.warn("[video-share]", error);
+        showToast("Impossible de partager cette vidéo.", "error");
+      }
     }
   };
 
@@ -105,7 +213,13 @@ export function useVideoActions({
       return;
     }
 
-    const cleanHandle = video.profiles?.handle?.replace(/^@/, "") || "membre";
+    if (!video?.id || !video?.video_url) {
+      showToast("Cette vidéo ne peut pas être repostée.", "error");
+      return;
+    }
+
+    const cleanHandle =
+      video.profiles?.handle?.replace(/^@/, "") || "membre";
 
     try {
       const { data, error } = await insertVideo(
@@ -132,18 +246,31 @@ export function useVideoActions({
 
       if (error) throw error;
 
-      onRewardPoints?.("repost_video", "Repost", data?.id);
+      // Notifier l'auteur de la vidéo originale.
+      await notifyVideoInteraction({
+        contentId: video.id,
+        interactionType: "repost",
+      });
+
+      onRewardPoints?.(
+        "repost_video",
+        "Repost",
+        data?.id,
+      );
+
       showPointsReward?.(5, "Repost");
       showToast("Vidéo repostée !", "success");
-      loadVideos();
+
+      await loadVideos();
     } catch (error) {
-      console.error(error);
+      console.error("[video-repost]", error);
       showToast("Impossible de reposter cette vidéo.", "error");
     }
   };
 
   const handleDelete = async (videoId) => {
     if (!user) return;
+
     if (!window.confirm("Supprimer cette vidéo ?")) return;
 
     try {
@@ -155,14 +282,24 @@ export function useVideoActions({
 
       if (error) throw error;
 
-      setVideos((prev) => prev.filter((video) => video.id !== videoId));
+      setVideos((prev) =>
+        prev.filter((video) => video.id !== videoId),
+      );
+
       delete videoRefs.current[videoId];
+
       showToast("Vidéo supprimée.", "success");
     } catch (error) {
-      console.error(error);
+      console.error("[video-delete]", error);
       showToast("Impossible de supprimer la vidéo.", "error");
     }
   };
 
-  return { handleLike, handleShare, handleRepost, handleDelete, shareId };
+  return {
+    handleLike,
+    handleShare,
+    handleRepost,
+    handleDelete,
+    shareId,
+  };
 }
