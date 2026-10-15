@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Globe2, ChevronDown, Bell, Sparkles, User, Search, ShieldAlert } from "lucide-react";
+import { Globe2, ChevronDown, Bell, Sparkles, User, Search, ShieldAlert, Plus, X } from "lucide-react";
 import { COLORS as THEME_COLORS } from "../theme.js";
 import { useApp } from "../contexts/AppContext.jsx";
 
@@ -27,7 +27,16 @@ const TICKER_EVENTS = [
   "🌐 Expérience multilingue",
 ];
 
-export function Header({ lang = "fr", setLang, userProfile, onOpenProfile, onOpenNotifications, onOpenSearch }) {
+export function Header({
+  lang = "fr",
+  setLang,
+  userProfile,
+  onOpenProfile,
+  onOpenNotifications,
+  onOpenSearch,
+  isCreateOpen = false,
+  onToggleCreate,
+}) {
   const C = { ...FALLBACK, ...(THEME_COLORS || {}) };
   const { isAnonymous } = useApp() || {};
   const [langMenuOpen, setLangMenuOpen] = useState(false);
@@ -43,6 +52,16 @@ export function Header({ lang = "fr", setLang, userProfile, onOpenProfile, onOpe
     window.addEventListener("click", close);
     return () => window.removeEventListener("click", close);
   }, [langMenuOpen]);
+
+  const handleCreateClick = () => {
+    if (onToggleCreate) {
+      onToggleCreate();
+      // Remonte automatiquement en haut de page pour afficher le champ de création sous le header
+      if (!isCreateOpen) {
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      }
+    }
+  };
 
   const showAvatar = Boolean(userProfile?.avatar_url) && !avatarBroken;
   const initial = userProfile?.display_name
@@ -143,6 +162,20 @@ export function Header({ lang = "fr", setLang, userProfile, onOpenProfile, onOpe
               Invité
             </div>
           )}
+
+          {/* 🌟 BOUTON DE CRÉATION DANS LE HEADER */}
+          <button
+            onClick={handleCreateClick}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full font-bold text-xs shadow-md transition-all active:scale-95 border hover:brightness-110"
+            style={{
+              background: isCreateOpen ? C.surface2 : C.gold,
+              borderColor: C.borderGold,
+              color: isCreateOpen ? C.ivory : "#000",
+            }}
+          >
+            {isCreateOpen ? <X size={14} /> : <Plus size={14} className="stroke-[3]" />}
+            <span className="hidden xs:inline">{isCreateOpen ? "Fermer" : "Créer"}</span>
+          </button>
 
           <div className="relative" onClick={(e) => e.stopPropagation()}>
             <button
