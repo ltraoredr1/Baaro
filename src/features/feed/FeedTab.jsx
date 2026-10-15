@@ -659,19 +659,20 @@ export function FeedTab({
   return (
     <div className="flex flex-col gap-6 max-w-2xl mx-auto w-full pb-20">
       
-      {/* 🌟 MODALE / OVERLAY DE CRÉATION QUI S'AFFICHE AU PREMIER PLAN (SUR L'ÉCRAN VISIBLE) */}
+      {/* 🌟 MODALE / OVERLAY DE CRÉATION CORRIGÉE (BOUTON PUBLIER TOUJOURS VISIBLE) */}
       {activeUserId && isCreateOpen && (
         <div 
           className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200"
           onClick={() => setIsCreateOpen?.(false)}
         >
           <div
-            className="w-full max-w-lg rounded-t-3xl sm:rounded-2xl p-4 border shadow-2xl flex flex-col gap-3 max-h-[90vh] overflow-y-auto"
+            className="w-full max-w-lg rounded-t-3xl sm:rounded-2xl border shadow-2xl flex flex-col max-h-[85vh] sm:max-h-[90vh] overflow-hidden"
             style={{ borderColor: COLORS.borderGold, background: COLORS.surface }}
             onClick={(e) => e.stopPropagation()}
           >
+            {/* En-tête (Fixe) */}
             <div
-              className="flex items-center justify-between border-b pb-2 text-xs font-semibold"
+              className="flex items-center justify-between border-b p-4 text-xs font-semibold shrink-0"
               style={{ borderColor: COLORS.border, color: COLORS.gold }}
             >
               <div className="flex items-center gap-2">
@@ -687,42 +688,46 @@ export function FeedTab({
               </button>
             </div>
 
-            <RichTextComposer
-              value={newText}
-              onChange={setNewText}
-              pollData={pollData}
-              onPollChange={setPollData}
-              placeholder="Partagez une perspective, une analyse ou une innovation avec le monde..."
-              rows={4}
-              disabled={submitting}
-            />
+            {/* Corps défilable (Texte + Sondage + Média) */}
+            <div className="p-4 flex-1 overflow-y-auto flex flex-col gap-3">
+              <RichTextComposer
+                value={newText}
+                onChange={setNewText}
+                pollData={pollData}
+                onPollChange={setPollData}
+                placeholder="Partagez une perspective, une analyse ou une innovation avec le monde..."
+                rows={4}
+                disabled={submitting}
+              />
 
-            {mediaPreview && (
-              <div
-                className="relative rounded-xl overflow-hidden max-h-60 border"
-                style={{ borderColor: COLORS.border }}
-              >
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMediaFile(null);
-                    setMediaPreview(null);
-                  }}
-                  className="absolute top-2 right-2 z-10 p-1.5 rounded-full bg-black/60 text-white hover:bg-black transition-colors"
-                  aria-label="Retirer le média"
+              {mediaPreview && (
+                <div
+                  className="relative rounded-xl overflow-hidden max-h-60 border"
+                  style={{ borderColor: COLORS.border }}
                 >
-                  <X size={14} />
-                </button>
-                {mediaFile?.type?.startsWith("video") ? (
-                  <video src={mediaPreview} controls className="w-full h-full object-cover" />
-                ) : (
-                  <img src={mediaPreview} alt="Aperçu" className="w-full h-full object-cover" />
-                )}
-              </div>
-            )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMediaFile(null);
+                      setMediaPreview(null);
+                    }}
+                    className="absolute top-2 right-2 z-10 p-1.5 rounded-full bg-black/60 text-white hover:bg-black transition-colors"
+                    aria-label="Retirer le média"
+                  >
+                    <X size={14} />
+                  </button>
+                  {mediaFile?.type?.startsWith("video") ? (
+                    <video src={mediaPreview} controls className="w-full h-full object-cover" />
+                  ) : (
+                    <img src={mediaPreview} alt="Aperçu" className="w-full h-full object-cover" />
+                  )}
+                </div>
+              )}
+            </div>
 
+            {/* Pied de page (Fixe avec le bouton Publier) */}
             <div
-              className="flex items-center justify-between border-t pt-3 flex-wrap gap-2"
+              className="flex items-center justify-between border-t p-3 flex-wrap gap-2 shrink-0 bg-inherit"
               style={{ borderColor: COLORS.border }}
             >
               <div className="flex items-center gap-2">
@@ -747,7 +752,7 @@ export function FeedTab({
                   type="button"
                   onClick={() =>
                     window.dispatchEvent(
-                      new CustomEvent("baaro:ask-ai", {
+                      new CustomEvent("baaro:ai-draft", {
                         detail: {
                           prompt: newText.trim()
                             ? `Améliore ce brouillon de publication pour BAARO et rends-le plus engageant :\n"${newText.trim()}"\n\n`
