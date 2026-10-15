@@ -56,7 +56,6 @@ export function Header({
   const handleCreateClick = () => {
     if (onToggleCreate) {
       onToggleCreate();
-      // Remonte automatiquement en haut de page pour afficher le champ de création sous le header
       if (!isCreateOpen) {
         window.scrollTo({ top: 0, behavior: "smooth" });
       }
@@ -92,13 +91,14 @@ export function Header({
         <style>{`@keyframes meridian-scroll{from{transform:translateX(0)}to{transform:translateX(-50%)}}`}</style>
       </div>
 
-      <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between gap-4">
+      <div className="max-w-7xl mx-auto px-2.5 sm:px-4 py-2.5 flex items-center justify-between gap-1.5 sm:gap-4">
+        {/* LOGO ET VERSION 0.1.0 (Texte BAARO retiré) */}
         <div
-          className="flex items-center gap-3 cursor-pointer shrink-0"
+          className="flex items-center gap-2 cursor-pointer shrink-0"
           onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
         >
           <div
-            className="w-10 h-10 rounded-xl overflow-hidden flex items-center justify-center shadow-lg border"
+            className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl overflow-hidden flex items-center justify-center shadow-lg border shrink-0"
             style={{ borderColor: C.borderGold, background: C.bg }}
           >
             <img
@@ -110,26 +110,15 @@ export function Header({
           </div>
           <div>
             <div
-              className="flex items-center gap-1.5 font-extrabold text-lg tracking-wider font-serif"
-              style={{ color: C.ivory }}
+              className="text-[10px] sm:text-xs px-2 py-0.5 rounded-full uppercase tracking-wider font-sans font-bold"
+              style={{ background: C.tealGlow, color: C.teal }}
             >
-              BAARO
-              <span
-                className="text-[10px] px-1.5 py-0.5 rounded-full uppercase tracking-wider font-sans font-semibold"
-                style={{ background: C.tealGlow, color: C.teal }}
-              >
-                v2.0
-              </span>
-            </div>
-            <div
-              className="text-[10px] hidden sm:block tracking-widest uppercase"
-              style={{ color: C.muted }}
-            >
-              Crée · Découvre · Connecte
+              v0.1.0
             </div>
           </div>
         </div>
 
+        {/* BARRE DE RECHERCHE (DESKTOP) */}
         <button
           onClick={onOpenSearch}
           className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-xl border text-xs font-medium hover:border-amber-400/50 transition flex-1 max-w-xs"
@@ -139,18 +128,21 @@ export function Header({
           <span className="truncate">Rechercher membres, hashtags...</span>
         </button>
 
-        <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+        {/* ACTIONS & ICONES DU HEADER */}
+        <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
+          {/* RECHERCHE (MOBILE) */}
           <button
             onClick={onOpenSearch}
-            className="sm:hidden p-2 rounded-lg border hover:opacity-80 transition"
+            className="sm:hidden p-1.5 rounded-lg border hover:opacity-80 transition shrink-0"
             style={{ background: C.surface, borderColor: C.border, color: C.gold }}
           >
-            <Search size={16} />
+            <Search size={15} />
           </button>
 
+          {/* BADGE INVITÉ */}
           {isAnonymous && (
             <div
-              className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[10px] font-bold"
+              className="hidden sm:flex items-center gap-1.5 px-2 py-1 rounded-full border text-[10px] font-bold shrink-0"
               style={{
                 background: "rgba(236,72,153,0.12)",
                 borderColor: "rgba(236,72,153,0.35)",
@@ -163,10 +155,10 @@ export function Header({
             </div>
           )}
 
-          {/* 🌟 BOUTON DE CRÉATION DANS LE HEADER */}
+          {/* BOUTON DE CRÉATION */}
           <button
             onClick={handleCreateClick}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full font-bold text-xs shadow-md transition-all active:scale-95 border hover:brightness-110"
+            className="flex items-center gap-1 px-2.5 py-1.5 rounded-full font-bold text-xs shadow-md transition-all active:scale-95 border hover:brightness-110 shrink-0"
             style={{
               background: isCreateOpen ? C.surface2 : C.gold,
               borderColor: C.borderGold,
@@ -177,15 +169,16 @@ export function Header({
             <span className="hidden xs:inline">{isCreateOpen ? "Fermer" : "Créer"}</span>
           </button>
 
-          <div className="relative" onClick={(e) => e.stopPropagation()}>
+          {/* SELECTEUR DE LANGUE */}
+          <div className="relative shrink-0" onClick={(e) => e.stopPropagation()}>
             <button
               onClick={() => setLangMenuOpen((v) => !v)}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border hover:border-amber-500/40 transition"
+              className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-medium border hover:border-amber-500/40 transition"
               style={{ background: C.surface, borderColor: C.border, color: C.ivory }}
             >
-              <Globe2 size={14} style={{ color: C.teal }} />
-              <span className="uppercase">{lang}</span>
-              <ChevronDown size={12} style={{ color: C.muted }} />
+              <Globe2 size={13} style={{ color: C.teal }} />
+              <span className="uppercase text-[11px]">{lang}</span>
+              <ChevronDown size={11} style={{ color: C.muted }} />
             </button>
             {langMenuOpen && (
               <div
@@ -214,25 +207,28 @@ export function Header({
             )}
           </div>
 
+          {/* NOTIFICATIONS */}
           <button
             onClick={onOpenNotifications}
-            className="p-2 rounded-lg relative hover:opacity-80 transition border"
+            className="p-1.5 rounded-lg relative hover:opacity-80 transition border shrink-0"
             style={{ background: C.surface, borderColor: C.border, color: C.ivory }}
           >
-            <Bell size={16} />
+            <Bell size={15} />
             <span
               className="absolute top-1 right-1 w-2 h-2 rounded-full"
               style={{ background: C.gold }}
             />
           </button>
 
+          {/* BOUTON DE PROFIL */}
           <button
             onClick={onOpenProfile}
-            className="flex items-center gap-2 p-1 pl-2 pr-2.5 rounded-full border hover:border-amber-500/50 transition"
+            className="flex items-center gap-1.5 p-1 sm:pl-2 sm:pr-2.5 rounded-full border hover:border-amber-500/50 transition shrink-0 min-w-max"
             style={{ background: C.surface2, borderColor: C.borderGold }}
+            aria-label="Voir le profil"
           >
             <div
-              className="w-7 h-7 rounded-full flex items-center justify-center font-bold text-xs shrink-0 overflow-hidden"
+              className="w-7 h-7 sm:w-7 sm:h-7 rounded-full flex items-center justify-center font-bold text-xs shrink-0 overflow-hidden"
               style={{ background: C.gold, color: C.bg }}
             >
               {showAvatar ? (
