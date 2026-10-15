@@ -1,201 +1,217 @@
-/**
- * BAARO — Sonnerie d'appel (entrant + ringback sortant)
- *
- * Utilise Web Audio API (pas de fichier externe).
- * - Incoming : rythme type téléphone (double bip, pause, boucle) + vibration
- * - Outgoing : ton d'attente (ringback) plus doux
- *
- * Usage :
- *   import { startIncomingRingtone, startOutgoingRingback, stopRingtone } from "../lib/callRingtone.js";
- *   startIncomingRingtone();
- *   // ...
- *   stopRingtone();
- */
-
-let audioCtx = null;
-let loopTimer = null;
-let oscillators = [];
-let gainNodes = [];
+let audioContext = null;
 let active = false;
-let mode = null; // "incoming" | "outgoing"
+let currentMode = null;
+let loopTimer = null;
+
+const pendingTimers = new Set();
+const oscillators = new Set();
 
 function getCtx() {
-  if (!audioCtx) {
-    const Ctx = window.AudioContext || window.webkitAudioContext;
-    if (!Ctx) return null;
-    audioCtx = new Ctx();
+  if (typeof window === "undefined") return null;
+
+  const AudioContextClass =
+    window.AudioContext || window.webkitAudioContext;
+
+  if (!AudioContextClass) return null;
+
+  try {
+    if (!audioContext || audioContext.state === "closed") {
+      audioContext = new AudioContextClass();
+    }
+
+    if (audioContext.state === "suspended") {
+      audioContext.resume().catch(() => {});
+    }
+
+    return audioContext;
+  } catch (error) {
+    console.warn("[callRingtone] Audio indisponible :", error);
+    return null;
   }
-  if (audioCtx.state === "suspended") {
-    audioCtx.resume().catch(() => {});
-  }
-  return audioCtx;
 }
 
-function stopOscillators() {
-  oscillators.forEach((o) => {
-    try {
-      o.stop();
-      o.disconnect();
-    } catch (_) {}
-  });
-  gainNodes.forEach((g) => {
-    try {
-      g.disconnect();
-    } catch (_) {}
-  });
-  oscillators = [];
-  gainNodes = [];
-}
+function clearPendingTimers() {
+  for (const timer of pendingTimers) {
+    clearTimeout(timer);
+  }
 
-function clearLoop() {
-  if (loopTimer) {
+  pendingTimers.clear();
+
+  if (loopTimer !== null) {
     clearTimeout(loopTimer);
     loopTimer = null;
   }
 }
 
-/** Vibration native (Android / certains navigateurs) */
-function vibrateIncoming() {
-  try {
-    if (navigator.vibrate) {
-      // motif : vibre 400ms, pause 200, vibre 400, pause 1200 (cycle sonnerie)
-      navigator.vibrate([400, 200, 400, 1200]);
+function stopOscillators() {
+  for (const oscillator of oscillators) {
+    try {
+      oscillator.stop();
+    } catch {
+      // L'oscillateur peut déjà être arrêté.
     }
-  } catch (_) {}
+
+    try {
+      oscillator.disconnect();
+    } catch {
+      // Déjà déconnecté.
+    }
+  }
+
+  oscillators.clear();
 }
 
-function vibrateStop() {
+function playTone(frequencies, duration = 0.18, volume = 0.12) {
+  if (!active) return;
+
+  const ctx = getCtx();
+  if (!ctx || ctx.state === "closed") return;
+
   try {
-    if (navigator.vibrate) navigator.vibrate(0);
-  } catch (_) {}
+    const now = ctx.currentTime;
+    const master = ctx.createGain();
+
+    master.gain.setValueAtTime(0.0001, now);
+    master.gain.exponentialRampToValueAtTime(
+      Math.max(0.0001, Math.min(volume, 1)),
+      now + 0.02
+    );
+    master.gain.setValueAtTime(
+      Math.max(0.0001, Math.min(volume, 1)),
+      now + Math.max(0.03, duration - 0.03)
+    );
+    master.gain.exponentialRampToValueAtTime(
+      0.0001,
+      now + duration
+    );
+
+    master.connect(ctx.destination);
+
+    for (const frequency of frequencies) {
+      const oscillator = ctx.createOscillator();
+      oscillator.type = "sine";
+      oscillator.frequency.setValueAtTime(frequency, now);
+      oscillator.connect(master);
+
+      oscillators.add(oscillator);
+
+      oscillator.onended = () => {
+        oscillators.delete(oscillator);
+
+        try {
+          oscillator.disconnect();
+        } catch {
+          // Déjà déconnecté.
+        }
+      };
+
+      oscillator.start(now);
+      oscillator.stop(now + duration);
+    }
+
+    const cleanupTimer = setTimeout(() => {
+      pendingTimers.delete(cleanupTimer);
+
+      try {
+        master.disconnect();
+      } catch {
+        // Déjà déconnecté.
+      }
+    }, Math.ceil((duration + 0.1) * 1000));
+
+    pendingTimers.add(cleanupTimer);
+  } catch (error) {
+    console.warn("[callRingtone] Lecture audio impossible :", error);
+  }
 }
 
-/**
- * Joue un "ring" court (deux tons) — style sonnerie téléphone.
- * freqs: [Hz, Hz], durationMs par bip, gapMs entre les 2 bips.
- */
-function playDoubleRing(freqs, durationMs, gapMs, volume) {
-  const ctx = getCtx();
-  if (!ctx) return;
+function scheduleTimer(callback, delay) {
+  const timer = setTimeout(() => {
+    pendingTimers.delete(timer);
 
-  const now = ctx.currentTime;
-  const vol = Math.max(0.05, Math.min(0.45, volume));
-
-  freqs.forEach((freq, i) => {
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = "sine";
-    osc.frequency.value = freq;
-
-    // Enveloppe douce
-    const t0 = now;
-    gain.gain.setValueAtTime(0, t0);
-    gain.gain.linearRampToValueAtTime(vol, t0 + 0.03);
-    gain.gain.setValueAtTime(vol, t0 + durationMs / 1000 - 0.05);
-    gain.gain.linearRampToValueAtTime(0, t0 + durationMs / 1000);
-
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.start(t0);
-    osc.stop(t0 + durationMs / 1000 + 0.02);
-
-    oscillators.push(osc);
-    gainNodes.push(gain);
-  });
-
-  // 2e bip après gap
-  setTimeout(() => {
     if (!active) return;
-    const ctx2 = getCtx();
-    if (!ctx2) return;
-    const t1 = ctx2.currentTime;
-    freqs.forEach((freq) => {
-      const osc = ctx2.createOscillator();
-      const gain = ctx2.createGain();
-      osc.type = "sine";
-      osc.frequency.value = freq;
-      gain.gain.setValueAtTime(0, t1);
-      gain.gain.linearRampToValueAtTime(vol, t1 + 0.03);
-      gain.gain.setValueAtTime(vol, t1 + durationMs / 1000 - 0.05);
-      gain.gain.linearRampToValueAtTime(0, t1 + durationMs / 1000);
-      osc.connect(gain);
-      gain.connect(ctx2.destination);
-      osc.start(t1);
-      osc.stop(t1 + durationMs / 1000 + 0.02);
-      oscillators.push(osc);
-      gainNodes.push(gain);
-    });
-  }, gapMs);
+
+    callback();
+  }, delay);
+
+  pendingTimers.add(timer);
+  return timer;
 }
 
-/**
- * Ringback sortant : un seul ton plus long, style "appel en cours…".
- */
-function playRingbackTone(volume) {
-  const ctx = getCtx();
-  if (!ctx) return;
-  const now = ctx.currentTime;
-  const vol = Math.max(0.04, Math.min(0.28, volume));
+function playDoubleRing() {
+  if (!active) return;
 
-  // Deux fréquences classiques ringback (~440 + 480 Hz)
-  [440, 480].forEach((freq) => {
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = "sine";
-    osc.frequency.value = freq;
-    gain.gain.setValueAtTime(0, now);
-    gain.gain.linearRampToValueAtTime(vol * 0.7, now + 0.05);
-    gain.gain.setValueAtTime(vol * 0.7, now + 1.8);
-    gain.gain.linearRampToValueAtTime(0, now + 2.0);
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.start(now);
-    osc.stop(now + 2.05);
-    oscillators.push(osc);
-    gainNodes.push(gain);
-  });
+  playTone([440, 480], 0.22, 0.12);
+
+  scheduleTimer(() => {
+    playTone([440, 480], 0.22, 0.12);
+  }, 380);
 }
 
-function scheduleIncomingLoop() {
-  if (!active || mode !== "incoming") return;
-  // Double bip (420+480 Hz) ~ 400ms, gap 200ms, puis silence ~1.2s
-  playDoubleRing([420, 520], 380, 200, 0.32);
-  vibrateIncoming();
-  loopTimer = setTimeout(scheduleIncomingLoop, 2000);
+function vibrate(pattern) {
+  if (typeof navigator === "undefined") return;
+  if (typeof navigator.vibrate !== "function") return;
+
+  try {
+    navigator.vibrate(pattern);
+  } catch {
+    // Vibration non prise en charge ou refusée.
+  }
 }
 
-function scheduleOutgoingLoop() {
-  if (!active || mode !== "outgoing") return;
-  playRingbackTone(0.22);
-  // Ringback : 2s ton + 2s silence (standard)
-  loopTimer = setTimeout(scheduleOutgoingLoop, 4000);
+function startLoop(mode) {
+  stopRingtone();
+
+  active = true;
+  currentMode = mode;
+
+  const play = () => {
+    if (!active || currentMode !== mode) return;
+
+    if (mode === "incoming") {
+      playDoubleRing();
+      vibrate([250, 120, 250]);
+    } else {
+      playTone([440], 1.5, 0.08);
+    }
+
+    const delay = mode === "incoming" ? 3000 : 3000;
+
+    loopTimer = setTimeout(() => {
+      loopTimer = null;
+
+      if (active && currentMode === mode) {
+        play();
+      }
+    }, delay);
+  };
+
+  play();
 }
 
-/** Démarre la sonnerie d'appel entrant (boucle + vibration). */
 export function startIncomingRingtone() {
-  stopRingtone();
-  active = true;
-  mode = "incoming";
-  getCtx(); // unlock audio context si possible
-  scheduleIncomingLoop();
+  startLoop("incoming");
 }
 
-/** Démarre le ton d'attente (ringback) pour l'appelant. */
 export function startOutgoingRingback() {
-  stopRingtone();
-  active = true;
-  mode = "outgoing";
-  getCtx();
-  scheduleOutgoingLoop();
+  startLoop("outgoing");
 }
 
-/** Arrête toute sonnerie / vibration. */
 export function stopRingtone() {
   active = false;
-  mode = null;
-  clearLoop();
+  currentMode = null;
+
+  clearPendingTimers();
   stopOscillators();
-  vibrateStop();
+
+  if (typeof navigator !== "undefined" &&
+      typeof navigator.vibrate === "function") {
+    try {
+      navigator.vibrate(0);
+    } catch {
+      // Vibration non disponible.
+    }
+  }
 }
 
 export function isRingtonePlaying() {
