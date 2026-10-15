@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { supabase } from '../../supabaseClient.js';
 import { COLORS as C } from '../../theme.js';
-import { Plus, Eye, Heart, Send, Trash2, Image as ImageIcon, X, HelpCircle, ShoppingBag } from 'lucide-react';
+import { Plus, Eye, Heart, Send, Trash2, Image as ImageIcon, X, HelpCircle, ShoppingBag, History, Sparkles } from 'lucide-react';
 import { EngagementList } from '../../components/EngagementList.jsx';
 import { uploadExternalMedia } from '../../lib/externalMedia.js';
 
@@ -25,6 +25,9 @@ export function StoriesTab({ id, onOpenProfile }) {
   const [stories, setStories] = useState([]);
   const [loading, setLoading] = useState(true);
   const [caption, setCaption] = useState('');
+  
+  // --- ÉTAT DE VISIBILITÉ DU FORMULAIRE DE CRÉATION (Bouton Unique) ---
+  const [isCreateOpen, setIsCreateOpen] = useState(false);
   
   // --- CARROUSEL MULTI-MÉDIAS ---
   const [mediaItems, setMediaItems] = useState([]); 
@@ -303,6 +306,7 @@ export function StoriesTab({ id, onOpenProfile }) {
       setSelectedProduct(null);
       setShowPollComposer(false);
       setShowProductPicker(false);
+      setIsCreateOpen(false); // Fermer le formulaire après publication
       await load();
     } catch (e) {
       setError('Erreur : ' + (e.message || 'Impossible de créer la story'));
@@ -389,6 +393,19 @@ export function StoriesTab({ id, onOpenProfile }) {
           <h2 className="text-xl font-bold" style={{ color: C.ivory }}>Stories</h2>
           <p className="text-xs" style={{ color: C.muted }}>24 h · texte, média, produit, sondage et musique</p>
         </div>
+
+        {/* BOUTON UNIQUE DE CRÉATION DE STORY */}
+        {id && (
+          <button
+            type="button"
+            onClick={() => setIsCreateOpen(!isCreateOpen)}
+            className="flex items-center gap-2 px-4 py-2 rounded-full font-bold text-xs shadow-lg transition-all active:scale-95"
+            style={{ background: C.gold || '#f59e0b', color: '#000' }}
+          >
+            <History size={16} />
+            <span>{isCreateOpen ? "Fermer" : "Créer une story"}</span>
+          </button>
+        )}
       </div>
 
       {error && (
@@ -400,138 +417,147 @@ export function StoriesTab({ id, onOpenProfile }) {
         </div>
       )}
 
-      {/* FORMULAIRE DE CRÉATION DE STORY */}
-      <div className="rounded-2xl p-4 border shadow-sm backdrop-blur-md space-y-4" style={{ background: C.surface, borderColor: C.border }}>
-        {/* ÉDITEUR DE TEXTE ENRICHI */}
-        <RichTextComposer
-          value={caption}
-          onChange={setCaption}
-          placeholder="Créer une story..."
-          rows={3}
-        />
-
-        {/* CARROUSEL DE MÉDIAS */}
-        {mediaItems.length > 0 && (
-          <MediaCarousel
-            mediaItems={mediaItems}
-            selectedIndex={selectedMediaIndex}
-            onSelectIndex={setSelectedMediaIndex}
-            onMove={handleMoveMedia}
-            onRemove={handleRemoveMedia}
-          />
-        )}
-
-        {/* PRODUIT ÉPINGLÉ PRÉVISUALISATION */}
-        {selectedProduct && (
-          <div className="relative border rounded-xl p-2 bg-white/5">
-            <button
-              onClick={() => setSelectedProduct(null)}
-              className="absolute top-2 right-2 p-1 rounded-full bg-black/60 text-white z-10"
-            >
-              <X size={14} />
+      {/* FORMULAIRE DE CRÉATION DE STORY (AFFICHÉ SI isCreateOpen EST VRAI) */}
+      {isCreateOpen && (
+        <div className="rounded-2xl p-4 border shadow-xl backdrop-blur-md space-y-4 animate-in fade-in slide-in-from-top-3 duration-200" style={{ background: C.surface, borderColor: C.border }}>
+          <div className="flex items-center justify-between border-b pb-2">
+            <span className="text-xs font-bold" style={{ color: C.gold }}>Nouvelle Story éphémère</span>
+            <button onClick={() => setIsCreateOpen(false)} className="text-zinc-400 hover:text-white">
+              <X size={16} />
             </button>
-            <ProductCard
-              product={selectedProduct}
-              quantity={cartQuantities[selectedProduct.id] || 0}
-              onAdd={() => handleCartAdd(selectedProduct.id)}
-              onRemove={() => handleCartRemove(selectedProduct.id)}
-            />
           </div>
-        )}
 
-        {/* SÉLECTION DE PRODUIT BOUTIQUE */}
-        {showProductPicker && (
-          <div className="p-3 rounded-xl border space-y-2 bg-black/30 border-amber-500/30">
-            <div className="flex justify-between items-center">
-              <span className="text-xs font-bold text-amber-400">Épingler un produit de ta boutique</span>
-              <button onClick={() => setShowProductPicker(false)} className="text-zinc-400 hover:text-white"><X size={14}/></button>
-            </div>
-            {myProducts.length === 0 ? (
-              <p className="text-xs text-zinc-400">Aucun produit disponible dans ta boutique.</p>
-            ) : (
-              <div className="grid grid-cols-1 gap-2 max-h-48 overflow-y-auto pr-1">
-                {myProducts.map(prod => (
-                  <button
-                    key={prod.id}
-                    onClick={() => {
-                      setSelectedProduct(prod);
-                      setShowProductPicker(false);
-                    }}
-                    className="text-left p-2 rounded-lg border border-white/10 hover:border-amber-400/50 bg-white/5 transition flex items-center justify-between"
-                  >
-                    <span className="text-xs font-semibold text-white truncate">{prod.name}</span>
-                    <span className="text-xs font-bold text-amber-400">{prod.price} {prod.currency}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* SONDAGE */}
-        {showPollComposer && (
-          <PollComposer
-            value={pollData}
-            onChange={setPollData}
-            onClose={() => {
-              setShowPollComposer(false);
-              setPollData(null);
-            }}
+          {/* ÉDITEUR DE TEXTE ENRICHI */}
+          <RichTextComposer
+            value={caption}
+            onChange={setCaption}
+            placeholder="Créer une story..."
+            rows={3}
           />
-        )}
 
-        <div className="flex items-center gap-2 flex-wrap">
-          <label className="flex items-center gap-2 px-3 py-2 rounded-xl border cursor-pointer active:opacity-70 transition-all hover:bg-white/5" style={{ borderColor: C.border, color: C.ivory }}>
-            <ImageIcon size={16} />
-            <span className="text-sm">Ajouter média</span>
-            <input
-              type="file"
-              accept="image/*,video/*"
-              multiple
-              onChange={handleAddMediaFiles}
-              className="hidden"
+          {/* CARROUSEL DE MÉDIAS */}
+          {mediaItems.length > 0 && (
+            <MediaCarousel
+              mediaItems={mediaItems}
+              selectedIndex={selectedMediaIndex}
+              onSelectIndex={setSelectedMediaIndex}
+              onMove={handleMoveMedia}
+              onRemove={handleRemoveMedia}
             />
-          </label>
+          )}
 
-          <button
-            type="button"
-            onClick={() => setShowPollComposer(!showPollComposer)}
-            className="flex items-center gap-2 px-3 py-2 rounded-xl border transition-all hover:bg-white/5"
-            style={{ borderColor: C.border, color: C.teal || '#2dd4bf' }}
-          >
-            <HelpCircle size={16} />
-            <span className="text-sm">{showPollComposer ? "Masquer le sondage" : "Créer un sondage"}</span>
-          </button>
+          {/* PRODUIT ÉPINGLÉ PRÉVISUALISATION */}
+          {selectedProduct && (
+            <div className="relative border rounded-xl p-2 bg-white/5">
+              <button
+                onClick={() => setSelectedProduct(null)}
+                className="absolute top-2 right-2 p-1 rounded-full bg-black/60 text-white z-10"
+              >
+                <X size={14} />
+              </button>
+              <ProductCard
+                product={selectedProduct}
+                quantity={cartQuantities[selectedProduct.id] || 0}
+                onAdd={() => handleCartAdd(selectedProduct.id)}
+                onRemove={() => handleCartRemove(selectedProduct.id)}
+              />
+            </div>
+          )}
 
-          <button
-            type="button"
-            onClick={() => setShowProductPicker(!showProductPicker)}
-            className="flex items-center gap-2 px-3 py-2 rounded-xl border transition-all hover:bg-white/5"
-            style={{ borderColor: C.border, color: C.gold || '#f59e0b' }}
-          >
-            <ShoppingBag size={16} />
-            <span className="text-sm">Produit</span>
-          </button>
+          {/* SÉLECTION DE PRODUIT BOUTIQUE */}
+          {showProductPicker && (
+            <div className="p-3 rounded-xl border space-y-2 bg-black/30 border-amber-500/30">
+              <div className="flex justify-between items-center">
+                <span className="text-xs font-bold text-amber-400">Épingler un produit de ta boutique</span>
+                <button onClick={() => setShowProductPicker(false)} className="text-zinc-400 hover:text-white"><X size={14}/></button>
+              </div>
+              {myProducts.length === 0 ? (
+                <p className="text-xs text-zinc-400">Aucun produit disponible dans ta boutique.</p>
+              ) : (
+                <div className="grid grid-cols-1 gap-2 max-h-48 overflow-y-auto pr-1">
+                  {myProducts.map(prod => (
+                    <button
+                      key={prod.id}
+                      onClick={() => {
+                        setSelectedProduct(prod);
+                        setShowProductPicker(false);
+                      }}
+                      className="text-left p-2 rounded-lg border border-white/10 hover:border-amber-400/50 bg-white/5 transition flex items-center justify-between"
+                    >
+                      <span className="text-xs font-semibold text-white truncate">{prod.name}</span>
+                      <span className="text-xs font-bold text-amber-400">{prod.price} {prod.currency}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* SONDAGE */}
+          {showPollComposer && (
+            <PollComposer
+              value={pollData}
+              onChange={setPollData}
+              onClose={() => {
+                setShowPollComposer(false);
+                setPollData(null);
+              }}
+            />
+          )}
+
+          <div className="flex items-center gap-2 flex-wrap">
+            <label className="flex items-center gap-2 px-3 py-2 rounded-xl border cursor-pointer active:opacity-70 transition-all hover:bg-white/5" style={{ borderColor: C.border, color: C.ivory }}>
+              <ImageIcon size={16} />
+              <span className="text-sm">Ajouter média</span>
+              <input
+                type="file"
+                accept="image/*,video/*"
+                multiple
+                onChange={handleAddMediaFiles}
+                className="hidden"
+              />
+            </label>
+
+            <button
+              type="button"
+              onClick={() => setShowPollComposer(!showPollComposer)}
+              className="flex items-center gap-2 px-3 py-2 rounded-xl border transition-all hover:bg-white/5"
+              style={{ borderColor: C.border, color: C.teal || '#2dd4bf' }}
+            >
+              <HelpCircle size={16} />
+              <span className="text-sm">{showPollComposer ? "Masquer le sondage" : "Créer un sondage"}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setShowProductPicker(!showProductPicker)}
+              className="flex items-center gap-2 px-3 py-2 rounded-xl border transition-all hover:bg-white/5"
+              style={{ borderColor: C.border, color: C.gold || '#f59e0b' }}
+            >
+              <ShoppingBag size={16} />
+              <span className="text-sm">Produit</span>
+            </button>
+          </div>
+
+          {/* MUSIQUE */}
+          <AudioPicker
+            selectedAudio={selectedAudio}
+            onSelectAudio={setSelectedAudio}
+            onRemoveAudio={() => setSelectedAudio(null)}
+          />
+
+          <div className="flex justify-end pt-2">
+            <button
+              disabled={creating || (!caption.trim() && mediaItems.length === 0 && !selectedAudio && !pollData?.question && !selectedProduct)}
+              onClick={create}
+              className="px-4 py-2 rounded-xl font-semibold flex items-center disabled:opacity-50 active:opacity-80 transition-all shadow-md"
+              style={{ background: C.gold, color: '#000' }}
+            >
+              {creating ? 'Publication...' : <><Plus size={16} className="inline mr-1" />Publier la story</>}
+            </button>
+          </div>
         </div>
-
-        {/* MUSIQUE */}
-        <AudioPicker
-          selectedAudio={selectedAudio}
-          onSelectAudio={setSelectedAudio}
-          onRemoveAudio={() => setSelectedAudio(null)}
-        />
-
-        <div className="flex justify-end pt-2">
-          <button
-            disabled={creating || (!caption.trim() && mediaItems.length === 0 && !selectedAudio && !pollData?.question && !selectedProduct)}
-            onClick={create}
-            className="px-4 py-2 rounded-xl font-semibold flex items-center disabled:opacity-50 active:opacity-80 transition-all shadow-md"
-            style={{ background: C.gold, color: '#000' }}
-          >
-            {creating ? 'Publication...' : <><Plus size={16} className="inline mr-1" />Publier</>}
-          </button>
-        </div>
-      </div>
+      )}
 
       {/* GRILLE DES STORIES */}
       {loading ? (
