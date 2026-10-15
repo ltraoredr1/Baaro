@@ -107,7 +107,6 @@ export function FeedTab({
   const [reportPost, setReportPost] = useState(null);
 
   // J'aime, Reposts, commentaires, traduction
-  const [likedPosts, setLikedPosts] = useState({});
   const [repostedPosts, setRepostedPosts] = useState({});
   const [commentOpen, setCommentOpen] = useState({});
   const [commentsMap, setCommentsMap] = useState({});
