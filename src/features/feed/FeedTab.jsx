@@ -659,14 +659,14 @@ export function FeedTab({
   return (
     <div className="flex flex-col gap-6 max-w-2xl mx-auto w-full pb-20">
       
-      {/* 🌟 MODALE / OVERLAY DE CRÉATION CORRIGÉE (BOUTON PUBLIER TOUJOURS VISIBLE) */}
+      {/* 🌟 MODALE / OVERLAY DE CRÉATION CORRIGÉE (ÉVITE LA BARRE MOBILE) */}
       {activeUserId && isCreateOpen && (
         <div 
           className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200"
           onClick={() => setIsCreateOpen?.(false)}
         >
           <div
-            className="w-full max-w-lg rounded-t-3xl sm:rounded-2xl border shadow-2xl flex flex-col max-h-[85vh] sm:max-h-[90vh] overflow-hidden"
+            className="w-full max-w-lg rounded-t-3xl sm:rounded-2xl border shadow-2xl flex flex-col max-h-[75vh] sm:max-h-[85vh] mb-16 sm:mb-0 overflow-hidden"
             style={{ borderColor: COLORS.borderGold, background: COLORS.surface }}
             onClick={(e) => e.stopPropagation()}
           >
