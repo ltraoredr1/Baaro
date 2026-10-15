@@ -288,7 +288,6 @@ function getUpstashConfig() {
 /**
  * Exécute une commande via l'API REST Upstash.
  *
- * Les commandes sont intégrées au chemin URL :
  * GET /incr/<clé>
  * GET /expire/<clé>/<secondes>
  */
@@ -372,9 +371,7 @@ export async function rateLimitAsync(
 
     /*
      * L'expiration est rafraîchie à chaque requête.
-     * Cela évite de laisser un compteur sans expiration si une commande
-     * EXPIRE précédente a échoué. Cette stratégie correspond à une
-     * fenêtre glissante : l'expiration est prolongée par chaque requête.
+     * Cette stratégie prolonge l'expiration à chaque appel.
      */
     const expiryResult = await upstashCommand(
       `${url}/expire/${encodedKey}/${windowSec}`,
@@ -413,9 +410,32 @@ export async function rateLimitAsync(
       remaining: Math.max(0, max - count),
       headers,
     };
-  } catch {
+  } catch (err) {
+    /*
+     * Ne jamais écrire le jeton ou l'URL Upstash dans les logs.
+     * Seuls les messages internes connus ou le nom du type
+     * d'erreur sont autorisés.
+     */
+    const safeMessages = new Set([
+      "URL Upstash invalide.",
+      "Upstash doit utiliser HTTPS.",
+      "Jeton Upstash manquant.",
+      "Réponse Upstash invalide.",
+      "Compteur Upstash invalide.",
+      "Expiration du compteur Upstash non confirmée.",
+    ]);
+
+    const errorMessage =
+      err instanceof Error ? err.message : "";
+
+    const safeDiagnostic =
+      /^Upstash HTTP \d{3}$/.test(errorMessage) ||
+      safeMessages.has(errorMessage)
+        ? errorMessage
+        : `Erreur réseau ou technique (${err instanceof Error && err.name ? err.name : "inconnue"})`;
+
     console.error(
-      "[rate-limit] Distributed limiter unavailable; request blocked."
+      `[rate-limit] ${safeDiagnostic}; request blocked.`
     );
 
     // En production, ne pas contourner Upstash avec un compteur local.
@@ -685,7 +705,9 @@ export function getAdminClient() {
 
 export async function requireUser(req, admin) {
   const header = req.headers.authorization || "";
-  const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
+  const token = header.startsWith("Bearer ")
+    ? header.slice(7).trim()
+    : "";
 
   if (!token) {
     const error = new Error("Authentification manquante");
