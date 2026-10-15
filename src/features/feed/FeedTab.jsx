@@ -44,7 +44,6 @@ const REPORT_REASONS = [
   "Autre",
 ];
 
-/** Transforme une ligne Supabase en objet post prêt à afficher */
 function formatPost(post) {
   const profile = post.profiles || {};
   const rawHandle = profile.handle || "membre";
@@ -68,7 +67,6 @@ function formatPost(post) {
 }
 
 export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
-  // MainShell envoie `id` et `user_id`
   const propUserId = id || user_id || null;
 
   const { showToast, showPointsReward } = useToast();
@@ -77,7 +75,7 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
 
-  // --- ÉTAT DU BOUTON ET DU MODULE DE CRÉATION ---
+  // --- BOUTON FIXE & PANNEAU DE CRÉATION ---
   const [isCreateOpen, setIsCreateOpen] = useState(false);
 
   // Saisie enrichie, sondages & médias
@@ -115,7 +113,6 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
 
   const activeUserId = currentUserId || propUserId || null;
 
-  // Session Supabase
   useEffect(() => {
     let mounted = true;
 
@@ -135,14 +132,12 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
     };
   }, []);
 
-  // Libération de l'URL d'aperçu média
   useEffect(() => {
     return () => {
       if (mediaPreview) URL.revokeObjectURL(mediaPreview);
     };
   }, [mediaPreview]);
 
-  // Fermer le menu "..." en touchant ailleurs
   useEffect(() => {
     if (!menuOpenId) return;
     const close = (e) => {
@@ -152,7 +147,6 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
     return () => document.removeEventListener("pointerdown", close);
   }, [menuOpenId]);
 
-  // Texte rédigé par l'IA, envoyé vers le champ de publication
   useEffect(() => {
     const apply = (text) => {
       if (!text) return;
@@ -166,9 +160,7 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
         sessionStorage.removeItem("baaro:ai_draft");
         apply(draft);
       }
-    } catch {
-      // sessionStorage indisponible
-    }
+    } catch {}
     const onDraft = (e) => {
       try { sessionStorage.removeItem("baaro:ai_draft"); } catch {}
       apply(e.detail?.text);
@@ -177,7 +169,6 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
     return () => window.removeEventListener("baaro:ai-draft", onDraft);
   }, []);
 
-  // 1. Chargement du flux
   const loadPosts = useCallback(
     async ({ silent = false } = {}) => {
       if (!silent) setLoading(true);
@@ -201,7 +192,6 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
     [showToast]
   );
 
-  // 2. Défilement infini
   const loadMorePosts = useCallback(async () => {
     if (loadingMore || !hasMore || loading || !cursorRef.current) return;
     setLoadingMore(true);
@@ -249,9 +239,7 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
         const fresh = incoming.filter((p) => !seen.has(p.id));
         return fresh.length ? [...fresh, ...prev] : prev;
       });
-    } catch {
-      // Ignorer
-    }
+    } catch {}
   }, []);
 
   useEffect(() => {
@@ -339,7 +327,6 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
     setMediaPreview(URL.createObjectURL(file));
   };
 
-  // 3. Publication
   const handlePublish = async () => {
     const hasText = Boolean(newText.trim());
     const hasMedia = Boolean(mediaFile);
@@ -364,7 +351,6 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
       let mediaUrl = null;
       let mediaType = null;
 
-      // Téléversement vers Cloudflare R2
       if (mediaFile) {
         const uploadResult = await uploadExternalMedia(mediaFile, {
           folder: "posts",
@@ -410,7 +396,7 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
       setPollData(null);
       setMediaFile(null);
       setMediaPreview(null);
-      setIsCreateOpen(false); // Masquer le panneau après publication
+      setIsCreateOpen(false);
       
       onRewardPoints?.(
         mediaUrl ? "publish_post_media" : "publish_post",
@@ -658,29 +644,30 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
   }
 
   return (
-    <div className="flex flex-col gap-6 max-w-2xl mx-auto w-full pb-20">
+    <div className="flex flex-col gap-6 max-w-2xl mx-auto w-full pb-20 relative">
       
-      {/* BARRE D'ACTION ET BOUTON UNIQUE DE CRÉATION */}
+      {/* 📌 BOUTON ACTION FIXE EN BAS À DROITE (FAB) */}
       {activeUserId && (
-        <div className="flex items-center justify-between gap-4">
-          <div className="flex items-center gap-2 text-sm font-bold" style={{ color: COLORS.ivory }}>
-            <Sparkles size={18} style={{ color: COLORS.gold }} />
-            <span>Fil d'actualité</span>
-          </div>
-
+        <div className="fixed bottom-20 right-5 z-40">
           <button
             type="button"
-            onClick={() => setIsCreateOpen(!isCreateOpen)}
-            className="flex items-center gap-2 px-4 py-2 rounded-full font-bold text-xs shadow-lg transition-all active:scale-95"
+            onClick={() => {
+              const nextState = !isCreateOpen;
+              setIsCreateOpen(nextState);
+              if (nextState) {
+                window.scrollTo({ top: 0, behavior: "smooth" });
+              }
+            }}
+            className="flex items-center gap-2 px-5 py-3 rounded-full font-bold text-xs shadow-2xl transition-all active:scale-95 border border-amber-400/40 backdrop-blur-md"
             style={{ background: COLORS.gold, color: "#000" }}
           >
-            {isCreateOpen ? <X size={16} /> : <Plus size={16} />}
+            {isCreateOpen ? <X size={18} /> : <Plus size={18} />}
             <span>{isCreateOpen ? "Fermer" : "Créer un post"}</span>
           </button>
         </div>
       )}
 
-      {/* MODULE DE RÉDACTION S'AFFICHANT SUR ACTION DU BOUTON */}
+      {/* MODULE DE RÉDACTION AFFICHÉ SI LE BOUTON EST CLIQUÉ */}
       {activeUserId && isCreateOpen && (
         <div
           className="glass-card rounded-2xl p-4 shadow-xl border flex flex-col gap-3 transition-all animate-in fade-in slide-in-from-top-3 duration-200"
