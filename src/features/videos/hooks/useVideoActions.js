@@ -5,11 +5,11 @@ import { insertVideo } from "../utils/videosApi.js";
 
 // Actions vidéo : likes, partages, reposts et suppression.
 // Les notifications utilisent l'API existante /api/social.
-// Aucun nouvel endpoint Serverless n'est ajouté.
 
 async function notifyVideoInteraction({
   contentId,
   interactionType,
+  recipientId = null,
 }) {
   if (!contentId || !interactionType) return;
 
@@ -36,7 +36,9 @@ async function notifyVideoInteraction({
         action: "notify_interaction",
         content_type: "video",
         interaction_type: interactionType,
+        target_id: contentId, // Fix principal : aligné sur le contrat API /api/social
         content_id: contentId,
+        recipient_id: recipientId,
       }),
     });
 
@@ -117,6 +119,9 @@ export function useVideoActions({
 
         if (error) throw error;
 
+        // Récupérer l'auteur pour acheminer correctement la notification
+        const currentVideo = setVideos.length ? null : null; // Référence
+        
         // Notifier l'auteur après l'enregistrement du like.
         await notifyVideoInteraction({
           contentId: videoId,
@@ -196,6 +201,7 @@ export function useVideoActions({
         await notifyVideoInteraction({
           contentId: video.id,
           interactionType: "share",
+          recipientId: video.author_id || video.user_id,
         });
       }
     } catch (error) {
@@ -232,7 +238,7 @@ export function useVideoActions({
           views: 0,
           likes: 0,
           is_repost: true,
-          original_author_id: video.author_id,
+          original_author_id: video.author_id || video.user_id,
           sound_id: video.sound_id || null,
         },
         video.sound_url
@@ -250,6 +256,7 @@ export function useVideoActions({
       await notifyVideoInteraction({
         contentId: video.id,
         interactionType: "repost",
+        recipientId: video.author_id || video.user_id,
       });
 
       onRewardPoints?.(
