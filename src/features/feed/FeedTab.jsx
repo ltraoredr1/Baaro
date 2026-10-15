@@ -46,6 +46,27 @@ const REPORT_REASONS = [
   "Autre",
 ];
 
+/** Formate la date de publication relative ou lisible */
+function formatDate(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+
+  const now = new Date();
+  const diffInSeconds = Math.floor((now - date) / 1000);
+
+  if (diffInSeconds < 60) return "À l'instant";
+  if (diffInSeconds < 3600) return `${Math.floor(diffInSeconds / 60)} min`;
+  if (diffInSeconds < 86400) return `${Math.floor(diffInSeconds / 3600)} h`;
+
+  return date.toLocaleDateString("fr-FR", {
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 /** Transforme une ligne Supabase en objet post prêt à afficher */
 function formatPost(post) {
   const profile = post.profiles || {};
@@ -107,6 +128,7 @@ export function FeedTab({
   const [reportPost, setReportPost] = useState(null);
 
   // J'aime, Reposts, commentaires, traduction
+  const [likedPosts, setLikedPosts] = useState({});
   const [repostedPosts, setRepostedPosts] = useState({});
   const [commentOpen, setCommentOpen] = useState({});
   const [commentsMap, setCommentsMap] = useState({});
@@ -115,10 +137,6 @@ export function FeedTab({
 
   const fileInputRef = useRef(null);
   const cursorRef = useRef(null);
-  const sentinelRef = useRef(null);
-  const postViewRefs = useRef({});
-  const postViewedRef = useRef(new Set());
-  const postsRef = useRef([]);
 
   const activeUserId = currentUserId || propUserId || null;
 
@@ -158,28 +176,6 @@ export function FeedTab({
     document.addEventListener("pointerdown", close);
     return () => document.removeEventListener("pointerdown", close);
   }, [menuOpenId]);
-
-  // Texte rédigé par l'IA
-  useEffect(() => {
-    const apply = (text) => {
-      if (!text) return;
-      setNewText(text);
-      setIsCreateOpen?.(true);
-    };
-    try {
-      const draft = sessionStorage.getItem("baaro:ai_draft");
-      if (draft) {
-        sessionStorage.removeItem("baaro:ai_draft");
-        apply(draft);
-      }
-    } catch {}
-    const onDraft = (e) => {
-      try { sessionStorage.removeItem("baaro:ai_draft"); } catch {}
-      apply(e.detail?.text);
-    };
-    window.addEventListener("baaro:ai-draft", onDraft);
-    return () => window.removeEventListener("baaro:ai-draft", onDraft);
-  }, [setIsCreateOpen]);
 
   // Chargement des likes et des reposts de l'utilisateur
   const postIdsKey = posts.map((p) => p.id).join(",");
@@ -511,7 +507,7 @@ export function FeedTab({
   return (
     <div className="flex flex-col gap-6 max-w-2xl mx-auto w-full pb-20">
       
-      {/* Modale de création avec bouton pliable pour le texte et IA */}
+      {/* Modale de création */}
       {activeUserId && isCreateOpen && (
         <div 
           className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200"
@@ -666,6 +662,7 @@ export function FeedTab({
             className="glass-card rounded-2xl p-5 shadow-xl border flex flex-col gap-3"
             style={{ borderColor: COLORS.border }}
           >
+            {/* En-tête de la publication : Photo, Nom, Pseudo & DATE / HEURE */}
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <button
@@ -683,9 +680,15 @@ export function FeedTab({
                   )}
                 </button>
                 <div>
-                  <p className="font-bold text-sm flex items-center gap-1" style={{ color: COLORS.ivory }}>
-                    {post.display_name} {post.flag}
-                  </p>
+                  <div className="flex items-center gap-2">
+                    <p className="font-bold text-sm flex items-center gap-1" style={{ color: COLORS.ivory }}>
+                      {post.display_name} {post.flag}
+                    </p>
+                    <span className="text-xs" style={{ color: COLORS.muted }}>·</span>
+                    <span className="text-xs font-normal" style={{ color: COLORS.muted }}>
+                      {formatDate(post.created_at)}
+                    </span>
+                  </div>
                   <p className="text-xs" style={{ color: COLORS.muted }}>
                     {post.handle}
                   </p>
@@ -709,11 +712,10 @@ export function FeedTab({
             <PollCard postId={post.id} user_id={activeUserId} />
             <SocialPostEnhancements post={post} user_id={activeUserId} />
 
-            {/* Barre d'actions complète (Likes, Reposts, Commentaires, Traduction, IA, Tip) */}
+            {/* Barre d'actions (Likes, Reposts, Commentaires, Traduction, IA, Tip) */}
             <div className="flex items-center justify-between gap-2 pt-2 border-t flex-wrap" style={{ borderColor: COLORS.border }}>
               <div className="flex items-center gap-3 text-[11px] font-medium flex-wrap" style={{ color: COLORS.muted }}>
                 
-                {/* Bouton Like */}
                 <button
                   type="button"
                   onClick={() => handleLike(post.id)}
@@ -724,7 +726,6 @@ export function FeedTab({
                   {Number(post.likes || 0)}
                 </button>
 
-                {/* Bouton Repost */}
                 <button
                   type="button"
                   onClick={() => handleRepost(post)}
@@ -746,7 +747,6 @@ export function FeedTab({
                 )}
               </div>
 
-              {/* Boutons secondaires (Commentaires, Traduction, IA, Tip) */}
               <div className="flex items-center gap-2">
                 <button
                   type="button"
@@ -774,7 +774,7 @@ export function FeedTab({
               </div>
             </div>
 
-            {/* Section des commentaires déroulante */}
+            {/* Commentaires */}
             {commentOpen[post.id] && (
               <div className="pt-3 border-t space-y-2" style={{ borderColor: COLORS.border }}>
                 {(commentsMap[post.id] || []).map((c) => (
