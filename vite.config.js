@@ -76,6 +76,11 @@ export default defineConfig({
 
         navigateFallback: null,
 
+        // Ajoute les gestionnaires "push" et "notificationclick" au
+        // service worker généré (/sw.js). Sans cela, les notifications
+        // Web Push arrivent mais ne s'affichent jamais.
+        importScripts: ['push-sw.js'],
+
         clientsClaim: true,
         skipWaiting: true,
         cleanupOutdatedCaches: true,
