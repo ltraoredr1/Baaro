@@ -86,7 +86,7 @@ export function MainShell() {
   const [searchModalOpen, setSearchModalOpen] = useState(false);
   const [forceOnboarding, setForceOnboarding] = useState(false);
 
-  // --- ÉTAT GLOBAL POUR LA MODALE DE CRÉATION DE POST ---
+  // --- ÉTAT GLOBAL POUR LA MODALE DE CRÉATION ---
   const [isFeedCreateOpen, setIsFeedCreateOpen] = useState(false);
 
   const COLORS = {
@@ -134,7 +134,7 @@ export function MainShell() {
               THEME_BG_MAP.midnight,
           });
         } catch {
-          // StatusBar indisponible : continuer normalement
+          // StatusBar indisponible
         }
 
         backListener = await CapApp.addListener(
@@ -341,33 +341,38 @@ export function MainShell() {
       />
 
       {/* =====================================================
-          HEADER AVEC CONTRÔLE DE CRÉATION INTÉGRÉ
+          HEADER UNIFIÉ (PRESENT SUR TOUS LES ONGLETS)
           ===================================================== */}
-      {!isImmersive && (
-        <Header
-          lang={lang}
-          setLang={setLang}
-          userProfile={userProfile}
-          onOpenProfile={() => setInspectingProfileId(id)}
-          onOpenNotifications={() => setNotifDrawerOpen(true)}
-          onOpenSearch={() => setSearchModalOpen(true)}
-          isCreateOpen={activeTab === "feed" ? isFeedCreateOpen : false}
-          onToggleCreate={() => {
-            if (activeTab !== "feed") {
-              setActiveTab("feed");
-            }
-            setIsFeedCreateOpen((prev) => !prev);
-          }}
-        />
-      )}
+      <Header
+        lang={lang}
+        setLang={setLang}
+        userProfile={userProfile}
+        onOpenProfile={() => setInspectingProfileId(id)}
+        onOpenNotifications={() => setNotifDrawerOpen(true)}
+        onOpenSearch={() => setSearchModalOpen(true)}
+        isCreateOpen={activeTab === "feed" ? isFeedCreateOpen : false}
+        onToggleCreate={() => {
+          if (activeTab !== "feed") {
+            setActiveTab("feed");
+          }
+          setIsFeedCreateOpen((prev) => !prev);
+        }}
+      />
 
       {/* =====================================================
-          MODE IMMERSIF OU NORMAL
+          CONTENU PRINCIPAL
           ===================================================== */}
-      {isImmersive ? (
+      <div className="max-w-7xl mx-auto w-full px-3 sm:px-6 pt-4 sm:pt-6 flex-1 grid grid-cols-1 md:grid-cols-4 gap-6">
+        <div className="hidden md:block md:col-span-1">
+          <Navigation
+            activeTab={activeTab}
+            setActiveTab={setActiveTab}
+          />
+        </div>
+
         <main
           id="main-content"
-          className="flex-1 relative mobile-nav-spacer"
+          className="col-span-1 md:col-span-3 mobile-nav-spacer"
           tabIndex={-1}
         >
           <ErrorBoundary>
@@ -390,52 +395,17 @@ export function MainShell() {
             </Suspense>
           </ErrorBoundary>
         </main>
-      ) : (
-        <div className="max-w-7xl mx-auto w-full px-3 sm:px-6 pt-4 sm:pt-6 flex-1 grid grid-cols-1 md:grid-cols-4 gap-6">
-          <div className="md:col-span-1">
-            <Navigation
-              activeTab={activeTab}
-              setActiveTab={setActiveTab}
-            />
-          </div>
+      </div>
 
-          <main
-            id="main-content"
-            className="md:col-span-3 mobile-nav-spacer"
-            tabIndex={-1}
-          >
-            <ErrorBoundary>
-              <Suspense fallback={<TabFallback />}>
-                {Tab ? (
-                  <>
-                    <Tab
-                      key={activeTab}
-                      {...(tabProps[activeTab] || {})}
-                    />
-                    <FutureModulePanel moduleId={activeTab} onNavigate={(moduleId, action) => {
-                      if (/IA|intelligent|montage|traduction|mémoire/i.test(action)) setActiveTab("assistant");
-                      else if (/sécurité|confidentialité|appareils|contrôles|export|privacy/i.test(action)) setActiveTab("settings");
-                      else if (/communauté|modération/i.test(action)) setActiveTab("community");
-                      else if (/recherche|historique/i.test(action)) setSearchModalOpen(true);
-                      else if (/vidéo|Story/i.test(action)) setActiveTab(action.includes("Story") ? "stories" : "videos");
-                    }} />
-                  </>
-                ) : null}
-              </Suspense>
-            </ErrorBoundary>
-          </main>
-        </div>
-      )}
+      {/* NAVIGATION MOBILE UNIQUE */}
+      <div className="md:hidden">
+        <Navigation
+          activeTab={activeTab}
+          setActiveTab={setActiveTab}
+        />
+      </div>
 
-      {isImmersive && (
-        <div className="md:hidden">
-          <Navigation
-            activeTab={activeTab}
-            setActiveTab={setActiveTab}
-          />
-        </div>
-      )}
-
+      {/* MODALES ET ASSISTANT */}
       {inspectingProfileId && (
         <ProfileModal
           id={inspectingProfileId}
@@ -476,7 +446,7 @@ export function MainShell() {
         onSelectShop={() => setActiveTab("shop")}
       />
 
-      {!isAnonymous && !isImmersive && (
+      {!isAnonymous && (
         <FloatingAiAssistant
           userProfile={userProfile}
           hidden={activeTab === "assistant"}
@@ -485,3 +455,5 @@ export function MainShell() {
     </div>
   );
 }
+
+export default MainShell;
