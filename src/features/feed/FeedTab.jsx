@@ -189,7 +189,7 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
         handleDbError(error, showToast, "Erreur lors du chargement du fil");
         if (!silent) setPosts([]);
         setHasMore(false);
-      } font-medium {
+      } finally {
         setLoading(false);
       }
     },
