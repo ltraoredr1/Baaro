@@ -20,7 +20,9 @@ import { baaroLogo } from "../constants.js";
 import { formatCount } from "../utils/format.js";
 
 // Une vidéo plein écran du flux, avec ses boutons d'action.
-// playback : retour de useFeedPlayback — actions : like, commentaires, repost, partage…
+// playback : retour de useFeedPlayback.
+// actions : like, commentaires, repost, partage, suppression...
+// onShowViewers : ouvre la liste des spectateurs de cette vidéo.
 export default function VideoCard({
   video,
   sound,
@@ -28,6 +30,7 @@ export default function VideoCard({
   user,
   playback,
   actions,
+  onShowViewers,
 }) {
   const {
     videoRefs,
@@ -45,7 +48,7 @@ export default function VideoCard({
     toggleFullscreen,
     handleTimeUpdate,
   } = playback;
-    const [showViewers, setShowViewers] = useState(false);
+
   const {
     handleLike,
     openComments,
@@ -61,7 +64,9 @@ export default function VideoCard({
   const id = String(video.id);
   const isPlaying = playingId === id;
   const profile = video.profiles || {};
-  const caption = [video.title, video.description].filter(Boolean).join(" · ");
+  const caption = [video.title, video.description]
+    .filter(Boolean)
+    .join(" · ");
   const handleClean = profile.handle?.replace(/^@/, "") || "membre";
 
   return (
@@ -121,9 +126,10 @@ export default function VideoCard({
             <div className="text-5xl mb-4">⚠️</div>
             <p className="font-black text-lg">Vidéo indisponible</p>
             <p className="text-xs text-white/50 mt-2 mb-5">
-              Le fichier n'a pas pu être lu.
+              Le fichier n&apos;a pas pu être lu.
             </p>
             <button
+              type="button"
               onClick={() => {
                 setVideoErrors((prev) => {
                   const copy = { ...prev };
@@ -147,6 +153,7 @@ export default function VideoCard({
 
       {!isPlaying && !videoErrors[video.id] && (
         <button
+          type="button"
           onClick={() => togglePlay(video.id)}
           className="absolute inset-0 z-10 flex items-center justify-center"
           aria-label="Lire la vidéo"
@@ -181,6 +188,7 @@ export default function VideoCard({
               />
             )}
           </div>
+
           <div className="min-w-0">
             <div className="font-black text-sm truncate">
               @{handleClean} {profile.flag || ""}
@@ -192,11 +200,14 @@ export default function VideoCard({
         </div>
 
         <button
+          type="button"
           onClick={() => setCaptionOpen(!captionOpen)}
           className="text-left"
         >
           <p
-            className={`text-sm font-medium leading-snug ${captionOpen ? "" : "line-clamp-2"}`}
+            className={`text-sm font-medium leading-snug ${
+              captionOpen ? "" : "line-clamp-2"
+            }`}
           >
             {caption || "Vidéo BAARO"}
           </p>
@@ -214,6 +225,7 @@ export default function VideoCard({
             videoId={video.id}
           />
         </div>
+
         <div className="mt-2 flex items-center gap-2 min-w-0">
           <div className="flex items-center gap-1.5 text-[11px] text-white/65 min-w-0 flex-1">
             <Music2 size={13} className="shrink-0" />
@@ -223,7 +235,9 @@ export default function VideoCard({
                 : "Son original"}
             </span>
           </div>
+
           <button
+            type="button"
             onClick={() => onUseSound?.(video, sound)}
             className="shrink-0 flex items-center gap-1 rounded-full px-3 py-1.5 text-[11px] font-black shadow-lg active:scale-95"
             style={{ background: COLORS.gold, color: "#000" }}
@@ -237,6 +251,7 @@ export default function VideoCard({
 
       <div className="absolute right-2 bottom-28 z-30 flex flex-col items-center gap-3">
         <button
+          type="button"
           onClick={() => handleLike(video.id)}
           className="flex flex-col items-center"
           aria-label="J'aime"
@@ -258,6 +273,7 @@ export default function VideoCard({
         </button>
 
         <button
+          type="button"
           onClick={() => openComments(video.id)}
           className="flex flex-col items-center"
           aria-label="Commentaires"
@@ -271,6 +287,7 @@ export default function VideoCard({
         </button>
 
         <button
+          type="button"
           onClick={() => handleRepost(video)}
           className="h-11 w-11 rounded-full bg-white/10 backdrop-blur-md flex items-center justify-center"
           aria-label="Reposter"
@@ -279,6 +296,7 @@ export default function VideoCard({
         </button>
 
         <button
+          type="button"
           onClick={() => handleShare(video)}
           className="h-11 w-11 rounded-full bg-white/10 backdrop-blur-md flex items-center justify-center"
           aria-label="Partager"
@@ -291,6 +309,7 @@ export default function VideoCard({
         </button>
 
         <button
+          type="button"
           onClick={() => toggleFullscreen(video.id)}
           className="h-11 w-11 rounded-full bg-white/10 backdrop-blur-md flex items-center justify-center"
           aria-label="Plein écran"
@@ -300,6 +319,7 @@ export default function VideoCard({
 
         {video.author_id === user?.id && (
           <button
+            type="button"
             onClick={() => handleDelete(video.id)}
             className="h-11 w-11 rounded-full bg-red-500/20 backdrop-blur-md flex items-center justify-center"
             aria-label="Supprimer"
@@ -319,26 +339,31 @@ export default function VideoCard({
         />
       </div>
 
-      <div className="absolute bottom-8 left-3 right-3 z-30 flex items-center justify-between text-[10px] text-white/55">
+      <div className="absolute bottom-8 left-3 right-3 z-30 flex items-center justify-between text-[10px] text-white/65">
         <span className="flex items-center gap-1">
           <Clock3 size={12} />
           {video.duration || "00:00"}
         </span>
+
         {video.author_id === user?.id && (
-  <button
-    type="button"
-    onClick={() => setShowViewers(true)}
-    className="underline text-white"
-  >
-    <Eye size={13} /> Voir les spectateurs
-  </button>
-)}
+          <button
+            type="button"
+            onClick={() => onShowViewers?.(video.id)}
+            className="flex items-center gap-1 underline text-white"
+            aria-label="Voir les spectateurs de cette vidéo"
+          >
+            <Eye size={13} />
+            Voir les spectateurs
+          </button>
+        )}
 
         <div className="flex items-center gap-2">
           <span>{formatCount(video.views)} vues</span>
           <button
+            type="button"
             onClick={() => toggleMute()}
             className="h-8 w-8 rounded-full bg-black/35 backdrop-blur-md flex items-center justify-center"
+            aria-label={muted ? "Activer le son" : "Couper le son"}
           >
             {muted ? <VolumeX size={15} /> : <Volume2 size={15} />}
           </button>
