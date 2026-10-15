@@ -1,4 +1,11 @@
 /// <reference types="vite/client" />
+import {
+  loadCloudSettings,
+  saveCloudSettings,
+  saveLocalSettings,
+  syncPrivateProfile,
+} from "../../lib/appSettings.js";
+import { applyNativeSettings } from "../../lib/nativeSettings.js";
 import { NotificationPrefsPanel } from "./NotificationPrefsPanel.jsx";
 import NotificationSoundSettings from "./NotificationSoundSettings.jsx";
 // src/features/settings/index.tsx
@@ -200,10 +207,14 @@ export default function SettingsTab({
     setOpenSections((s) => ({ ...s, [id]: !s[id] }));
 
   useEffect(() => {
-    saveLocalSettings(settings);
-    applyDocumentLang(settings.lang);
-    applyA11y(settings);
-  }, [settings]);
+saveLocalSettings(settings);
+applyDocumentLang(settings.lang);
+applyA11y(settings);
+
+void applyNativeSettings(settings).catch((error) => {
+console.warn("[settings] native settings:", error);
+});
+}, [settings]);
 
   useEffect(() => {
     if (currentTheme && currentTheme !== settings.theme) {
