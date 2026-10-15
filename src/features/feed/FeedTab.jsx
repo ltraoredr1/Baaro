@@ -918,7 +918,7 @@ export function FeedTab({ id, user_id, onOpenProfile, onRewardPoints }) {
               </div>
             ) : (
               <div
-                className="text-sm leading-relaxed whitespace-pre-wrap"
+                className="text-base sm:text-lg leading-relaxed whitespace-pre-wrap"
                 style={{ color: COLORS.ivory }}
               >
                 {translatedMap[post.id] ? (
