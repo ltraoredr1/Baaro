@@ -73,10 +73,12 @@ export default function VideoCard({
   const [captionOpen, setCaptionOpen] = useState(false);
   const [playbackRate, setPlaybackRate] = useState(1);
   const [showHeartAnim, setShowHeartAnim] = useState(false);
+  const [dragging, setDragging] = useState(false);
 
   const clickTimeoutRef = useRef(null);
   const heartTimeoutRef = useRef(null);
   const lastClickTimeRef = useRef(0);
+  const draggingRef = useRef(false);
 
   useEffect(() => {
     return () => {
@@ -145,18 +147,48 @@ export default function VideoCard({
     if (videoEl) videoEl.playbackRate = nextRate;
   };
 
-  // --- SCRUBBING ---
-  const handleSeek = (e) => {
-    e.stopPropagation();
+  // --- SCRUBBING (tap + glisser, souris et tactile) ---
+  const seekToPointer = (e) => {
     const videoEl = videoRefs.current[video.id];
     if (!videoEl || !videoEl.duration) return;
 
     const rect = e.currentTarget.getBoundingClientRect();
-    const clickX = e.clientX - rect.left;
-    videoEl.currentTime = (clickX / rect.width) * videoEl.duration;
+    if (!rect.width) return;
+    const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+    videoEl.currentTime = ratio * videoEl.duration;
 
     const audioEl = audioRefs.current[video.id];
     if (audioEl) syncAudioTime(videoEl, audioEl);
+  };
+
+  const handleSeekStart = (e) => {
+    e.stopPropagation();
+    draggingRef.current = true;
+    setDragging(true);
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      // capture non supportée : le glisser reste limité à la barre
+    }
+    seekToPointer(e);
+  };
+
+  const handleSeekMove = (e) => {
+    if (!draggingRef.current) return;
+    e.stopPropagation();
+    seekToPointer(e);
+  };
+
+  const handleSeekEnd = (e) => {
+    if (!draggingRef.current) return;
+    e.stopPropagation();
+    draggingRef.current = false;
+    setDragging(false);
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      // déjà relâché
+    }
   };
 
   return (
@@ -476,15 +508,26 @@ export default function VideoCard({
         )}
       </div>
 
-      {/* Barre de progression cliquable (vidéos uniquement) */}
+      {/* Barre de progression : tap ou glisser (vidéos uniquement) */}
       {!isImage && (
         <div
-          className="absolute left-3 right-3 bottom-24 z-30 h-3 flex items-end cursor-pointer"
-          onClick={handleSeek}
+          className="absolute left-3 right-3 bottom-[88px] z-30 h-7 flex items-end pb-2 cursor-pointer"
+          style={{ touchAction: "none" }}
+          onClick={(e) => e.stopPropagation()}
+          onPointerDown={handleSeekStart}
+          onPointerMove={handleSeekMove}
+          onPointerUp={handleSeekEnd}
+          onPointerCancel={handleSeekEnd}
         >
-          <div className="w-full h-1 rounded-full bg-white/20 overflow-hidden">
+          <div
+            className={`w-full rounded-full bg-white/20 overflow-hidden transition-[height] ${
+              dragging ? "h-2" : "h-1"
+            }`}
+          >
             <div
-              className="h-full transition-[width] duration-100"
+              className={`h-full ${
+                dragging ? "" : "transition-[width] duration-100"
+              }`}
               style={{
                 width: `${(progress[video.id] || 0) * 100}%`,
                 background: COLORS.gold,
