@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import CommentsSheet from "./composent/CommentsSheet.jsx";
 import { FeedEmpty, FeedError, FeedLoading } from "./composent/FeedStatus.jsx";
 import UploadModal from "./composent/UploadModal.jsx";
@@ -15,7 +15,7 @@ import VideoNextGenStudio from "./VideoNextGenStudio.jsx";
 import { useToast } from "../../components/ToastContext.jsx";
 import { EngagementList } from "../../components/EngagementList.jsx";
 import { TipButton } from "../../components/TipButton.jsx";
-import { Volume2, VolumeX } from "lucide-react";
+import { Volume2, VolumeX, Sparkles } from "lucide-react";
 
 export function VideosTab({ onRewardPoints, onExit }) {
   const feed = useVideoFeed();
@@ -99,23 +99,58 @@ export function VideosTab({ onRewardPoints, onExit }) {
   const [studioOpen, setStudioOpen] = useState(false);
   const [viewersVideoId, setViewersVideoId] = useState(null);
 
-  const handleStudioCreate = () => {
+  // Intégration des fonctionnalités sélectionnées dans le studio NextGen
+  const handleStudioCreate = (selectedFeatures) => {
     setStudioOpen(false);
+    if (selectedFeatures && selectedFeatures.length > 0) {
+      showToast(`${selectedFeatures.length} outils Studio activés`, "info");
+    }
     openUpload();
   };
 
-  // Gestion de la pause/lecture manuelle
-  const handleVideoClick = (videoId) => {
+  // --- GESTION CLICK SIMPLE (PAUSE/LECTURE) & DOUBLE-TAP (LIKE) ---
+  const clickTimeoutRef = useRef(null);
+  const lastClickTimeRef = useRef(0);
+
+  const handleVideoTouchOrClick = (e, video) => {
+    e.stopPropagation();
+    const currentTime = new Date().getTime();
+    const tapLength = currentTime - lastClickTimeRef.current;
+
+    if (tapLength < 300 && tapLength > 0) {
+      // --- DOUBLE TAP : LIKE ---
+      if (clickTimeoutRef.current) {
+        clearTimeout(clickTimeoutRef.current);
+        clickTimeoutRef.current = null;
+      }
+      if (!likedMap[video.id]) {
+        videoActions.toggleLike(video.id);
+      }
+      lastClickTimeRef.current = 0;
+    } else {
+      // --- SIMPLE TAP : TOGGLE PLAY / PAUSE ---
+      lastClickTimeRef.current = currentTime;
+      clickTimeoutRef.current = setTimeout(() => {
+        handleTogglePlayPause(video.id);
+        clickTimeoutRef.current = null;
+      }, 300);
+    }
+  };
+
+  const handleTogglePlayPause = (videoId) => {
+    // Méthode unifiée compatible avec Chrome mobile / Chrome desktop
     if (playback?.togglePlayPause) {
       playback.togglePlayPause(videoId);
     } else if (playback?.togglePlay) {
       playback.togglePlay(videoId);
-    } else if (playback?.videoRefs?.current?.[videoId]) {
-      const el = playback.videoRefs.current[videoId];
-      if (el.paused) {
-        el.play().catch(() => {});
-      } else {
-        el.pause();
+    } else {
+      const el = playback?.videoRefs?.current?.[videoId];
+      if (el) {
+        if (el.paused) {
+          el.play().catch(() => {});
+        } else {
+          el.pause();
+        }
       }
     }
   };
@@ -125,8 +160,17 @@ export function VideosTab({ onRewardPoints, onExit }) {
   return (
     <div className="relative w-full h-[calc(100vh-env(safe-area-inset-top))] overflow-hidden bg-black flex flex-col">
       
-      {/* BOUTON HAUT-PARLEUR FIXÉ EN HAUT À DROITE */}
-      <div className="absolute top-4 right-4 z-[70] flex items-center">
+      {/* BOUTON HAUT-PARLEUR FIXÉ EN HAUT À DROITE (UNIQUE BOUTON SON) */}
+      <div className="absolute top-4 right-4 z-[70] flex items-center gap-2">
+        <button
+          onClick={() => setStudioOpen(true)}
+          className="h-9 px-3 rounded-full bg-black/40 backdrop-blur-xl border border-white/20 flex items-center gap-1.5 text-xs font-bold text-white shadow-lg hover:bg-black/60 transition-all active:scale-95"
+          title="Studio NextGen"
+        >
+          <Sparkles size={14} className="text-yellow-400" />
+          <span>Studio</span>
+        </button>
+
         <button
           onClick={playback.toggleMute}
           className="h-9 w-9 rounded-full bg-black/40 backdrop-blur-xl border border-white/20 flex items-center justify-center text-white shadow-lg hover:bg-black/60 transition-all active:scale-95"
@@ -137,7 +181,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
         </button>
       </div>
 
-      {/* CONTENEUR MAGNÉTIQUE PLEIN ÉCRAN (SNAP VERTICAL) */}
+      {/* CONTENEUR MAGNÉTIQUE PLEIN ÉCRAN */}
       <div className="w-full h-full overflow-y-scroll snap-y snap-mandatory scrollbar-none flex flex-col bg-black">
         {loadError ? (
           <div className="flex items-center justify-center h-full">
@@ -154,8 +198,8 @@ export function VideosTab({ onRewardPoints, onExit }) {
               className="relative w-full h-full shrink-0 snap-start snap-always flex items-center justify-center bg-black"
             >
               <div 
-                className="w-full h-full max-w-2xl relative flex items-center justify-center overflow-hidden cursor-pointer"
-                onClick={() => handleVideoClick(video.id)}
+                className="w-full h-full max-w-2xl relative flex items-center justify-center overflow-hidden cursor-pointer select-none"
+                onClick={(e) => handleVideoTouchOrClick(e, video)}
               >
                 <VideoCard
                   video={video}
@@ -164,13 +208,14 @@ export function VideosTab({ onRewardPoints, onExit }) {
                   user={user}
                   playback={playback}
                   actions={actions}
+                  hideVolumeControl={true} /* Masque le bouton son du composant enfant pour éviter le doublon */
                   onShowViewers={() => setViewersVideoId(video.id)}
                 />
 
                 {/* BOUTON POURBOIRE (TIP) */}
                 {user?.id && video.user_id && video.user_id !== user.id && (
                   <div 
-                    className="absolute bottom-20 right-4 z-30"
+                    className="absolute bottom-24 right-4 z-30"
                     onClick={(e) => e.stopPropagation()}
                   >
                     <TipButton recipientId={video.user_id} videoId={video.id} compact />
@@ -201,6 +246,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
         camera={camera}
       />
 
+      {/* STUDIO NEXTGEN BRANCHÉ */}
       <VideoNextGenStudio
         open={studioOpen}
         onClose={() => setStudioOpen(false)}
