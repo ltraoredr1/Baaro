@@ -49,6 +49,7 @@
     "@capacitor/splash-screen": "^8.0.1",
     "@capacitor/status-bar": "^8.0.4",
     "@daily-co/daily-js": "^0.70.0",
+    "@google/genai": "^0.1.1",
     "@reduxjs/toolkit": "^2.2.7",
     "@supabase/supabase-js": "^2.45.0",
     "i18next": "^23.15.1",
