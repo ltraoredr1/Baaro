@@ -1,11 +1,12 @@
-import { uploadExternalMedia } from "../../../lib/externalMedia.js";
+import { GoogleGenAI } from "@google/genai";
 import { useEffect, useRef, useState } from "react";
-import { supabase } from "../../../supabaseClient.js";
 import { useToast } from "../../../components/ToastContext.jsx";
+import { uploadExternalMedia } from "../../../lib/externalMedia.js";
+import { supabase } from "../../../supabaseClient.js";
 import { MAX_PHOTOS } from "../constants.js";
 import { formatTime } from "../utils/format.js";
 import { insertVideo } from "../utils/videosApi.js";
-import { 
+import {
   loadImage,
   makePhotoDrawer,
   makeTextDrawer,
@@ -13,7 +14,56 @@ import {
   renderToFile,
 } from "../utils/videoRenderer.js";
 
-// Fenêtre de publication : choix du média (vidéo / photos / texte), aperçu, envoi.
+// Helper de génération par IA Gemini (Text & Visuals)
+async function generateGeminiVisual(promptText) {
+  const apiKey =
+    import.meta.env.VITE_GEMINI_API_KEY ||
+    import.meta.env.GEMINI_API_KEY;
+
+  if (!apiKey) {
+    console.warn("VITE_GEMINI_API_KEY non configurée dans .env");
+    return null;
+  }
+
+  const ai = new GoogleGenAI({ apiKey });
+
+  try {
+    // Tentative de génération d'image via Gemini / Imagen
+    const response = await ai.models.generateImages({
+      model: "imagen-3.0-generate-002",
+      prompt: `Création visuelle verticale 9:16 attrayante pour réseau social: ${promptText}`,
+      config: {
+        numberOfImages: 1,
+        outputMimeType: "image/jpeg",
+        aspectRatio: "9:16",
+      },
+    });
+
+    const base64Image = response?.generatedImages?.[0]?.image?.imageBytes;
+    if (!base64Image) return null;
+
+    const byteCharacters = atob(base64Image);
+    const byteNumbers = new Array(byteCharacters.length);
+    for (let i = 0; i < byteCharacters.length; i++) {
+      byteNumbers[i] = byteCharacters.charCodeAt(i);
+    }
+    const byteArray = new Uint8Array(byteNumbers);
+    const blob = new Blob([byteArray], { type: "image/jpeg" });
+
+    const file = new File([blob], `gemini-ai-${Date.now()}.jpg`, {
+      type: "image/jpeg",
+    });
+    return {
+      file,
+      url: URL.createObjectURL(file),
+    };
+  } catch (error) {
+    console.warn("Génération visuelle Gemini indisponible/repli local:", error);
+    return null;
+  }
+}
+
+// Fenêtre de publication : choix du média (vidéo / photos / texte / Gemini IA), aperçu, envoi.
 export function useVideoCreator({
   user,
   loadVideos,
@@ -101,7 +151,7 @@ export function useVideoCreator({
 
       stopSoundPreview();
       setGenerating(true);
-      setGenerateProgress(0);
+      setGenerateProgress(0.1);
 
       let drawFrame;
       let totalMs;
@@ -109,6 +159,7 @@ export function useVideoCreator({
       if (createMode === "photo") {
         if (!photoFiles.length) {
           showToast("Ajoute au moins une photo.", "error");
+          setGenerating(false);
           return;
         }
         const images = await Promise.all(
@@ -120,11 +171,26 @@ export function useVideoCreator({
         const text = textContent.trim();
         if (!text) {
           showToast("Écris ton texte.", "error");
+          setGenerating(false);
           return;
         }
-        const words = text.split(/\s+/).length;
-        totalMs = Math.min(15, Math.max(5, Math.ceil(words * 0.5))) * 1000;
-        drawFrame = makeTextDrawer(text, textTheme);
+
+        setGenerateProgress(0.2);
+
+        // Tentative d'enrichissement visuel via Gemini IA
+        const geminiResult = await generateGeminiVisual(text);
+        setGenerateProgress(0.5);
+
+        if (geminiResult) {
+          const aiImage = await loadImage(geminiResult.url);
+          totalMs = 6000; // 6 secondes pour le visuel IA
+          drawFrame = makePhotoDrawer([aiImage], 6);
+        } else {
+          // Fallback Canvas local texte animé si Gemini n'est pas configuré
+          const words = text.split(/\s+/).length;
+          totalMs = Math.min(15, Math.max(5, Math.ceil(words * 0.5))) * 1000;
+          drawFrame = makeTextDrawer(text, textTheme);
+        }
       }
 
       const file = await renderToFile({
@@ -132,16 +198,20 @@ export function useVideoCreator({
         totalMs,
         audioUrl: wantSound ? selectedSound.audio_url : null,
         audioCtx,
-        onProgress: setGenerateProgress,
+        onProgress: (p) => setGenerateProgress(0.5 + p * 0.5),
       });
 
       handleFileSelected(file);
       setGenerated(true);
       setBakedAudio(wantSound);
       setGeneratedSeconds(Math.round(totalMs / 1000));
+      showToast("Génération réussie !", "success");
     } catch (error) {
       console.error(error);
-      showToast(`Création impossible : ${error.message || "erreur"}`, "error");
+      showToast(
+        `Création impossible : ${error.message || "erreur de rendu"}`,
+        "error",
+      );
     } finally {
       audioCtx?.close?.().catch(() => {});
       setGenerating(false);
@@ -202,7 +272,6 @@ export function useVideoCreator({
 
     try {
       setUploadProgress(30);
-      // Upload média de la vidéo via Cloudflare R2
       const uploaded = await uploadExternalMedia(selectedFile, "videos");
       const publicUrl = uploaded.publicUrl || uploaded.url;
       setUploadProgress(65);
@@ -211,7 +280,6 @@ export function useVideoCreator({
         ? formatTime(generatedSeconds)
         : await readDuration(selectedFile);
 
-      // Traitement du son séparé via Cloudflare R2 si présent
       let soundUrl = null;
       if (selectedSound?.audio_url && !bakedAudio) {
         soundUrl = selectedSound.audio_url;
@@ -228,7 +296,6 @@ export function useVideoCreator({
       const {
         data: created,
         error: dbError,
-        degraded,
       } = await insertVideo(
         {
           author_id: user.id,
