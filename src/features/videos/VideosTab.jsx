@@ -158,7 +158,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
   if (loading) return <FeedLoading />;
 
   return (
-    <div className="relative w-full h-[calc(100vh-env(safe-area-inset-top))] overflow-hidden bg-black flex flex-col">
+    <div className="relative w-full h-screen h-[calc(100vh-env(safe-area-inset-top))] overflow-hidden bg-black flex flex-col">
       
       {/* BOUTON HAUT-PARLEUR FIXÉ EN HAUT À DROITE (UNIQUE BOUTON SON) */}
       <div className="absolute top-4 right-4 z-[70] flex items-center gap-2">
@@ -195,10 +195,10 @@ export function VideosTab({ onRewardPoints, onExit }) {
           visibleVideos.map((video) => (
             <div 
               key={video.id} 
-              className="relative w-full h-full shrink-0 snap-start snap-always flex items-center justify-center bg-black"
+              className="relative w-full h-full h-screen shrink-0 snap-start snap-always flex items-center justify-center bg-black overflow-hidden"
             >
               <div 
-                className="w-full h-full max-w-2xl relative flex items-center justify-center overflow-hidden cursor-pointer select-none"
+                className="w-full h-full relative flex items-center justify-center overflow-hidden cursor-pointer select-none"
                 onClick={(e) => handleVideoTouchOrClick(e, video)}
               >
                 <VideoCard
