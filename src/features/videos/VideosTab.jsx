@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import CommentsSheet from "./composent/CommentsSheet.jsx";
 import { FeedEmpty, FeedError, FeedLoading } from "./composent/FeedStatus.jsx";
 import UploadModal from "./composent/UploadModal.jsx";
-import VideoCard from "./composent/VideoCard.jsx";
+import VideoCard, { isImageVideo } from "./composent/VideoCard.jsx";
 import { useCamera } from "./hooks/useCamera.js";
 import { useFeedPlayback } from "./hooks/useFeedPlayback.js";
 import { useSoundPicker } from "./hooks/useSoundPicker.js";
@@ -14,8 +14,9 @@ import { useVideoFeed } from "./hooks/useVideoFeed.js";
 import VideoNextGenStudio from "./VideoNextGenStudio.jsx";
 import { useToast } from "../../components/ToastContext.jsx";
 import { EngagementList } from "../../components/EngagementList.jsx";
-import { TipButton } from "../../components/TipButton.jsx";
 import { Volume2, VolumeX, Sparkles } from "lucide-react";
+
+const IMAGE_DURATION_MS = 6000;
 
 export function VideosTab({ onRewardPoints, onExit }) {
   const feed = useVideoFeed();
@@ -64,16 +65,21 @@ export function VideosTab({ onRewardPoints, onExit }) {
 
   const openUpload = () => creator.setShowUpload(true);
 
+  // Toujours garder la dernière version de openUpload pour le listener global
+  const openUploadRef = useRef(openUpload);
+  openUploadRef.current = openUpload;
+
   // Écouter le clic sur le bouton "+" du Header lorsque l'onglet actif est Vidéos
   useEffect(() => {
-    const handleGlobalVideoCreate = () => {
-      openUpload();
-    };
+    const handleGlobalVideoCreate = () => openUploadRef.current();
     window.addEventListener("baaro:open-video-create", handleGlobalVideoCreate);
     return () => {
-      window.removeEventListener("baaro:open-video-create", handleGlobalVideoCreate);
+      window.removeEventListener(
+        "baaro:open-video-create",
+        handleGlobalVideoCreate
+      );
     };
-  }, [creator]);
+  }, []);
 
   const handleUseSound = (video, sound) => {
     const handle = video.profiles?.handle?.replace(/^@/, "") || "membre";
@@ -90,8 +96,10 @@ export function VideosTab({ onRewardPoints, onExit }) {
     showToast(`Son « ${title} » sélectionné`, "success");
   };
 
+  // VideoCard lit actions.handleLike ; on expose les deux noms possibles
   const actions = {
     ...videoActions,
+    handleLike: videoActions.handleLike || videoActions.toggleLike,
     openComments: commentsState.openComments,
     onUseSound: handleUseSound,
   };
@@ -99,7 +107,6 @@ export function VideosTab({ onRewardPoints, onExit }) {
   const [studioOpen, setStudioOpen] = useState(false);
   const [viewersVideoId, setViewersVideoId] = useState(null);
 
-  // Intégration des fonctionnalités sélectionnées dans le studio NextGen
   const handleStudioCreate = (selectedFeatures) => {
     setStudioOpen(false);
     if (selectedFeatures && selectedFeatures.length > 0) {
@@ -108,59 +115,106 @@ export function VideosTab({ onRewardPoints, onExit }) {
     openUpload();
   };
 
-  // --- GESTION CLICK SIMPLE (PAUSE/LECTURE) & DOUBLE-TAP (LIKE) ---
-  const clickTimeoutRef = useRef(null);
-  const lastClickTimeRef = useRef(0);
+  // ---------------------------------------------------------------
+  // AUTO-PLAY / PLAYLIST
+  // ---------------------------------------------------------------
+  const scrollRef = useRef(null);
+  const slideRefs = useRef({});
+  const [activeId, setActiveId] = useState(null);
 
-  const handleVideoTouchOrClick = (e, video) => {
-    e.stopPropagation();
-    const currentTime = new Date().getTime();
-    const tapLength = currentTime - lastClickTimeRef.current;
-
-    if (tapLength < 300 && tapLength > 0) {
-      // --- DOUBLE TAP : LIKE ---
-      if (clickTimeoutRef.current) {
-        clearTimeout(clickTimeoutRef.current);
-        clickTimeoutRef.current = null;
-      }
-      if (!likedMap[video.id]) {
-        videoActions.toggleLike(video.id);
-      }
-      lastClickTimeRef.current = 0;
-    } else {
-      // --- SIMPLE TAP : TOGGLE PLAY / PAUSE ---
-      lastClickTimeRef.current = currentTime;
-      clickTimeoutRef.current = setTimeout(() => {
-        handleTogglePlayPause(video.id);
-        clickTimeoutRef.current = null;
-      }, 300);
+  const goToNext = (currentId) => {
+    const idx = visibleVideos.findIndex(
+      (v) => String(v.id) === String(currentId)
+    );
+    const next = visibleVideos[idx + 1];
+    if (next) {
+      slideRefs.current[String(next.id)]?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+      return true;
     }
+    return false;
   };
 
-  const handleTogglePlayPause = (videoId) => {
-    // Méthode unifiée compatible avec Chrome mobile / Chrome desktop
-    if (playback?.togglePlayPause) {
-      playback.togglePlayPause(videoId);
-    } else if (playback?.togglePlay) {
-      playback.togglePlay(videoId);
-    } else {
-      const el = playback?.videoRefs?.current?.[videoId];
-      if (el) {
-        if (el.paused) {
-          el.play().catch(() => {});
-        } else {
-          el.pause();
-        }
+  // Détecte la publication visible (>= 60 % de l'écran)
+  useEffect(() => {
+    const root = scrollRef.current;
+    if (!root || visibleVideos.length === 0) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting && entry.intersectionRatio >= 0.6) {
+            setActiveId(entry.target.dataset.videoId);
+          }
+        });
+      },
+      { root, threshold: [0.6] }
+    );
+
+    Object.values(slideRefs.current).forEach((node) => {
+      if (node) observer.observe(node);
+    });
+
+    return () => observer.disconnect();
+  }, [visibleVideos]);
+
+  // Joue la vidéo active, met les autres en pause
+  useEffect(() => {
+    if (!activeId) return;
+    const refs = playback?.videoRefs?.current || {};
+    Object.entries(refs).forEach(([id, el]) => {
+      if (!el) return;
+      if (String(id) === String(activeId)) {
+        if (el.ended) el.currentTime = 0;
+        el.play().catch(() => {});
+      } else {
+        el.pause();
       }
-    }
-  };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeId, visibleVideos]);
+
+  // Fin de vidéo -> suivante (la dernière est rejouée)
+  useEffect(() => {
+    if (!activeId) return;
+    const el = playback?.videoRefs?.current?.[activeId];
+    if (!el) return;
+
+    el.loop = false; // sinon l'événement "ended" n'est jamais émis
+
+    const onEnded = () => {
+      if (!goToNext(activeId)) {
+        el.currentTime = 0;
+        el.play().catch(() => {});
+      }
+    };
+
+    el.addEventListener("ended", onEnded);
+    return () => el.removeEventListener("ended", onEnded);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeId, visibleVideos]);
+
+  // Images : passage automatique après quelques secondes
+  useEffect(() => {
+    if (!activeId) return;
+    const current = visibleVideos.find((v) => String(v.id) === String(activeId));
+    if (!current || !isImageVideo(current)) return;
+
+    const timer = setTimeout(() => goToNext(activeId), IMAGE_DURATION_MS);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeId, visibleVideos]);
 
   if (loading) return <FeedLoading />;
 
   return (
-    <div className="relative w-full h-screen h-[calc(100vh-env(safe-area-inset-top))] overflow-hidden bg-black flex flex-col">
-      
-      {/* BOUTON HAUT-PARLEUR FIXÉ EN HAUT À DROITE (UNIQUE BOUTON SON) */}
+    <div
+      className="relative w-full h-screen overflow-hidden bg-black flex flex-col"
+      style={{ height: "100dvh" }}
+    >
+      {/* STUDIO + SON (HAUT DROITE) */}
       <div className="absolute top-4 right-4 z-[70] flex items-center gap-2">
         <button
           onClick={() => setStudioOpen(true)}
@@ -182,7 +236,11 @@ export function VideosTab({ onRewardPoints, onExit }) {
       </div>
 
       {/* CONTENEUR MAGNÉTIQUE PLEIN ÉCRAN */}
-      <div className="w-full h-full overflow-y-scroll snap-y snap-mandatory scrollbar-none flex flex-col bg-black">
+      <div
+        ref={scrollRef}
+        className="w-full h-full overflow-y-scroll snap-y snap-mandatory scrollbar-none overscroll-contain bg-black"
+        style={{ WebkitOverflowScrolling: "touch" }}
+      >
         {loadError ? (
           <div className="flex items-center justify-center h-full">
             <FeedError message={loadError} onRetry={loadVideos} />
@@ -193,35 +251,26 @@ export function VideosTab({ onRewardPoints, onExit }) {
           </div>
         ) : (
           visibleVideos.map((video) => (
-            <div 
-              key={video.id} 
-              className="relative w-full h-full h-screen shrink-0 snap-start snap-always flex items-center justify-center bg-black overflow-hidden"
+            <div
+              key={video.id}
+              ref={(node) => {
+                if (node) slideRefs.current[String(video.id)] = node;
+                else delete slideRefs.current[String(video.id)];
+              }}
+              data-video-id={String(video.id)}
+              className="relative w-full h-full shrink-0 snap-start snap-always bg-black overflow-hidden"
             >
-              <div 
-                className="w-full h-full relative flex items-center justify-center overflow-hidden cursor-pointer select-none"
-                onClick={(e) => handleVideoTouchOrClick(e, video)}
-              >
-                <VideoCard
-                  video={video}
-                  sound={getVideoSound(video)}
-                  liked={!!likedMap[video.id]}
-                  user={user}
-                  playback={playback}
-                  actions={actions}
-                  hideVolumeControl={true} /* Masque le bouton son du composant enfant pour éviter le doublon */
-                  onShowViewers={() => setViewersVideoId(video.id)}
-                />
-
-                {/* BOUTON POURBOIRE (TIP) */}
-                {user?.id && video.user_id && video.user_id !== user.id && (
-                  <div 
-                    className="absolute bottom-24 right-4 z-30"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <TipButton recipientId={video.user_id} videoId={video.id} compact />
-                  </div>
-                )}
-              </div>
+              {/* Les gestes (tap, double-tap) et le pourboire sont gérés dans VideoCard */}
+              <VideoCard
+                video={video}
+                sound={getVideoSound(video)}
+                liked={!!likedMap[video.id]}
+                user={user}
+                playback={playback}
+                actions={actions}
+                hideVolumeControl={true}
+                onShowViewers={() => setViewersVideoId(video.id)}
+              />
             </div>
           ))
         )}
@@ -230,9 +279,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
       {/* MODALES & OVERLAYS */}
       {commentsState.showComments && (
         <CommentsSheet
-          comments={
-            commentsState.comments[commentsState.showComments] || []
-          }
+          comments={commentsState.comments[commentsState.showComments] || []}
           newComment={commentsState.newComment}
           setNewComment={commentsState.setNewComment}
           onSend={commentsState.sendComment}
@@ -246,7 +293,6 @@ export function VideosTab({ onRewardPoints, onExit }) {
         camera={camera}
       />
 
-      {/* STUDIO NEXTGEN BRANCHÉ */}
       <VideoNextGenStudio
         open={studioOpen}
         onClose={() => setStudioOpen(false)}
