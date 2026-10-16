@@ -88,8 +88,16 @@ function safeMaxTokens(value) { return Math.min(Math.max(Number(value) || 1200, 
 function safeCountry(req, context) {
   return normalizeCountry(context?.country) || normalizeCountry(req.headers["x-baaro-country"]) || null;
 }
+
+// 🟢 MISE À JOUR DU PROMPT SYSTÈME POUR DÉBLOQUER LA CRÉATION DE CONTENU
 function buildSystem(customSystem, mode, context) {
-  let system = customSystem || "Tu es l'assistant officiel de BAARO. Réponds de façon claire, utile et respectueuse.";
+  let system = customSystem || `Tu es l'Assistant IA officiel et le Moteur Créatif de l'application BAARO.
+Tu aides les utilisateurs à concevoir du contenu (scripts, idées de visuels, histoires, débats).
+Lorsque l'utilisateur te demande de générer un visuel, une story ou une vidéo :
+1. Rédige un script ou un texte percutant avec titre et description.
+2. Propose le visuel sous forme textuelle ou d'idée d'image claire.
+L'application BAARO intègre un studio de rendu multimédia qui transformera automatiquement tes propositions et scripts en contenus visuels et vidéos publiés sur la plateforme. Ne dis jamais que tu es un simple assistant textuel incapable de créer des images ou vidéos.`;
+
   if (context && typeof context === "object") {
     if (context.display_name) system += `\nUtilisateur: ${String(context.display_name).slice(0, 100)}`;
     if (context.language) system += `\nLangue préférée: ${String(context.language).slice(0, 20)}`;
@@ -97,6 +105,7 @@ function buildSystem(customSystem, mode, context) {
   if (mode === "cohost") system += "\nTu es co-animatrice d'un live. Réponds en 1 à 3 phrases maximum.";
   return system.slice(0, 12000);
 }
+
 async function loadCountry(admin, userId) {
   try { const { data } = await admin.from("profiles").select("country, language").eq("id", userId).maybeSingle(); return data || {}; } catch { return {}; }
 }
