@@ -11,6 +11,9 @@ export function useFeedPlayback({ visibleVideos }) {
   const videoRefs = useRef({});
   const audioRefs = useRef({});
   const mutedRef = useRef(true);
+  // Valeur courante de playingId, lisible dans l'observer sans le recréer
+  const playingIdRef = useRef(null);
+  playingIdRef.current = playingId;
   const viewedRef = useRef(new Set());
 
   useEffect(() => {
@@ -30,7 +33,7 @@ export function useFeedPlayback({ visibleVideos }) {
               video.removeAttribute("src");
               video.load();
             }
-            if (playingId === id) {
+            if (playingIdRef.current === id) {
               setPlayingId(null);
             }
           }
@@ -83,7 +86,7 @@ export function useFeedPlayback({ visibleVideos }) {
     });
 
     return () => observer.disconnect();
-  }, [visibleVideos, playingId]);
+  }, [visibleVideos]);
 
   const syncAudioTime = (videoEl, audio) => {
     if (!videoEl || !audio) return;
