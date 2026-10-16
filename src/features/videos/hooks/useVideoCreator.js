@@ -1,7 +1,7 @@
-import { GoogleGenAI } from "@google/genai";
 import { useEffect, useRef, useState } from "react";
 import { useToast } from "../../../components/ToastContext.jsx";
 import { uploadExternalMedia } from "../../../lib/externalMedia.js";
+import { generateAIImage } from "../../../lib/geminiAI.js";
 import { supabase } from "../../../supabaseClient.js";
 import { MAX_PHOTOS } from "../constants.js";
 import { formatTime } from "../utils/format.js";
@@ -14,51 +14,20 @@ import {
   renderToFile,
 } from "../utils/videoRenderer.js";
 
-// Helper de génération par IA Gemini (Text & Visuals)
+// Helper de génération par IA Gemini via l'API backend sécurisée
 async function generateGeminiVisual(promptText) {
-  const apiKey =
-    import.meta.env.VITE_GEMINI_API_KEY ||
-    import.meta.env.GEMINI_API_KEY;
-
-  if (!apiKey) {
-    console.warn("VITE_GEMINI_API_KEY non configurée dans .env");
-    return null;
-  }
-
-  const ai = new GoogleGenAI({ apiKey });
-
   try {
-    // Tentative de génération d'image via Gemini / Imagen
-    const response = await ai.models.generateImages({
-      model: "imagen-3.0-generate-002",
-      prompt: `Création visuelle verticale 9:16 attrayante pour réseau social: ${promptText}`,
-      config: {
-        numberOfImages: 1,
-        outputMimeType: "image/jpeg",
-        aspectRatio: "9:16",
-      },
-    });
+    const file = await generateAIImage(
+      `Création visuelle verticale 9:16 attrayante pour réseau social: ${promptText}`
+    );
+    if (!file) return null;
 
-    const base64Image = response?.generatedImages?.[0]?.image?.imageBytes;
-    if (!base64Image) return null;
-
-    const byteCharacters = atob(base64Image);
-    const byteNumbers = new Array(byteCharacters.length);
-    for (let i = 0; i < byteCharacters.length; i++) {
-      byteNumbers[i] = byteCharacters.charCodeAt(i);
-    }
-    const byteArray = new Uint8Array(byteNumbers);
-    const blob = new Blob([byteArray], { type: "image/jpeg" });
-
-    const file = new File([blob], `gemini-ai-${Date.now()}.jpg`, {
-      type: "image/jpeg",
-    });
     return {
       file,
       url: URL.createObjectURL(file),
     };
   } catch (error) {
-    console.warn("Génération visuelle Gemini indisponible/repli local:", error);
+    console.warn("Génération visuelle Gemini indisponible / repli local :", error);
     return null;
   }
 }
@@ -177,7 +146,7 @@ export function useVideoCreator({
 
         setGenerateProgress(0.2);
 
-        // Tentative d'enrichissement visuel via Gemini IA
+        // Appel à la génération d'image via le backend sécurisé
         const geminiResult = await generateGeminiVisual(text);
         setGenerateProgress(0.5);
 
@@ -186,7 +155,7 @@ export function useVideoCreator({
           totalMs = 6000; // 6 secondes pour le visuel IA
           drawFrame = makePhotoDrawer([aiImage], 6);
         } else {
-          // Fallback Canvas local texte animé si Gemini n'est pas configuré
+          // Fallback Canvas local texte animé si le backend ou l'IA n'est pas disponible
           const words = text.split(/\s+/).length;
           totalMs = Math.min(15, Math.max(5, Math.ceil(words * 0.5))) * 1000;
           drawFrame = makeTextDrawer(text, textTheme);
