@@ -1,56 +1,102 @@
-import { GoogleGenAI } from "@google/genai";
-
-// Initialisation avec votre clé API (idéalement stockée dans une variable d'environnement VITE_GEMINI_API_KEY)
-const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY });
+/**
+ * Service Front-End sécurisé pour les fonctionnalités IA de BAARO.
+ * Toutes les requêtes passent par le backend pour protéger la clé API Gemini.
+ */
 
 /**
  * Générer du texte intelligent ou des descriptions pour les stories/vidéos
+ * @param {string} prompt - Instruction ou texte fourni par l'utilisateur
+ * @param {string} systemInstruction - Instructions de comportement du modèle
  */
 export async function generateAIText(prompt, systemInstruction = "") {
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: prompt,
-      config: {
-        systemInstruction: systemInstruction || "Tu es l'assistant créatif de BAARO, une application vidéo innovante.",
-      },
+    const response = await fetch("/api/ai/video-engine", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ 
+        action: "text", 
+        prompt, 
+        systemInstruction 
+      }),
     });
-    return response.text;
+
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || "Erreur lors de la génération de texte par l'IA");
+    }
+
+    return data.reply || data.text || null;
   } catch (error) {
-    console.error("Erreur Gemini Text:", error);
+    console.error("Erreur Gemini Text (Frontend):", error);
     return null;
   }
 }
 
 /**
- * Générer une image via Gemini / Imagen (si pris en charge par votre configuration)
+ * Obtenir un plan de montage intelligent structuré en JSON via le backend sécurisé
+ * @param {string} prompt - Objectif du montage
+ * @param {string} transcript - Transcription de la vidéo
+ */
+export async function generateAIEditPlan(prompt, transcript) {
+  try {
+    const response = await fetch("/api/ai/video-engine", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ 
+        action: "edit_plan", 
+        prompt, 
+        transcript 
+      }),
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || "Erreur lors de la génération du plan de montage");
+    }
+
+    return data.plan;
+  } catch (error) {
+    console.error("Erreur Plan de montage IA (Frontend):", error);
+    throw error;
+  }
+}
+
+/**
+ * Générer une image ou un contenu visuel via le backend
+ * (Passe par une action dédiée sur votre routeur serveur sécurisé)
  */
 export async function generateAIImage(prompt) {
   try {
-    // Utilisation du modèle de génération d'image Imagen ou équivalent via le SDK
-    const response = await ai.models.generateImages({
-      model: 'imagen-3.0-generate-002',
-      prompt: prompt,
-      config: {
-        numberOfImages: 1,
-        outputMimeType: 'image/jpeg',
-        aspectRatio: '9:16', // Format vertical idéal pour les vidéos/stories BAARO
-      },
+    const response = await fetch("/api/ai/video-engine", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ 
+        action: "image", 
+        prompt 
+      }),
     });
 
-    const base64Image = response.generatedImages[0].image.imageBytes;
-    // Conversion du base64 en objet File exploitable par votre application
-    const byteCharacters = atob(base64Image);
-    const byteNumbers = new Array(byteCharacters.length);
-    for (let i = 0; i < byteCharacters.length; i++) {
-      byteNumbers[i] = byteCharacters.charCodeAt(i);
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || "Impossible de générer l'image par IA.");
     }
-    const byteArray = new Uint8Array(byteNumbers);
-    const blob = new Blob([byteArray], { type: 'image/jpeg' });
-    
-    return new File([blob], `gemini-ai-${Date.now()}.jpg`, { type: 'image/jpeg' });
+
+    // Si le serveur renvoie l'image sous forme de base64, on la convertit en objet File exploitable
+    if (data.imageBase64) {
+      const byteCharacters = atob(data.imageBase64);
+      const byteNumbers = new Array(byteCharacters.length);
+      for (let i = 0; i < byteCharacters.length; i++) {
+        byteNumbers[i] = byteCharacters.charCodeAt(i);
+      }
+      const byteArray = new Uint8Array(byteNumbers);
+      const blob = new Blob([byteArray], { type: data.mimeType || "image/jpeg" });
+      
+      return new File([blob], `gemini-ai-${Date.now()}.jpg`, { type: data.mimeType || "image/jpeg" });
+    }
+
+    throw new Error("Format de réponse d'image invalide.");
   } catch (error) {
-    console.error("Erreur Gemini Image:", error);
-    throw new Error("Impossible de générer l'image par IA.");
+    console.error("Erreur Gemini Image (Frontend):", error);
+    throw error;
   }
 }
