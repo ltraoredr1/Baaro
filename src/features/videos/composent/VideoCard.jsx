@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import {
   Check,
   Clock3,
   Expand,
+  Gauge,
   Heart,
   MessageCircle,
   Eye,
@@ -20,9 +21,6 @@ import { baaroLogo } from "../constants.js";
 import { formatCount } from "../utils/format.js";
 
 // Une vidéo plein écran du flux, avec ses boutons d'action.
-// playback : retour de useFeedPlayback.
-// actions : like, commentaires, repost, partage, suppression...
-// onShowViewers : ouvre la liste des spectateurs de cette vidéo.
 export default function VideoCard({
   video,
   sound,
@@ -30,6 +28,7 @@ export default function VideoCard({
   user,
   playback,
   actions,
+  hideVolumeControl = false,
   onShowViewers,
 }) {
   const {
@@ -60,6 +59,11 @@ export default function VideoCard({
   } = actions;
 
   const [captionOpen, setCaptionOpen] = useState(false);
+  const [playbackRate, setPlaybackRate] = useState(1);
+  const [showHeartAnim, setShowHeartAnim] = useState(false);
+
+  const clickTimeoutRef = useRef(null);
+  const lastClickTimeRef = useRef(0);
 
   const id = String(video.id);
   const isPlaying = playingId === id;
@@ -69,10 +73,64 @@ export default function VideoCard({
     .join(" · ");
   const handleClean = profile.handle?.replace(/^@/, "") || "membre";
 
+  // --- GESTION DU TAP ET DOUBLE-TAP ---
+  const handleCardClick = (e) => {
+    e.stopPropagation();
+    const currentTime = new Date().getTime();
+    const tapLength = currentTime - lastClickTimeRef.current;
+
+    if (tapLength < 300 && tapLength > 0) {
+      // DOUBLE TAP : LIKE + ANIMATION
+      if (clickTimeoutRef.current) {
+        clearTimeout(clickTimeoutRef.current);
+        clickTimeoutRef.current = null;
+      }
+      setShowHeartAnim(true);
+      setTimeout(() => setShowHeartAnim(false), 800);
+      if (!liked) handleLike(video.id);
+      lastClickTimeRef.current = 0;
+    } else {
+      // SIMPLE TAP : TOGGLE PLAY / PAUSE
+      lastClickTimeRef.current = currentTime;
+      clickTimeoutRef.current = setTimeout(() => {
+        togglePlay(video.id);
+        clickTimeoutRef.current = null;
+      }, 300);
+    }
+  };
+
+  // --- CHANGEMENT DE VITESSE (1x, 1.25x, 1.5x, 2x) ---
+  const toggleSpeed = (e) => {
+    e.stopPropagation();
+    const rates = [1, 1.25, 1.5, 2];
+    const nextRate = rates[(rates.indexOf(playbackRate) + 1) % rates.length];
+    setPlaybackRate(nextRate);
+    const videoEl = videoRefs.current[video.id];
+    if (videoEl) {
+      videoEl.playbackRate = nextRate;
+    }
+  };
+
+  // --- DÉFILEMENT INTERACTIF (SCRUBBING) ---
+  const handleSeek = (e) => {
+    e.stopPropagation();
+    const videoEl = videoRefs.current[video.id];
+    if (!videoEl || !videoEl.duration) return;
+
+    const rect = e.currentTarget.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const newTime = (clickX / rect.width) * videoEl.duration;
+
+    videoEl.currentTime = newTime;
+    const audioEl = audioRefs.current[video.id];
+    if (audioEl) syncAudioTime(videoEl, audioEl);
+  };
+
   return (
     <article
       key={video.id}
-      className="relative h-[100dvh] min-h-[620px] w-full snap-start bg-black overflow-hidden"
+      className="relative h-[100dvh] min-h-[620px] w-full snap-start bg-black overflow-hidden select-none"
+      onClick={handleCardClick}
     >
       <video
         ref={(el) => {
@@ -103,7 +161,6 @@ export default function VideoCard({
         onError={() =>
           setVideoErrors((prev) => ({ ...prev, [video.id]: true }))
         }
-        onClick={() => togglePlay(video.id)}
       />
 
       {sound && (
@@ -121,8 +178,28 @@ export default function VideoCard({
 
       <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-transparent to-black/30 pointer-events-none" />
 
+      {/* Animation Cœur au Double-Tap */}
+      {showHeartAnim && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-40 animate-ping">
+          <Heart size={96} className="text-pink-500 fill-pink-500 drop-shadow-lg" />
+        </div>
+      )}
+
+      {/* Bouton Vitesse de lecture (Haut-Gauche) */}
+      <button
+        type="button"
+        onClick={toggleSpeed}
+        className="absolute top-16 left-4 z-30 flex items-center gap-1 bg-black/45 backdrop-blur-md text-white px-2.5 py-1.5 rounded-full text-[11px] font-mono border border-white/20 active:scale-95"
+      >
+        <Gauge size={13} />
+        <span>{playbackRate}x</span>
+      </button>
+
       {videoErrors[video.id] && (
-        <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/85 text-center px-6">
+        <div 
+          className="absolute inset-0 z-20 flex items-center justify-center bg-black/85 text-center px-6"
+          onClick={(e) => e.stopPropagation()}
+        >
           <div>
             <div className="text-5xl mb-4">⚠️</div>
             <p className="font-black text-lg">Vidéo indisponible</p>
@@ -153,16 +230,11 @@ export default function VideoCard({
       )}
 
       {!isPlaying && !videoErrors[video.id] && (
-        <button
-          type="button"
-          onClick={() => togglePlay(video.id)}
-          className="absolute inset-0 z-10 flex items-center justify-center"
-          aria-label="Lire la vidéo"
-        >
+        <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none">
           <span className="h-16 w-16 rounded-full bg-black/45 backdrop-blur-md flex items-center justify-center">
             <Play size={30} fill="white" className="ml-1" />
           </span>
-        </button>
+        </div>
       )}
 
       {video.is_repost && (
@@ -172,7 +244,10 @@ export default function VideoCard({
         </div>
       )}
 
-      <div className="absolute left-3 right-20 bottom-28 z-20">
+      <div 
+        className="absolute left-3 right-20 bottom-28 z-20"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="flex items-center gap-2 mb-2">
           <div className="h-10 w-10 rounded-full overflow-hidden border-2 border-white bg-zinc-800 shrink-0">
             {profile.avatar_url ? (
@@ -251,7 +326,10 @@ export default function VideoCard({
         </div>
       </div>
 
-      <div className="absolute right-2 bottom-28 z-30 flex flex-col items-center gap-3">
+      <div 
+        className="absolute right-2 bottom-28 z-30 flex flex-col items-center gap-3"
+        onClick={(e) => e.stopPropagation()}
+      >
         <button
           type="button"
           onClick={() => handleLike(video.id)}
@@ -331,17 +409,26 @@ export default function VideoCard({
         )}
       </div>
 
-      <div className="absolute left-3 right-3 bottom-24 z-30 h-1 rounded-full bg-white/20 overflow-hidden pointer-events-none">
-        <div
-          className="h-full transition-[width] duration-100"
-          style={{
-            width: `${(progress[video.id] || 0) * 100}%`,
-            background: COLORS.gold,
-          }}
-        />
+      {/* Barre de Défilement Interactif (Scrubbing) */}
+      <div 
+        className="absolute left-3 right-3 bottom-24 z-30 h-3 flex items-end cursor-pointer"
+        onClick={handleSeek}
+      >
+        <div className="w-full h-1 rounded-full bg-white/20 overflow-hidden">
+          <div
+            className="h-full transition-[width] duration-100"
+            style={{
+              width: `${(progress[video.id] || 0) * 100}%`,
+              background: COLORS.gold,
+            }}
+          />
+        </div>
       </div>
 
-      <div className="absolute bottom-8 left-3 right-3 z-30 flex items-center justify-between text-[10px] text-white/65">
+      <div 
+        className="absolute bottom-8 left-3 right-3 z-30 flex items-center justify-between text-[10px] text-white/65"
+        onClick={(e) => e.stopPropagation()}
+      >
         <span className="flex items-center gap-1">
           <Clock3 size={12} />
           {video.duration || "00:00"}
@@ -361,14 +448,16 @@ export default function VideoCard({
 
         <div className="flex items-center gap-2">
           <span>{formatCount(video.views)} vues</span>
-          <button
-            type="button"
-            onClick={() => toggleMute()}
-            className="h-8 w-8 rounded-full bg-black/35 backdrop-blur-md flex items-center justify-center"
-            aria-label={muted ? "Activer le son" : "Couper le son"}
-          >
-            {muted ? <VolumeX size={15} /> : <Volume2 size={15} />}
-          </button>
+          {!hideVolumeControl && (
+            <button
+              type="button"
+              onClick={() => toggleMute()}
+              className="h-8 w-8 rounded-full bg-black/35 backdrop-blur-md flex items-center justify-center"
+              aria-label={muted ? "Activer le son" : "Couper le son"}
+            >
+              {muted ? <VolumeX size={15} /> : <Volume2 size={15} />}
+            </button>
+          )}
         </div>
       </div>
     </article>
