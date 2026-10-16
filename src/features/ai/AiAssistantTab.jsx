@@ -13,6 +13,8 @@ import {
   Volume2,
   VolumeX,
   PlusCircle,
+  Video,
+  Image as ImageIcon,
 } from "lucide-react";
 import { COLORS } from "../../theme.js";
 import { useToast } from "../../components/ToastContext.jsx";
@@ -22,6 +24,7 @@ import { supabase } from "../../supabaseClient.js";
 const PRESETS = [
   { icon: Coins, text: "Comment maximiser mes points aujourd'hui ?" },
   { icon: Swords, text: "Propose-moi 3 sujets de débat viraux" },
+  { icon: ImageIcon, text: "Génère une image verticale pour ma story" },
   { icon: MessageSquare, text: "Idée de publication engageante" },
   { icon: Zap, text: "Analyse mon activité BAARO et donne des conseils" },
 ];
@@ -36,7 +39,7 @@ const PROVIDER_LABELS = {
 
 const HISTORY_LIMIT = 10;
 
-export function AiAssistantTab({ userProfile, onPublishAction, prefill }) {
+export function AiAssistantTab({ userProfile, onPublishAction, onGenerateMedia, prefill }) {
   const { showToast, showPointsReward } = useToast();
   const [messages, setMessages] = useState([
     {
@@ -82,16 +85,15 @@ export function AiAssistantTab({ userProfile, onPublishAction, prefill }) {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }, [messages, loading]);
 
-  // Texte pré-rempli depuis un bouton "Demander à l'IA"
+  // Texte pré-rempli depuis un bouton externe "Demander à l'IA"
   useEffect(() => {
     if (prefill?.text) {
       setInput(prefill.text);
       setTimeout(() => inputRef.current?.focus(), 50);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [prefill?.key]);
+  }, [prefill?.key, prefill?.text]);
 
-  // Lecture vocale robuste (WebView native & Web + correction phonétique "BAARO" -> "Bâro")
+  // Lecture vocale
   const speakText = useCallback(
     (messageId, text) => {
       if (typeof window === "undefined" || !("speechSynthesis" in window)) {
@@ -113,7 +115,6 @@ export function AiAssistantTab({ userProfile, onPublishAction, prefill }) {
 
       if (!text) return;
 
-      // Correction phonétique pour une prononciation parfaite de BAARO
       const cleanText = text
         .replace(/[*#_`]/g, "")
         .replace(/\bBAARO\b/gi, "Bâro")
@@ -236,11 +237,19 @@ export function AiAssistantTab({ userProfile, onPublishAction, prefill }) {
 
       if (data.provider) setProvider(data.provider);
       const replyText = data.reply || "Voici une suggestion personnalisée.";
+      const imageUrl = data.imageUrl || null;
 
       const assistantMsgId = `a_${Date.now()}`;
       setMessages((prev) => [
         ...prev,
-        { id: assistantMsgId, role: "assistant", text: replyText, canPublish: true },
+        { 
+          id: assistantMsgId, 
+          role: "assistant", 
+          text: replyText, 
+          imageUrl,
+          canPublish: true,
+          canGenerate: true,
+        },
       ]);
 
       // Lecture automatique de la réponse
@@ -292,7 +301,7 @@ export function AiAssistantTab({ userProfile, onPublishAction, prefill }) {
             key={i}
             type="button"
             onClick={() => handleSend(p.text)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs whitespace-nowrap shrink-0 hover:bg-white/5"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs whitespace-nowrap shrink-0 hover:bg-white/5 transition-all active:scale-95"
             style={{
               background: COLORS.surface,
               borderColor: COLORS.border,
@@ -310,7 +319,7 @@ export function AiAssistantTab({ userProfile, onPublishAction, prefill }) {
         className="rounded-2xl border p-4 flex flex-col min-h-[320px]"
         style={{ background: COLORS.surface, borderColor: COLORS.border }}
       >
-        <div className="flex-1 overflow-y-auto space-y-4 max-h-[360px] pr-1">
+        <div className="flex-1 overflow-y-auto space-y-4 max-h-[380px] pr-1">
           {messages.map((m) => {
             const isSpeaking = speakingMessageId === m.id;
 
@@ -338,6 +347,15 @@ export function AiAssistantTab({ userProfile, onPublishAction, prefill }) {
                     }}
                   >
                     {m.text}
+                    {m.imageUrl && (
+                      <div className="mt-3 rounded-xl overflow-hidden border border-white/10">
+                        <img 
+                          src={m.imageUrl} 
+                          alt="Génération IA" 
+                          className="w-full max-h-64 object-cover" 
+                        />
+                      </div>
+                    )}
                   </div>
 
                   {m.role === "assistant" && (
@@ -356,11 +374,26 @@ export function AiAssistantTab({ userProfile, onPublishAction, prefill }) {
                         <span>{isSpeaking ? "Arrêter" : "Écouter"}</span>
                       </button>
 
+                      {m.canGenerate && typeof onGenerateMedia === "function" && (
+                        <button
+                          type="button"
+                          onClick={() => onGenerateMedia(m.text)}
+                          className="flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg border transition-all active:scale-95"
+                          style={{
+                            background: `${COLORS.gold}20`,
+                            borderColor: COLORS.borderGold,
+                            color: COLORS.gold,
+                          }}
+                        >
+                          <Video size={13} /> Créer le visuel
+                        </button>
+                      )}
+
                       {m.canPublish && typeof onPublishAction === "function" && (
                         <button
                           type="button"
                           onClick={() => onPublishAction(m.text)}
-                          className="flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg border"
+                          className="flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg border transition-all active:scale-95"
                           style={{
                             background: `${COLORS.teal}20`,
                             borderColor: COLORS.borderTeal,
@@ -415,7 +448,7 @@ export function AiAssistantTab({ userProfile, onPublishAction, prefill }) {
             placeholder={
               isListening
                 ? "Écoute en cours..."
-                : "Posez votre question ou demandez une action..."
+                : "Demandez du texte, une image ou une idée vidéo..."
             }
             className="flex-1 min-w-0 px-4 py-2.5 rounded-xl border text-sm outline-none"
             style={{
@@ -427,7 +460,7 @@ export function AiAssistantTab({ userProfile, onPublishAction, prefill }) {
           <button
             type="submit"
             disabled={!input.trim() || loading}
-            className="px-4 py-2.5 rounded-xl font-bold disabled:opacity-40"
+            className="px-4 py-2.5 rounded-xl font-bold disabled:opacity-40 transition-all active:scale-95 flex items-center justify-center"
             style={{ background: COLORS.gold, color: "#000" }}
           >
             <Send size={16} />
