@@ -1,12 +1,4 @@
-
 name: BAARO - Dependencies and lockfile
-
-# Fonctionnement :
-# 1. Installer les dépendances déclarées dans package.json.
-# 2. Générer ou actualiser package-lock.json.
-# 3. Vérifier que les dépendances déclarées sont installées.
-# 4. Committer uniquement package-lock.json si nécessaire.
-# 5. Lancer npm run ci uniquement sur demande manuelle.
 
 on:
   push:
@@ -16,13 +8,11 @@ on:
       - package-lock.json
       - .npmrc
       - .github/workflows/install-dependencies.yml
-
   pull_request:
     paths:
       - package.json
       - package-lock.json
       - .npmrc
-
   workflow_dispatch:
     inputs:
       run_ci:
@@ -35,7 +25,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: read
+  contents: write # <- obligatoire pour pouvoir committer le lockfile
 
 jobs:
   dependencies:
@@ -52,74 +42,36 @@ jobs:
           node-version: 22
           cache: npm
 
-      # package.json est la référence.
-      # npm install installe les dépendances et génère/actualise le lockfile.
       - name: Install dependencies and generate lockfile
         shell: bash
         run: |
           set -euo pipefail
-
-          test -s package.json || {
-            echo "::error::package.json est absent ou vide."
-            exit 1
-          }
-
+          test -s package.json || { echo "::error::package.json absent ou vide."; exit 1; }
           npm install
+          test -s package-lock.json || { echo "::error::package-lock.json non généré."; exit 1; }
 
-          test -s package-lock.json || {
-            echo "::error::package-lock.json n'a pas été généré."
-            exit 1
-          }
-
-          echo "Installation et génération du lockfile terminées."
-
-      # Vérifie les dépendances déclarées dans package.json.
       - name: Verify declared dependencies are installed
         shell: bash
         run: |
-          set -euo pipefail
-
           node <<'NODE'
           const fs = require("node:fs");
           const path = require("node:path");
-
           const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
-          const declared = [
-            ...Object.keys(pkg.dependencies || {}),
-            ...Object.keys(pkg.devDependencies || {}),
-          ];
-
-          const missing = declared.filter((name) => {
-            try {
-              const packagePath = path.join(
-                "node_modules",
-                name,
-                "package.json"
-              );
-              return !fs.statSync(packagePath).isFile();
-            } catch {
-              return true;
-            }
+          const declared = [...Object.keys(pkg.dependencies || {}), ...Object.keys(pkg.devDependencies || {})];
+          const missing = declared.filter(name => {
+            try { return !fs.statSync(path.join("node_modules", name, "package.json")).isFile(); }
+            catch { return true; }
           });
-
           if (missing.length > 0) {
-            console.error(
-              "Dépendances déclarées mais non installées :\n- " +
-                missing.join("\n- ")
-            );
+            console.error("Manquantes:\n- " + missing.join("\n- "));
             process.exit(1);
           }
-
-          console.log(
-            `OK : ${declared.length} dépendances déclarées vérifiées.`
-          );
+          console.log(`OK: ${declared.length} dépendances vérifiées.`);
           NODE
 
-      # Vérifie la cohérence de l'arbre installé.
       - name: Verify dependency tree
         run: npm ls --depth=0
 
-      # Commit uniquement du lockfile, jamais sur une pull request.
       - name: Commit updated package-lock.json
         if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') }}
         uses: stefanzweifel/git-auto-commit-action@v5
@@ -127,20 +79,6 @@ jobs:
           commit_message: "chore: update package-lock.json [skip ci]"
           file_pattern: "package-lock.json"
 
-      # Exécution optionnelle des contrôles et du build.
       - name: Run BAARO CI checks and build
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_ci }}
         run: npm run ci
-
-      - name: Summary
-        if: success()
-        shell: bash
-        run: |
-          {
-            echo "## BAARO - Dépendances"
-            echo ""
-            echo "- Installation via npm install."
-            echo "- package-lock.json généré ou actualisé."
-            echo "- Dépendances déclarées vérifiées."
-            echo "- Commit : ${GITHUB_SHA}"
-          } >> "$GITHUB_STEP_SUMMARY"
