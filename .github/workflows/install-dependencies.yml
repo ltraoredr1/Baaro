@@ -16,57 +16,40 @@ on:
   workflow_dispatch:
     inputs:
       run_ci:
-        description: "Lancer aussi npm run ci (vérifications et build)"
+        description: "Lancer aussi npm run ci"
         type: boolean
         default: false
 
-concurrency:
-  group: baaro-dependencies-${{ github.ref }}
-  cancel-in-progress: false
-
 permissions:
-  contents: write # <- obligatoire pour pouvoir committer le lockfile
+  contents: write # tu l'as déjà corrigé, garde write
 
 jobs:
   dependencies:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
 
       - name: Install dependencies and generate lockfile
-        shell: bash
         run: |
           set -euo pipefail
-          test -s package.json || { echo "::error::package.json absent ou vide."; exit 1; }
+          test -s package.json
           npm install
-          test -s package-lock.json || { echo "::error::package-lock.json non généré."; exit 1; }
+          test -s package-lock.json
 
       - name: Verify declared dependencies are installed
-        shell: bash
         run: |
           node <<'NODE'
-          const fs = require("node:fs");
-          const path = require("node:path");
-          const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
-          const declared = [...Object.keys(pkg.dependencies || {}), ...Object.keys(pkg.devDependencies || {})];
-          const missing = declared.filter(name => {
-            try { return !fs.statSync(path.join("node_modules", name, "package.json")).isFile(); }
-            catch { return true; }
-          });
-          if (missing.length > 0) {
-            console.error("Manquantes:\n- " + missing.join("\n- "));
-            process.exit(1);
-          }
-          console.log(`OK: ${declared.length} dépendances vérifiées.`);
+          const fs=require("fs"), path=require("path");
+          const pkg=JSON.parse(fs.readFileSync("package.json","utf8"));
+          const declared=[...Object.keys(pkg.dependencies||{}), ...Object.keys(pkg.devDependencies||{})];
+          const missing=declared.filter(n=>{try{return !fs.statSync(path.join("node_modules",n,"package.json")).isFile()}catch{return true}});
+          if(missing.length){console.error("Manquantes:\n- "+missing.join("\n- "));process.exit(1)}
+          console.log(`OK: ${declared.length} deps`);
           NODE
 
       - name: Verify dependency tree
