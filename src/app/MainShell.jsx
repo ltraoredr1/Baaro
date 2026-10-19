@@ -16,7 +16,8 @@ import { TabFallback } from "./TabFallback.jsx";
 import { OfflineBanner } from "../components/OfflineBanner.jsx";
 import { FutureModulePanel } from "../components/FutureModulePanel.jsx";
 import { saveLastTab, loadLastTab } from "../lib/perf.js";
-import { useCryptoKeys } from "../hooks/useCryptoKeys.js";
+// Chemin corrigé vers useCryptoKeys.js
+import { useCryptoKeys } from "../features/messaging/hooks/useCryptoKeys.js";
 import { useIncomingCalls } from "../hooks/useIncomingCalls.js";
 import { ChatCallModal } from "../components/ChatCallModal.jsx";
 import FloatingAiAssistant from "../components/FloatingAiAssistant.jsx";
