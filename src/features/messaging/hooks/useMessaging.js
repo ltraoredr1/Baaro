@@ -95,6 +95,16 @@ export function useMessaging(conversation_id, current_user_id, recipient_id) {
 
   useEffect(() => () => clearTimeout(typingTimerRef.current), []);
 
+  // Messages éphémères : retire de l'écran ceux qui expirent pendant la session
+  useEffect(() => {
+    const t = setInterval(() => {
+      const now = Date.now();
+      const expired = (m) => m.expires_at && new Date(m.expires_at).getTime() < now;
+      setMessages((prev) => (prev.some(expired) ? prev.filter((m) => !expired(m)) : prev));
+    }, 15000);
+    return () => clearInterval(t);
+  }, []);
+
   const decryptOne = useCallback(
     async (rawMsg) => {
       try {
@@ -431,6 +441,75 @@ export function useMessaging(conversation_id, current_user_id, recipient_id) {
     );
   }, []);
 
+  // Transfère un message (texte rechiffré pour le nouveau destinataire, ou média tel quel)
+  const forwardMessage = useCallback(
+    async (msg, target) => {
+      if (!msg || !target?.conversationId || !target?.recipientId) {
+        return { ok: false, error: "Destinataire manquant" };
+      }
+      if (!keysReady || !myPublicKeyJwk) {
+        return { ok: false, error: keysError || "Clés de chiffrement pas encore prêtes." };
+      }
+      try {
+        const base = {
+          conversation_id: target.conversationId,
+          sender_id: current_user_id,
+          recipient_id: target.recipientId,
+          client_message_id: crypto?.randomUUID
+            ? crypto.randomUUID()
+            : `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        };
+        let row;
+        if (msg.type && msg.type !== "text" && msg.media_url) {
+          row = {
+            ...base,
+            type: msg.type,
+            text: msg.text || msg.file_name || "",
+            media_url: msg.media_url,
+            media_mime: msg.media_mime,
+            media_size: msg.media_size,
+            file_name: msg.file_name,
+            media_duration: msg.media_duration,
+          };
+        } else {
+          const clean = (msg.plaintext || "").trim();
+          if (!clean) return { ok: false, error: "Message vide" };
+          const pub = await fetchRecipientPublicKey(target.recipientId);
+          if (!pub) throw new Error(NO_RECIPIENT_KEY);
+          const payload = await encryptMessage(clean, [
+            { user_id: target.recipientId, publicKeyJwk: pub },
+            { user_id: current_user_id, publicKeyJwk: myPublicKeyJwk },
+          ]);
+          row = { ...base, type: "text", text: serializePayload(payload) };
+        }
+        const { error } = await supabase.from("messages").insert(row);
+        if (error) throw error;
+        return { ok: true };
+      } catch (e) {
+        return { ok: false, error: e?.message || "Transfert impossible" };
+      }
+    },
+    [current_user_id, keysReady, keysError, myPublicKeyJwk, fetchRecipientPublicKey]
+  );
+
+  // Code de sécurité à comparer avec le contact (identique des deux côtés)
+  const getSafetyNumber = useCallback(async () => {
+    if (!myPublicKeyJwk || !recipient_id) return null;
+    const theirs = recipientKeyCache.current || (await fetchRecipientPublicKey(recipient_id));
+    if (!theirs) return null;
+    recipientKeyCache.current = theirs;
+    const a = String(myPublicKeyJwk.n || JSON.stringify(myPublicKeyJwk));
+    const b = String(theirs.n || JSON.stringify(theirs));
+    const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode([a, b].sort().join("|")));
+    const bytes = new Uint8Array(buf);
+    const groups = [];
+    for (let i = 0; i < 30; i += 5) {
+      const n = (bytes[i] * 16777216 + bytes[i + 1] * 65536 + bytes[i + 2] * 256 + bytes[i + 3]) % 100000;
+      groups.push(String(n).padStart(5, "0"));
+    }
+    return groups.join(" ");
+  }, [myPublicKeyJwk, recipient_id, fetchRecipientPublicKey]);
+
   // Suppression "pour tous" de MES messages (marque deleted_at ; le contenu n'est plus affiché)
   const deleteMessage = useCallback(
     async (messageId) => {
@@ -458,6 +537,8 @@ export function useMessaging(conversation_id, current_user_id, recipient_id) {
     loading: loading || (!keysReady && !keysError),
     sendMessage,
     addMessage,
+    forwardMessage,
+    getSafetyNumber,
     deleteMessage,
     loadOlder,
     hasMore,
