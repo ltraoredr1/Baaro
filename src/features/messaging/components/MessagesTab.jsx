@@ -1,15 +1,15 @@
 /**
- * BAARO MessagesTab — Version corrigée complète
+ * BAARO MessagesTab — Version avec enregistrement vocal direct & Cloudflare R2
  */
 import { useMessaging } from "../hooks/useMessaging.js";
 import { useState, useEffect, useRef, useCallback } from "react";
 import {
   ArrowLeft, MessageCircle, Plus, X, Search,
-  Phone, Video, MoreHorizontal, Loader2
+  Phone, Video, Loader2, Mic, Square
 } from "lucide-react";
 import { COLORS as THEME_COLORS } from "../../../theme.js";
 import { supabase } from "../../../supabaseClient.js";
-import { uploadChatFile, mimeToMessageType } from "../../../lib/chatMedia.js";
+import { uploadChatFile, uploadVoiceBlob, mimeToMessageType } from "../../../lib/chatMedia.js";
 import { createCallRoom, getCallToken, createCallRecord } from "../lib/chatCalls.js";
 import { ChatCallModal } from "./ChatCallModal.jsx";
 import { deserializePayload } from "../lib/crypto.js";
@@ -18,7 +18,6 @@ import { ChatInput } from "./ChatInput.jsx";
 import { MessageBubble } from "./MessageBubble.jsx";
 import { messageService } from "../lib/messageService.js";
 
-/** Validation UUID auth.users.id */
 function isValidAuthUserId(value) {
   if (!value || typeof value !== "string") return false;
   if (value.startsWith("@") || (value.includes("@") && value.includes("."))) return false;
@@ -64,6 +63,7 @@ const FALLBACK = {
 export function MessagesTab({ id: propId, onOpenProfile }) {
   const C = { ...FALLBACK, ...(THEME_COLORS || {}) };
   const [id, setId] = useState(propId || null);
+  const [authChecking, setAuthChecking] = useState(!propId);
   const [conversations, setConversations] = useState([]);
   const [activeChat, setActiveChat] = useState(null);
   const messaging = useMessaging(activeChat?.id, id, activeChat?.otherUserId);
@@ -76,31 +76,35 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
   const [searchLoading, setSearchLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [callState, setCallState] = useState(null);
-  const [searchInChat, setSearchInChat] = useState("");
-  const [typing, setTyping] = useState(false);
-  const closeCall = useCallback(() => setCallState(null), []);
 
+  // Gestion de l'enregistrement vocal direct
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingTime, setRecordingTime] = useState(0);
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
+  const timerRef = useRef(null);
+
+  const closeCall = useCallback(() => setCallState(null), []);
   const messagesEndRef = useRef(null);
   const listChannelRef = useRef(null);
 
-  // ── Auth ──────────────────────────────────────────────────────────────────
   useEffect(() => {
     if (propId) {
       setId(propId);
+      setAuthChecking(false);
       return;
     }
     supabase.auth.getUser().then(({ data }) => {
       if (data?.user) setId(data.user.id);
+      setAuthChecking(false);
     });
   }, [propId]);
 
-  // ── Conversations via messageService ──────────────────────────────────────
   const fetchConversations = useCallback(async () => {
     if (!id) return;
     setLoading(true);
     try {
       const rawConversations = await messageService.getConversations(id);
-
       const enriched = (rawConversations || []).map((c) => {
         const otherParticipant = c.participants?.find((p) => p.user_id !== id) || {};
         const profile = otherParticipant.profiles || {};
@@ -115,7 +119,6 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
           created_at: c.created_at,
         };
       });
-
       setConversations(enriched);
     } catch (e) {
       console.error("[MessagesTab] fetchConversations error:", e);
@@ -127,7 +130,6 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
   useEffect(() => {
     if (!id) return;
     fetchConversations();
-
     const ch = supabase
       .channel(`conv-list:${id}`)
       .on(
@@ -145,7 +147,6 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
     };
   }, [id, fetchConversations]);
 
-  // ── Chargement des messages du chat actif ────────────────────────────────
   useEffect(() => {
     setMessages(messaging.messages || []);
     if (activeChat?.id && id) {
@@ -157,9 +158,8 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
     if (messagesEndRef.current) {
       messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
     }
-  }, [messages, typing]);
+  }, [messages]);
 
-  // ── Ouvrir ou créer une conversation ──────────────────────────────────────
   const openConversation = async (otherId, name, avatar, flag) => {
     if (!id || !otherId || otherId === id) return;
     try {
@@ -212,7 +212,6 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
     }
   };
 
-  // ── Envoi texte & médias via ChatInput ────────────────────────────────────
   const handleSendText = async (text) => {
     if (!text || !activeChat || !id || sending) return;
     if (!isValidAuthUserId(id) || !isValidAuthUserId(activeChat.otherUserId)) {
@@ -254,14 +253,83 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
     }
   };
 
-  // ── Appels sortants ───────────────────────────────────────────────────────
+  // ── Enregistrement vocal géré directement ici ─────────────────────────────
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = recorder;
+      audioChunksRef.current = [];
+
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data);
+      };
+
+      recorder.onstop = async () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: audioChunksRef.current[0]?.type || 'audio/webm' });
+        stream.getTracks().forEach((track) => track.stop());
+        if (audioBlob.size > 0) {
+          await handleSendVoice(audioBlob, recordingTime);
+        }
+        setRecordingTime(0);
+      };
+
+      recorder.start();
+      setIsRecording(true);
+      setRecordingTime(0);
+
+      timerRef.current = setInterval(() => {
+        setRecordingTime((prev) => prev + 1);
+      }, 1000);
+    } catch (err) {
+      console.error("Erreur micro :", err);
+      alert("Impossible d'accéder au microphone.");
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+      clearInterval(timerRef.current);
+    }
+  };
+
+  const handleSendVoice = async (audioBlob, duration) => {
+    if (!audioBlob || !activeChat) return;
+    setUploading(true);
+    try {
+      // Utilisation directe de uploadVoiceBlob vers Cloudflare R2
+      const up = await uploadVoiceBlob(audioBlob, id, duration);
+
+      if (!isValidAuthUserId(id) || !isValidAuthUserId(activeChat.otherUserId)) return;
+
+      await supabase.from("messages").insert({
+        conversation_id: activeChat.id,
+        sender_id: id,
+        recipient_id: activeChat.otherUserId,
+        text: "Message vocal",
+        type: "voice",
+        media_url: up.url,
+        media_mime: up.mime,
+        media_size: up.size,
+        file_name: up.fileName,
+        media_duration: up.duration,
+        client_message_id: makeClientMessageId(),
+      });
+    } catch (err) {
+      alert(err.message || "Échec de l’envoi du message vocal");
+    } finally {
+      setUploading(false);
+    }
+  };
+
   const startCall = async (type) => {
     if (!activeChat || !id) return;
     try {
       const roomRes = await createCallRoom({ userName: "Moi", mode: type });
       const roomName = roomRes.roomName || roomRes.daily_room_name;
-      if (!roomName || !roomRes.url)
-        throw new Error("Salle non créée : vérifie DAILY_API_KEY et DAILY_DOMAIN sur Vercel");
+      if (!roomName || !roomRes.url) throw new Error("Salle non créée");
       const rec = await createCallRecord({
         conversation_id: activeChat.id,
         caller_id: id,
@@ -269,7 +337,7 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
         type,
         dailyRoomName: roomName,
       });
-      if (!rec?.id) throw new Error("Appel non enregistré (table calls ou RLS)");
+      if (!rec?.id) throw new Error("Appel non enregistré");
       const tokenRes = await getCallToken({ roomName, userName: "Moi", isOwner: true });
       setCallState({
         mode: "outgoing",
@@ -284,12 +352,10 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
         },
       });
     } catch (e) {
-      console.error(e);
       alert(e.message || "Impossible de démarrer l'appel");
     }
   };
 
-  // ── Recherche contacts ───────────────────────────────────────────────────
   useEffect(() => {
     if (!showNewChat) return;
     const q = searchQuery.trim();
@@ -311,7 +377,7 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
     return () => clearTimeout(t);
   }, [searchQuery, showNewChat, id]);
 
-  const Avatar = ({ src, flag, name, size = 44 }) => (
+  const Avatar = ({ src, flag, size = 44 }) => (
     <div
       className="relative flex-shrink-0 rounded-full overflow-hidden ring-2 ring-white/10"
       style={{ width: size, height: size, background: C.surface2 }}
@@ -326,16 +392,22 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
     </div>
   );
 
-  // ── UI : Nouvelle conversation ────────────────────────────────────────────
+  if (authChecking) {
+    return (
+      <div className="flex flex-col items-center justify-center py-32 gap-3" style={{ color: C.muted }}>
+        <Loader2 size={28} className="animate-spin" style={{ color: C.gold }} />
+        <p className="text-sm">Vérification de la session…</p>
+      </div>
+    );
+  }
+
   if (showNewChat) {
     return (
       <div className="max-w-2xl mx-auto w-full px-4 pt-4 pb-28">
         <div className="flex items-center justify-between mb-5">
-          <div>
-            <h2 className="text-xl font-bold tracking-tight" style={{ color: C.ivory }}>
-              Nouvelle conversation
-            </h2>
-          </div>
+          <h2 className="text-xl font-bold tracking-tight" style={{ color: C.ivory }}>
+            Nouvelle conversation
+          </h2>
           <button onClick={() => setShowNewChat(false)} className="p-2.5 rounded-full hover:bg-white/10">
             <X size={20} style={{ color: C.muted }} />
           </button>
@@ -367,7 +439,7 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
               className="w-full p-3.5 rounded-2xl border flex items-center gap-3.5 text-left"
               style={{ background: C.surface, borderColor: C.border }}
             >
-              <Avatar src={u.avatar_url} flag={u.flag} name={u.display_name} size={48} />
+              <Avatar src={u.avatar_url} flag={u.flag} size={48} />
               <div>
                 <p className="font-semibold text-sm" style={{ color: C.ivory }}>{u.display_name}</p>
                 {u.handle && <p className="text-xs" style={{ color: C.muted }}>@{u.handle}</p>}
@@ -379,16 +451,7 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
     );
   }
 
-  // ── UI : Chat actif ───────────────────────────────────────────────────────
   if (activeChat) {
-    const filtered = messages.filter(
-      (m) =>
-        !searchInChat ||
-        String(m.plaintext || m.text || m.content || "")
-          .toLowerCase()
-          .includes(searchInChat.trim().toLowerCase())
-    );
-
     return (
       <>
         {callState && (
@@ -403,14 +466,13 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
           />
         )}
         <div className="flex flex-col max-w-2xl mx-auto w-full" style={{ height: "calc(100dvh - 120px)" }}>
-          {/* Header */}
           <div className="flex items-center gap-3 px-3 py-3 border-b sticky top-0 z-20" style={{ borderColor: C.border, background: C.bg }}>
             <button onClick={() => { setActiveChat(null); fetchConversations(); }} className="p-2 rounded-full hover:bg-white/10">
               <ArrowLeft size={20} style={{ color: C.ivory }} />
             </button>
 
             <button type="button" className="flex items-center gap-3 flex-1 text-left" onClick={() => onOpenProfile?.(activeChat.otherUserId)}>
-              <Avatar src={activeChat.otherUserAvatar} flag={activeChat.otherUserFlag} name={activeChat.otherUserName} size={40} />
+              <Avatar src={activeChat.otherUserAvatar} flag={activeChat.otherUserFlag} size={40} />
               <div>
                 <p className="font-bold text-sm" style={{ color: C.ivory }}>{activeChat.otherUserName}</p>
                 <p className="text-[11px]" style={{ color: C.muted }}>Sécurisé 🔒</p>
@@ -427,7 +489,6 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
             </div>
           </div>
 
-          {/* Messages */}
           <div className="flex-1 overflow-y-auto px-3 py-4 space-y-1">
             {messaging.loading && messages.length === 0 && (
               <div className="flex justify-center py-16" style={{ color: C.muted }}>
@@ -435,7 +496,7 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
               </div>
             )}
 
-            {filtered.map((m) => (
+            {messages.map((m) => (
               <MessageBubble
                 key={m.id}
                 message={m}
@@ -446,19 +507,40 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
             <div ref={messagesEndRef} />
           </div>
 
-          {/* Saisie avec ChatInput */}
-          <ChatInput
-            disabled={sending || uploading}
-            placeholder="Écrire un message…"
-            onSend={handleSendText}
-            onSendMedia={handleSendMedia}
-          />
+          {/* Barre de saisie ou interface d'enregistrement vocal */}
+          {isRecording ? (
+            <div className="p-3 border-t flex items-center justify-between bg-red-500/10 text-red-400">
+              <span className="text-xs font-semibold animate-pulse">
+                Enregistrement vocal en cours... {Math.floor(recordingTime / 60)}:{(recordingTime % 60).toString().padStart(2, '0')}
+              </span>
+              <button type="button" onClick={stopRecording} className="p-2 rounded-full bg-red-500 text-white">
+                <Square size={16} />
+              </button>
+            </div>
+          ) : (
+            <div className="relative">
+              <ChatInput
+                disabled={sending || uploading}
+                placeholder="Écrire un message…"
+                onSend={handleSendText}
+                onSendMedia={handleSendMedia}
+              />
+              <button
+                type="button"
+                onClick={startRecording}
+                disabled={sending || uploading}
+                className="absolute right-14 bottom-2.5 p-2 rounded-full hover:bg-white/10 text-amber-500"
+                title="Enregistrer un vocal"
+              >
+                <Mic size={20} />
+              </button>
+            </div>
+          )}
         </div>
       </>
     );
   }
 
-  // ── UI : Liste des conversations ──────────────────────────────────────────
   return (
     <div className="max-w-2xl mx-auto w-full px-4 pt-4 pb-28">
       <div className="flex items-center justify-between mb-6">
@@ -477,7 +559,7 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
       {loading ? (
         <div className="flex flex-col items-center justify-center py-20 gap-3" style={{ color: C.muted }}>
           <Loader2 size={28} className="animate-spin" style={{ color: C.gold }} />
-          <p className="text-sm">Chargement…</p>
+          <p className="text-sm">Chargement des conversations…</p>
         </div>
       ) : conversations.length === 0 ? (
         <div className="text-center py-20">
@@ -492,7 +574,7 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
               className="w-full p-3.5 rounded-2xl border text-left flex items-center gap-3.5 transition hover:scale-[1.01]"
               style={{ background: C.surface, borderColor: C.border }}
             >
-              <Avatar src={c.otherUserAvatar} flag={c.otherUserFlag} name={c.otherUserName} size={52} />
+              <Avatar src={c.otherUserAvatar} flag={c.otherUserFlag} size={52} />
               <div className="flex-1 min-w-0">
                 <div className="flex items-center justify-between">
                   <p className="font-semibold text-sm truncate" style={{ color: C.ivory }}>{c.otherUserName}</p>
