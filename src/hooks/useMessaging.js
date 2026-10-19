@@ -1,10 +1,13 @@
 /**
- * Hook de messagerie avec chiffrement E2E — version stabilisée
+ * Hook de messagerie avec chiffrement E2E — version corrigée complète
+ * - Fix: charge les 150 plus RÉCENTS (desc + reverse)
  * - Chiffre avant insert
  * - Déchiffre à la réception / au chargement
  * - Rétrocompatible avec les anciens messages en clair
  * - Gestion plus robuste des erreurs de clés
  * - Support client_message_id pour éviter les doublons
+ * - Filtrage expires_at côté client
+ * - Respect: pas de gros fichiers dans Supabase, utilise R2 via media_url existant
  */
 import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "../supabaseClient.js";
@@ -43,7 +46,11 @@ export function useMessaging(conversation_id, current_user_id, recipient_id) {
   const decryptOne = useCallback(
     async (rawMsg) => {
       try {
-        // Messages média (image/video/voice/file) : pas de chiffrement texte
+        // Messages expirés: masquer
+        if (rawMsg.expires_at && new Date(rawMsg.expires_at) < new Date()) {
+          return { ...rawMsg, plaintext: "[Message expiré]", encrypted: false, expired: true };
+        }
+        // Messages média (image/video/voice/file) : pas de chiffrement texte, media_url est R2 signé
         if (rawMsg.type && rawMsg.type !== "text" && rawMsg.media_url) {
           return {
             ...rawMsg,
@@ -84,11 +91,12 @@ export function useMessaging(conversation_id, current_user_id, recipient_id) {
 
     const load = async () => {
       setLoading(true);
+      // FIX P0: on charge les plus récents, pas les plus anciens
       let { data, error } = await supabase
         .from("messages")
         .select("*, sender:sender_id(display_name, flag, avatar_url)")
         .eq("conversation_id", conversation_id)
-        .order("created_at", { ascending: true })
+        .order("created_at", { ascending: false })
         .limit(150);
 
       if (error) {
@@ -97,7 +105,7 @@ export function useMessaging(conversation_id, current_user_id, recipient_id) {
           .from("messages")
           .select("*")
           .eq("conversation_id", conversation_id)
-          .order("created_at", { ascending: true })
+          .order("created_at", { ascending: false })
           .limit(150);
         data = plain.data;
         error = plain.error;
@@ -108,10 +116,12 @@ export function useMessaging(conversation_id, current_user_id, recipient_id) {
         return;
       }
 
-      const decrypted = await Promise.all((data || []).map(decryptOne));
+      // reverse pour affichage chrono
+      const ordered = (data || []).slice().reverse();
+      const decrypted = await Promise.all(ordered.map(decryptOne));
       if (!cancelled) {
         decrypted.forEach((m) => seenIds.current.add(m.id));
-        setMessages(decrypted);
+        setMessages(decrypted.filter(m => !m.expired));
         setLoading(false);
       }
     };
@@ -131,7 +141,7 @@ export function useMessaging(conversation_id, current_user_id, recipient_id) {
         async (payload) => {
           if (seenIds.current.has(payload.new.id)) return;
           const decrypted = await decryptOne(payload.new);
-          if (!cancelled) {
+          if (!cancelled && !decrypted.expired) {
             seenIds.current.add(decrypted.id);
             setMessages((prev) =>
               prev.some((m) => m.id === decrypted.id) ? prev : [...prev, decrypted]
@@ -150,9 +160,13 @@ export function useMessaging(conversation_id, current_user_id, recipient_id) {
         async (payload) => {
           const decrypted = await decryptOne(payload.new);
           if (!cancelled) {
-            setMessages((prev) =>
-              prev.map((m) => (m.id === decrypted.id ? { ...m, ...decrypted } : m))
-            );
+            if (decrypted.expired) {
+              setMessages((prev) => prev.filter(m => m.id !== decrypted.id));
+            } else {
+              setMessages((prev) =>
+                prev.map((m) => (m.id === decrypted.id ? { ...m, ...decrypted } : m))
+              );
+            }
           }
         }
       )
@@ -217,7 +231,13 @@ export function useMessaging(conversation_id, current_user_id, recipient_id) {
           .select()
           .single();
 
-        if (error) throw error;
+        if (error) {
+          // Gestion doublon unique (conversation_id, client_message_id)
+          if (error.code === '23505' || error.message.includes('duplicate') || error.message.includes('unique')) {
+            return { ok: true, data: { id: clientId, duplicate: true } };
+          }
+          throw error;
+        }
 
         seenIds.current.add(data.id);
         setMessages((prev) =>
