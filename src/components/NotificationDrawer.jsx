@@ -108,7 +108,7 @@ async function attachActorProfiles(notifications) {
 
   const { data: profiles, error } = await supabase
     .from("profiles")
-    .select("id, display_name, username, handle, avatar_url")
+    .select("id, display_name, handle, avatar_url")
     .in("id", actorIds);
 
   if (error) {
