@@ -57,14 +57,6 @@ import {
   isHandleUniqueViolation,
 } from "../../lib/username.js";
 import {
-  loadCloudSettings,
-  saveCloudSettings,
-  saveLocalSettings,
-  syncPrivateProfile,
-} from "../../lib/appSettings.js";
-
-
-import {
   STORAGE_KEY,
   APP_VERSION,
   THEMES,
