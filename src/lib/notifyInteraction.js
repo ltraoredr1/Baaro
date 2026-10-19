@@ -1,11 +1,11 @@
 import { supabase } from "../supabaseClient.js";
 
 /**
- * Demande au serveur (/api/social) de notifier l'auteur / la personne concernée.
+ * Demande au serveur (/api/social) de notifier la personne concernée.
  * Ne lève jamais d'erreur : une notification ratée ne doit pas annuler l'action.
  *   contentType : "post" | "video" | "user"
- *   interactionType : like | comment | share | repost | follow | friend_request | friend_accepted
- *   targetId : id du contenu, ou id de la personne pour contentType "user"
+ *   interactionType : like | comment | share | repost | friend_request | friend_accepted
+ *   targetId : id du contenu, ou id de l'autre personne pour contentType "user"
  */
 export async function notifyInteraction({ contentType, interactionType, targetId }) {
   if (!contentType || !interactionType || !targetId) return;
