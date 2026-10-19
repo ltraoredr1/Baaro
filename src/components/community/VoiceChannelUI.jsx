@@ -16,7 +16,7 @@ import {
   enableMic,
   getParticipants,
   subscribeCallEvents,
-} from "../../lib/chatCalls.js";
+} from "../../features/messaging/lib/chatCalls.js";
 
 function getParticipantList() {
   const participants = getParticipants();
