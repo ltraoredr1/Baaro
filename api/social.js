@@ -1,6 +1,7 @@
 /**
- * /api/social — notifications d'interactions (like, commentaire, partage, repost,
- * abonnement, demande d'ami). Appelé par le client avec action = "notify_interaction".
+ * /api/social — notifications d'interactions sur les publications et vidéos
+ * (like, commentaire, partage, repost). Appelé avec action = "notify_interaction".
+ * Les abonnements sont déjà notifiés par le trigger SQL on_follow_created : pas géré ici.
  *
  * Le destinataire est TOUJOURS déterminé côté serveur (auteur du contenu), jamais
  * pris tel quel depuis le client. Chaque interaction est vérifiée quand c'est possible,
@@ -25,11 +26,6 @@ const CONTENT_TYPES = {
     share: { type: "video_share", verb: "a partagé votre vidéo" },
     repost: { type: "video_repost", verb: "a reposté votre vidéo" },
   },
-  user: {
-    follow: { type: "follow", verb: "a commencé à vous suivre" },
-    friend_request: { type: "friend_request", verb: "vous a envoyé une demande d'ami" },
-    friend_accepted: { type: "friend_accepted", verb: "a accepté votre demande d'ami" },
-  },
 };
 
 function clip(value, max) {
@@ -38,44 +34,16 @@ function clip(value, max) {
 }
 
 async function loadContent(admin, contentType, id) {
-  if (contentType === "post") {
-    const { data } = await admin.from("posts").select("id, author_id, text").eq("id", id).maybeSingle();
-    return data ? { authorId: data.author_id, preview: clip(data.text, 120) } : null;
-  }
-  const { data } = await admin
-    .from("videos")
-    .select("id, author_id, title, description")
-    .eq("id", id)
-    .maybeSingle();
-  return data
-    ? { authorId: data.author_id, preview: clip(data.title || data.description, 120) }
-    : null;
+  const table = contentType === "post" ? "posts" : "videos";
+  const { data } = await admin.from(table).select("*").eq("id", id).maybeSingle();
+  if (!data) return null;
+  const text =
+    contentType === "post" ? data.text || data.content : data.title || data.description;
+  return { authorId: data.author_id || data.user_id, preview: clip(text, 120) };
 }
 
 // Vérifie que l'action a réellement eu lieu (anti-fausses notifications)
 async function interactionHappened(admin, { contentType, interactionType, actorId, targetId, recipientId }) {
-  if (contentType === "user") {
-    const { data: sent } = await admin
-      .from("follows")
-      .select("status, is_friend")
-      .eq("follower_id", actorId)
-      .eq("followed_id", recipientId)
-      .maybeSingle();
-    if (interactionType === "follow") return sent?.status === "accepted";
-    if (interactionType === "friend_request") return sent?.is_friend === true && sent?.status === "pending";
-    if (interactionType === "friend_accepted") {
-      if (sent?.is_friend === true && sent?.status === "accepted") return true;
-      const { data: received } = await admin
-        .from("follows")
-        .select("status, is_friend")
-        .eq("follower_id", recipientId)
-        .eq("followed_id", actorId)
-        .maybeSingle();
-      return received?.is_friend === true && received?.status === "accepted";
-    }
-    return false;
-  }
-
   if (interactionType === "like") {
     const table = contentType === "post" ? "post_likes" : "video_likes";
     const column = contentType === "post" ? "post_id" : "video_id";
@@ -127,7 +95,7 @@ export default async function handler(req, res) {
   }
 
   const targetId = String(body.target_id || body.content_id || body.recipient_id || "");
-  if (!targetId || (contentType === "user" && !UUID_RE.test(targetId))) {
+  if (!targetId || !UUID_RE.test(targetId)) {
     return res.status(400).json({ ok: false, error: "Cible invalide" });
   }
 
@@ -136,17 +104,12 @@ export default async function handler(req, res) {
     let preview = "";
     let sourceId = targetId;
 
-    if (contentType === "user") {
-      recipientId = targetId;
-      sourceId = user.id;
-    } else {
-      const content = await loadContent(admin, contentType, targetId);
-      if (!content?.authorId) {
-        return res.status(404).json({ ok: false, error: "Contenu introuvable" });
-      }
-      recipientId = content.authorId;
-      preview = content.preview;
+    const content = await loadContent(admin, contentType, targetId);
+    if (!content?.authorId) {
+      return res.status(404).json({ ok: false, error: "Contenu introuvable" });
     }
+    recipientId = content.authorId;
+    preview = content.preview;
 
     // Jamais de notification à soi-même
     if (recipientId === user.id) {
@@ -206,9 +169,7 @@ export default async function handler(req, res) {
     const url =
       contentType === "video"
         ? `/?video=${encodeURIComponent(targetId)}`
-        : contentType === "post"
-          ? `/?post=${encodeURIComponent(targetId)}`
-          : "/";
+        : `/?post=${encodeURIComponent(targetId)}`;
 
     // Le push ne doit jamais faire échouer la notification enregistrée
     await sendPushToUsers(admin, {
