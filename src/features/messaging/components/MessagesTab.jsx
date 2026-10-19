@@ -5,7 +5,7 @@ import { useMessaging } from "../hooks/useMessaging.js";
 import { Fragment, useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from "react";
 import {
   ArrowLeft, MessageCircle, Plus, X, Search,
-  Phone, Video, Loader2, ChevronDown
+  Phone, Video, Loader2, ChevronDown, Clock, ShieldCheck, Pin
 } from "lucide-react";
 import { COLORS as THEME_COLORS } from "../../../theme.js";
 import { supabase } from "../../../supabaseClient.js";
@@ -17,6 +17,7 @@ import { makeClientMessageId } from "../lib/chatFeatures.js";
 import { ChatInput, MAX_FILE_MB } from "./ChatInput.jsx";
 import { MessageBubble, messagePreviewText } from "./MessageBubble.jsx";
 import { messageService } from "../services/messageService.js";
+import { usePresence } from "../hooks/usePresence.js";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -83,17 +84,79 @@ const FALLBACK = {
   teal: "#2DBFA6",
 };
 
-// Défini hors du composant : sinon il est recréé (et remonté) à chaque rendu → clignotement des avatars
-function Avatar({ src, flag, size = 44, bg }) {
+function loadSet(key) {
+  try {
+    return new Set(JSON.parse(localStorage.getItem(key) || "[]"));
+  } catch {
+    return new Set();
+  }
+}
+
+function saveSet(key, set) {
+  try {
+    localStorage.setItem(key, JSON.stringify([...set]));
+  } catch {
+    /* stockage indisponible */
+  }
+}
+
+const EPHEMERAL = [
+  { ms: 0, label: "désactivé" },
+  { ms: 24 * 3600 * 1000, label: "24 h" },
+  { ms: 7 * 24 * 3600 * 1000, label: "7 jours" },
+];
+
+function callLabel(c, myId) {
+  const kind = c.type === "video" ? "vidéo" : "vocal";
+  const icon = c.type === "video" ? "📹" : "📞";
+  const secs = Number(c.duration_seconds) || 0;
+  if (secs > 0) return `${icon} Appel ${kind} · ${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`;
+  if (c.status === "rejected") return `${icon} Appel ${kind} refusé`;
+  return c.caller_id === myId ? `${icon} Appel ${kind} sans réponse` : `${icon} Appel ${kind} manqué`;
+}
+
+// Feuille qui monte du bas (définie hors du composant pour ne pas être remontée à chaque rendu)
+function Sheet({ title, onClose, C, children }) {
   return (
-    <div
-      className="relative flex-shrink-0 rounded-full overflow-hidden ring-2 ring-white/10"
-      style={{ width: size, height: size, background: bg }}
-    >
-      {src ? (
-        <img src={src} alt="" className="w-full h-full object-cover" />
-      ) : (
-        <div className="w-full h-full flex items-center justify-center text-lg">{flag || "🌍"}</div>
+    <div className="fixed inset-0 z-[95] flex items-end" role="dialog" aria-modal="true">
+      <div className="absolute inset-0 bg-black/60" onClick={onClose} />
+      <div
+        className="relative w-full max-h-[75dvh] overflow-y-auto rounded-t-3xl p-4"
+        style={{
+          background: C.bg,
+          color: C.ivory,
+          paddingBottom: "calc(1.5rem + env(safe-area-inset-bottom))",
+        }}
+      >
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="font-bold text-base">{title}</h3>
+          <button type="button" onClick={onClose} aria-label="Fermer" className="p-2 rounded-full bg-white/10">
+            <X size={18} />
+          </button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+// Défini hors du composant : sinon il est recréé (et remonté) à chaque rendu → clignotement des avatars
+function Avatar({ src, flag, size = 44, bg, online = false }) {
+  return (
+    <div className="relative flex-shrink-0" style={{ width: size, height: size }}>
+      <div className="w-full h-full rounded-full overflow-hidden ring-2 ring-white/10" style={{ background: bg }}>
+        {src ? (
+          <img src={src} alt="" className="w-full h-full object-cover" />
+        ) : (
+          <div className="w-full h-full flex items-center justify-center text-lg">{flag || "🌍"}</div>
+        )}
+      </div>
+      {online && (
+        <span
+          className="absolute bottom-0 right-0 w-3 h-3 rounded-full border-2"
+          style={{ background: "#22C55E", borderColor: "#0B1220" }}
+          aria-label="En ligne"
+        />
       )}
     </div>
   );
@@ -122,6 +185,16 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
   const [toast, setToast] = useState(null);
   const [atBottom, setAtBottom] = useState(true);
   const [replyTo, setReplyTo] = useState(null);
+  const [starred, setStarred] = useState(() => new Set());
+  const [pinned, setPinned] = useState(() => new Set());
+  const [chatSearchOpen, setChatSearchOpen] = useState(false);
+  const [chatQuery, setChatQuery] = useState("");
+  const [ephemeralIdx, setEphemeralIdx] = useState(0);
+  const [calls, setCalls] = useState([]);
+  const [forwardMsg, setForwardMsg] = useState(null);
+  const [safetyOpen, setSafetyOpen] = useState(false);
+  const [safetyCode, setSafetyCode] = useState(null);
+  const online = usePresence(id);
 
   const closeCall = useCallback(() => setCallState(null), []);
   const messagesEndRef = useRef(null);
@@ -231,10 +304,48 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
     };
   }, [id, fetchConversations]);
 
-  // Changer de conversation efface la réponse en cours
+  // Changer de conversation efface la réponse en cours, la recherche et le mode éphémère
   useEffect(() => {
     setReplyTo(null);
+    setChatSearchOpen(false);
+    setChatQuery("");
+    setEphemeralIdx(0);
+    setForwardMsg(null);
+    setSafetyOpen(false);
   }, [activeChat?.id]);
+
+  // Favoris et messages épinglés (stockés sur l'appareil, aucune table)
+  useEffect(() => {
+    if (!id) return;
+    setStarred(loadSet(`baaro:stars:${id}`));
+    setPinned(loadSet(`baaro:pins:${id}`));
+  }, [id]);
+
+  // Historique des appels de la conversation (ignoré silencieusement si indisponible)
+  useEffect(() => {
+    setCalls([]);
+    if (!activeChat?.id) return;
+    let alive = true;
+    (async () => {
+      try {
+        const { data, error } = await supabase
+          .from("calls")
+          .select("*")
+          .eq("conversation_id", activeChat.id)
+          .order("created_at", { ascending: false })
+          .limit(30);
+        if (alive && !error && data) setCalls(data);
+      } catch {
+        /* pas d'historique d'appels */
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [activeChat?.id, callState]);
+
+  const ephemeralExpiry = () =>
+    EPHEMERAL[ephemeralIdx].ms ? new Date(Date.now() + EPHEMERAL[ephemeralIdx].ms).toISOString() : null;
 
   // Marquer comme lu seulement quand le dernier message vient de l'autre (et non à chaque rendu)
   const lastMsg = messages[messages.length - 1];
@@ -354,6 +465,7 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
       const result = await messaging.sendMessage(text, {
         clientMessageId: options.clientMessageId || makeClientMessageId(),
         replyToId,
+        expiresAt: options.expiresAt !== undefined ? options.expiresAt : ephemeralExpiry(),
       });
       if (!result?.ok) notify(result?.error || "Impossible d'envoyer le message");
       else fetchConversations(true);
@@ -366,6 +478,7 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
     handleSendText(msg.plaintext, {
       clientMessageId: msg.client_message_id,
       replyToId: msg.reply_to_id || null,
+      expiresAt: msg.expires_at || null,
     });
 
   const handleDelete = async (msg) => {
@@ -386,6 +499,7 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
         recipient_id: activeChat.otherUserId,
         client_message_id: makeClientMessageId(),
         reply_to_id: replyToId || null,
+        expires_at: ephemeralExpiry(),
         ...fields,
       })
       .select()
@@ -553,6 +667,72 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
     };
   };
 
+  const toggleIn = (setter, key) => (m) => {
+    if (!m?.id) return;
+    setter((prev) => {
+      const next = new Set(prev);
+      if (next.has(m.id)) next.delete(m.id);
+      else next.add(m.id);
+      saveSet(`${key}:${id}`, next);
+      return next;
+    });
+  };
+  const toggleStar = toggleIn(setStarred, "baaro:stars");
+  const togglePin = toggleIn(setPinned, "baaro:pins");
+
+  const doForward = async (conv) => {
+    const msg = forwardMsg;
+    setForwardMsg(null);
+    if (!msg || !conv?.otherUserId) return;
+    const res = await messaging.forwardMessage(msg, {
+      conversationId: conv.id,
+      recipientId: conv.otherUserId,
+    });
+    if (res?.ok) {
+      notify("Message transféré");
+      fetchConversations(true);
+    } else {
+      notify(res?.error || "Transfert impossible");
+    }
+  };
+
+  const openSafety = async () => {
+    setSafetyOpen(true);
+    setSafetyCode(null);
+    try {
+      const code = await messaging.getSafetyNumber();
+      setSafetyCode(code || "");
+    } catch {
+      setSafetyCode("");
+    }
+  };
+
+  // Chronologie : messages + appels (ou seulement les résultats si une recherche est en cours)
+  const timeline = useMemo(() => {
+    const q = chatQuery.trim().toLowerCase();
+    if (q) {
+      return messages
+        .filter((m) => !m.deleted_at && (m.plaintext || "").toLowerCase().includes(q))
+        .map((m) => ({ kind: "msg", m, at: m.created_at }));
+    }
+    const items = messages.map((m) => ({ kind: "msg", m, at: m.created_at }));
+    const firstAt = messages[0]?.created_at;
+    for (const c of calls) {
+      if (messaging.hasMore && firstAt && c.created_at < firstAt) continue;
+      items.push({ kind: "call", c, at: c.created_at });
+    }
+    return items.sort((a, b) => new Date(a.at) - new Date(b.at));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages, calls, chatQuery, messaging.hasMore]);
+
+  const pinnedMessages = useMemo(
+    () => messages.filter((m) => pinned.has(m.id) && !m.deleted_at),
+    [messages, pinned]
+  );
+
+  const jumpTo = (m) =>
+    document.getElementById(`msg-${m.id}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+
   const replyBar = replyTo
     ? {
         name: replyTo.sender_id === id ? "vous-même" : activeChat?.otherUserName || "Membre",
@@ -649,6 +829,60 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
     return (
       <>
         {toastEl}
+        {safetyOpen && (
+          <Sheet title="Vérifier le chiffrement" onClose={() => setSafetyOpen(false)} C={C}>
+            {safetyCode === null ? (
+              <div className="flex justify-center py-8" style={{ color: C.muted }}>
+                <Loader2 size={22} className="animate-spin" />
+              </div>
+            ) : safetyCode ? (
+              <>
+                <p className="text-xs mb-3" style={{ color: C.muted }}>
+                  Comparez ce code avec {activeChat.otherUserName}, en personne ou pendant un appel. S’il est
+                  identique des deux côtés, personne ne s’interpose dans votre conversation.
+                </p>
+                <div className="grid grid-cols-3 gap-2 text-center">
+                  {safetyCode.split(" ").map((g, i) => (
+                    <span
+                      key={i}
+                      className="py-2 rounded-xl font-mono text-base tracking-wider"
+                      style={{ background: C.surface2, color: C.gold }}
+                    >
+                      {g}
+                    </span>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <p className="text-sm" style={{ color: C.muted }}>
+                Code indisponible : ce contact n’a pas encore de clé publique.
+              </p>
+            )}
+          </Sheet>
+        )}
+        {forwardMsg && (
+          <Sheet title="Transférer à…" onClose={() => setForwardMsg(null)} C={C}>
+            <div className="space-y-1.5">
+              {conversations.filter((c) => c.otherUserId).length === 0 && (
+                <p className="text-sm" style={{ color: C.muted }}>Aucune conversation disponible.</p>
+              )}
+              {conversations
+                .filter((c) => c.otherUserId)
+                .map((c) => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onClick={() => doForward(c)}
+                    className="w-full p-3 rounded-2xl border flex items-center gap-3 text-left"
+                    style={{ background: C.surface, borderColor: C.border }}
+                  >
+                    <Avatar src={c.otherUserAvatar} flag={c.otherUserFlag} size={40} bg={C.surface2} />
+                    <span className="text-sm font-semibold truncate">{c.otherUserName}</span>
+                  </button>
+                ))}
+            </div>
+          </Sheet>
+        )}
         {callState && (
           <ChatCallModal
             mode={callState.mode}
@@ -681,16 +915,38 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
               className="flex items-center gap-3 flex-1 text-left min-w-0"
               onClick={() => onOpenProfile?.(activeChat.otherUserId)}
             >
-              <Avatar src={activeChat.otherUserAvatar} flag={activeChat.otherUserFlag} size={40} bg={C.surface2} />
+              <Avatar src={activeChat.otherUserAvatar} flag={activeChat.otherUserFlag} size={40} bg={C.surface2} online={online.has(activeChat.otherUserId)} />
               <div className="min-w-0">
                 <p className="font-bold text-sm truncate" style={{ color: C.ivory }}>{activeChat.otherUserName}</p>
-                <p className="text-[11px]" style={{ color: messaging.otherTyping ? C.teal : C.muted }}>
-                  {messaging.otherTyping ? "écrit…" : "Sécurisé 🔒"}
+                <p
+                  className="text-[11px]"
+                  style={{ color: messaging.otherTyping || online.has(activeChat.otherUserId) ? C.teal : C.muted }}
+                >
+                  {messaging.otherTyping ? "écrit…" : online.has(activeChat.otherUserId) ? "En ligne" : "Sécurisé 🔒"}
                 </p>
               </div>
             </button>
 
             <div className="flex items-center gap-0.5">
+              <button
+                onClick={() => {
+                  setChatSearchOpen((v) => !v);
+                  setChatQuery("");
+                }}
+                className="p-2 rounded-full hover:bg-white/10"
+                style={{ color: chatSearchOpen ? C.gold : C.muted }}
+                aria-label="Rechercher dans la conversation"
+              >
+                <Search size={18} />
+              </button>
+              <button
+                onClick={openSafety}
+                className="p-2 rounded-full hover:bg-white/10"
+                style={{ color: C.muted }}
+                aria-label="Vérifier le chiffrement"
+              >
+                <ShieldCheck size={18} />
+              </button>
               <button
                 onClick={() => startCall("voice")}
                 disabled={callStarting}
@@ -720,6 +976,39 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
             >
               Messagerie sécurisée indisponible : {messaging.keysError}
             </div>
+          )}
+
+          {chatSearchOpen && (
+            <div className="px-3 py-2 border-b" style={{ borderColor: C.border, background: C.bg }}>
+              <div className="relative">
+                <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2" style={{ color: C.muted }} />
+                <input
+                  autoFocus
+                  value={chatQuery}
+                  onChange={(e) => setChatQuery(e.target.value)}
+                  placeholder="Rechercher dans la conversation…"
+                  className="w-full pl-10 pr-4 py-2 rounded-2xl border text-sm outline-none"
+                  style={{ background: C.surface, borderColor: C.border, color: C.ivory }}
+                />
+              </div>
+            </div>
+          )}
+
+          {pinnedMessages.length > 0 && !chatQuery.trim() && (
+            <button
+              type="button"
+              onClick={() => jumpTo(pinnedMessages[pinnedMessages.length - 1])}
+              className="flex items-center gap-2 px-4 py-2 text-xs border-b text-left"
+              style={{ borderColor: C.border, background: C.surface, color: C.ivory }}
+            >
+              <Pin size={13} className="flex-shrink-0" style={{ color: C.gold }} />
+              <span className="truncate flex-1">
+                {messagePreviewText(pinnedMessages[pinnedMessages.length - 1])}
+              </span>
+              {pinnedMessages.length > 1 && (
+                <span style={{ color: C.muted }}>+{pinnedMessages.length - 1}</span>
+              )}
+            </button>
           )}
 
           <div className="relative flex-1 min-h-0">
@@ -757,28 +1046,59 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
                 </p>
               )}
 
-              {messages.map((m, i) => {
-                const prev = messages[i - 1];
-                const showDay = !prev || dayKey(prev.created_at) !== dayKey(m.created_at);
-                return (
-                  <Fragment key={msgKey(m) || i}>
-                    {showDay && (
-                      <div className="flex justify-center py-2">
+              {chatQuery.trim() && timeline.length === 0 && (
+                <p className="text-center text-sm py-16" style={{ color: C.muted }}>
+                  Aucun message trouvé
+                </p>
+              )}
+
+              {timeline.map((it, i) => {
+                const prevAt = timeline[i - 1]?.at;
+                const showDay = !prevAt || dayKey(prevAt) !== dayKey(it.at);
+                const dayEl = showDay ? (
+                  <div className="flex justify-center py-2">
+                    <span
+                      className="text-[11px] px-3 py-1 rounded-full capitalize"
+                      style={{ background: C.surface2, color: C.muted }}
+                    >
+                      {dayLabel(it.at)}
+                    </span>
+                  </div>
+                ) : null;
+
+                if (it.kind === "call") {
+                  const time = new Date(it.at).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+                  return (
+                    <Fragment key={`call-${it.c.id}`}>
+                      {dayEl}
+                      <div className="flex justify-center py-1">
                         <span
-                          className="text-[11px] px-3 py-1 rounded-full capitalize"
+                          className="text-[11px] px-3 py-1 rounded-full"
                           style={{ background: C.surface2, color: C.muted }}
                         >
-                          {dayLabel(m.created_at)}
+                          {callLabel(it.c, id)} · {time}
                         </span>
                       </div>
-                    )}
+                    </Fragment>
+                  );
+                }
+
+                const m = it.m;
+                return (
+                  <Fragment key={msgKey(m) || i}>
+                    {dayEl}
                     <MessageBubble
                       message={m}
                       isMe={m.sender_id === id}
                       reply={quoteFor(m)}
+                      starred={starred.has(m.id)}
+                      pinned={pinned.has(m.id)}
                       onRetry={handleRetry}
                       onReply={setReplyTo}
                       onDelete={handleDelete}
+                      onToggleStar={toggleStar}
+                      onTogglePin={togglePin}
+                      onForward={setForwardMsg}
                     />
                   </Fragment>
                 );
@@ -805,6 +1125,22 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
               Envoi en cours…
             </div>
           )}
+
+          <div className="flex items-center gap-2 px-3 pt-1">
+            <button
+              type="button"
+              onClick={() => setEphemeralIdx((i) => (i + 1) % EPHEMERAL.length)}
+              className="flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-full border"
+              style={{
+                background: C.surface,
+                borderColor: ephemeralIdx ? C.borderGold : C.border,
+                color: ephemeralIdx ? C.gold : C.muted,
+              }}
+              aria-label="Messages éphémères"
+            >
+              <Clock size={12} /> Éphémère : {EPHEMERAL[ephemeralIdx].label}
+            </button>
+          </div>
 
           <ChatInput
             disabled={uploading}
@@ -873,7 +1209,7 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
               className="w-full p-3.5 rounded-2xl border text-left flex items-center gap-3.5 transition hover:scale-[1.01]"
               style={{ background: C.surface, borderColor: c.unread ? C.borderGold : C.border }}
             >
-              <Avatar src={c.otherUserAvatar} flag={c.otherUserFlag} size={52} bg={C.surface2} />
+              <Avatar src={c.otherUserAvatar} flag={c.otherUserFlag} size={52} bg={C.surface2} online={online.has(c.otherUserId)} />
               <div className="flex-1 min-w-0">
                 <div className="flex items-center justify-between gap-2">
                   <p
