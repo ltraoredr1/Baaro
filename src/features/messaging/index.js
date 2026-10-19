@@ -13,4 +13,4 @@ export { useCryptoKeys } from "./hooks/useCryptoKeys.js";
 
 // Libs - vérifie que ces fichiers existent, sinon commente la ligne
 export * from "./lib/crypto.js";
-// export * from "./lib/calls.js"; // Commenté car le fichier n'existe pas
+// export * from "./lib/chatCalls.js"; // Commenté car le fichier n'existe pas
