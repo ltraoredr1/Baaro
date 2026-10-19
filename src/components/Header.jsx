@@ -1,23 +1,51 @@
 import { useState, useEffect } from "react";
-import { Globe2, ChevronDown, Bell, Sparkles, User, Search, ShieldAlert, Plus, X } from "lucide-react";
+import {
+  Globe2,
+  ChevronDown,
+  Bell,
+  Sparkles,
+  User,
+  Search,
+  ShieldAlert,
+  Plus,
+  X,
+} from "lucide-react";
 import { COLORS as THEME_COLORS } from "../theme.js";
 import { useApp } from "../contexts/AppContext.jsx";
+import { setAppLanguage, SUPPORTED_LANGUAGES } from "../../i18n.js";
 
 const FALLBACK = {
-  bg: "#0B1220", surface: "#111A2C", surface2: "rgba(255,255,255,0.06)",
-  border: "rgba(255,255,255,0.08)", borderGold: "rgba(217,174,82,0.2)", borderTeal: "rgba(45,191,166,0.2)",
-  ivory: "#F5F3EF", muted: "rgba(245,243,239,0.5)", gold: "#D9AE52", teal: "#2DBFA6",
-  tealGlow: "rgba(45,191,166,0.15)", goldGlow: "rgba(217,174,82,0.15)", rose: "#EC4899",
+  bg: "#0B1220",
+  surface: "#111A2C",
+  surface2: "rgba(255,255,255,0.06)",
+  border: "rgba(255,255,255,0.08)",
+  borderGold: "rgba(217,174,82,0.2)",
+  borderTeal: "rgba(45,191,166,0.2)",
+  ivory: "#F5F3EF",
+  muted: "rgba(245,243,239,0.5)",
+  gold: "#D9AE52",
+  teal: "#2DBFA6",
+  tealGlow: "rgba(45,191,166,0.15)",
+  goldGlow: "rgba(217,174,82,0.15)",
+  rose: "#EC4899",
 };
 
 const LANGUAGES = [
-  { code: "fr", label: "Français" }, { code: "en", label: "English" },
-  { code: "es", label: "Español" }, { code: "zh", label: "中文" },
-  { code: "hi", label: "हिन्दी" }, { code: "ar", label: "العربية" },
-  { code: "pt", label: "Português" }, { code: "ru", label: "Русский" },
-  { code: "ja", label: "日本語" }, { code: "de", label: "Deutsch" },
+  { code: "fr", label: "Français" },
+  { code: "en", label: "English" },
+  { code: "ar", label: "العربية" },
+  { code: "nqo", label: "ߒߞߏ" },
+  { code: "bm", label: "Bamanankan" },
+  { code: "boz", label: "Bozo" },
+  { code: "dog", label: "Dogon" },
+  { code: "snk", label: "Soninké" },
+  { code: "pt", label: "Português" },
+  { code: "es", label: "Español" },
   { code: "sw", label: "Kiswahili" },
-];
+  { code: "wo", label: "Wolof" },
+  { code: "ha", label: "Hausa" },
+  { code: "ff", label: "Fulfulde" },
+].filter((language) => SUPPORTED_LANGUAGES.includes(language.code));
 
 const TICKER_EVENTS = [
   "🌍 BAARO — réseau social international",
@@ -39,8 +67,15 @@ export function Header({
 }) {
   const C = { ...FALLBACK, ...(THEME_COLORS || {}) };
   const { isAnonymous } = useApp() || {};
+
   const [langMenuOpen, setLangMenuOpen] = useState(false);
   const [avatarBroken, setAvatarBroken] = useState(false);
+  const [changingLanguage, setChangingLanguage] = useState(false);
+  const [currentLang, setCurrentLang] = useState(lang);
+
+  useEffect(() => {
+    setCurrentLang(lang);
+  }, [lang]);
 
   useEffect(() => {
     setAvatarBroken(false);
@@ -48,58 +83,110 @@ export function Header({
 
   useEffect(() => {
     if (!langMenuOpen) return;
+
     const close = () => setLangMenuOpen(false);
     window.addEventListener("click", close);
+
     return () => window.removeEventListener("click", close);
   }, [langMenuOpen]);
 
-  const handleCreateClick = () => {
-    if (onToggleCreate) {
-      onToggleCreate();
-      if (!isCreateOpen) {
-        window.scrollTo({ top: 0, behavior: "smooth" });
+  const handleLanguageChange = async (code) => {
+    if (
+      changingLanguage ||
+      !SUPPORTED_LANGUAGES.includes(code)
+    ) {
+      return;
+    }
+
+    setChangingLanguage(true);
+
+    try {
+      await setAppLanguage(code);
+      setCurrentLang(code);
+
+      if (typeof setLang === "function") {
+        setLang(code);
       }
+
+      setLangMenuOpen(false);
+    } catch (error) {
+      console.error("Impossible de changer la langue :", error);
+    } finally {
+      setChangingLanguage(false);
     }
   };
 
-  const showAvatar = Boolean(userProfile?.avatar_url) && !avatarBroken;
+  const handleCreateClick = () => {
+    if (!onToggleCreate) return;
+
+    onToggleCreate();
+
+    if (!isCreateOpen) {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  };
+
+  const showAvatar =
+    Boolean(userProfile?.avatar_url) && !avatarBroken;
+
   const initial = userProfile?.display_name
     ? userProfile.display_name.charAt(0).toUpperCase()
     : null;
 
   return (
-    <header className="sticky top-0 z-40 w-full glass-panel border-b border-[rgba(255,255,255,0.08)] backdrop-blur-xl">
+    <header className="sticky top-0 z-40 w-full glass-panel border-b border-[rgba(255,255,255,0.08)]">
+      {/* Bandeau compact */}
       <div
-        className="overflow-hidden py-1 border-b"
-        style={{ borderColor: "rgba(217,174,82,0.15)", background: "rgba(11, 18, 32, 0.9)" }}
+        className="overflow-hidden py-0.5 border-b"
+        style={{
+          borderColor: "rgba(217,174,82,0.12)",
+          background: "rgba(11,18,32,0.9)",
+        }}
       >
         <div
-          className="flex whitespace-nowrap py-0.5"
-          style={{ animation: "meridian-scroll 32s linear infinite" }}
+          className="flex whitespace-nowrap py-0"
+          style={{
+            animation: "meridian-scroll 32s linear infinite",
+          }}
         >
-          {[...TICKER_EVENTS, ...TICKER_EVENTS].map((t, i) => (
+          {[...TICKER_EVENTS, ...TICKER_EVENTS].map((event, index) => (
             <span
-              key={i}
-              className="mx-6 text-[11px] tracking-wide flex items-center gap-1.5"
-              style={{ color: C.muted, fontFamily: "'IBM Plex Mono', monospace" }}
+              key={index}
+              className="mx-4 text-[10px] tracking-wide flex items-center gap-1"
+              style={{
+                color: C.muted,
+                fontFamily: "'IBM Plex Mono', monospace",
+              }}
             >
-              <Sparkles size={11} style={{ color: C.gold }} />
-              {t}
+              <Sparkles size={10} style={{ color: C.gold }} />
+              {event}
             </span>
           ))}
         </div>
-        <style>{`@keyframes meridian-scroll{from{transform:translateX(0)}to{transform:translateX(-50%)}}`}</style>
+
+        <style>
+          {`@keyframes meridian-scroll {
+            from { transform: translateX(0); }
+            to { transform: translateX(-50%); }
+          }`}
+        </style>
       </div>
 
-      <div className="max-w-7xl mx-auto px-2.5 sm:px-4 py-2.5 flex items-center justify-between gap-1.5 sm:gap-4">
-        {/* LOGO ET VERSION 0.1.0 (Texte BAARO retiré) */}
+      {/* Barre principale affinée */}
+      <div className="max-w-7xl mx-auto px-2 sm:px-4 py-1.5 flex items-center justify-between gap-1.5 sm:gap-3">
+        {/* Logo */}
         <div
-          className="flex items-center gap-2 cursor-pointer shrink-0"
-          onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+          className="flex items-center gap-1.5 cursor-pointer shrink-0"
+          onClick={() =>
+            window.scrollTo({ top: 0, behavior: "smooth" })
+          }
         >
           <div
-            className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl overflow-hidden flex items-center justify-center shadow-lg border shrink-0"
-            style={{ borderColor: C.borderGold, background: C.bg }}
+            className="w-8 h-8 sm:w-9 sm:h-9 rounded-lg overflow-hidden flex items-center justify-center border shrink-0"
+            style={{
+              borderColor: C.borderGold,
+              background: C.bg,
+            }}
           >
             <img
               src="./brand/baaro-logo.png"
@@ -108,41 +195,54 @@ export function Header({
               loading="eager"
             />
           </div>
-          <div>
-            <div
-              className="text-[10px] sm:text-xs px-2 py-0.5 rounded-full uppercase tracking-wider font-sans font-bold"
-              style={{ background: C.tealGlow, color: C.teal }}
-            >
-              v0.1.0
-            </div>
+
+          <div
+            className="text-[9px] px-1.5 py-0.5 rounded-full uppercase tracking-wide font-bold"
+            style={{
+              background: C.tealGlow,
+              color: C.teal,
+            }}
+          >
+            v0.1.0
           </div>
         </div>
 
-        {/* BARRE DE RECHERCHE (DESKTOP) */}
+        {/* Recherche desktop */}
         <button
           onClick={onOpenSearch}
-          className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-xl border text-xs font-medium hover:border-amber-400/50 transition flex-1 max-w-xs"
-          style={{ background: C.surface, borderColor: C.border, color: C.muted }}
+          className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-medium transition flex-1 max-w-xs"
+          style={{
+            background: C.surface,
+            borderColor: C.border,
+            color: C.muted,
+          }}
         >
-          <Search size={14} style={{ color: C.gold }} />
-          <span className="truncate">Rechercher membres, hashtags...</span>
+          <Search size={13} style={{ color: C.gold }} />
+          <span className="truncate">
+            Rechercher membres, hashtags...
+          </span>
         </button>
 
-        {/* ACTIONS & ICONES DU HEADER */}
-        <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
-          {/* RECHERCHE (MOBILE) */}
+        {/* Actions */}
+        <div className="flex items-center gap-1 sm:gap-2 shrink-0">
+          {/* Recherche mobile */}
           <button
             onClick={onOpenSearch}
-            className="sm:hidden p-1.5 rounded-lg border hover:opacity-80 transition shrink-0"
-            style={{ background: C.surface, borderColor: C.border, color: C.gold }}
+            aria-label="Rechercher"
+            className="sm:hidden p-1.5 rounded-lg border transition"
+            style={{
+              background: C.surface,
+              borderColor: C.border,
+              color: C.gold,
+            }}
           >
-            <Search size={15} />
+            <Search size={14} />
           </button>
 
-          {/* BADGE INVITÉ */}
+          {/* Badge invité */}
           {isAnonymous && (
             <div
-              className="hidden sm:flex items-center gap-1.5 px-2 py-1 rounded-full border text-[10px] font-bold shrink-0"
+              className="hidden sm:flex items-center gap-1 px-2 py-1 rounded-full border text-[10px] font-bold"
               style={{
                 background: "rgba(236,72,153,0.12)",
                 borderColor: "rgba(236,72,153,0.35)",
@@ -150,86 +250,124 @@ export function Header({
               }}
               title="Mode invité"
             >
-              <ShieldAlert size={12} />
+              <ShieldAlert size={11} />
               Invité
             </div>
           )}
 
-          {/* BOUTON DE CRÉATION */}
+          {/* Création */}
           <button
             onClick={handleCreateClick}
-            className="flex items-center gap-1 px-2.5 py-1.5 rounded-full font-bold text-xs shadow-md transition-all active:scale-95 border hover:brightness-110 shrink-0"
+            aria-label={isCreateOpen ? "Fermer la création" : "Créer"}
+            className="flex items-center gap-1 px-2 py-1.5 rounded-full font-bold text-xs border transition-all active:scale-95"
             style={{
               background: isCreateOpen ? C.surface2 : C.gold,
               borderColor: C.borderGold,
               color: isCreateOpen ? C.ivory : "#000",
             }}
           >
-            {isCreateOpen ? <X size={14} /> : <Plus size={14} className="stroke-[3]" />}
-            <span className="hidden xs:inline">{isCreateOpen ? "Fermer" : "Créer"}</span>
+            {isCreateOpen ? (
+              <X size={13} />
+            ) : (
+              <Plus size={13} strokeWidth={3} />
+            )}
+            <span className="hidden xs:inline">
+              {isCreateOpen ? "Fermer" : "Créer"}
+            </span>
           </button>
 
-          {/* SELECTEUR DE LANGUE */}
-          <div className="relative shrink-0" onClick={(e) => e.stopPropagation()}>
+          {/* Langue */}
+          <div
+            className="relative shrink-0"
+            onClick={(event) => event.stopPropagation()}
+          >
             <button
-              onClick={() => setLangMenuOpen((v) => !v)}
-              className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-medium border hover:border-amber-500/40 transition"
-              style={{ background: C.surface, borderColor: C.border, color: C.ivory }}
+              onClick={() => setLangMenuOpen((open) => !open)}
+              aria-label="Changer la langue"
+              aria-expanded={langMenuOpen}
+              className="flex items-center gap-1 px-1.5 py-1.5 rounded-lg text-xs border transition"
+              style={{
+                background: C.surface,
+                borderColor: C.border,
+                color: C.ivory,
+              }}
             >
-              <Globe2 size={13} style={{ color: C.teal }} />
-              <span className="uppercase text-[11px]">{lang}</span>
-              <ChevronDown size={11} style={{ color: C.muted }} />
+              <Globe2 size={12} style={{ color: C.teal }} />
+              <span className="uppercase text-[10px]">
+                {currentLang}
+              </span>
+              <ChevronDown size={10} style={{ color: C.muted }} />
             </button>
+
             {langMenuOpen && (
               <div
-                className="absolute right-0 mt-2 w-36 rounded-xl p-1.5 shadow-2xl glass-panel border z-50 max-h-60 overflow-y-auto"
-                style={{ borderColor: C.borderGold, background: C.surface }}
+                className="absolute right-0 mt-1.5 w-40 rounded-xl p-1 shadow-2xl border z-50 max-h-56 overflow-y-auto"
+                style={{
+                  borderColor: C.borderGold,
+                  background: C.surface,
+                }}
               >
-                {LANGUAGES.map((l) => (
+                {LANGUAGES.map((language) => (
                   <button
-                    key={l.code}
-                    onClick={() => {
-                      setLang(l.code);
-                      setLangMenuOpen(false);
-                    }}
-                    className={`w-full text-left px-3 py-1.5 text-xs rounded-lg transition ${
-                      lang === l.code ? "font-bold" : ""
-                    }`}
+                    key={language.code}
+                    type="button"
+                    disabled={changingLanguage}
+                    onClick={() =>
+                      handleLanguageChange(language.code)
+                    }
+                    className="w-full text-left px-2.5 py-2 text-xs rounded-lg transition disabled:opacity-50"
                     style={{
-                      background: lang === l.code ? C.goldGlow : "transparent",
-                      color: lang === l.code ? C.gold : C.ivory,
+                      background:
+                        currentLang === language.code
+                          ? C.goldGlow
+                          : "transparent",
+                      color:
+                        currentLang === language.code
+                          ? C.gold
+                          : C.ivory,
                     }}
                   >
-                    {l.label}
+                    {language.label}
                   </button>
                 ))}
               </div>
             )}
           </div>
 
-          {/* NOTIFICATIONS */}
+          {/* Notifications */}
           <button
             onClick={onOpenNotifications}
-            className="p-1.5 rounded-lg relative hover:opacity-80 transition border shrink-0"
-            style={{ background: C.surface, borderColor: C.border, color: C.ivory }}
+            aria-label="Notifications"
+            className="p-1.5 rounded-lg relative border transition"
+            style={{
+              background: C.surface,
+              borderColor: C.border,
+              color: C.ivory,
+            }}
           >
-            <Bell size={15} />
+            <Bell size={14} />
             <span
-              className="absolute top-1 right-1 w-2 h-2 rounded-full"
+              className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full"
               style={{ background: C.gold }}
             />
           </button>
 
-          {/* BOUTON DE PROFIL */}
+          {/* Profil */}
           <button
             onClick={onOpenProfile}
-            className="flex items-center gap-1.5 p-1 sm:pl-2 sm:pr-2.5 rounded-full border hover:border-amber-500/50 transition shrink-0 min-w-max"
-            style={{ background: C.surface2, borderColor: C.borderGold }}
             aria-label="Voir le profil"
+            className="flex items-center gap-1 p-1 rounded-full border transition shrink-0"
+            style={{
+              background: C.surface2,
+              borderColor: C.borderGold,
+            }}
           >
             <div
-              className="w-7 h-7 sm:w-7 sm:h-7 rounded-full flex items-center justify-center font-bold text-xs shrink-0 overflow-hidden"
-              style={{ background: C.gold, color: C.bg }}
+              className="w-7 h-7 rounded-full flex items-center justify-center font-bold text-xs shrink-0 overflow-hidden"
+              style={{
+                background: C.gold,
+                color: C.bg,
+              }}
             >
               {showAvatar ? (
                 <img
@@ -241,11 +379,12 @@ export function Header({
               ) : initial ? (
                 initial
               ) : (
-                <User size={14} />
+                <User size={13} />
               )}
             </div>
+
             <span
-              className="text-xs font-semibold hidden md:inline truncate max-w-[80px]"
+              className="hidden md:inline text-xs font-semibold truncate max-w-[80px] pr-1"
               style={{ color: C.ivory }}
             >
               {userProfile?.display_name || "Membre"}
@@ -256,3 +395,5 @@ export function Header({
     </header>
   );
 }
+
+export default Header;
