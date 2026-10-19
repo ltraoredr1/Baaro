@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { supabase, acceptFriendRequest } from "../../supabaseClient.js";
 import { useToast } from "../../components/ToastContext.jsx";
-import { notifyInteraction } from "../../lib/notifyInteraction.js";
 import { useCurrentUser } from "../../hooks/useCommunity.js";
 import { COLORS } from "../../theme.js";
 import { UserPlus, Clock, Users, Loader2 } from "lucide-react";
@@ -116,7 +115,6 @@ const FriendRequestButton = ({ targetId }) => {
       }
 
       setState("pending_sent");
-      notifyInteraction({ contentType: "user", interactionType: "friend_request", targetId });
     } catch (err) {
       console.error("[FriendRequestButton] send", err);
       showToast(
