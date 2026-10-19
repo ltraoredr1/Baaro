@@ -92,6 +92,11 @@ const FriendRequestButton = ({ targetId }) => {
 
       if (readErr && readErr.code !== "PGRST116") throw readErr;
 
+      if (existing?.is_friend && existing.status === "pending") {
+        setState("pending_sent");
+        return;
+      }
+
       if (existing) {
         const { error } = await supabase
           .from("follows")
