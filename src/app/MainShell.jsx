@@ -18,8 +18,8 @@ import { FutureModulePanel } from "../components/FutureModulePanel.jsx";
 import { saveLastTab, loadLastTab } from "../lib/perf.js";
 // Chemin corrigé vers useCryptoKeys.js
 import { useCryptoKeys } from "../features/messaging/hooks/useCryptoKeys.js";
-import { useIncomingCalls } from "../hooks/useIncomingCalls.js";
-import { ChatCallModal } from "../components/ChatCallModal.jsx";
+import { useIncomingCalls } from "../features/messaging/hooks/useIncomingCalls.js";
+import { ChatCallModal } from "../features/messaging/components/ChatCallModal.jsx";
 import FloatingAiAssistant from "../components/FloatingAiAssistant.jsx";
 
 const THEME_BG_MAP = {
