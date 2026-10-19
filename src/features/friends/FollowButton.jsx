@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { supabase } from "../../supabaseClient.js";
 import { COLORS } from "../../theme.js";
+import { useToast } from "../../components/ToastContext.jsx";
 
 /** auth.users.id (UUID) uniquement — rejette email/handle */
 function isValidAuthUserId(value) {
@@ -39,6 +40,7 @@ function useCurrentUser() {
  */
 const FollowButton = ({ targetId }) => {
   const id = useCurrentUser();
+  const { showToast } = useToast();
   const [isFollowing, setIsFollowing] = useState(false);
   const [loading, setLoading] = useState(true);
 
@@ -92,6 +94,7 @@ const FollowButton = ({ targetId }) => {
       }
     } catch (err) {
       console.error("[FollowButton] toggle", err);
+      showToast(`Abonnement impossible : ${err?.message || "erreur"}`, "error");
       setIsFollowing(prev);
     } finally {
       setLoading(false);
