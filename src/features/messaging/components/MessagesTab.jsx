@@ -16,7 +16,7 @@ import { deserializePayload } from "../lib/crypto.js";
 import { makeClientMessageId } from "../lib/chatFeatures.js";
 import { ChatInput, MAX_FILE_MB } from "./ChatInput.jsx";
 import { MessageBubble, messagePreviewText } from "./MessageBubble.jsx";
-import { messageService } from "../lib/messageService.js";
+import { messageService } from "../services/messageService.js";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -375,17 +375,23 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
     else fetchConversations(true);
   };
 
-  // Insertion d'un message média/vocal dans la base (l'erreur Supabase est propagée)
+  // Insertion d'un message média/vocal dans la base (l'erreur Supabase est propagée).
+  // Le message inséré est ajouté tout de suite à l'écran (sans attendre le temps réel).
   const insertMediaMessage = async (fields, replyToId) => {
-    const { error } = await supabase.from("messages").insert({
-      conversation_id: activeChat.id,
-      sender_id: id,
-      recipient_id: activeChat.otherUserId,
-      client_message_id: makeClientMessageId(),
-      reply_to_id: replyToId || null,
-      ...fields,
-    });
+    const { data, error } = await supabase
+      .from("messages")
+      .insert({
+        conversation_id: activeChat.id,
+        sender_id: id,
+        recipient_id: activeChat.otherUserId,
+        client_message_id: makeClientMessageId(),
+        reply_to_id: replyToId || null,
+        ...fields,
+      })
+      .select()
+      .single();
     if (error) throw error;
+    messaging.addMessage?.(data);
   };
 
   const handleSendMedia = async (file) => {
