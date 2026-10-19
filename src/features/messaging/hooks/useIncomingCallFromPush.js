@@ -12,7 +12,7 @@
  */
 import { useEffect, useState, useCallback } from "react";
 import { supabase } from "../../../supabaseClient.js";
-import { getCallToken } from "../lib/calls.js";
+import { getCallToken } from "../lib/chatCalls.js";
 
 function parseCallParams() {
   try {
