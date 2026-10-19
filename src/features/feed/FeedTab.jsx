@@ -2,9 +2,12 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import {
   X,
   Trash2,
+  MoreHorizontal,
   Image as ImageIcon,
   Send,
   Sparkles,
+  Pencil,
+  Flag,
   Heart,
   MessageCircle,
   Eye,
@@ -21,6 +24,7 @@ import { useToast } from "@/components/ToastContext.jsx";
 import { supabase } from "@/supabaseClient.js";
 import { handleDbError } from "@/lib/dbErrors.js";
 import { fetchFeedPage } from "@/lib/feedPagination.js";
+import { recordFeedEvent } from "@/lib/feedEvents.js";
 import { checkRateLimit, rateLimitMessage } from "@/lib/rateLimit.js";
 import { uploadExternalMedia } from "@/lib/externalMedia.js";
 
@@ -36,6 +40,14 @@ import { GuestBanner } from "@/components/GuestBanner.jsx";
 const PAGE_SIZE = 20;
 const MAX_MEDIA_BYTES = 50 * 1024 * 1024; // 50 Mo
 const MAX_REC_SECONDS = 300; // 5 min max pour un vocal
+
+const REPORT_REASONS = [
+  "Spam ou arnaque",
+  "Harcèlement ou haine",
+  "Contenu inapproprié",
+  "Fausse information",
+  "Autre",
+];
 
 const VIDEO_EXT = /\.(mp4|webm|mov|m4v|ogv)(\?.*)?$/i;
 const AUDIO_EXT = /\.(mp3|m4a|aac|wav|ogg|oga|opus|weba)(\?.*)?$/i;
@@ -134,6 +146,12 @@ export function FeedTab({
   const [menuOpenId, setMenuOpenId] = useState(null);
   const [engagement, setEngagement] = useState(null);
 
+  // Modification & signalement
+  const [editingId, setEditingId] = useState(null);
+  const [editText, setEditText] = useState("");
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [reportPost, setReportPost] = useState(null);
+
   // J'aime, Reposts, commentaires, traduction
   const [likedPosts, setLikedPosts] = useState({});
   const [repostedPosts, setRepostedPosts] = useState({});
@@ -201,18 +219,21 @@ export function FeedTab({
       const postIds = postIdsKey.split(",");
       const likedAcc = {};
       const repostedAcc = {};
+      let failed = false;
 
       for (let i = 0; i < postIds.length; i += 50) {
         const chunk = postIds.slice(i, i + 50);
-        const [{ data: likes }, { data: reposts }] = await Promise.all([
+        const [{ data: likes, error: likesErr }, { data: reposts, error: repostsErr }] = await Promise.all([
           supabase.from("post_likes").select("post_id").eq("user_id", activeUserId).in("post_id", chunk),
           supabase.from("post_reposts").select("post_id").eq("user_id", activeUserId).in("post_id", chunk),
         ]);
+        if (likesErr || repostsErr) { failed = true; break; }
         (likes || []).forEach((l) => { likedAcc[l.post_id] = true; });
         (reposts || []).forEach((r) => { repostedAcc[r.post_id] = true; });
       }
 
-      if (!cancelled) {
+      // En cas d'erreur, on garde l'état actuel (comme avant) au lieu de tout effacer
+      if (!cancelled && !failed) {
         setLikedPosts(likedAcc);
         setRepostedPosts(repostedAcc);
       }
@@ -632,7 +653,7 @@ export function FeedTab({
             : "image";
       }
 
-      const { error: postErr } = await supabase
+      const { data: newPost, error: postErr } = await supabase
         .from("posts")
         .insert([
           {
