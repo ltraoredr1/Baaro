@@ -2,7 +2,6 @@ import React, { useState, useEffect, useCallback } from "react";
 import { supabase } from "../../supabaseClient.js";
 import { COLORS } from "../../theme.js";
 import { useToast } from "../../components/ToastContext.jsx";
-import { notifyInteraction } from "../../lib/notifyInteraction.js";
 
 /** auth.users.id (UUID) uniquement — rejette email/handle */
 function isValidAuthUserId(value) {
@@ -92,7 +91,6 @@ const FollowButton = ({ targetId }) => {
           is_friend: false,
         });
         if (error) throw error;
-        notifyInteraction({ contentType: "user", interactionType: "follow", targetId });
       }
     } catch (err) {
       console.error("[FollowButton] toggle", err);
