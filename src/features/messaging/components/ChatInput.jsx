@@ -1,7 +1,7 @@
 /**
  * src/features/messaging/components/ChatInput.jsx
  * Barre de saisie : texte, pièces jointes, collage d'image, vocal (enregistrer / annuler / envoyer),
- * bandeau "réponse à…" et signal de saisie (onTyping).
+ * bandeau "réponse à…", signal de saisie (onTyping) et BROUILLON conservé (prop draftKey).
  * L'enregistrement vocal est géré ICI uniquement (MessagesTab reçoit le résultat via onSendVoice).
  */
 import React, { useState, useRef, useEffect, useCallback } from "react";
@@ -23,6 +23,15 @@ function formatTime(seconds) {
   return `${m}:${s < 10 ? "0" : ""}${s}`;
 }
 
+function loadDraft(key) {
+  if (!key) return "";
+  try {
+    return localStorage.getItem(key) || "";
+  } catch {
+    return "";
+  }
+}
+
 export function ChatInput({
   onSend,
   onSendMedia,
@@ -31,10 +40,11 @@ export function ChatInput({
   onError,
   replyTo, // { name, text } | null
   onCancelReply,
+  draftKey, // clé de stockage du brouillon (ex. "baaro:draft:<user>:<conversation>")
   disabled,
   placeholder = "Message...",
 }) {
-  const [text, setText] = useState("");
+  const [text, setText] = useState(() => loadDraft(draftKey));
   const [isRecording, setIsRecording] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
 
@@ -54,6 +64,17 @@ export function ChatInput({
     },
     [onError]
   );
+
+  // Brouillon : enregistré à chaque modification, effacé quand le champ est vide (après envoi)
+  useEffect(() => {
+    if (!draftKey) return;
+    try {
+      if (text) localStorage.setItem(draftKey, text);
+      else localStorage.removeItem(draftKey);
+    } catch {
+      /* stockage indisponible */
+    }
+  }, [text, draftKey]);
 
   // Hauteur auto du textarea
   useEffect(() => {
