@@ -3,6 +3,14 @@ import { X, Eye, Heart } from "lucide-react";
 import { supabase } from "../supabaseClient.js";
 import { COLORS } from "../theme.js";
 
+// Messages d'erreur des fonctions Supabase, en français
+function friendlyError(error) {
+  const text = String(error?.message || "");
+  if (text.includes("AUTH_REQUIRED")) return "Connecte-toi pour voir cette liste.";
+  if (text.includes("ACCESS_DENIED")) return "Accès réservé au propriétaire.";
+  return text || "Impossible de charger la liste.";
+}
+
 const RPCS = {
   storyViews: "get_story_viewers",
   storyLikes: "get_story_reactors",
@@ -31,7 +39,7 @@ export function EngagementList({ type, targetId, ownerId, viewerId, onClose }) {
       const argName = type.startsWith("story") ? "p_story_id" : type.startsWith("video") ? "p_video_id" : "p_post_id";
       const { data, error: rpcError } = await supabase.rpc(rpc, { [argName]: targetId });
       if (!active) return;
-      if (rpcError) setError(rpcError.message || "Impossible de charger la liste");
+      if (rpcError) setError(friendlyError(rpcError));
       else setRows(data || []);
       setLoading(false);
     })();
