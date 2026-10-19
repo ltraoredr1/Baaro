@@ -65,7 +65,15 @@ export const sendFriendRequest = async (targetUserId) => {
 
 export const acceptFriendRequest = async (followerId) => {
   const user_id = await getCurrentUserId();
-  return await supabase.from("follows").update({ status: "accepted", is_friend: true }).eq("follower_id", followerId).eq("followed_id", user_id).eq("status", "pending").select().single();
+  const result = await supabase.from("follows").update({ status: "accepted", is_friend: true }).eq("follower_id", followerId).eq("followed_id", user_id).eq("status", "pending").select().single();
+  if (result.error) return result;
+  // Ligne réciproque : l'amitié devient symétrique (liste d'amis des deux côtés).
+  const { error: reciprocalError } = await supabase.from("follows").upsert(
+    { follower_id: user_id, followed_id: followerId, status: "accepted", is_friend: true },
+    { onConflict: "follower_id,followed_id" }
+  );
+  if (reciprocalError) console.warn("[friends] ligne réciproque non créée :", reciprocalError.message);
+  return result;
 };
 
 export const rejectFriendRequest = async (followerId) => {
