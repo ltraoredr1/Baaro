@@ -1,0 +1,42 @@
+import { useState } from 'react';
+
+/** Réagir / partager / supprimer, avec état busy et message du viewer. */
+export function useStoryActions({ userId, toggleLike, removeStory, onRemoved }) {
+  const [busy, setBusy] = useState(false);
+  const [modalMsg, setModalMsg] = useState(null);
+
+  const react = async (story) => {
+    if (!userId) return setModalMsg({ type: 'error', text: 'Connecte-toi pour réagir.' });
+    if (busy) return;
+    setBusy(true); setModalMsg(null);
+    try { await toggleLike(story); }
+    catch (e) { setModalMsg({ type: 'error', text: 'Réaction impossible : ' + (e.message || 'erreur') }); }
+    finally { setBusy(false); }
+  };
+
+  const share = async (story) => {
+    setModalMsg(null);
+    const text = story.caption || 'Story BAARO';
+    const url = story.media_url || window.location.origin;
+    try {
+      if (navigator.share) await navigator.share({ title: 'BAARO', text, url });
+      else if (navigator.clipboard) {
+        await navigator.clipboard.writeText(url);
+        setModalMsg({ type: 'ok', text: 'Lien copié' });
+      }
+    } catch (e) {
+      if (e?.name !== 'AbortError') setModalMsg({ type: 'error', text: 'Partage impossible.' });
+    }
+  };
+
+  const remove = async (story) => {
+    if (story.author_id !== userId || busy) return;
+    if (!window.confirm('Supprimer cette story ?')) return;
+    setBusy(true); setModalMsg(null);
+    try { await removeStory(story); onRemoved?.(); }
+    catch (e) { setModalMsg({ type: 'error', text: 'Suppression impossible : ' + (e.message || 'erreur') }); }
+    finally { setBusy(false); }
+  };
+
+  return { busy, modalMsg, clearMsg: () => setModalMsg(null), react, share, remove };
+}
