@@ -6,25 +6,26 @@ import {
   loadLocalSettings,
   saveCloudSettings,
   DEFAULT_SETTINGS,
-} from "./appSettings.js";
+} from "../lib/appSettings.js";
 
 export function useSettings() {
-  const [settings, setSettings] = useState(() => {
-    const initial = loadLocalSettings();
-    applySettingsToDom(initial);
-    return initial;
-  });
-
+  const [settings, setSettings] = useState(() => loadLocalSettings());
   const [loading, setLoading] = useState(true);
 
+  // Applique immédiatement les réglages locaux à l'interface.
   useEffect(() => {
-    let isMounted = true;
+    applySettingsToDom(settings);
+  }, [settings]);
+
+  // Charge les réglages locaux, puis les réglages du compte connecté.
+  useEffect(() => {
+    let active = true;
 
     async function loadSettings() {
       try {
         const localSettings = loadLocalSettings();
 
-        if (isMounted) {
+        if (active) {
           setSettings(localSettings);
           applySettingsToDom(localSettings);
         }
@@ -39,74 +40,78 @@ export function useSettings() {
           return;
         }
 
-        if (!user || !isMounted) return;
+        if (!user || !active) return;
 
-        const result = await supabase
+        const { data, error } = await supabase
           .from("user_settings")
           .select("*")
           .eq("user_id", user.id)
           .maybeSingle();
 
-        if (result.error) {
-          console.warn("[useSettings] Chargement cloud :", result.error.message);
+        if (error) {
+          console.warn("[useSettings] Chargement cloud :", error.message);
           return;
         }
 
-        if (result.data && isMounted) {
-          const cloudSettings = {};
+        if (!data || !active) return;
 
-          for (const key of Object.keys(DEFAULT_SETTINGS)) {
-            if (
-              Object.prototype.hasOwnProperty.call(result.data, key) &&
-              result.data[key] !== null &&
-              result.data[key] !== undefined
-            ) {
-              cloudSettings[key] = result.data[key];
-            }
+        // Ne fusionne que les réglages connus pour éviter de mettre
+        // des colonnes Supabase étrangères dans l'état de l'application.
+        const cloudSettings = {};
+
+        for (const key of Object.keys(DEFAULT_SETTINGS)) {
+          if (data[key] !== null && data[key] !== undefined) {
+            cloudSettings[key] = data[key];
           }
-
-          const merged = { ...localSettings, ...cloudSettings };
-
-          setSettings(merged);
-          saveLocalSettings(merged);
-          applySettingsToDom(merged);
         }
+
+        const merged = {
+          ...localSettings,
+          ...cloudSettings,
+        };
+
+        if (!active) return;
+
+        setSettings(merged);
+        saveLocalSettings(merged);
+        applySettingsToDom(merged);
       } catch (error) {
-        console.warn("[useSettings] Chargement :", error);
+        console.warn("[useSettings] Chargement des réglages :", error);
       } finally {
-        if (isMounted) setLoading(false);
+        if (active) setLoading(false);
       }
     }
 
     void loadSettings();
 
     return () => {
-      isMounted = false;
+      active = false;
     };
   }, []);
 
+  // Met à jour l'interface et l'appareil immédiatement,
+  // puis synchronise les réglages avec le compte si connecté.
   const update = useCallback(async (patch) => {
+    if (!patch || typeof patch !== "object" || Array.isArray(patch)) {
+      return { ok: false, error: "Réglages invalides." };
+    }
+
     let nextSettings;
 
     setSettings((previous) => {
       nextSettings = { ...previous, ...patch };
-
       saveLocalSettings(nextSettings);
       applySettingsToDom(nextSettings);
-
       return nextSettings;
     });
 
-    // La sauvegarde locale reste prioritaire même si le cloud est indisponible.
-    try {
-      const previous = loadLocalSettings();
-      nextSettings = { ...previous, ...patch };
+    // La mise à jour React est asynchrone : calcule aussi la prochaine
+    // valeur depuis le stockage local pour la synchronisation.
+    const currentSettings = loadLocalSettings();
+    nextSettings = { ...currentSettings, ...patch };
 
-      saveLocalSettings(nextSettings);
-      applySettingsToDom(nextSettings);
-    } catch (error) {
-      console.warn("[useSettings] Sauvegarde locale :", error);
-    }
+    saveLocalSettings(nextSettings);
+    applySettingsToDom(nextSettings);
 
     try {
       const {
@@ -116,7 +121,7 @@ export function useSettings() {
 
       if (authError) {
         console.warn("[useSettings] Authentification :", authError.message);
-        return { ok: false, error: authError.message };
+        return { ok: false, localOnly: true, error: authError.message };
       }
 
       if (!user) {
@@ -126,15 +131,25 @@ export function useSettings() {
       const result = await saveCloudSettings(user.id, nextSettings);
 
       if (!result.ok) {
-        console.warn("[useSettings] Sauvegarde cloud :", result.error);
+        console.warn("[useSettings] Synchronisation cloud :", result.error);
+        return {
+          ok: false,
+          localOnly: true,
+          error: result.error || "Échec de synchronisation.",
+        };
       }
 
-      return result;
+      return { ok: true };
     } catch (error) {
       console.warn("[useSettings] Mise à jour :", error);
+
       return {
         ok: false,
-        error: error instanceof Error ? error.message : "Erreur inconnue",
+        localOnly: true,
+        error:
+          error instanceof Error
+            ? error.message
+            : "Erreur lors de la synchronisation.",
       };
     }
   }, []);
