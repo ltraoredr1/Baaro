@@ -62,3 +62,25 @@ export { DEFAULT_SETTINGS };
   console.warn("[settings] Impossible d'appliquer la langue :", error);
   }
   }
+export function applyA11y(settings: Record<string, unknown>) {
+  try {
+    const root = document.documentElement;
+
+    root.classList.toggle("baaro-large-text", Boolean(settings.large_text));
+    root.classList.toggle("baaro-reduce-motion", Boolean(settings.reduce_motion));
+
+    if (settings.large_text) {
+      root.setAttribute("data-large-text", "1");
+    } else {
+      root.removeAttribute("data-large-text");
+    }
+
+    if (settings.reduce_motion) {
+      root.setAttribute("data-reduce-motion", "1");
+    } else {
+      root.removeAttribute("data-reduce-motion");
+    }
+  } catch (error) {
+    console.warn("[settings] Impossible d'appliquer l'accessibilité :", error);
+  }
+}
