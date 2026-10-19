@@ -1,6 +1,7 @@
 import { useSocial } from '../../hooks/useSocial.js';
 import React, { useEffect, useState } from 'react';
-import { supabase } from '../../supabaseClient';
+import { supabase, getFriends } from '../../supabaseClient';
+import FriendRequests from './FriendRequests.jsx';
 import { useCurrentUser } from '../../hooks/useCommunity';
 import { COLORS } from '../../theme';
 
@@ -24,16 +25,11 @@ export const FriendsTab = ({ onOpenProfile }) => {
           setFriends(profiles || []);
         } else setFriends([]);
       } else {
-        const { data: follows } = await supabase.from('follows').select('followed_id').eq('follower_id', id).eq('status', 'accepted');
-        if (follows?.length) {
-          const followedIds = follows.map(f => f.followed_id);
-          const { data: reciprocal } = await supabase.from('follows').select('follower_id').eq('followed_id', id).eq('status', 'accepted').in('follower_id', followedIds);
-          const reciprocalIds = new Set((reciprocal||[]).map(r => r.follower_id));
-          const friendIds = followedIds.filter(fid => reciprocalIds.has(fid));
-          if (friendIds.length) {
-            const { data: profiles } = await supabase.from('profiles').select('id, display_name, handle, avatar_url, country, language, flag').in('id', friendIds);
-            setFriends(profiles || []);
-          } else setFriends([]);
+        const { data: friendIds, error: friendsError } = await getFriends();
+        if (friendsError) throw friendsError;
+        if (friendIds?.length) {
+          const { data: profiles } = await supabase.from('profiles').select('id, display_name, handle, avatar_url, country, language, flag').in('id', friendIds);
+          setFriends(profiles || []);
         } else setFriends([]);
       }
     } catch (e) {
@@ -58,6 +54,7 @@ export const FriendsTab = ({ onOpenProfile }) => {
 
   return (
     <div className="friends-tab-container p-4">
+      <FriendRequests onChanged={fetchFriends} />
       <h3 className="text-xl font-bold mb-4" style={{ color: COLORS.ivory }}>Mes Amis ({friends.length})</h3>
       {friends.length === 0 ? (
         <p style={{ color: COLORS.muted }}>Pas encore d'amis réciproques.</p>
