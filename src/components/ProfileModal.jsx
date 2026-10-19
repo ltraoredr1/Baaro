@@ -16,7 +16,7 @@ import ProfilePhotosEditor from "./ProfilePhotosEditor.jsx";
 import FollowButton from "../features/friends/FollowButton.jsx";
 import { useToast } from "./ToastContext.jsx";
 import { COLORS } from "../theme.js";
-import { sendFriendRequest } from "../supabaseClient.js";
+import FriendRequestButton from "../features/friends/FriendRequestButton.jsx";
 
 function formatDate(value) {
   if (!value) return null;
@@ -53,38 +53,12 @@ export function ProfileModal({
   const currentUserId = currentId;
 
   const { showToast } = useToast();
-  const [friendLoading, setFriendLoading] = useState(false);
   // Message affiché dans la fenêtre (remplace les alert() de débogage)
   const [notice, setNotice] = useState(null); // { type: "ok" | "error", text }
   const [failedAvatarUrl, setFailedAvatarUrl] = useState(null);
 
   const { profile, contacts, links, socials, loading, reload } = useProfile(authorId, showToast);
   const stats = useProfileStats(authorId);
-
-  const handleFriendRequest = async () => {
-    if (friendLoading) return;
-    if (!currentUserId) {
-      setNotice({ type: "error", text: "Connecte-toi pour envoyer une demande d'ami." });
-      return;
-    }
-    if (!authorId || currentUserId === authorId) return;
-
-    setFriendLoading(true);
-    setNotice(null);
-    try {
-      const { error } = await sendFriendRequest(authorId);
-      if (error) throw error;
-      setNotice({ type: "ok", text: "Demande d'ami envoyée." });
-    } catch (error) {
-      console.error("Erreur demande d'ami:", error);
-      setNotice({
-        type: "error",
-        text: "Demande impossible : " + (error?.message || "erreur inconnue"),
-      });
-    } finally {
-      setFriendLoading(false);
-    }
-  };
 
   // Le message disparaît tout seul
   useEffect(() => {
@@ -234,15 +208,7 @@ export function ProfileModal({
                   {!isOwnProfile && (
                     <>
                       <FollowButton targetId={authorId} currentUserId={currentUserId} />
-                      <button
-                        type="button"
-                        onClick={handleFriendRequest}
-                        disabled={friendLoading}
-                        className="flex h-10 items-center gap-2 rounded-full border px-4 text-sm font-semibold transition hover:scale-[1.02] disabled:opacity-60"
-                        style={{ background: COLORS.surface, borderColor: COLORS.borderGold, color: COLORS.gold }}
-                      >
-                        {friendLoading ? "…" : "Ajouter ami"}
-                      </button>
+                      <FriendRequestButton targetId={authorId} />
                       <button
                         type="button"
                         onClick={handleMessage}
