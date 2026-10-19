@@ -42,7 +42,7 @@ import {
   startIncomingRingtone,
   startOutgoingRingback,
   stopRingtone,
-} from "../lib/callRingtone.js";
+} from "../../../lib/callRingtone.js";
 
 const baaroLogo = "/brand/baaro-logo.png";
 
