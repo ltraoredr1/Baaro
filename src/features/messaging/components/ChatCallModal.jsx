@@ -25,7 +25,7 @@ import {
   Volume2,
   VolumeX,
 } from "lucide-react";
-import { COLORS as THEME_COLORS } from "../theme.js";
+import { COLORS as THEME_COLORS } from "../../../theme.js";
 import {
   startCall,
   joinCall,
