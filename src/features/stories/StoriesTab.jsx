@@ -1,9 +1,11 @@
-// Orchestrateur : branche les hooks sur les composants. Aucune logique métier ici.
+/**
+ * Orchestrateur : branche les hooks sur les composants. Aucune logique métier ici.
+ */
 import { useState } from 'react';
-import { COLORS as C } from '../../../theme.js';
-import { ConnectionStatus } from '../../../components/ConnectionStatus.jsx';
-import { FutureModulePanel } from '../../../components/FutureModulePanel.jsx';
-import { EngagementList } from '../../../components/EngagementList.jsx';
+import { COLORS as C } from '../../theme.js';
+import { ConnectionStatus } from '../../components/ConnectionStatus.jsx';
+import { FutureModulePanel } from '../../components/FutureModulePanel.jsx';
+import { EngagementList } from '../../components/EngagementList.jsx';
 
 import { recordStoryView } from './api/storiesApi.js';
 import { useStories } from './hooks/useStories.js';
