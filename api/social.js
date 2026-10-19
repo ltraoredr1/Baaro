@@ -1,7 +1,8 @@
 /**
  * /api/social — notifications d'interactions sur les publications et vidéos
  * (like, commentaire, partage, repost). Appelé avec action = "notify_interaction".
- * Les abonnements sont déjà notifiés par le trigger SQL on_follow_created : pas géré ici.
+ * + demandes d'ami (friend_request) et acceptations (friend_accepted).
+ * Les simples abonnements sont notifiés par le trigger SQL on_follow_created : pas géré ici.
  *
  * Le destinataire est TOUJOURS déterminé côté serveur (auteur du contenu), jamais
  * pris tel quel depuis le client. Chaque interaction est vérifiée quand c'est possible,
@@ -26,6 +27,10 @@ const CONTENT_TYPES = {
     share: { type: "video_share", verb: "a partagé votre vidéo" },
     repost: { type: "video_repost", verb: "a reposté votre vidéo" },
   },
+  user: {
+    friend_request: { type: "friend_request", verb: "vous a envoyé une demande d'ami" },
+    friend_accepted: { type: "friend_accepted", verb: "a accepté votre demande d'ami" },
+  },
 };
 
 function clip(value, max) {
@@ -44,6 +49,29 @@ async function loadContent(admin, contentType, id) {
 
 // Vérifie que l'action a réellement eu lieu (anti-fausses notifications)
 async function interactionHappened(admin, { contentType, interactionType, actorId, targetId, recipientId }) {
+  if (contentType === "user") {
+    const { data: sent } = await admin
+      .from("follows")
+      .select("status, is_friend")
+      .eq("follower_id", actorId)
+      .eq("followed_id", recipientId)
+      .maybeSingle();
+    if (interactionType === "friend_request") {
+      return sent?.is_friend === true && sent?.status === "pending";
+    }
+    // friend_accepted : l'acceptation met à jour la ligne de la personne qui avait demandé
+    const { data: received } = await admin
+      .from("follows")
+      .select("status, is_friend")
+      .eq("follower_id", recipientId)
+      .eq("followed_id", actorId)
+      .maybeSingle();
+    return (
+      (received?.is_friend === true && received?.status === "accepted") ||
+      (sent?.is_friend === true && sent?.status === "accepted")
+    );
+  }
+
   if (interactionType === "like") {
     const table = contentType === "post" ? "post_likes" : "video_likes";
     const column = contentType === "post" ? "post_id" : "video_id";
@@ -104,12 +132,18 @@ export default async function handler(req, res) {
     let preview = "";
     let sourceId = targetId;
 
-    const content = await loadContent(admin, contentType, targetId);
-    if (!content?.authorId) {
-      return res.status(404).json({ ok: false, error: "Contenu introuvable" });
+    if (contentType === "user") {
+      // targetId = la personne concernée ; la « source » est l'auteur de l'action
+      recipientId = targetId;
+      sourceId = user.id;
+    } else {
+      const content = await loadContent(admin, contentType, targetId);
+      if (!content?.authorId) {
+        return res.status(404).json({ ok: false, error: "Contenu introuvable" });
+      }
+      recipientId = content.authorId;
+      preview = content.preview;
     }
-    recipientId = content.authorId;
-    preview = content.preview;
 
     // Jamais de notification à soi-même
     if (recipientId === user.id) {
@@ -127,16 +161,21 @@ export default async function handler(req, res) {
       return res.status(409).json({ ok: false, error: "Interaction non constatée" });
     }
 
-    // Pas de doublon pour like / abonnement / demande (les commentaires peuvent se répéter)
+    // Pas de doublon pour like / demande d'ami (les commentaires et partages peuvent se répéter).
+    // Pour les demandes d'ami, seule une notification très récente compte comme doublon,
+    // afin qu'une nouvelle demande, plus tard, soit bien notifiée.
     if (interactionType !== "comment" && interactionType !== "share") {
-      const { data: dup } = await admin
+      let dupQuery = admin
         .from("notifications")
         .select("notification_id")
         .eq("user_id", recipientId)
         .eq("actor_id", user.id)
         .eq("type", rule.type)
-        .eq("source_id", sourceId)
-        .limit(1);
+        .eq("source_id", sourceId);
+      if (contentType === "user") {
+        dupQuery = dupQuery.gte("created_at", new Date(Date.now() - 10 * 60_000).toISOString());
+      }
+      const { data: dup } = await dupQuery.limit(1);
       if (dup?.length) {
         return res.status(200).json({ ok: true, notified: false, reason: "duplicate" });
       }
@@ -169,7 +208,9 @@ export default async function handler(req, res) {
     const url =
       contentType === "video"
         ? `/?video=${encodeURIComponent(targetId)}`
-        : `/?post=${encodeURIComponent(targetId)}`;
+        : contentType === "post"
+          ? `/?post=${encodeURIComponent(targetId)}`
+          : "/";
 
     // Le push ne doit jamais faire échouer la notification enregistrée
     await sendPushToUsers(admin, {
