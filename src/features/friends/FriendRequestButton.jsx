@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { supabase } from "../../supabaseClient.js";
+import { supabase, acceptFriendRequest } from "../../supabaseClient.js";
+import { useToast } from "../../components/ToastContext.jsx";
 import { useCurrentUser } from "../../hooks/useCommunity.js";
 import { COLORS } from "../../theme.js";
 import { UserPlus, Clock, Users, Loader2 } from "lucide-react";
@@ -16,6 +17,7 @@ function isValidAuthUserId(value) {
 
 const FriendRequestButton = ({ targetId }) => {
   const { id } = useCurrentUser();
+  const { showToast } = useToast();
   const [state, setState] = useState("loading");
   const [busy, setBusy] = useState(false);
 
@@ -110,7 +112,28 @@ const FriendRequestButton = ({ targetId }) => {
       setState("pending_sent");
     } catch (err) {
       console.error("[FriendRequestButton] send", err);
+      showToast(
+        `Demande impossible : ${err?.message || "erreur"}`,
+        "error",
+      );
       await check();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const acceptRequest = async (e) => {
+    e?.stopPropagation?.();
+    if (!id || busy) return;
+    setBusy(true);
+    try {
+      const { error } = await acceptFriendRequest(targetId);
+      if (error) throw error;
+      setState("friends");
+      showToast("Ami ajouté !", "success");
+    } catch (err) {
+      console.error("[FriendRequestButton] accept", err);
+      showToast(`Acceptation impossible : ${err?.message || "erreur"}`, "error");
     } finally {
       setBusy(false);
     }
@@ -147,12 +170,16 @@ const FriendRequestButton = ({ targetId }) => {
 
   if (state === "pending_received") {
     return (
-      <span
-        className="px-4 py-1.5 rounded-full text-xs font-black"
-        style={{ background: COLORS.surface2, color: COLORS.gold }}
+      <button
+        type="button"
+        onClick={acceptRequest}
+        disabled={busy}
+        className="px-4 py-1.5 rounded-full text-xs font-black transition-all active:scale-95 shadow-lg flex items-center gap-1.5 disabled:opacity-50"
+        style={{ background: "rgba(16,185,129,0.18)", color: "#10b981" }}
       >
-        Vous a demandé en ami
-      </span>
+        {busy ? <Loader2 size={13} className="animate-spin" /> : <Users size={13} />}
+        Accepter
+      </button>
     );
   }
 
