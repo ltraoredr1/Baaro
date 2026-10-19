@@ -1,14 +1,11 @@
 /**
- * src/lib/chatCalls.js — VERSION COMPLÈTE CORRIGÉE
+ * src/lib/chatCalls.js — VERSION CORRIGÉE COMPLÈTE
  * Appels vocaux / vidéo 1-1 via Daily.co
- * + push notify_call via /api/live (app fermée)
- *
- * Correction « Duplicate DailyIframe instances are not allowed » :
- * - Daily n'autorise qu'UNE instance d'appel par page. Avant chaque appel,
- *   toute instance existante (même issue d'une tentative échouée) est détruite
- *   via DailyIframe.getCallInstance().
- * - Si le join échoue, l'instance créée est détruite (plus d'instance fantôme).
- * - Les démarrages simultanés sont mis en file (verrou), pour éviter les doublons.
+ * Fix:
+ * - Utilise VITE_API_BASE_URL pour Capacitor (capacitor://localhost)
+ * - Gère à la fois debate_rooms et calls pour le token
+ * - Meilleure gestion Duplicate DailyIframe
+ * - Fire-and-forget avec retry
  */
 import DailyIframe from "@daily-co/daily-js";
 import { supabase } from "../supabaseClient.js";
@@ -24,9 +21,10 @@ async function authHeaders() {
 
 async function callApi(body) {
   const base =
+    (typeof import.meta !== "undefined" && import.meta.env?.VITE_API_BASE_URL) ||
     (typeof window !== "undefined" && window.location?.origin) ||
     "https://baaro-xi.vercel.app";
-  const endpoint = `${base}/api/live`;
+  const endpoint = `${base.replace(/\/$/, "")}/api/live`;
 
   try {
     const res = await fetch(endpoint, {
@@ -45,7 +43,7 @@ async function callApi(body) {
     } else {
       const text = await res.text();
       throw new Error(
-        `Réponse non-JSON du serveur (${res.status}): ${text.substring(0, 150)}`
+        `Réponse non-JSON du serveur (${res.status}): ${text.substring(0, 200)}`
       );
     }
 
@@ -57,10 +55,11 @@ async function callApi(body) {
     console.error("[chatCalls]", error);
     if (
       error.message?.includes("Failed to fetch") ||
-      error.message?.includes("NetworkError")
+      error.message?.includes("NetworkError") ||
+      error.message?.includes("Load failed")
     ) {
       throw new Error(
-        `Impossible de contacter le serveur (${endpoint}). Vérifiez votre connexion.`
+        `Impossible de contacter le serveur (${endpoint}). Vérifiez VITE_API_BASE_URL et connexion.`
       );
     }
     throw error;
@@ -68,8 +67,7 @@ async function callApi(body) {
 }
 
 /**
- * Détruit toute instance Daily présente sur la page (appel, Live, tentative échouée).
- * Chaque étape est protégée séparément : un échec de leave() n'empêche pas destroy().
+ * Détruit toute instance Daily présente
  */
 async function destroyExistingCall() {
   const instances = [];
@@ -132,7 +130,7 @@ async function startCallInternal({ roomUrl, token, video = false }) {
     if (video) {
       await callObject.setLocalVideo(true);
     }
-    // Suppression de bruit intégrée à Daily (ignorée si indisponible)
+    // Suppression de bruit
     try {
       await callObject.updateInputSettings({
         audio: { processor: { type: "noise-cancellation" } },
@@ -141,14 +139,13 @@ async function startCallInternal({ roomUrl, token, video = false }) {
       console.warn("Suppression de bruit indisponible :", e?.message || e);
     }
   } catch (error) {
-    // Pas d'instance fantôme après un échec
     await destroyExistingCall();
     throw error;
   }
   return callObject;
 }
 
-/** 3. Démarrer / rejoindre l'appel (démarrages mis en file) */
+/** 3. Démarrer / rejoindre l'appel (file d'attente) */
 export async function startCall(opts) {
   if (startingLock) {
     try {
@@ -219,7 +216,6 @@ export function getParticipants() {
   return callObject?.participants() || {};
 }
 
-/** Le navigateur permet-il de choisir la sortie audio ? */
 export function canSelectAudioOutput() {
   return (
     typeof HTMLMediaElement !== "undefined" &&
@@ -227,7 +223,6 @@ export function canSelectAudioOutput() {
   );
 }
 
-/** Sorties audio exposées par le navigateur (haut-parleur, écouteur, casque…) */
 export async function listAudioOutputs() {
   try {
     if (!navigator.mediaDevices?.enumerateDevices) return [];
@@ -238,10 +233,6 @@ export async function listAudioOutputs() {
   }
 }
 
-/**
- * Push destinataire (app fermée) via /api/live action notify_call
- * Fire-and-forget — ne bloque pas l'UI.
- */
 export async function notifyCalleeOfIncomingCall({
   callee_id,
   caller_id,
@@ -262,12 +253,25 @@ export async function notifyCalleeOfIncomingCall({
     });
     return data;
   } catch (e) {
-    console.warn("[notify_call]", e?.message || e);
-    return { ok: false, error: e?.message };
+    console.warn("[notify_call] retry", e?.message || e);
+    // retry une fois
+    try {
+      await new Promise(r => setTimeout(r, 1000));
+      return await callApi({
+        action: "notify_call",
+        callee_id,
+        caller_id,
+        call_id,
+        call_type: call_type === "video" ? "video" : "voice",
+        daily_room_name: daily_room_name || "",
+        caller_name: caller_name || "",
+      });
+    } catch {
+      return { ok: false, error: e?.message };
+    }
   }
 }
 
-/** 4. Enregistrement BDD + push */
 export async function createCallRecord({
   conversation_id,
   caller_id,
