@@ -116,7 +116,7 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
   }, [propId]);
 
   const fetchProfiles = useCallback(async (ids) => {
-    const missing = [...new Set(ids.filter((x) => x && !profilesCache.current[x]))];
+    const missing = [...new Set(ids.filter(x => x && !profilesCache.current[x]))];
     if (missing.length === 0) return;
     const { data } = await supabase
       .from("profiles")
