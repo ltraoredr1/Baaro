@@ -57,8 +57,16 @@ export const isFollowing = async (targetUserId) => {
 export const sendFriendRequest = async (targetUserId) => {
   const user_id = await getCurrentUserId();
   if (!targetUserId || targetUserId === user_id) throw new Error("Cible invalide");
+
+  // Une demande reçue de cette personne : on l'accepte au lieu d'en créer une seconde.
+  const { data: incoming } = await supabase.from("follows").select("status,is_friend").eq("follower_id", targetUserId).eq("followed_id", user_id).maybeSingle();
+  if (incoming?.is_friend && incoming.status === "pending") return acceptFriendRequest(targetUserId);
+  if (incoming?.is_friend && incoming.status === "accepted") return { data: incoming, error: null };
+
+  // Déjà amis ou demande déjà envoyée : aucune nouvelle demande.
   const { data: existing } = await supabase.from("follows").select("status,is_friend").eq("follower_id", user_id).eq("followed_id", targetUserId).maybeSingle();
-  if (existing?.is_friend && existing.status === "accepted") return { data: existing, error: null };
+  if (existing?.is_friend && (existing.status === "accepted" || existing.status === "pending")) return { data: existing, error: null };
+
   const { data, error } = await supabase.from("follows").upsert({ follower_id: user_id, followed_id: targetUserId, status: "pending", is_friend: true }, { onConflict: "follower_id,followed_id" }).select().single();
   return { data, error };
 };
