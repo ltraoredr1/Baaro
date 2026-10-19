@@ -10,7 +10,7 @@
  * - Respect: pas de gros fichiers dans Supabase, utilise R2 via media_url existant
  */
 import { useState, useEffect, useCallback, useRef } from "react";
-import { supabase } from "../../../supabaseClient.js";
+import { supabase } from "../supabaseClient.js";
 import {
   encryptMessage,
   decryptMessage,
