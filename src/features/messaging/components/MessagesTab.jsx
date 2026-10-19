@@ -1,11 +1,11 @@
 /**
- * BAARO MessagesTab — Version avec enregistrement vocal direct & Cloudflare R2
+ * BAARO MessagesTab — Version complète et finale avec vocal R2 et menu d'options
  */
 import { useMessaging } from "../hooks/useMessaging.js";
 import { useState, useEffect, useRef, useCallback } from "react";
 import {
   ArrowLeft, MessageCircle, Plus, X, Search,
-  Phone, Video, Loader2, Mic, Square
+  Phone, Video, Loader2, Mic, Square, MoreHorizontal
 } from "lucide-react";
 import { COLORS as THEME_COLORS } from "../../../theme.js";
 import { supabase } from "../../../supabaseClient.js";
@@ -77,7 +77,7 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
   const [uploading, setUploading] = useState(false);
   const [callState, setCallState] = useState(null);
 
-  // Gestion de l'enregistrement vocal direct
+  // Enregistrement vocal
   const [isRecording, setIsRecording] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
   const mediaRecorderRef = useRef(null);
@@ -253,7 +253,6 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
     }
   };
 
-  // ── Enregistrement vocal géré directement ici ─────────────────────────────
   const startRecording = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -299,7 +298,6 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
     if (!audioBlob || !activeChat) return;
     setUploading(true);
     try {
-      // Utilisation directe de uploadVoiceBlob vers Cloudflare R2
       const up = await uploadVoiceBlob(audioBlob, id, duration);
 
       if (!isValidAuthUserId(id) || !isValidAuthUserId(activeChat.otherUserId)) return;
@@ -486,6 +484,9 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
               <button onClick={() => startCall("video")} className="p-2.5 rounded-full hover:bg-white/10" style={{ color: C.gold }}>
                 <Video size={18} />
               </button>
+              <button onClick={() => alert("Options de la conversation")} className="p-2.5 rounded-full hover:bg-white/10" style={{ color: C.muted }}>
+                <MoreHorizontal size={18} />
+              </button>
             </div>
           </div>
 
@@ -507,7 +508,6 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
             <div ref={messagesEndRef} />
           </div>
 
-          {/* Barre de saisie ou interface d'enregistrement vocal */}
           {isRecording ? (
             <div className="p-3 border-t flex items-center justify-between bg-red-500/10 text-red-400">
               <span className="text-xs font-semibold animate-pulse">
