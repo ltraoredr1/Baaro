@@ -1,214 +1,156 @@
-import React, { useState, useEffect, useCallback } from "react";
-import { supabase, acceptFriendRequest } from "../../supabaseClient.js";
-import { useToast } from "../../components/ToastContext.jsx";
-import { notifyInteraction } from "../../lib/notifyInteraction.js";
+import React, { useCallback, useEffect, useState } from "react";
+import { Check, X, Loader2 } from "lucide-react";
+import {
+  supabase,
+  acceptFriendRequest,
+  rejectFriendRequest,
+} from "../../supabaseClient.js";
 import { useCurrentUser } from "../../hooks/useCommunity.js";
+import { useToast } from "../../components/ToastContext.jsx";
 import { COLORS } from "../../theme.js";
-import { UserPlus, Clock, Users, Loader2 } from "lucide-react";
 
-function isValidAuthUserId(value) {
-  if (!value || typeof value !== "string") return false;
-  if (value.startsWith("@") || (value.includes("@") && value.includes("."))) {
-    return false;
-  }
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-    value
-  );
-}
-
-const FriendRequestButton = ({ targetId }) => {
+// Demandes d'ami REÇUES : liste + boutons Accepter / Refuser.
+// L'envoi est géré par FriendRequestButton.jsx.
+const FriendRequests = ({ onChanged }) => {
   const { id } = useCurrentUser();
   const { showToast } = useToast();
-  const [state, setState] = useState("loading");
-  const [busy, setBusy] = useState(false);
+  const [requests, setRequests] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [busyId, setBusyId] = useState(null);
 
-  const validTarget = isValidAuthUserId(targetId);
-  const isSelf = !!(id && validTarget && id === targetId);
-
-  const check = useCallback(async () => {
-    if (!id || !validTarget || isSelf) {
-      setState("none");
+  const load = useCallback(async () => {
+    if (!id) {
+      setRequests([]);
+      setLoading(false);
       return;
     }
-
+    setLoading(true);
     try {
-      const [{ data: sent }, { data: received }] = await Promise.all([
-        supabase
-          .from("follows")
-          .select("status, is_friend")
-          .eq("follower_id", id)
-          .eq("followed_id", targetId)
-          .maybeSingle(),
-        supabase
-          .from("follows")
-          .select("status, is_friend")
-          .eq("follower_id", targetId)
-          .eq("followed_id", id)
-          .maybeSingle(),
-      ]);
-
-      if (
-        (sent?.status === "accepted" && sent?.is_friend === true) ||
-        (received?.status === "accepted" && received?.is_friend === true)
-      ) {
-        setState("friends");
-        return;
-      }
-
-      if (sent?.status === "pending" && sent?.is_friend === true) {
-        setState("pending_sent");
-        return;
-      }
-
-      if (received?.status === "pending" && received?.is_friend === true) {
-        setState("pending_received");
-        return;
-      }
-
-      setState("none");
-    } catch (e) {
-      console.error("[FriendRequestButton] check", e);
-      setState("none");
-    }
-  }, [id, targetId, validTarget, isSelf]);
-
-  useEffect(() => {
-    check();
-  }, [check]);
-
-  const sendRequest = async (e) => {
-    e?.stopPropagation?.();
-    if (!id || !validTarget || isSelf || busy) return;
-
-    setBusy(true);
-    setState("pending_sent");
-
-    try {
-      const { data: existing, error: readErr } = await supabase
+      const { data: rows, error } = await supabase
         .from("follows")
-        .select("follower_id, status, is_friend")
-        .eq("follower_id", id)
-        .eq("followed_id", targetId)
-        .maybeSingle();
+        .select("follower_id, created_at")
+        .eq("followed_id", id)
+        .eq("is_friend", true)
+        .eq("status", "pending")
+        .order("created_at", { ascending: false });
+      if (error) throw error;
 
-      if (readErr && readErr.code !== "PGRST116") throw readErr;
-
-      if (existing?.is_friend && existing.status === "pending") {
-        setState("pending_sent");
-        return;
+      const ids = (rows || []).map((r) => r.follower_id);
+      let profiles = {};
+      if (ids.length) {
+        const { data: profs } = await supabase
+          .from("profiles")
+          .select("id, display_name, handle, avatar_url, flag")
+          .in("id", ids);
+        profiles = Object.fromEntries((profs || []).map((p) => [p.id, p]));
       }
-
-      if (existing) {
-        const { error } = await supabase
-          .from("follows")
-          .update({ status: "pending", is_friend: true })
-          .eq("follower_id", id)
-          .eq("followed_id", targetId);
-        if (error) throw error;
-      } else {
-        const { error } = await supabase.from("follows").insert({
-          follower_id: id,
-          followed_id: targetId,
-          status: "pending",
-          is_friend: true,
-        });
-        if (error && error.code !== "23505") throw error;
-      }
-
-      setState("pending_sent");
-      notifyInteraction({ contentType: "user", interactionType: "friend_request", targetId });
+      setRequests(
+        (rows || []).map((r) => ({ ...r, profile: profiles[r.follower_id] })),
+      );
     } catch (err) {
-      console.error("[FriendRequestButton] send", err);
+      console.error("[FriendRequests] load", err);
       showToast(
-        `Demande impossible : ${err?.message || "erreur"}`,
+        `Impossible de charger les demandes : ${err?.message || "erreur"}`,
         "error",
       );
-      await check();
     } finally {
-      setBusy(false);
+      setLoading(false);
     }
-  };
+  }, [id, showToast]);
 
-  const acceptRequest = async (e) => {
-    e?.stopPropagation?.();
-    if (!id || busy) return;
-    setBusy(true);
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const answer = async (requesterId, accept) => {
+    if (busyId) return;
+    setBusyId(requesterId);
     try {
-      const { error } = await acceptFriendRequest(targetId);
+      const { error } = accept
+        ? await acceptFriendRequest(requesterId)
+        : await rejectFriendRequest(requesterId);
       if (error) throw error;
-      setState("friends");
-      showToast("Ami ajouté !", "success");
+      setRequests((prev) => prev.filter((r) => r.follower_id !== requesterId));
+      showToast(accept ? "Ami ajouté !" : "Demande refusée.", "success");
+      onChanged?.();
     } catch (err) {
-      console.error("[FriendRequestButton] accept", err);
-      showToast(`Acceptation impossible : ${err?.message || "erreur"}`, "error");
+      console.error("[FriendRequests] answer", err);
+      showToast(
+        `Action impossible : ${err?.message || "erreur"} (vérifie les policies RLS de la table follows)`,
+        "error",
+      );
     } finally {
-      setBusy(false);
+      setBusyId(null);
     }
   };
 
-  if (!validTarget || isSelf || state === "loading") return null;
-
-  if (state === "friends") {
-    return (
-      <span
-        className="px-4 py-1.5 rounded-full text-xs font-black flex items-center gap-1.5"
-        style={{ background: "rgba(16,185,129,0.15)", color: "#10b981" }}
-      >
-        <Users size={13} /> Amis
-      </span>
-    );
-  }
-
-  if (state === "pending_sent") {
-    return (
-      <span
-        className="px-4 py-1.5 rounded-full text-xs font-black flex items-center gap-1.5"
-        style={{ background: COLORS.surface2, color: COLORS.muted }}
-      >
-        {busy ? (
-          <Loader2 size={13} className="animate-spin" />
-        ) : (
-          <Clock size={13} />
-        )}
-        Demande envoyée
-      </span>
-    );
-  }
-
-  if (state === "pending_received") {
-    return (
-      <button
-        type="button"
-        onClick={acceptRequest}
-        disabled={busy}
-        className="px-4 py-1.5 rounded-full text-xs font-black transition-all active:scale-95 shadow-lg flex items-center gap-1.5 disabled:opacity-50"
-        style={{ background: "rgba(16,185,129,0.18)", color: "#10b981" }}
-      >
-        {busy ? <Loader2 size={13} className="animate-spin" /> : <Users size={13} />}
-        Accepter
-      </button>
-    );
-  }
+  if (!id || loading || requests.length === 0) return null;
 
   return (
-    <button
-      type="button"
-      onClick={sendRequest}
-      disabled={busy || !id}
-      className="px-4 py-1.5 rounded-full text-xs font-black transition-all active:scale-95 hover:scale-105 shadow-lg flex items-center gap-1.5 disabled:opacity-50"
-      style={{
-        background: `linear-gradient(135deg, ${COLORS.gold}, #ff8c42)`,
-        color: COLORS.bg,
-      }}
-    >
-      {busy ? (
-        <Loader2 size={13} className="animate-spin" />
-      ) : (
-        <UserPlus size={13} />
-      )}
-      Ajouter
-    </button>
+    <div className="mb-5">
+      <h3 className="text-sm font-black mb-2" style={{ color: COLORS.gold }}>
+        Demandes d'amis ({requests.length})
+      </h3>
+      <ul className="space-y-2">
+        {requests.map((r) => {
+          const p = r.profile || {};
+          const busy = busyId === r.follower_id;
+          return (
+            <li
+              key={r.follower_id}
+              className="flex items-center gap-3 p-3 rounded-[14px] border-2"
+              style={{ background: COLORS.surface2, borderColor: COLORS.border }}
+            >
+              <img
+                src={
+                  p.avatar_url ||
+                  `https://api.dicebear.com/7.x/initials/svg?seed=${p.display_name || "A"}`
+                }
+                alt=""
+                className="w-11 h-11 rounded-full object-cover border-2"
+                style={{ borderColor: COLORS.gold }}
+              />
+              <div className="flex-1 min-w-0">
+                <div
+                  className="font-black text-[14px] truncate"
+                  style={{ color: COLORS.ivory }}
+                >
+                  {p.display_name || "Membre BAARO"} {p.flag || ""}
+                </div>
+                <div className="text-xs truncate" style={{ color: COLORS.muted }}>
+                  @{(p.handle || "membre").replace(/^@/, "")}
+                </div>
+              </div>
+              {busy ? (
+                <Loader2 size={18} className="animate-spin" />
+              ) : (
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => answer(r.follower_id, true)}
+                    className="h-9 w-9 rounded-full flex items-center justify-center active:scale-95"
+                    style={{ background: "rgba(16,185,129,0.18)", color: "#10b981" }}
+                    aria-label="Accepter"
+                  >
+                    <Check size={18} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => answer(r.follower_id, false)}
+                    className="h-9 w-9 rounded-full flex items-center justify-center active:scale-95"
+                    style={{ background: "rgba(239,68,68,0.18)", color: "#ef4444" }}
+                    aria-label="Refuser"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </div>
   );
 };
 
-export default FriendRequestButton;
+export default FriendRequests;
