@@ -81,6 +81,7 @@ export const acceptFriendRequest = async (followerId) => {
     { onConflict: "follower_id,followed_id" }
   );
   if (reciprocalError) console.warn("[friends] ligne réciproque non créée :", reciprocalError.message);
+  import("./lib/notifyInteraction.js").then((m) => m.notifyInteraction({ contentType: "user", interactionType: "friend_accepted", targetId: followerId }));
   return result;
 };
 
