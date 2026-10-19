@@ -3,6 +3,8 @@
  * Fix build: n'exporte que les fichiers qui existent réellement
  */
 export { MessagesTab } from "./components/MessagesTab.jsx";
+export { ChatInput } from "./components/ChatInput.jsx";
+export { MessageBubble } from "./components/MessageBubble.jsx";
 export { ChatCallModal } from "./components/ChatCallModal.jsx";
 
 // Hooks existants
