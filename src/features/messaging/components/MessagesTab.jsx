@@ -17,8 +17,8 @@ import {
   Phone, Video, Smile, Reply, Star, MoreHorizontal, CheckCheck,
   Check, Image as ImageIcon, Film, Mic as MicIcon, Lock, Loader2
 } from "lucide-react";
-import { COLORS as THEME_COLORS } from "../theme.js";
-import { supabase } from "../supabaseClient.js";
+import { COLORS as THEME_COLORS } from "../../../theme.js";
+import { supabase } from "../../../supabaseClient.js";
 import { uploadChatFile, uploadVoiceBlob, mimeToMessageType, formatDuration, getBestAudioMime } from "../lib/chatMedia.js";
 import { createCallRoom, getCallToken, createCallRecord } from "../lib/chatCalls.js";
 import { ChatCallModal } from "./ChatCallModal.jsx";
@@ -1095,7 +1095,7 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
             style={{
               borderColor: C.border,
               background: C.bg,
-              paddingBottom: "calc(5.5rem + env(safe-area-inset-bottom))",
+              paddingBottom: "calc(5.5rem + env(safe-area-inset-top))",
             }}
           >
             {replyTo && (
