@@ -16,7 +16,7 @@ import { deserializePayload } from "../lib/crypto.js";
 import { makeClientMessageId } from "../lib/chatFeatures.js";
 import { ChatInput, MAX_FILE_MB } from "./ChatInput.jsx";
 import { MessageBubble, messagePreviewText } from "./MessageBubble.jsx";
-import { messageService } from "../services/messageService.js";
+import { messageService } from "../lib/messageService.js";
 import { usePresence } from "../hooks/usePresence.js";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
