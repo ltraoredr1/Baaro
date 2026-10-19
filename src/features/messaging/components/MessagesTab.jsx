@@ -1,11 +1,11 @@
 /**
- * BAARO MessagesTab — Version complète et finale avec vocal R2 et menu d'options
+ * BAARO MessagesTab — messagerie (texte E2E, médias, vocal via Cloudflare R2, appels)
  */
 import { useMessaging } from "../hooks/useMessaging.js";
-import { useState, useEffect, useRef, useCallback } from "react";
+import { Fragment, useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from "react";
 import {
   ArrowLeft, MessageCircle, Plus, X, Search,
-  Phone, Video, Loader2, Mic, Square, MoreHorizontal
+  Phone, Video, Loader2, ChevronDown
 } from "lucide-react";
 import { COLORS as THEME_COLORS } from "../../../theme.js";
 import { supabase } from "../../../supabaseClient.js";
@@ -14,38 +14,61 @@ import { createCallRoom, getCallToken, createCallRecord } from "../lib/chatCalls
 import { ChatCallModal } from "./ChatCallModal.jsx";
 import { deserializePayload } from "../lib/crypto.js";
 import { makeClientMessageId } from "../lib/chatFeatures.js";
-import { ChatInput } from "./ChatInput.jsx";
-import { MessageBubble } from "./MessageBubble.jsx";
+import { ChatInput, MAX_FILE_MB } from "./ChatInput.jsx";
+import { MessageBubble, messagePreviewText } from "./MessageBubble.jsx";
 import { messageService } from "../lib/messageService.js";
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function isValidAuthUserId(value) {
   if (!value || typeof value !== "string") return false;
   if (value.startsWith("@") || (value.includes("@") && value.includes("."))) return false;
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+  return UUID_RE.test(value);
 }
 
 function formatRelativeTime(iso) {
   if (!iso) return "";
   const d = new Date(iso);
-  const now = Date.now();
-  const diff = Math.floor((now - d.getTime()) / 1000);
+  const diff = Math.floor((Date.now() - d.getTime()) / 1000);
   if (diff < 60) return "À l’instant";
   if (diff < 3600) return `${Math.floor(diff / 60)} min`;
   if (diff < 86400) return `${Math.floor(diff / 3600)} h`;
   if (diff < 604800) return `${Math.floor(diff / 86400)} j`;
-  return d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+  return d.toLocaleDateString("fr-FR", { day: "numeric", month: "short" });
 }
 
-function lastMessagePreview(msg) {
+function dayKey(iso) {
+  return iso ? new Date(iso).toDateString() : "";
+}
+
+function dayLabel(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  const today = new Date();
+  const yesterday = new Date();
+  yesterday.setDate(today.getDate() - 1);
+  if (d.toDateString() === today.toDateString()) return "Aujourd’hui";
+  if (d.toDateString() === yesterday.toDateString()) return "Hier";
+  return d.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" });
+}
+
+function lastMessagePreview(msg, myId) {
   if (!msg) return "Nouvelle conversation";
+  const prefix = msg.sender_id && msg.sender_id === myId ? "Vous : " : "";
   if (msg.deleted_at) return "Message supprimé";
-  if (msg.type === "voice") return "🎤 Message vocal";
-  if (msg.type === "image") return "📷 Photo";
-  if (msg.type === "video") return "🎬 Vidéo";
-  if (msg.type === "file") return `📎 ${msg.file_name || "Fichier"}`;
-  const payload = deserializePayload(msg.text || msg.content);
-  if (payload) return "🔒 Message chiffré";
-  return (msg.text || msg.content || "").slice(0, 80) || "…";
+  if (msg.type === "voice") return `${prefix}🎤 Message vocal`;
+  if (msg.type === "image") return `${prefix}📷 Photo`;
+  if (msg.type === "video") return `${prefix}🎬 Vidéo`;
+  if (msg.type === "file") return `${prefix}📎 ${msg.file_name || "Fichier"}`;
+  const raw = msg.text || msg.content;
+  let encrypted = false;
+  try {
+    encrypted = !!deserializePayload(raw);
+  } catch {
+    encrypted = false;
+  }
+  if (encrypted) return `${prefix}🔒 Message chiffré`;
+  return prefix + ((raw || "").slice(0, 80) || "…");
 }
 
 const FALLBACK = {
@@ -60,33 +83,65 @@ const FALLBACK = {
   teal: "#2DBFA6",
 };
 
+// Défini hors du composant : sinon il est recréé (et remonté) à chaque rendu → clignotement des avatars
+function Avatar({ src, flag, size = 44, bg }) {
+  return (
+    <div
+      className="relative flex-shrink-0 rounded-full overflow-hidden ring-2 ring-white/10"
+      style={{ width: size, height: size, background: bg }}
+    >
+      {src ? (
+        <img src={src} alt="" className="w-full h-full object-cover" />
+      ) : (
+        <div className="w-full h-full flex items-center justify-center text-lg">{flag || "🌍"}</div>
+      )}
+    </div>
+  );
+}
+
+const msgKey = (m) => m?.client_message_id || m?.id || null;
+
 export function MessagesTab({ id: propId, onOpenProfile }) {
-  const C = { ...FALLBACK, ...(THEME_COLORS || {}) };
+  const C = useMemo(() => ({ ...FALLBACK, ...(THEME_COLORS || {}) }), []);
   const [id, setId] = useState(propId || null);
   const [authChecking, setAuthChecking] = useState(!propId);
+  const [myName, setMyName] = useState("");
   const [conversations, setConversations] = useState([]);
   const [activeChat, setActiveChat] = useState(null);
   const messaging = useMessaging(activeChat?.id, id, activeChat?.otherUserId);
-  const [messages, setMessages] = useState([]);
+  const messages = messaging.messages || [];
   const [loading, setLoading] = useState(true);
-  const [sending, setSending] = useState(false);
   const [showNewChat, setShowNewChat] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState([]);
   const [searchLoading, setSearchLoading] = useState(false);
+  const [listFilter, setListFilter] = useState("");
   const [uploading, setUploading] = useState(false);
   const [callState, setCallState] = useState(null);
-
-  // Enregistrement vocal
-  const [isRecording, setIsRecording] = useState(false);
-  const [recordingTime, setRecordingTime] = useState(0);
-  const mediaRecorderRef = useRef(null);
-  const audioChunksRef = useRef([]);
-  const timerRef = useRef(null);
+  const [callStarting, setCallStarting] = useState(false);
+  const [toast, setToast] = useState(null);
+  const [atBottom, setAtBottom] = useState(true);
+  const [replyTo, setReplyTo] = useState(null);
 
   const closeCall = useCallback(() => setCallState(null), []);
   const messagesEndRef = useRef(null);
-  const listChannelRef = useRef(null);
+  const scrollRef = useRef(null);
+  const refreshTimerRef = useRef(null);
+  const toastTimerRef = useRef(null);
+  const prevLastKeyRef = useRef(null);
+  const prependRef = useRef(null);
+
+  // Notification légère (remplace alert(), qui bloque l'interface)
+  const notify = useCallback((message) => {
+    setToast(message);
+    clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => setToast(null), 4000);
+  }, []);
+
+  useEffect(() => () => {
+    clearTimeout(toastTimerRef.current);
+    clearTimeout(refreshTimerRef.current);
+  }, []);
 
   useEffect(() => {
     if (propId) {
@@ -94,39 +149,68 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
       setAuthChecking(false);
       return;
     }
-    supabase.auth.getUser().then(({ data }) => {
-      if (data?.user) setId(data.user.id);
-      setAuthChecking(false);
-    });
+    let alive = true;
+    supabase.auth
+      .getUser()
+      .then(({ data }) => {
+        if (alive && data?.user) setId(data.user.id);
+      })
+      .catch((e) => console.error("[MessagesTab] getUser error:", e))
+      .finally(() => alive && setAuthChecking(false));
+    return () => {
+      alive = false;
+    };
   }, [propId]);
 
-  const fetchConversations = useCallback(async () => {
+  // Nom affiché dans les appels (au lieu du "Moi" codé en dur)
+  useEffect(() => {
     if (!id) return;
-    setLoading(true);
-    try {
-      const rawConversations = await messageService.getConversations(id);
-      const enriched = (rawConversations || []).map((c) => {
-        const otherParticipant = c.participants?.find((p) => p.user_id !== id) || {};
-        const profile = otherParticipant.profiles || {};
-        return {
-          id: c.id,
-          otherUserId: otherParticipant.user_id,
-          otherUserName: profile.display_name || "Membre",
-          otherUserAvatar: profile.avatar_url,
-          otherUserFlag: profile.flag || "🌍",
-          lastMsg: c.last_message || null,
-          unread: c.unread || false,
-          created_at: c.created_at,
-        };
+    let alive = true;
+    supabase
+      .from("profiles")
+      .select("display_name")
+      .eq("id", id)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (alive && data?.display_name) setMyName(data.display_name);
       });
-      setConversations(enriched);
-    } catch (e) {
-      console.error("[MessagesTab] fetchConversations error:", e);
-    } finally {
-      setLoading(false);
-    }
+    return () => {
+      alive = false;
+    };
   }, [id]);
 
+  const fetchConversations = useCallback(
+    async (silent = false) => {
+      if (!id) return;
+      if (!silent) setLoading(true); // pas de spinner sur les rafraîchissements temps réel
+      try {
+        const rawConversations = await messageService.getConversations(id);
+        const enriched = (rawConversations || []).map((c) => {
+          const otherParticipant = c.participants?.find((p) => p.user_id !== id) || {};
+          const profile = otherParticipant.profiles || {};
+          return {
+            id: c.id,
+            otherUserId: otherParticipant.user_id,
+            otherUserName: profile.display_name || "Membre",
+            otherUserAvatar: profile.avatar_url,
+            otherUserFlag: profile.flag || "🌍",
+            lastMsg: c.last_message || null,
+            unread: c.unread || false,
+            created_at: c.created_at,
+          };
+        });
+        setConversations(enriched);
+      } catch (e) {
+        console.error("[MessagesTab] fetchConversations error:", e);
+        if (!silent) notify("Impossible de charger les conversations.");
+      } finally {
+        if (!silent) setLoading(false);
+      }
+    },
+    [id, notify]
+  );
+
+  // Liste des conversations + temps réel sur les messages REÇUS (filtre serveur)
   useEffect(() => {
     if (!id) return;
     fetchConversations();
@@ -134,52 +218,102 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
       .channel(`conv-list:${id}`)
       .on(
         "postgres_changes",
-        { event: "INSERT", schema: "public", table: "messages" },
+        { event: "INSERT", schema: "public", table: "messages", filter: `recipient_id=eq.${id}` },
         () => {
-          clearTimeout(window.__baaroConvRefresh);
-          window.__baaroConvRefresh = setTimeout(fetchConversations, 400);
+          clearTimeout(refreshTimerRef.current);
+          refreshTimerRef.current = setTimeout(() => fetchConversations(true), 400);
         }
       )
       .subscribe();
-    listChannelRef.current = ch;
     return () => {
-      if (listChannelRef.current) supabase.removeChannel(listChannelRef.current);
+      clearTimeout(refreshTimerRef.current);
+      supabase.removeChannel(ch);
     };
   }, [id, fetchConversations]);
 
+  // Changer de conversation efface la réponse en cours
   useEffect(() => {
-    setMessages(messaging.messages || []);
-    if (activeChat?.id && id) {
-      messageService.markAsRead(activeChat.id, id);
-    }
-  }, [messaging.messages, activeChat?.id, id]);
+    setReplyTo(null);
+  }, [activeChat?.id]);
+
+  // Marquer comme lu seulement quand le dernier message vient de l'autre (et non à chaque rendu)
+  const lastMsg = messages[messages.length - 1];
+  const lastMsgId = lastMsg?.id;
+  const lastMsgFromOther = !!lastMsg && lastMsg.sender_id !== id;
+  useEffect(() => {
+    if (!activeChat?.id || !id || !lastMsgId || !lastMsgFromOther) return;
+    Promise.resolve(messageService.markAsRead(activeChat.id, id)).catch((e) =>
+      console.warn("[MessagesTab] markAsRead error:", e)
+    );
+    setConversations((prev) => prev.map((c) => (c.id === activeChat.id ? { ...c, unread: false } : c)));
+  }, [activeChat?.id, id, lastMsgId, lastMsgFromOther]);
+
+  // Défilement : on ne descend que si le DERNIER message a changé (pas quand on charge l'historique)
+  useEffect(() => {
+    prevLastKeyRef.current = null;
+    setAtBottom(true);
+  }, [activeChat?.id]);
 
   useEffect(() => {
-    if (messagesEndRef.current) {
+    const key = msgKey(lastMsg);
+    const prevKey = prevLastKeyRef.current;
+    prevLastKeyRef.current = key;
+    if (!key || key === prevKey || !messagesEndRef.current) return;
+    if (prevKey === null) {
+      messagesEndRef.current.scrollIntoView({ behavior: "auto" }); // ouverture : saut direct
+    } else if (atBottom || lastMsg?.sender_id === id) {
       messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages]);
+
+  // Après chargement de messages plus anciens : garder la position de lecture
+  useLayoutEffect(() => {
+    const pending = prependRef.current;
+    const el = scrollRef.current;
+    if (!pending || !el) return;
+    if (msgKey(messages[0]) !== pending.firstKey) {
+      el.scrollTop += el.scrollHeight - pending.height;
+      prependRef.current = null;
+    }
+  }, [messages]);
+
+  const handleScroll = (e) => {
+    const el = e.currentTarget;
+    setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 80);
+  };
+
+  const handleLoadOlder = async () => {
+    const el = scrollRef.current;
+    if (el) prependRef.current = { height: el.scrollHeight, firstKey: msgKey(messages[0]) };
+    const added = await messaging.loadOlder();
+    if (!added) prependRef.current = null;
+  };
+
+  const openChatWith = (convId, otherId, name, avatar, flag) => {
+    setActiveChat({
+      id: convId,
+      otherUserId: otherId,
+      otherUserName: name,
+      otherUserAvatar: avatar,
+      otherUserFlag: flag,
+    });
+    setShowNewChat(false);
+  };
 
   const openConversation = async (otherId, name, avatar, flag) => {
     if (!id || !otherId || otherId === id) return;
     try {
-      const { data: existing } = await supabase
+      const { data: existing, error: selErr } = await supabase
         .from("conversations")
         .select("id")
-        .or(
-          `and(user1_id.eq.${id},user2_id.eq.${otherId}),and(user1_id.eq.${otherId},user2_id.eq.${id})`
-        )
+        .or(`and(user1_id.eq.${id},user2_id.eq.${otherId}),and(user1_id.eq.${otherId},user2_id.eq.${id})`)
         .limit(1);
 
+      if (selErr) throw selErr;
+
       if (existing?.[0]) {
-        setActiveChat({
-          id: existing[0].id,
-          otherUserId: otherId,
-          otherUserName: name,
-          otherUserAvatar: avatar,
-          otherUserFlag: flag,
-        });
-        setShowNewChat(false);
+        openChatWith(existing[0].id, otherId, name, avatar, flag);
         return;
       }
 
@@ -192,140 +326,143 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
         .single();
 
       if (error) {
-        alert(error.message || "Impossible de créer la conversation");
+        notify(error.message || "Impossible de créer la conversation");
         return;
       }
 
       if (nw) {
-        setActiveChat({
-          id: nw.id,
-          otherUserId: otherId,
-          otherUserName: name,
-          otherUserAvatar: avatar,
-          otherUserFlag: flag,
-        });
-        setShowNewChat(false);
-        fetchConversations();
+        openChatWith(nw.id, otherId, name, avatar, flag);
+        fetchConversations(true);
       }
     } catch (e) {
       console.error("openConversation error:", e);
+      notify(e?.message || "Impossible d'ouvrir la conversation");
     }
   };
 
-  const handleSendText = async (text) => {
-    if (!text || !activeChat || !id || sending) return;
+  // Envoi texte OPTIMISTE : le message s'affiche aussitôt ; en cas d'échec il reste visible avec "réessayer"
+  const handleSendText = async (text, options = {}) => {
+    if (!text || !activeChat || !id) return;
     if (!isValidAuthUserId(id) || !isValidAuthUserId(activeChat.otherUserId)) {
-      alert("Conversation invalide");
+      notify("Conversation invalide");
       return;
     }
-    setSending(true);
-    const result = await messaging.sendMessage(text, {
-      clientMessageId: makeClientMessageId(),
-    });
-    setSending(false);
-    if (!result?.ok) {
-      alert(result?.error || "Impossible d'envoyer le message");
+    const isRetry = "replyToId" in options;
+    const replyToId = isRetry ? options.replyToId : replyTo?.id || null;
+    if (!isRetry) setReplyTo(null);
+    try {
+      const result = await messaging.sendMessage(text, {
+        clientMessageId: options.clientMessageId || makeClientMessageId(),
+        replyToId,
+      });
+      if (!result?.ok) notify(result?.error || "Impossible d'envoyer le message");
+      else fetchConversations(true);
+    } catch (e) {
+      notify(e?.message || "Impossible d'envoyer le message");
     }
+  };
+
+  const handleRetry = (msg) =>
+    handleSendText(msg.plaintext, {
+      clientMessageId: msg.client_message_id,
+      replyToId: msg.reply_to_id || null,
+    });
+
+  const handleDelete = async (msg) => {
+    if (!window.confirm("Supprimer ce message pour tous ?")) return;
+    const res = await messaging.deleteMessage(msg.id);
+    if (!res?.ok) notify(res?.error || "Suppression impossible");
+    else fetchConversations(true);
+  };
+
+  // Insertion d'un message média/vocal dans la base (l'erreur Supabase est propagée)
+  const insertMediaMessage = async (fields, replyToId) => {
+    const { error } = await supabase.from("messages").insert({
+      conversation_id: activeChat.id,
+      sender_id: id,
+      recipient_id: activeChat.otherUserId,
+      client_message_id: makeClientMessageId(),
+      reply_to_id: replyToId || null,
+      ...fields,
+    });
+    if (error) throw error;
   };
 
   const handleSendMedia = async (file) => {
-    if (!file || !activeChat) return;
+    if (!file || !activeChat || !id) return;
+    // Validation AVANT l'upload (avant : le fichier était envoyé puis jeté silencieusement)
+    if (!isValidAuthUserId(id) || !isValidAuthUserId(activeChat.otherUserId)) {
+      notify("Conversation invalide");
+      return;
+    }
+    if (file.size > MAX_FILE_MB * 1024 * 1024) {
+      notify(`Fichier trop volumineux (max ${MAX_FILE_MB} Mo).`);
+      return;
+    }
+    const replyToId = replyTo?.id || null;
     setUploading(true);
     try {
       const up = await uploadChatFile(file, id);
-      if (!isValidAuthUserId(id) || !isValidAuthUserId(activeChat.otherUserId)) return;
-      await supabase.from("messages").insert({
-        conversation_id: activeChat.id,
-        sender_id: id,
-        recipient_id: activeChat.otherUserId,
-        text: up.fileName,
-        type: mimeToMessageType(up.mime),
-        media_url: up.url,
-        media_mime: up.mime,
-        media_size: up.size,
-        file_name: up.fileName,
-        client_message_id: makeClientMessageId(),
-      });
+      await insertMediaMessage(
+        {
+          text: up.fileName,
+          type: mimeToMessageType(up.mime),
+          media_url: up.url,
+          media_mime: up.mime,
+          media_size: up.size,
+          file_name: up.fileName,
+        },
+        replyToId
+      );
+      setReplyTo(null);
+      fetchConversations(true);
     } catch (err) {
-      alert(err.message || "Échec de l’envoi du fichier");
+      console.error("[MessagesTab] handleSendMedia error:", err);
+      notify(err?.message || "Échec de l’envoi du fichier");
     } finally {
       setUploading(false);
     }
   };
 
-  const startRecording = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream);
-      mediaRecorderRef.current = recorder;
-      audioChunksRef.current = [];
-
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) audioChunksRef.current.push(e.data);
-      };
-
-      recorder.onstop = async () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: audioChunksRef.current[0]?.type || 'audio/webm' });
-        stream.getTracks().forEach((track) => track.stop());
-        if (audioBlob.size > 0) {
-          await handleSendVoice(audioBlob, recordingTime);
-        }
-        setRecordingTime(0);
-      };
-
-      recorder.start();
-      setIsRecording(true);
-      setRecordingTime(0);
-
-      timerRef.current = setInterval(() => {
-        setRecordingTime((prev) => prev + 1);
-      }, 1000);
-    } catch (err) {
-      console.error("Erreur micro :", err);
-      alert("Impossible d'accéder au microphone.");
-    }
-  };
-
-  const stopRecording = () => {
-    if (mediaRecorderRef.current && isRecording) {
-      mediaRecorderRef.current.stop();
-      setIsRecording(false);
-      clearInterval(timerRef.current);
-    }
-  };
-
+  // Appelé par ChatInput avec (blob, durée en secondes)
   const handleSendVoice = async (audioBlob, duration) => {
-    if (!audioBlob || !activeChat) return;
+    if (!audioBlob || !activeChat || !id) return;
+    if (!isValidAuthUserId(id) || !isValidAuthUserId(activeChat.otherUserId)) {
+      notify("Conversation invalide");
+      return;
+    }
+    const replyToId = replyTo?.id || null;
     setUploading(true);
     try {
       const up = await uploadVoiceBlob(audioBlob, id, duration);
-
-      if (!isValidAuthUserId(id) || !isValidAuthUserId(activeChat.otherUserId)) return;
-
-      await supabase.from("messages").insert({
-        conversation_id: activeChat.id,
-        sender_id: id,
-        recipient_id: activeChat.otherUserId,
-        text: "Message vocal",
-        type: "voice",
-        media_url: up.url,
-        media_mime: up.mime,
-        media_size: up.size,
-        file_name: up.fileName,
-        media_duration: up.duration,
-        client_message_id: makeClientMessageId(),
-      });
+      await insertMediaMessage(
+        {
+          text: "Message vocal",
+          type: "voice",
+          media_url: up.url,
+          media_mime: up.mime,
+          media_size: up.size,
+          file_name: up.fileName,
+          media_duration: up.duration ?? duration,
+        },
+        replyToId
+      );
+      setReplyTo(null);
+      fetchConversations(true);
     } catch (err) {
-      alert(err.message || "Échec de l’envoi du message vocal");
+      console.error("[MessagesTab] handleSendVoice error:", err);
+      notify(err?.message || "Échec de l’envoi du message vocal");
     } finally {
       setUploading(false);
     }
   };
 
   const startCall = async (type) => {
-    if (!activeChat || !id) return;
+    if (!activeChat || !id || callStarting) return;
+    const userName = myName || "Membre";
+    setCallStarting(true);
     try {
-      const roomRes = await createCallRoom({ userName: "Moi", mode: type });
+      const roomRes = await createCallRoom({ userName, mode: type });
       const roomName = roomRes.roomName || roomRes.daily_room_name;
       if (!roomName || !roomRes.url) throw new Error("Salle non créée");
       const rec = await createCallRecord({
@@ -336,7 +473,7 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
         dailyRoomName: roomName,
       });
       if (!rec?.id) throw new Error("Appel non enregistré");
-      const tokenRes = await getCallToken({ roomName, userName: "Moi", isOwner: true });
+      const tokenRes = await getCallToken({ roomName, userName, isOwner: true });
       setCallState({
         mode: "outgoing",
         callType: type,
@@ -350,45 +487,82 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
         },
       });
     } catch (e) {
-      alert(e.message || "Impossible de démarrer l'appel");
+      notify(e?.message || "Impossible de démarrer l'appel");
+    } finally {
+      setCallStarting(false);
     }
   };
 
+  // Recherche d'un membre (nouvelle conversation) — avec garde contre les réponses périmées
   useEffect(() => {
     if (!showNewChat) return;
     const q = searchQuery.trim();
     if (q.length < 2) {
       setSearchResults([]);
+      setSearchLoading(false);
       return;
     }
+    let cancelled = false;
     setSearchLoading(true);
     const t = setTimeout(async () => {
-      const { data } = await supabase
+      // On retire % _ et la virgule pour ne pas casser le filtre ni créer de jokers
+      const safe = q.replace(/[%_,]/g, " ");
+      const { data, error } = await supabase
         .from("profiles")
         .select("id, display_name, avatar_url, flag, handle, public_key")
-        .ilike("display_name", "%" + q + "%")
+        .or(`display_name.ilike.%${safe}%,handle.ilike.%${safe}%`)
         .neq("id", id)
         .limit(20);
+      if (cancelled) return;
+      if (error) notify("Recherche impossible pour le moment.");
       setSearchResults(data || []);
       setSearchLoading(false);
     }, 280);
-    return () => clearTimeout(t);
-  }, [searchQuery, showNewChat, id]);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [searchQuery, showNewChat, id, notify]);
 
-  const Avatar = ({ src, flag, size = 44 }) => (
+  const filteredConversations = useMemo(() => {
+    const q = listFilter.trim().toLowerCase();
+    if (!q) return conversations;
+    return conversations.filter((c) => (c.otherUserName || "").toLowerCase().includes(q));
+  }, [conversations, listFilter]);
+
+  // Pour afficher la citation d'une réponse : retrouver le message d'origine parmi ceux chargés
+  const messageById = useMemo(() => {
+    const map = new Map();
+    for (const m of messages) if (m.id) map.set(m.id, m);
+    return map;
+  }, [messages]);
+
+  const quoteFor = (m) => {
+    if (!m.reply_to_id) return null;
+    const target = messageById.get(m.reply_to_id);
+    if (!target) return null;
+    return {
+      name: target.sender_id === id ? "Vous" : activeChat?.otherUserName || "Membre",
+      text: messagePreviewText(target),
+    };
+  };
+
+  const replyBar = replyTo
+    ? {
+        name: replyTo.sender_id === id ? "vous-même" : activeChat?.otherUserName || "Membre",
+        text: messagePreviewText(replyTo),
+      }
+    : null;
+
+  const toastEl = toast ? (
     <div
-      className="relative flex-shrink-0 rounded-full overflow-hidden ring-2 ring-white/10"
-      style={{ width: size, height: size, background: C.surface2 }}
+      role="alert"
+      className="fixed top-3 left-1/2 -translate-x-1/2 z-[90] max-w-[90vw] px-4 py-2.5 rounded-xl text-sm shadow-lg border"
+      style={{ background: C.surface, borderColor: C.borderGold, color: C.ivory }}
     >
-      {src ? (
-        <img src={src} alt="" className="w-full h-full object-cover" />
-      ) : (
-        <div className="w-full h-full flex items-center justify-center text-lg">
-          {flag || "🌍"}
-        </div>
-      )}
+      {toast}
     </div>
-  );
+  ) : null;
 
   if (authChecking) {
     return (
@@ -399,14 +573,27 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
     );
   }
 
+  if (!id) {
+    return (
+      <div className="text-center py-24 px-6">
+        <p className="text-sm" style={{ color: C.muted }}>Connectez-vous pour accéder à vos messages.</p>
+      </div>
+    );
+  }
+
   if (showNewChat) {
     return (
       <div className="max-w-2xl mx-auto w-full px-4 pt-4 pb-28">
+        {toastEl}
         <div className="flex items-center justify-between mb-5">
           <h2 className="text-xl font-bold tracking-tight" style={{ color: C.ivory }}>
             Nouvelle conversation
           </h2>
-          <button onClick={() => setShowNewChat(false)} className="p-2.5 rounded-full hover:bg-white/10">
+          <button
+            onClick={() => setShowNewChat(false)}
+            className="p-2.5 rounded-full hover:bg-white/10"
+            aria-label="Fermer"
+          >
             <X size={20} style={{ color: C.muted }} />
           </button>
         </div>
@@ -430,6 +617,9 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
               <span className="text-sm">Recherche…</span>
             </div>
           )}
+          {!searchLoading && searchQuery.trim().length >= 2 && searchResults.length === 0 && (
+            <p className="text-center text-sm py-10" style={{ color: C.muted }}>Aucun membre trouvé</p>
+          )}
           {searchResults.map((u) => (
             <button
               key={u.id}
@@ -437,7 +627,7 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
               className="w-full p-3.5 rounded-2xl border flex items-center gap-3.5 text-left"
               style={{ background: C.surface, borderColor: C.border }}
             >
-              <Avatar src={u.avatar_url} flag={u.flag} size={48} />
+              <Avatar src={u.avatar_url} flag={u.flag} size={48} bg={C.surface2} />
               <div>
                 <p className="font-semibold text-sm" style={{ color: C.ivory }}>{u.display_name}</p>
                 {u.handle && <p className="text-xs" style={{ color: C.muted }}>@{u.handle}</p>}
@@ -452,6 +642,7 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
   if (activeChat) {
     return (
       <>
+        {toastEl}
         {callState && (
           <ChatCallModal
             mode={callState.mode}
@@ -464,78 +655,162 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
           />
         )}
         <div className="flex flex-col max-w-2xl mx-auto w-full" style={{ height: "calc(100dvh - 120px)" }}>
-          <div className="flex items-center gap-3 px-3 py-3 border-b sticky top-0 z-20" style={{ borderColor: C.border, background: C.bg }}>
-            <button onClick={() => { setActiveChat(null); fetchConversations(); }} className="p-2 rounded-full hover:bg-white/10">
+          <div
+            className="flex items-center gap-3 px-3 py-3 border-b sticky top-0 z-20"
+            style={{ borderColor: C.border, background: C.bg }}
+          >
+            <button
+              onClick={() => {
+                setActiveChat(null);
+                fetchConversations(true);
+              }}
+              className="p-2 rounded-full hover:bg-white/10"
+              aria-label="Retour"
+            >
               <ArrowLeft size={20} style={{ color: C.ivory }} />
             </button>
 
-            <button type="button" className="flex items-center gap-3 flex-1 text-left" onClick={() => onOpenProfile?.(activeChat.otherUserId)}>
-              <Avatar src={activeChat.otherUserAvatar} flag={activeChat.otherUserFlag} size={40} />
-              <div>
-                <p className="font-bold text-sm" style={{ color: C.ivory }}>{activeChat.otherUserName}</p>
-                <p className="text-[11px]" style={{ color: C.muted }}>Sécurisé 🔒</p>
+            <button
+              type="button"
+              className="flex items-center gap-3 flex-1 text-left min-w-0"
+              onClick={() => onOpenProfile?.(activeChat.otherUserId)}
+            >
+              <Avatar src={activeChat.otherUserAvatar} flag={activeChat.otherUserFlag} size={40} bg={C.surface2} />
+              <div className="min-w-0">
+                <p className="font-bold text-sm truncate" style={{ color: C.ivory }}>{activeChat.otherUserName}</p>
+                <p className="text-[11px]" style={{ color: messaging.otherTyping ? C.teal : C.muted }}>
+                  {messaging.otherTyping ? "écrit…" : "Sécurisé 🔒"}
+                </p>
               </div>
             </button>
 
             <div className="flex items-center gap-0.5">
-              <button onClick={() => startCall("voice")} className="p-2.5 rounded-full hover:bg-white/10" style={{ color: C.teal }}>
+              <button
+                onClick={() => startCall("voice")}
+                disabled={callStarting}
+                className="p-2.5 rounded-full hover:bg-white/10 disabled:opacity-40"
+                style={{ color: C.teal }}
+                aria-label="Appel vocal"
+              >
                 <Phone size={18} />
               </button>
-              <button onClick={() => startCall("video")} className="p-2.5 rounded-full hover:bg-white/10" style={{ color: C.gold }}>
+              <button
+                onClick={() => startCall("video")}
+                disabled={callStarting}
+                className="p-2.5 rounded-full hover:bg-white/10 disabled:opacity-40"
+                style={{ color: C.gold }}
+                aria-label="Appel vidéo"
+              >
                 <Video size={18} />
               </button>
-              <button onClick={() => alert("Options de la conversation")} className="p-2.5 rounded-full hover:bg-white/10" style={{ color: C.muted }}>
-                <MoreHorizontal size={18} />
-              </button>
             </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto px-3 py-4 space-y-1">
-            {messaging.loading && messages.length === 0 && (
-              <div className="flex justify-center py-16" style={{ color: C.muted }}>
-                <Loader2 size={24} className="animate-spin" />
-              </div>
-            )}
-
-            {messages.map((m) => (
-              <MessageBubble
-                key={m.id}
-                message={m}
-                isMe={m.sender_id === id}
-                onRetry={() => handleSendText(m.plaintext || m.text || m.content)}
-              />
-            ))}
-            <div ref={messagesEndRef} />
-          </div>
-
-          {isRecording ? (
-            <div className="p-3 border-t flex items-center justify-between bg-red-500/10 text-red-400">
-              <span className="text-xs font-semibold animate-pulse">
-                Enregistrement vocal en cours... {Math.floor(recordingTime / 60)}:{(recordingTime % 60).toString().padStart(2, '0')}
-              </span>
-              <button type="button" onClick={stopRecording} className="p-2 rounded-full bg-red-500 text-white">
-                <Square size={16} />
-              </button>
-            </div>
-          ) : (
-            <div className="relative">
-              <ChatInput
-                disabled={sending || uploading}
-                placeholder="Écrire un message…"
-                onSend={handleSendText}
-                onSendMedia={handleSendMedia}
-              />
-              <button
-                type="button"
-                onClick={startRecording}
-                disabled={sending || uploading}
-                className="absolute right-14 bottom-2.5 p-2 rounded-full hover:bg-white/10 text-amber-500"
-                title="Enregistrer un vocal"
-              >
-                <Mic size={20} />
-              </button>
+          {messaging.keysError && (
+            <div
+              role="status"
+              className="px-4 py-2 text-xs border-b"
+              style={{ background: "rgba(239,68,68,0.1)", borderColor: C.border, color: "#fca5a5" }}
+            >
+              Messagerie sécurisée indisponible : {messaging.keysError}
             </div>
           )}
+
+          <div className="relative flex-1 min-h-0">
+            <div ref={scrollRef} onScroll={handleScroll} className="h-full overflow-y-auto px-3 py-4 space-y-1">
+              {messaging.hasMore && (
+                <div className="flex justify-center pb-2">
+                  <button
+                    type="button"
+                    onClick={handleLoadOlder}
+                    disabled={messaging.loadingOlder}
+                    className="flex items-center gap-2 text-xs px-4 py-2 rounded-full border disabled:opacity-60"
+                    style={{ borderColor: C.borderGold, color: C.gold, background: C.surface }}
+                  >
+                    {messaging.loadingOlder && <Loader2 size={14} className="animate-spin" />}
+                    Messages précédents
+                  </button>
+                </div>
+              )}
+
+              {messaging.loading && messages.length === 0 && (
+                <div className="flex justify-center py-16" style={{ color: C.muted }}>
+                  <Loader2 size={24} className="animate-spin" />
+                </div>
+              )}
+
+              {messaging.loadError && messages.length === 0 && (
+                <p className="text-center text-sm py-16" style={{ color: C.muted }}>
+                  Impossible de charger les messages ({messaging.loadError})
+                </p>
+              )}
+
+              {!messaging.loading && !messaging.loadError && !messaging.keysError && messages.length === 0 && (
+                <p className="text-center text-sm py-16" style={{ color: C.muted }}>
+                  Dites bonjour à {activeChat.otherUserName} 👋
+                </p>
+              )}
+
+              {messages.map((m, i) => {
+                const prev = messages[i - 1];
+                const showDay = !prev || dayKey(prev.created_at) !== dayKey(m.created_at);
+                return (
+                  <Fragment key={msgKey(m) || i}>
+                    {showDay && (
+                      <div className="flex justify-center py-2">
+                        <span
+                          className="text-[11px] px-3 py-1 rounded-full capitalize"
+                          style={{ background: C.surface2, color: C.muted }}
+                        >
+                          {dayLabel(m.created_at)}
+                        </span>
+                      </div>
+                    )}
+                    <MessageBubble
+                      message={m}
+                      isMe={m.sender_id === id}
+                      reply={quoteFor(m)}
+                      onRetry={handleRetry}
+                      onReply={setReplyTo}
+                      onDelete={handleDelete}
+                    />
+                  </Fragment>
+                );
+              })}
+              <div ref={messagesEndRef} />
+            </div>
+
+            {!atBottom && messages.length > 0 && (
+              <button
+                type="button"
+                onClick={() => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })}
+                className="absolute bottom-3 right-4 p-2.5 rounded-full shadow-lg border"
+                style={{ background: C.surface, borderColor: C.borderGold, color: C.gold }}
+                aria-label="Aller au dernier message"
+              >
+                <ChevronDown size={18} />
+              </button>
+            )}
+          </div>
+
+          {uploading && (
+            <div className="flex items-center gap-2 px-4 py-1.5 text-xs" style={{ color: C.muted }}>
+              <Loader2 size={14} className="animate-spin" style={{ color: C.gold }} />
+              Envoi en cours…
+            </div>
+          )}
+
+          <ChatInput
+            disabled={uploading}
+            placeholder="Écrire un message…"
+            onSend={handleSendText}
+            onSendMedia={handleSendMedia}
+            onSendVoice={handleSendVoice}
+            onTyping={messaging.notifyTyping}
+            onError={notify}
+            replyTo={replyBar}
+            onCancelReply={() => setReplyTo(null)}
+          />
         </div>
       </>
     );
@@ -543,7 +818,8 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
 
   return (
     <div className="max-w-2xl mx-auto w-full px-4 pt-4 pb-28">
-      <div className="flex items-center justify-between mb-6">
+      {toastEl}
+      <div className="flex items-center justify-between mb-4">
         <h2 className="text-2xl font-bold flex items-center gap-2.5" style={{ color: C.ivory }}>
           <MessageCircle size={20} style={{ color: C.gold }} /> Messages
         </h2>
@@ -556,6 +832,19 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
         </button>
       </div>
 
+      {conversations.length > 4 && (
+        <div className="relative mb-4">
+          <Search size={15} className="absolute left-4 top-1/2 -translate-y-1/2" style={{ color: C.muted }} />
+          <input
+            value={listFilter}
+            onChange={(e) => setListFilter(e.target.value)}
+            placeholder="Rechercher une conversation…"
+            className="w-full pl-10 pr-4 py-2.5 rounded-2xl border text-sm outline-none"
+            style={{ background: C.surface, borderColor: C.border, color: C.ivory }}
+          />
+        </div>
+      )}
+
       {loading ? (
         <div className="flex flex-col items-center justify-center py-20 gap-3" style={{ color: C.muted }}>
           <Loader2 size={28} className="animate-spin" style={{ color: C.gold }} />
@@ -565,26 +854,47 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
         <div className="text-center py-20">
           <p className="text-sm" style={{ color: C.muted }}>Aucune conversation</p>
         </div>
+      ) : filteredConversations.length === 0 ? (
+        <div className="text-center py-20">
+          <p className="text-sm" style={{ color: C.muted }}>Aucun résultat</p>
+        </div>
       ) : (
         <div className="space-y-1">
-          {conversations.map((c) => (
+          {filteredConversations.map((c) => (
             <button
               key={c.id}
               onClick={() => setActiveChat(c)}
               className="w-full p-3.5 rounded-2xl border text-left flex items-center gap-3.5 transition hover:scale-[1.01]"
-              style={{ background: C.surface, borderColor: C.border }}
+              style={{ background: C.surface, borderColor: c.unread ? C.borderGold : C.border }}
             >
-              <Avatar src={c.otherUserAvatar} flag={c.otherUserFlag} size={52} />
+              <Avatar src={c.otherUserAvatar} flag={c.otherUserFlag} size={52} bg={C.surface2} />
               <div className="flex-1 min-w-0">
-                <div className="flex items-center justify-between">
-                  <p className="font-semibold text-sm truncate" style={{ color: C.ivory }}>{c.otherUserName}</p>
-                  <span className="text-[10px]" style={{ color: C.muted }}>
+                <div className="flex items-center justify-between gap-2">
+                  <p
+                    className={`text-sm truncate ${c.unread ? "font-bold" : "font-semibold"}`}
+                    style={{ color: C.ivory }}
+                  >
+                    {c.otherUserName}
+                  </p>
+                  <span className="text-[10px] flex-shrink-0" style={{ color: c.unread ? C.gold : C.muted }}>
                     {formatRelativeTime(c.lastMsg?.created_at || c.created_at)}
                   </span>
                 </div>
-                <p className="text-xs truncate mt-0.5" style={{ color: C.muted }}>
-                  {lastMessagePreview(c.lastMsg)}
-                </p>
+                <div className="flex items-center justify-between gap-2 mt-0.5">
+                  <p
+                    className="text-xs truncate"
+                    style={{ color: c.unread ? C.ivory : C.muted, fontWeight: c.unread ? 600 : 400 }}
+                  >
+                    {lastMessagePreview(c.lastMsg, id)}
+                  </p>
+                  {c.unread && (
+                    <span
+                      className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                      style={{ background: C.gold }}
+                      aria-label="Non lu"
+                    />
+                  )}
+                </div>
               </div>
             </button>
           ))}
