@@ -1,11 +1,13 @@
 /**
  * src/features/messaging/components/MessageBubble.jsx
  * Bulle de message : texte, image (agrandissable), vidéo, vocal (lecteur), fichier, supprimé,
- * réponse citée, menu d'actions (répondre / copier / supprimer), envoi en cours / échec + réessayer.
+ * réponse citée, menu d'actions (répondre / copier / transférer / favori / épingler / supprimer),
+ * indicateur de message éphémère, envoi en cours / échec + réessayer.
  */
 import React, { useEffect, useRef, useState } from "react";
-import { Play, Pause, FileText, X, MoreHorizontal, Reply, Copy, Trash2, Star, Pin } from "lucide-react";
-import { CHAT_REACTIONS } from "../lib/chatFeatures.js";
+import {
+  Play, Pause, FileText, X, MoreHorizontal, Reply, Copy, Trash2, Star, Pin, Forward, Timer,
+} from "lucide-react";
 
 /** Texte court décrivant un message (aperçu dans les citations et la barre de réponse) */
 export function messagePreviewText(m) {
@@ -31,6 +33,15 @@ function formatSize(bytes) {
   if (bytes < 1024) return `${bytes} o`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} Ko`;
   return `${(bytes / 1024 / 1024).toFixed(1)} Mo`;
+}
+
+// Temps restant avant expiration d'un message éphémère
+function expiresLabel(iso) {
+  const ms = new Date(iso).getTime() - Date.now();
+  if (!Number.isFinite(ms) || ms <= 0) return "";
+  const h = Math.ceil(ms / 3600000);
+  if (h < 24) return `${h} h`;
+  return `${Math.ceil(h / 24)} j`;
 }
 
 const SPEEDS = [1, 1.5, 2];
@@ -146,25 +157,26 @@ function VoicePlayer({ src, duration, isMe }) {
   );
 }
 
+const PILL = "flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/10 text-[#F5F3EF]";
+
 /**
  * Props :
  *  - message, isMe
  *  - reply : { name, text } | null — contenu cité si message.reply_to_id (null = message d'origine introuvable)
- *  - reactions : [{ emoji, count, mine }], starred, pinned
- *  - onRetry(message), onReply(message), onDelete(message)
- *  - onReact(message, emoji), onToggleStar(message), onTogglePin(message)
+ *  - starred, pinned
+ *  - onRetry(message), onReply(message), onDelete(message), onForward(message)
+ *  - onToggleStar(message), onTogglePin(message)
  */
 export function MessageBubble({
   message,
   isMe,
   reply,
-  reactions = [],
   starred = false,
   pinned = false,
   onRetry,
   onReply,
   onDelete,
-  onReact,
+  onForward,
   onToggleStar,
   onTogglePin,
 }) {
@@ -189,6 +201,7 @@ export function MessageBubble({
   const isTmpId = String(message.id || "").startsWith("tmp-");
   const canAct = !pending && !message.failed && !isDeleted && !isTmpId;
   const canCopy = !isMedia && !isDeleted && !!body;
+  const expiresIn = !isDeleted && message.expires_at ? expiresLabel(message.expires_at) : "";
 
   const copyText = async () => {
     try {
@@ -201,8 +214,8 @@ export function MessageBubble({
     setMenuOpen(false);
   };
 
-  const hasMenu = !!(onReply || onDelete || canCopy || onReact || onToggleStar || onTogglePin);
-  const closeAnd = (fn) => () => {
+  const hasMenu = !!(onReply || onDelete || onForward || canCopy || onToggleStar || onTogglePin);
+  const act = (fn) => () => {
     setMenuOpen(false);
     fn?.(message);
   };
@@ -292,6 +305,11 @@ export function MessageBubble({
           <div className={`text-[10px] mt-1 flex gap-1.5 items-center ${isMe ? "text-white/70 justify-end" : "opacity-50"}`}>
             {pinned && <Pin size={11} aria-label="Épinglé" />}
             {starred && <Star size={11} className="fill-current" aria-label="Favori" />}
+            {expiresIn && (
+              <span className="flex items-center gap-0.5" title="Message éphémère">
+                <Timer size={11} /> {expiresIn}
+              </span>
+            )}
             <span>{time}</span>
             {isMe && !message.failed && (pending ? <span>⏳</span> : <span>{read ? "✓✓" : "✓"}</span>)}
             {message.failed && (
@@ -314,35 +332,36 @@ export function MessageBubble({
         </div>
 
         {(menuOpen || copied) && canAct && (
-          <div className={`flex gap-1 mt-1 text-xs ${isMe ? "justify-end" : "justify-start"}`}>
+          <div className={`flex flex-wrap gap-1 mt-1 text-xs ${isMe ? "justify-end" : "justify-start"}`}>
             {onReply && (
-              <button
-                type="button"
-                onClick={() => {
-                  onReply(message);
-                  setMenuOpen(false);
-                }}
-                className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/10 text-[#F5F3EF]"
-              >
+              <button type="button" onClick={act(onReply)} className={PILL}>
                 <Reply size={12} /> Répondre
               </button>
             )}
             {canCopy && (
-              <button
-                type="button"
-                onClick={copyText}
-                className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/10 text-[#F5F3EF]"
-              >
+              <button type="button" onClick={copyText} className={PILL}>
                 <Copy size={12} /> {copied ? "Copié" : "Copier"}
+              </button>
+            )}
+            {onForward && (
+              <button type="button" onClick={act(onForward)} className={PILL}>
+                <Forward size={12} /> Transférer
+              </button>
+            )}
+            {onToggleStar && (
+              <button type="button" onClick={act(onToggleStar)} className={PILL}>
+                <Star size={12} className={starred ? "fill-current" : ""} /> {starred ? "Retirer favori" : "Favori"}
+              </button>
+            )}
+            {onTogglePin && (
+              <button type="button" onClick={act(onTogglePin)} className={PILL}>
+                <Pin size={12} /> {pinned ? "Désépingler" : "Épingler"}
               </button>
             )}
             {isMe && onDelete && (
               <button
                 type="button"
-                onClick={() => {
-                  setMenuOpen(false);
-                  onDelete(message);
-                }}
+                onClick={act(onDelete)}
                 className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-red-500/20 text-red-300"
               >
                 <Trash2 size={12} /> Supprimer
