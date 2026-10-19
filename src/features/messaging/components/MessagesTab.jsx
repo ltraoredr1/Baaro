@@ -1,32 +1,21 @@
 /**
- * BAARO MessagesTab — version corrigée & redesign premium
- *
- * Corrections :
- * - Performance : dernier message chargé en une seule requête (évite N+1)
- * - Médias / vocaux : insertion + rafraîchissement immédiat via realtime
- * - Avatars réels + badges non-lus
- * - Aperçu des messages chiffrés plus élégant
- * - Recherche contacts assouplie (public_key optionnelle)
- * - Feedback d’envoi, états vides, typing, micro-interactions
- * - Design confiant, performant et attractif (glass, gold/teal, hiérarchie claire)
+ * BAARO MessagesTab — version intégrée avec ChatInput & MessageBubble
  */
 import { useMessaging } from "../hooks/useMessaging.js";
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import {
-  ArrowLeft, Send, MessageCircle, Plus, X, Search, Paperclip, Mic,
-  Phone, Video, Smile, Reply, Star, MoreHorizontal, CheckCheck,
-  Check, Image as ImageIcon, Film, Mic as MicIcon, Lock, Loader2
+  ArrowLeft, MessageCircle, Plus, X, Search,
+  Phone, Video, MoreHorizontal, Loader2
 } from "lucide-react";
 import { COLORS as THEME_COLORS } from "../../../theme.js";
 import { supabase } from "../../../supabaseClient.js";
-import { uploadChatFile, uploadVoiceBlob, mimeToMessageType, formatDuration, getBestAudioMime } from "../../../lib/chatMedia.js";
+import { uploadChatFile, mimeToMessageType } from "../../../lib/chatMedia.js";
 import { createCallRoom, getCallToken, createCallRecord } from "../lib/chatCalls.js";
 import { ChatCallModal } from "./ChatCallModal.jsx";
 import { deserializePayload } from "../lib/crypto.js";
-import {
-  CHAT_REACTIONS, toggleMessageReaction, toggleMessageStar,
-  markMessageRead, updateConversationSettings, makeClientMessageId
-} from "../lib/chatFeatures.js";
+import { makeClientMessageId } from "../lib/chatFeatures.js";
+import { ChatInput } from "./ChatInput.jsx";
+import { MessageBubble } from "./MessageBubble.jsx";
 
 /** auth.users.id (UUID) uniquement */
 function isValidAuthUserId(value) {
@@ -80,7 +69,6 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
   const [activeChat, setActiveChat] = useState(null);
   const messaging = useMessaging(activeChat?.id, id, activeChat?.otherUserId);
   const [messages, setMessages] = useState([]);
-  const [newMessage, setNewMessage] = useState("");
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [showNewChat, setShowNewChat] = useState(false);
@@ -88,28 +76,16 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
   const [searchResults, setSearchResults] = useState([]);
   const [searchLoading, setSearchLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [recording, setRecording] = useState(false);
-  const [recordSeconds, setRecordSeconds] = useState(0);
   const [callState, setCallState] = useState(null);
-  const [replyTo, setReplyTo] = useState(null);
   const [searchInChat, setSearchInChat] = useState("");
   const [showChatTools, setShowChatTools] = useState(false);
   const [typing, setTyping] = useState(false);
-  const [reactionFor, setReactionFor] = useState(null);
-  const [starred, setStarred] = useState(new Set());
-  const [actionsFor, setActionsFor] = useState(null);
   const closeCall = useCallback(() => setCallState(null), []);
 
   const messagesEndRef = useRef(null);
   const profilesCache = useRef({});
-  const fileInputRef = useRef(null);
-  const mediaRecorderRef = useRef(null);
-  const recordChunksRef = useRef([]);
-  const recordTimerRef = useRef(null);
-  const recordSecondsRef = useRef(0);
   const typingChRef = useRef(null);
   const lastTypingSent = useRef(0);
-  const markedRef = useRef(new Set());
   const incomingCallIdsRef = useRef(new Set());
   const listChannelRef = useRef(null);
 
@@ -139,12 +115,11 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
     }
   }, []);
 
-  // ── Conversations (optimisé — plus de N+1) ────────────────────────────────
+  // ── Conversations ────────────────────────────────────────────────────────
   const fetchConversations = useCallback(async () => {
     if (!id) return;
     setLoading(true);
     try {
-      // 1. Conversations de l’utilisateur
       const { data: rows, error } = await supabase
         .from("conversations")
         .select("id, user1_id, user2_id, created_at")
@@ -162,7 +137,6 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
       const otherIds = list.map((c) => (c.user1_id === id ? c.user2_id : c.user1_id));
       await fetchProfiles(otherIds);
 
-      // 2. Derniers messages en une seule requête (batch)
       const convIds = list.map((c) => c.id);
       const { data: lastMsgs } = await supabase
         .from("messages")
@@ -170,7 +144,6 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
         .in("conversation_id", convIds)
         .order("created_at", { ascending: false });
 
-      // Garder uniquement le plus récent par conversation
       const lastByConv = {};
       const unreadCount = {};
       (lastMsgs || []).forEach((m) => {
@@ -213,14 +186,12 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
     if (!id) return;
     fetchConversations();
 
-    // Realtime : nouveau message → rafraîchir la liste
     const ch = supabase
       .channel(`conv-list:${id}`)
       .on(
         "postgres_changes",
         { event: "INSERT", schema: "public", table: "messages" },
         () => {
-          // Debounce léger
           clearTimeout(window.__baaroConvRefresh);
           window.__baaroConvRefresh = setTimeout(fetchConversations, 400);
         }
@@ -235,15 +206,8 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
   // ── Messages du chat actif ────────────────────────────────────────────────
   useEffect(() => {
     setMessages(messaging.messages || []);
-    const incoming = (messaging.messages || []).filter((m) => m.recipient_id === id && !m.read_at);
-    incoming.forEach((m) => {
-      if (markedRef.current.has(m.id)) return;
-      markedRef.current.add(m.id);
-      markMessageRead(m.id);
-    });
-  }, [messaging.messages, id]);
+  }, [messaging.messages]);
 
-  // Typing indicator
   useEffect(() => {
     if (!activeChat?.id) return;
     const channel = supabase
@@ -401,69 +365,30 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
     }
   };
 
-  // Deep-link baaro:open_chat_with
-  useEffect(() => {
-    if (!id) return;
-    let target = null;
-    try {
-      target = sessionStorage.getItem("baaro:open_chat_with");
-      sessionStorage.removeItem("baaro:open_chat_with");
-    } catch {}
-    if (!target || !isValidAuthUserId(target)) return;
-    (async () => {
-      await fetchProfiles([target]);
-      const pr = profilesCache.current[target] || {};
-      openConversation(target, pr.display_name || "Membre", pr.avatar_url, pr.flag || "🌍");
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
-
-  // ── Envoi texte ───────────────────────────────────────────────────────────
-  const handleSend = async (e) => {
-    e.preventDefault();
-    if (!newMessage.trim() || !activeChat || !id || sending) return;
-    const text = newMessage.trim();
+  // ── Envoi texte & médias via ChatInput ────────────────────────────────────
+  const handleSendText = async (text) => {
+    if (!text || !activeChat || !id || sending) return;
     if (!isValidAuthUserId(id) || !isValidAuthUserId(activeChat.otherUserId)) {
       alert("Conversation invalide");
       return;
     }
     setSending(true);
-    setNewMessage("");
     const result = await messaging.sendMessage(text, {
-      replyToId: replyTo?.id || null,
       clientMessageId: makeClientMessageId(),
     });
     setSending(false);
     if (!result?.ok) {
-      setNewMessage(text);
       alert(result?.error || "Impossible d'envoyer le message");
-      return;
     }
-    setReplyTo(null);
-    broadcastTyping(false);
   };
 
-  const broadcastTyping = (value) => {
-    const now = Date.now();
-    if (!typingChRef.current || now - lastTypingSent.current < 1500) return;
-    lastTypingSent.current = now;
-    typingChRef.current.send({
-      type: "broadcast",
-      event: "typing",
-      payload: { user_id: id, typing: value },
-    });
-  };
-
-  // ── Médias ────────────────────────────────────────────────────────────────
-  const handleFileSelect = async (e) => {
-    const file = e.target.files?.[0];
+  const handleSendMedia = async (file) => {
     if (!file || !activeChat) return;
-    if (e.target) e.target.value = "";
     setUploading(true);
     try {
       const up = await uploadChatFile(file, id);
       if (!isValidAuthUserId(id) || !isValidAuthUserId(activeChat.otherUserId)) return;
-      const { error: insErr } = await supabase.from("messages").insert({
+      await supabase.from("messages").insert({
         conversation_id: activeChat.id,
         sender_id: id,
         recipient_id: activeChat.otherUserId,
@@ -475,109 +400,11 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
         file_name: up.fileName,
         client_message_id: makeClientMessageId(),
       });
-      if (insErr) throw insErr;
-      // Le realtime du hook useMessaging ajoutera le message
     } catch (err) {
       alert(err.message || "Échec de l’envoi du fichier");
     } finally {
       setUploading(false);
     }
-  };
-
-  const handleReaction = async (messageId, reaction) => {
-    try {
-      await toggleMessageReaction(messageId, id, reaction);
-      setReactionFor(null);
-    } catch (e) {
-      alert(e.message);
-    }
-  };
-
-  const handleStar = async (messageId) => {
-    try {
-      const on = await toggleMessageStar(messageId, id);
-      setStarred((prev) => {
-        const n = new Set(prev);
-        on ? n.add(messageId) : n.delete(messageId);
-        return n;
-      });
-    } catch (e) {
-      alert(e.message);
-    }
-  };
-
-  const setDisappearing = async (seconds) => {
-    if (!activeChat?.id) return;
-    try {
-      await updateConversationSettings(activeChat.id, { disappearing_seconds: seconds });
-      setShowChatTools(false);
-    } catch (e) {
-      alert(e.message);
-    }
-  };
-
-  // ── Vocaux ────────────────────────────────────────────────────────────────
-  const startRecording = async () => {
-    if (mediaRecorderRef.current) return;
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mime = getBestAudioMime();
-      const rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
-      recordChunksRef.current = [];
-      recordSecondsRef.current = 0;
-      rec.ondataavailable = (ev) => {
-        if (ev.data.size > 0) recordChunksRef.current.push(ev.data);
-      };
-      rec.onstop = async () => {
-        stream.getTracks().forEach((t) => t.stop());
-        clearInterval(recordTimerRef.current);
-        mediaRecorderRef.current = null;
-        const seconds = recordSecondsRef.current;
-        const blob = new Blob(recordChunksRef.current, { type: rec.mimeType || mime });
-        if (blob.size < 500 || seconds < 1) {
-          setRecording(false);
-          setRecordSeconds(0);
-          return;
-        }
-        setUploading(true);
-        try {
-          const up = await uploadVoiceBlob(blob, id, seconds);
-          const { error } = await supabase.from("messages").insert({
-            conversation_id: activeChat.id,
-            sender_id: id,
-            recipient_id: activeChat.otherUserId,
-            text: "Vocal",
-            type: "voice",
-            media_url: up.url,
-            media_mime: up.mime,
-            media_size: up.size,
-            media_duration: up.duration,
-            client_message_id: makeClientMessageId(),
-          });
-          if (error) throw error;
-        } catch (err) {
-          alert(err.message);
-        } finally {
-          setUploading(false);
-          setRecording(false);
-          setRecordSeconds(0);
-        }
-      };
-      mediaRecorderRef.current = rec;
-      rec.start();
-      setRecording(true);
-      recordTimerRef.current = setInterval(() => {
-        recordSecondsRef.current += 1;
-        setRecordSeconds(recordSecondsRef.current);
-      }, 1000);
-    } catch {
-      alert("Micro non autorisé");
-    }
-  };
-
-  const stopRecording = () => {
-    const r = mediaRecorderRef.current;
-    if (r && r.state !== "inactive") r.stop();
   };
 
   // ── Appels sortants ───────────────────────────────────────────────────────
@@ -625,7 +452,6 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
     }
     setSearchLoading(true);
     const t = setTimeout(async () => {
-      // On n’exige plus public_key pour pouvoir démarrer une conversation
       const { data } = await supabase
         .from("profiles")
         .select("id, display_name, avatar_url, flag, handle, public_key")
@@ -638,7 +464,6 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
     return () => clearTimeout(t);
   }, [searchQuery, showNewChat, id]);
 
-  // ── Avatar helper ─────────────────────────────────────────────────────────
   const Avatar = ({ src, flag, name, size = 44 }) => (
     <div
       className="relative flex-shrink-0 rounded-full overflow-hidden ring-2 ring-white/10"
@@ -752,14 +577,6 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
                     </p>
                   )}
                 </div>
-                {!u.public_key && (
-                  <span
-                    className="text-[10px] px-2 py-0.5 rounded-full"
-                    style={{ background: "rgba(217,174,82,0.15)", color: C.gold }}
-                  >
-                    Clé en attente
-                  </span>
-                )}
               </button>
             ))}
           </div>
@@ -871,65 +688,8 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
             </div>
           </div>
 
-          {/* Outils conversation */}
-          {showChatTools && (
-            <div
-              className="mx-3 mt-2 p-3 rounded-2xl border grid grid-cols-2 gap-2 text-xs animate-in fade-in"
-              style={{ background: C.surface, borderColor: C.border, color: C.ivory }}
-            >
-              <button
-                type="button"
-                onClick={() => setDisappearing(86400)}
-                className="p-2.5 rounded-xl border transition hover:bg-white/5"
-                style={{ borderColor: C.border }}
-              >
-                ⏳ 24 h
-              </button>
-              <button
-                type="button"
-                onClick={() => setDisappearing(604800)}
-                className="p-2.5 rounded-xl border transition hover:bg-white/5"
-                style={{ borderColor: C.border }}
-              >
-                ⏳ 7 jours
-              </button>
-              <button
-                type="button"
-                onClick={() => setDisappearing(0)}
-                className="p-2.5 rounded-xl border transition hover:bg-white/5"
-                style={{ borderColor: C.border }}
-              >
-                ♾️ Conserver
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setSearchInChat(" ");
-                  setShowChatTools(false);
-                }}
-                className="p-2.5 rounded-xl border transition hover:bg-white/5"
-                style={{ borderColor: C.border }}
-              >
-                🔎 Rechercher
-              </button>
-            </div>
-          )}
-
           {/* Messages */}
-          <div className="flex-1 overflow-y-auto px-3 py-4 space-y-1.5 scroll-smooth">
-            {searchInChat !== "" && (
-              <div className="sticky top-0 z-10 mb-3">
-                <input
-                  autoFocus
-                  value={searchInChat}
-                  onChange={(e) => setSearchInChat(e.target.value)}
-                  placeholder="Rechercher dans la conversation…"
-                  className="w-full px-4 py-2.5 rounded-xl border text-sm outline-none"
-                  style={{ background: C.surface, borderColor: C.borderGold, color: C.ivory }}
-                />
-              </div>
-            )}
-
+          <div className="flex-1 overflow-y-auto px-3 py-4 space-y-1 scroll-smooth">
             {messaging.loading && messages.length === 0 && (
               <div className="flex justify-center py-16" style={{ color: C.muted }}>
                 <Loader2 size={24} className="animate-spin" />
@@ -938,243 +698,31 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
 
             {filtered.map((m) => {
               const isMe = m.sender_id === id;
-              const body = m.plaintext ?? m.text;
-              const isEncrypted = m.encrypted && !m.decryptFailed;
-
               return (
-                <div key={m.id} className={`flex ${isMe ? "justify-end" : "justify-start"}`}>
-                  <div className="group relative max-w-[80%]">
-                    {m.reply_to_id && (
-                      <div
-                        className="text-[11px] px-2.5 py-1 mb-1 rounded-lg opacity-70"
-                        style={{ background: C.surface2, color: C.muted }}
-                      >
-                        ↩ Réponse
-                      </div>
-                    )}
-                    <div
-                      onClick={() => setActionsFor(actionsFor === m.id ? null : m.id)}
-                      className="px-3.5 py-2.5 rounded-2xl text-sm leading-relaxed shadow-sm"
-                      style={{
-                        background: isMe
-                          ? `linear-gradient(135deg, ${C.gold} 0%, #C49A3C 100%)`
-                          : C.surface2,
-                        color: isMe ? "#0B1220" : C.ivory,
-                        borderBottomRightRadius: isMe ? 6 : 18,
-                        borderBottomLeftRadius: isMe ? 18 : 6,
-                      }}
-                    >
-                      {m.type === "image" && m.media_url && (
-                        <img
-                          src={m.media_url}
-                          alt={m.file_name || "image"}
-                          className="rounded-xl max-h-72 max-w-full object-cover mb-1.5"
-                          loading="lazy"
-                        />
-                      )}
-                      {m.type === "video" && m.media_url && (
-                        <video
-                          src={m.media_url}
-                          controls
-                          className="rounded-xl max-h-72 max-w-full mb-1.5"
-                          preload="metadata"
-                        />
-                      )}
-                      {m.type === "voice" && m.media_url && (
-                        <audio src={m.media_url} controls className="max-w-full mb-1" />
-                      )}
-                      {m.type !== "image" && m.type !== "video" && m.type !== "voice" && (
-                        <p className="break-words whitespace-pre-wrap">{body}</p>
-                      )}
-                      {(m.type === "image" || m.type === "video") && body && body !== m.file_name && (
-                        <p className="break-words mt-1 text-xs opacity-80">{body}</p>
-                      )}
-
-                      <div
-                        className="flex items-center justify-end gap-1 mt-1 opacity-70 text-[10px]"
-                        style={{ color: isMe ? "rgba(0,0,0,0.55)" : C.muted }}
-                      >
-                        {isEncrypted && <Lock size={10} />}
-                        <span>{formatRelativeTime(m.created_at)}</span>
-                        {isMe &&
-                          (m.read_at ? (
-                            <CheckCheck size={12} style={{ color: C.teal }} />
-                          ) : (
-                            <Check size={12} />
-                          ))}
-                      </div>
-                    </div>
-
-                    {/* Actions rapides */}
-                    <div
-                      className={`${
-                        actionsFor === m.id ? "flex" : "hidden group-hover:flex"
-                      } absolute -top-9 ${isMe ? "right-0" : "left-0"} gap-0.5 rounded-xl p-1 z-20 shadow-lg`}
-                      style={{ background: C.surface, border: `1px solid ${C.border}` }}
-                    >
-                      <button
-                        type="button"
-                        onClick={() => setReactionFor(reactionFor === m.id ? null : m.id)}
-                        className="p-1.5 rounded-lg hover:bg-white/10"
-                        title="Réagir"
-                      >
-                        <Smile size={14} style={{ color: C.muted }} />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setReplyTo(m)}
-                        className="p-1.5 rounded-lg hover:bg-white/10"
-                        title="Répondre"
-                      >
-                        <Reply size={14} style={{ color: C.muted }} />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleStar(m.id)}
-                        className="p-1.5 rounded-lg hover:bg-white/10"
-                        title="Favori"
-                      >
-                        <Star
-                          size={14}
-                          fill={starred.has(m.id) ? C.gold : "none"}
-                          style={{ color: starred.has(m.id) ? C.gold : C.muted }}
-                        />
-                      </button>
-                    </div>
-
-                    {reactionFor === m.id && (
-                      <div
-                        className={`absolute -top-16 ${isMe ? "right-0" : "left-0"} flex gap-1 p-2 rounded-2xl z-20 shadow-xl`}
-                        style={{ background: C.surface, border: `1px solid ${C.border}` }}
-                      >
-                        {CHAT_REACTIONS.map((r) => (
-                          <button
-                            key={r}
-                            type="button"
-                            onClick={() => handleReaction(m.id, r)}
-                            className="text-lg hover:scale-125 transition-transform"
-                          >
-                            {r}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
+                <MessageBubble
+                  key={m.id}
+                  message={m}
+                  isMe={isMe}
+                  onRetry={() => handleSendText(m.plaintext || m.text)}
+                />
               );
             })}
 
             {typing && (
               <div className="flex items-center gap-2 px-2 py-1">
-                <div className="flex gap-1">
-                  <span
-                    className="w-1.5 h-1.5 rounded-full animate-bounce"
-                    style={{ background: C.teal, animationDelay: "0ms" }}
-                  />
-                  <span
-                    className="w-1.5 h-1.5 rounded-full animate-bounce"
-                    style={{ background: C.teal, animationDelay: "150ms" }}
-                  />
-                  <span
-                    className="w-1.5 h-1.5 rounded-full animate-bounce"
-                    style={{ background: C.teal, animationDelay: "300ms" }}
-                  />
-                </div>
-                <span className="text-xs" style={{ color: C.muted }}>
-                  écrit…
-                </span>
+                <span className="text-xs italic" style={{ color: C.muted }}>écrit…</span>
               </div>
             )}
             <div ref={messagesEndRef} />
           </div>
 
-          {/* Composer */}
-          <form
-            onSubmit={handleSend}
-            className="px-3 pt-2 border-t flex flex-col gap-2"
-            style={{
-              borderColor: C.border,
-              background: C.bg,
-              paddingBottom: "calc(5.5rem + env(safe-area-inset-top))",
-            }}
-          >
-            {replyTo && (
-              <div
-                className="flex items-center gap-2 text-xs px-3 py-2 rounded-xl"
-                style={{ background: C.surface2, color: C.muted }}
-              >
-                <Reply size={12} />
-                <span className="flex-1 truncate">
-                  {replyTo.plaintext || replyTo.text || "Message"}
-                </span>
-                <button type="button" onClick={() => setReplyTo(null)} className="p-1">
-                  <X size={12} />
-                </button>
-              </div>
-            )}
-
-            {recording && (
-              <div
-                className="flex items-center justify-center gap-3 py-2 text-sm font-medium"
-                style={{ color: "#EF4444" }}
-              >
-                <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse" />
-                Enregistrement {formatDuration ? formatDuration(recordSeconds) : `${recordSeconds}s`}
-              </div>
-            )}
-
-            <div className="flex items-center gap-1.5">
-              <input ref={fileInputRef} type="file" className="hidden" onChange={handleFileSelect} />
-              <button
-                type="button"
-                disabled={uploading}
-                onClick={() => fileInputRef.current?.click()}
-                className="p-2.5 rounded-xl border transition hover:bg-white/5 disabled:opacity-40"
-                style={{ borderColor: C.border, color: C.muted }}
-              >
-                {uploading ? <Loader2 size={18} className="animate-spin" /> : <Paperclip size={18} />}
-              </button>
-              <button
-                type="button"
-                onClick={recording ? stopRecording : startRecording}
-                className="p-2.5 rounded-xl border transition hover:bg-white/5"
-                style={{
-                  borderColor: recording ? "#EF4444" : C.border,
-                  color: recording ? "#EF4444" : C.muted,
-                }}
-              >
-                <Mic size={18} />
-              </button>
-              <input
-                value={newMessage}
-                onChange={(e) => {
-                  setNewMessage(e.target.value);
-                  broadcastTyping(true);
-                }}
-                onBlur={() => broadcastTyping(false)}
-                placeholder="Écrire un message…"
-                className="flex-1 px-4 py-3 rounded-2xl border text-sm outline-none transition focus:ring-1"
-                style={{
-                  background: C.surface2,
-                  borderColor: C.border,
-                  color: C.ivory,
-                }}
-                disabled={sending}
-              />
-              <button
-                type="submit"
-                disabled={!newMessage.trim() || sending}
-                className="p-3 rounded-2xl transition active:scale-95 disabled:opacity-40"
-                style={{
-                  background: `linear-gradient(135deg, ${C.gold}, #C49A3C)`,
-                  color: "#0B1220",
-                  boxShadow: "0 4px 14px rgba(217,174,82,0.35)",
-                }}
-              >
-                {sending ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}
-              </button>
-            </div>
-          </form>
+          {/* Saisie avec ChatInput branché */}
+          <ChatInput
+            disabled={sending || uploading}
+            placeholder="Écrire un message…"
+            onSend={handleSendText}
+            onSendMedia={handleSendMedia}
+          />
         </div>
       </>
     );
@@ -1198,7 +746,6 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
         className="max-w-2xl mx-auto w-full px-4 pt-4"
         style={{ paddingBottom: "calc(6.5rem + env(safe-area-inset-bottom))" }}
       >
-        {/* Header liste */}
         <div className="flex items-center justify-between mb-6">
           <div>
             <h2
@@ -1231,7 +778,6 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
           </button>
         </div>
 
-        {/* Liste */}
         {loading ? (
           <div className="flex flex-col items-center justify-center py-20 gap-3" style={{ color: C.muted }}>
             <Loader2 size={28} className="animate-spin" style={{ color: C.gold }} />
