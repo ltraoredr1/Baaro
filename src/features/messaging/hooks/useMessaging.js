@@ -7,6 +7,7 @@
  * - Réponse à un message (reply_to_id), suppression (deleted_at), indicateur "écrit…" (broadcast, sans table)
  * - Filtrage expires_at côté client
  * - Médias : pas de gros fichiers dans Supabase, media_url pointe vers R2
+ * - addMessage(row) : ajoute tout de suite à l'écran un message média/vocal déjà inséré en base
  */
 import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "../../../supabaseClient.js";
@@ -413,6 +414,23 @@ export function useMessaging(conversation_id, current_user_id, recipient_id) {
     ]
   );
 
+  // Ajoute immédiatement à l'écran un message média/vocal déjà inséré en base
+  // (sans attendre le temps réel, qui ne renvoie pas toujours à l'expéditeur)
+  const addMessage = useCallback((row) => {
+    if (!row) return;
+    setMessages((prev) =>
+      mergeMessages(prev, [
+        {
+          ...row,
+          plaintext: row.text || row.file_name || "",
+          encrypted: false,
+          pending: false,
+          failed: false,
+        },
+      ])
+    );
+  }, []);
+
   // Suppression "pour tous" de MES messages (marque deleted_at ; le contenu n'est plus affiché)
   const deleteMessage = useCallback(
     async (messageId) => {
@@ -439,6 +457,7 @@ export function useMessaging(conversation_id, current_user_id, recipient_id) {
     // Plus de spinner infini si les clés échouent : l'erreur est exposée via keysError
     loading: loading || (!keysReady && !keysError),
     sendMessage,
+    addMessage,
     deleteMessage,
     loadOlder,
     hasMore,
