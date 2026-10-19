@@ -131,6 +131,7 @@ async function attachActorProfiles(notifications) {
       ...item,
       actor,
       message: messageForNotification(item, actor),
+      actorName: actorLabel(actor),
     };
   });
 }
@@ -154,9 +155,7 @@ export function NotificationDrawer({ user_id, isOpen, onClose }) {
     try {
       const { data, error: fetchError } = await supabase
         .from("notifications")
-        .select(
-          "notification_id,user_id,type,message,source_id,actor_id,read,read_at,created_at",
-        )
+        .select("*")
         .eq("user_id", user_id)
         .order("created_at", { ascending: false })
         .limit(30);
@@ -471,6 +470,18 @@ export function NotificationDrawer({ user_id, isOpen, onClose }) {
                       />
                     </div>
 
+                    {notification.actor && (
+                      <img
+                        src={
+                          notification.actor.avatar_url ||
+                          `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(notification.actorName || "A")}`
+                        }
+                        alt=""
+                        className="h-10 w-10 shrink-0 rounded-full object-cover"
+                        style={{ border: `1px solid ${COLORS.border}` }}
+                      />
+                    )}
+
                     <button
                       type="button"
                       onClick={() =>
@@ -480,14 +491,37 @@ export function NotificationDrawer({ user_id, isOpen, onClose }) {
                       className="min-w-0 flex-1 text-left"
                     >
                       <div
-                        className="text-sm"
+                        className="text-sm leading-snug"
                         style={{
                           color: COLORS.ivory,
                           fontWeight: unread ? 600 : 400,
                         }}
                       >
-                        {notification.message || "Nouvelle notification"}
+                        {notification.actorName &&
+                        notification.message?.startsWith(notification.actorName) ? (
+                          <>
+                            <span style={{ color: COLORS.gold, fontWeight: 700 }}>
+                              {notification.actorName}
+                            </span>
+                            {notification.message.slice(notification.actorName.length)}
+                          </>
+                        ) : (
+                          notification.message || "Nouvelle notification"
+                        )}
                       </div>
+
+                      {notification.preview && (
+                        <div
+                          className="mt-1 line-clamp-2 rounded-md px-2 py-1 text-xs"
+                          style={{
+                            color: COLORS.muted,
+                            background: "rgba(255,255,255,0.04)",
+                            borderLeft: `2px solid ${COLORS.gold}`,
+                          }}
+                        >
+                          « {notification.preview} »
+                        </div>
+                      )}
 
                       <div
                         className="mt-1 text-xs"
