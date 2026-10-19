@@ -1,5 +1,5 @@
 /**
- * BAARO MessagesTab — Version refactorisée & branchée sur messageService, ChatInput & MessageBubble
+ * BAARO MessagesTab — Version corrigée complète
  */
 import { useMessaging } from "../hooks/useMessaging.js";
 import { useState, useEffect, useRef, useCallback } from "react";
@@ -81,8 +81,6 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
   const closeCall = useCallback(() => setCallState(null), []);
 
   const messagesEndRef = useRef(null);
-  const profilesCache = useRef({});
-  const typingChRef = useRef(null);
   const listChannelRef = useRef(null);
 
   // ── Auth ──────────────────────────────────────────────────────────────────
@@ -103,7 +101,6 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
     try {
       const rawConversations = await messageService.getConversations(id);
 
-      // Normalisation des conversations reçues du service
       const enriched = (rawConversations || []).map((c) => {
         const otherParticipant = c.participants?.find((p) => p.user_id !== id) || {};
         const profile = otherParticipant.profiles || {};
@@ -161,6 +158,59 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
       messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
     }
   }, [messages, typing]);
+
+  // ── Ouvrir ou créer une conversation ──────────────────────────────────────
+  const openConversation = async (otherId, name, avatar, flag) => {
+    if (!id || !otherId || otherId === id) return;
+    try {
+      const { data: existing } = await supabase
+        .from("conversations")
+        .select("id")
+        .or(
+          `and(user1_id.eq.${id},user2_id.eq.${otherId}),and(user1_id.eq.${otherId},user2_id.eq.${id})`
+        )
+        .limit(1);
+
+      if (existing?.[0]) {
+        setActiveChat({
+          id: existing[0].id,
+          otherUserId: otherId,
+          otherUserName: name,
+          otherUserAvatar: avatar,
+          otherUserFlag: flag,
+        });
+        setShowNewChat(false);
+        return;
+      }
+
+      const u1 = id < otherId ? id : otherId;
+      const u2 = id < otherId ? otherId : id;
+      const { data: nw, error } = await supabase
+        .from("conversations")
+        .insert({ user1_id: u1, user2_id: u2 })
+        .select("id")
+        .single();
+
+      if (error) {
+        alert(error.message || "Impossible de créer la conversation");
+        return;
+      }
+
+      if (nw) {
+        setActiveChat({
+          id: nw.id,
+          otherUserId: otherId,
+          otherUserName: name,
+          otherUserAvatar: avatar,
+          otherUserFlag: flag,
+        });
+        setShowNewChat(false);
+        fetchConversations();
+      }
+    } catch (e) {
+      console.error("openConversation error:", e);
+    }
+  };
 
   // ── Envoi texte & médias via ChatInput ────────────────────────────────────
   const handleSendText = async (text) => {
@@ -313,16 +363,7 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
           {searchResults.map((u) => (
             <button
               key={u.id}
-              onClick={() => {
-                setActiveChat({
-                  id: null,
-                  otherUserId: u.id,
-                  otherUserName: u.display_name,
-                  otherUserAvatar: u.avatar_url,
-                  otherUserFlag: u.flag,
-                });
-                setShowNewChat(false);
-              }}
+              onClick={() => openConversation(u.id, u.display_name, u.avatar_url, u.flag)}
               className="w-full p-3.5 rounded-2xl border flex items-center gap-3.5 text-left"
               style={{ background: C.surface, borderColor: C.border }}
             >
