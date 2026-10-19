@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 import { COLORS as THEME_COLORS } from "../../../theme.js";
 import { supabase } from "../../../supabaseClient.js";
-import { uploadChatFile, uploadVoiceBlob, mimeToMessageType, formatDuration, getBestAudioMime } from "../lib/chatMedia.js";
+import { uploadChatFile, uploadVoiceBlob, mimeToMessageType, formatDuration, getBestAudioMime } from "../../../lib/chatMedia.js";
 import { createCallRoom, getCallToken, createCallRecord } from "../lib/chatCalls.js";
 import { ChatCallModal } from "./ChatCallModal.jsx";
 import { deserializePayload } from "../lib/crypto.js";
