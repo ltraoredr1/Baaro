@@ -10,7 +10,9 @@ export { ChatCallModal } from "./components/ChatCallModal.jsx";
 // Hooks existants
 export { useMessaging } from "./hooks/useMessaging.js";
 export { useCryptoKeys } from "./hooks/useCryptoKeys.js";
+export { useConversations } from "./hooks/useConversations.js";
+export { useMessageExtras } from "./hooks/useMessageExtras.js";
 
 // Libs - vérifie que ces fichiers existent, sinon commente la ligne
 export * from "./lib/crypto.js";
-// export * from "./lib/chatCalls.js"; // Commenté car le fichier n'existe pas
+// export * from "./lib/chatcalls.js"; // Commenté car le fichier n'existe pas
