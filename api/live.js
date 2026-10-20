@@ -1,10 +1,10 @@
 /**
- * /api/live.js - V5.2 - FIX APPELS 1-1 + PASSERELLE IA RENFORCÉE
+ * /api/live.js - V5.3 - FIX APPELS 1-1 + PASSERELLE IA OPTIMISÉE (GROQ EN PREMIER)
  * - Fix 404 Live introuvable: insert calls côté serveur (service_role bypass RLS)
  * - Bypass total pour call-xxx même sans DB
  * - Passerelle Chat/Assistant IA (/api/chat) :
  *     • prompt système BAARO côté serveur (non écrasable par le client)
- *     • cascade de secours entre fournisseurs (gemini -> groq -> mistral)
+ *     • cascade de secours optimisée (groq -> mistral -> gemini) pour la vitesse
  *     • modèle choisi par le serveur uniquement
  *     • rate limit corrigé (clé "chat" dédiée)
  */
@@ -90,10 +90,9 @@ async function createMeetingToken(roomName, { userId, userName, isOwner }) {
 }
 
 // ============== AI CONFIG ==============
-// Ordre de secours : on passe au suivant si le précédent est en panne,
-// saturé (429) ou trop lent. Un fournisseur sans clé est ignoré.
-const AI_PROVIDER_CASCADE = ["gemini", "gemini-fallback", "groq", "mistral"];
-const AI_PROVIDER_TIMEOUT_MS = 15000;
+// Ordre de secours optimisé : Groq en premier pour une ultra-rapidité, puis Mistral et Gemini.
+const AI_PROVIDER_CASCADE = ["groq", "mistral", "gemini", "gemini-fallback"];
+const AI_PROVIDER_TIMEOUT_MS = 12000;
 const AI_ALLOWED_MODES = new Set(["chat", "cohost"]);
 const AI_MAX_REPLY_CHARS = 6000;
 
@@ -166,9 +165,13 @@ function withTimeout(promise, ms, label) {
 function resolveProvider(name) {
   let cfg = null;
   try { cfg = providerConfig(name); } catch { cfg = null; }
-  const key = cfg?.key || (name === "gemini" ? process.env.GEMINI_API_KEY : undefined);
+  const key = cfg?.key || (name === "gemini" ? process.env.GEMINI_API_KEY : name === "groq" ? process.env.GROQ_API_KEY : name === "mistral" ? process.env.MISTRAL_API_KEY : undefined);
   if (!key) return null;
-  const model = cfg?.model || (name === "gemini" ? process.env.GEMINI_MODEL || "gemini-3.8-flash" : undefined);
+  const model = cfg?.model || (
+    name === "gemini" ? process.env.GEMINI_MODEL || "gemini-3.8-flash" :
+    name === "groq" ? process.env.GROQ_MODELS?.split(",")[0] || "llama-3.3-70b-versatile" :
+    name === "mistral" ? process.env.MISTRAL_MODEL || "mistral-small-latest" : undefined
+  );
   return { ...(cfg || {}), key, model };
 }
 
