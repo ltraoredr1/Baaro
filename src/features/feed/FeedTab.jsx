@@ -8,12 +8,13 @@ import {
   Sparkles,
   Pencil,
   Flag,
-  Heart,
   MessageCircle,
   Eye,
   Repeat2,
   ChevronDown,
   ChevronUp,
+  Mic,
+  Square,
 } from "lucide-react";
 
 // Imports via l'alias absolu (@/ -> src/)
@@ -81,7 +82,7 @@ function formatPost(post) {
     media_url: post.media_url,
     media_type: post.media_type,
     created_at: post.created_at,
-    likes: post.likes_count || 0,
+    likes: post.likes_count || 0, // Conservé pour compatibilité éventuelle, mais retiré de l'UI
     reposts_count: post.reposts_count || 0,
     comments_count: post.comments_count || 0,
     views_count: post.views_count || 0,
@@ -117,6 +118,13 @@ export function FeedTab({
   const [mediaPreview, setMediaPreview] = useState(null);
   const [textToolsOpen, setTextToolsOpen] = useState(false);
 
+  // Post Vocal
+  const [isRecording, setIsRecording] = useState(false);
+  const [audioBlob, setAudioBlob] = useState(null);
+  const [audioPreviewUrl, setAudioPreviewUrl] = useState(null);
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
+
   // Session & modales
   const [currentUserId, setCurrentUserId] = useState(propUserId);
   const [menuOpenId, setMenuOpenId] = useState(null);
@@ -129,8 +137,7 @@ export function FeedTab({
   const [reportPost, setReportPost] = useState(null);
   const [reportReason, setReportReason] = useState(REPORT_REASONS[0]);
 
-  // J'aime, Reposts, commentaires, traduction
-  const [likedPosts, setLikedPosts] = useState({});
+  // Reposts, commentaires, traduction (Likes supprimés)
   const [repostedPosts, setRepostedPosts] = useState({});
   const [commentOpen, setCommentOpen] = useState({});
   const [commentsMap, setCommentsMap] = useState({});
@@ -162,12 +169,23 @@ export function FeedTab({
     };
   }, []);
 
-  // Libération de l'URL d'aperçu média
+  // Libération des URLs d'aperçu (média et audio)
   useEffect(() => {
     return () => {
       if (mediaPreview) URL.revokeObjectURL(mediaPreview);
+      if (audioPreviewUrl) URL.revokeObjectURL(audioPreviewUrl);
     };
-  }, [mediaPreview]);
+  }, [mediaPreview, audioPreviewUrl]);
+
+  // Nettoyage de l'enregistrement si la modale est fermée
+  useEffect(() => {
+    if (!isCreateOpen) {
+      if (audioPreviewUrl) URL.revokeObjectURL(audioPreviewUrl);
+      setAudioBlob(null);
+      setAudioPreviewUrl(null);
+      setIsRecording(false);
+    }
+  }, [isCreateOpen, audioPreviewUrl]);
 
   // Fermer le menu "..." en touchant ailleurs
   useEffect(() => {
@@ -179,7 +197,7 @@ export function FeedTab({
     return () => document.removeEventListener("pointerdown", close);
   }, [menuOpenId]);
 
-  // Chargement des likes et des reposts de l'utilisateur
+  // Chargement des reposts de l'utilisateur (Likes supprimés)
   const postIdsKey = posts.map((p) => p.id).join(",");
   useEffect(() => {
     if (!activeUserId || !postIdsKey) return;
@@ -187,14 +205,14 @@ export function FeedTab({
 
     (async () => {
       const postIds = postIdsKey.split(",");
-      const [{ data: likes }, { data: reposts }] = await Promise.all([
-        supabase.from("post_likes").select("post_id").eq("user_id", activeUserId).in("post_id", postIds),
-        supabase.from("post_reposts").select("post_id").eq("user_id", activeUserId).in("post_id", postIds),
-      ]);
+      const { data: reposts } = await supabase
+        .from("post_reposts")
+        .select("post_id")
+        .eq("user_id", activeUserId)
+        .in("post_id", postIds);
 
-      if (!cancelled) {
-        if (likes) setLikedPosts(Object.fromEntries(likes.map((l) => [l.post_id, true])));
-        if (reposts) setRepostedPosts(Object.fromEntries(reposts.map((r) => [r.post_id, true])));
+      if (!cancelled && reposts) {
+        setRepostedPosts(Object.fromEntries(reposts.map((r) => [r.post_id, true])));
       }
     })();
 
@@ -366,52 +384,6 @@ export function FeedTab({
     }
   };
 
-  // Action Like
-  const handleLike = async (postId) => {
-    if (!activeUserId) {
-      showToast("Vous devez être connecté", "error");
-      return;
-    }
-    const limit = checkRateLimit("like", { max: 30, windowMs: 60_000 });
-    if (!limit.allowed) {
-      showToast(rateLimitMessage(limit.retryAfterSec), "error");
-      return;
-    }
-
-    const wasLiked = !!likedPosts[postId];
-    const delta = wasLiked ? -1 : 1;
-    setLikedPosts((prev) => ({ ...prev, [postId]: !wasLiked }));
-    setPosts((prev) =>
-      prev.map((p) =>
-        p.id === postId ? { ...p, likes: Math.max(0, (p.likes || 0) + delta) } : p
-      )
-    );
-
-    try {
-      const result = await runOrEnqueue(
-        wasLiked ? "unlike_post" : "like_post",
-        { post_id: postId }
-      );
-      if (result?.offline) {
-        showToast("J'aime enregistré — sync au retour du réseau", "info");
-        return;
-      }
-      if (!wasLiked) {
-        onRewardPoints?.("like_post", "J'aime distribué", postId);
-        showPointsReward?.(2, "J'aime distribué");
-      }
-      void recordFeedEvent(postId, "like");
-    } catch (error) {
-      setLikedPosts((prev) => ({ ...prev, [postId]: wasLiked }));
-      setPosts((prev) =>
-        prev.map((p) =>
-          p.id === postId ? { ...p, likes: Math.max(0, (p.likes || 0) - delta) } : p
-        )
-      );
-      handleDbError(error, showToast, "Impossible d'aimer");
-    }
-  };
-
   // Gestion des commentaires
   const loadComments = async (postId) => {
     if (!postId) return;
@@ -514,12 +486,56 @@ export function FeedTab({
     setMediaPreview(URL.createObjectURL(file));
   };
 
+  // --- Fonctions Post Vocal ---
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaRecorderRef.current = new MediaRecorder(stream);
+      audioChunksRef.current = [];
+
+      mediaRecorderRef.current.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorderRef.current.onstop = () => {
+        const blob = new Blob(audioChunksRef.current, { type: "audio/webm" });
+        setAudioBlob(blob);
+        setAudioPreviewUrl(URL.createObjectURL(blob));
+        stream.getTracks().forEach((track) => track.stop());
+      };
+
+      mediaRecorderRef.current.start();
+      setIsRecording(true);
+    } catch (err) {
+      showToast("Impossible d'accéder au microphone. Vérifiez les permissions.", "error");
+      console.error("Erreur d'enregistrement audio:", err);
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+    }
+  };
+
+  const discardRecording = () => {
+    if (audioPreviewUrl) {
+      URL.revokeObjectURL(audioPreviewUrl);
+    }
+    setAudioBlob(null);
+    setAudioPreviewUrl(null);
+  };
+
   const handlePublish = async () => {
     const hasText = Boolean(newText.trim());
     const hasMedia = Boolean(mediaFile);
+    const hasAudio = Boolean(audioBlob);
     const hasPoll = Boolean(pollData?.question?.trim());
 
-    if (!hasText && !hasMedia && !hasPoll) return;
+    if (!hasText && !hasMedia && !hasAudio && !hasPoll) return;
     if (submitting) return;
 
     if (!activeUserId) {
@@ -540,6 +556,15 @@ export function FeedTab({
         });
         mediaUrl = uploadResult.url;
         mediaType = mediaFile.type.startsWith("video") ? "video" : "image";
+      } else if (audioBlob) {
+        const audioFile = new File([audioBlob], "voice-note.webm", { type: audioBlob.type || "audio/webm" });
+        const uploadResult = await uploadExternalMedia(audioFile, {
+          folder: "posts",
+          user_id: activeUserId,
+          maxBytes: MAX_MEDIA_BYTES,
+        });
+        mediaUrl = uploadResult.url;
+        mediaType = "audio";
       }
 
       const { data: newPost, error: postErr } = await supabase
@@ -562,6 +587,8 @@ export function FeedTab({
       setPollData(null);
       setMediaFile(null);
       setMediaPreview(null);
+      setAudioBlob(null);
+      setAudioPreviewUrl(null);
       setTextToolsOpen(false);
       setIsCreateOpen?.(false);
       
@@ -698,24 +725,61 @@ export function FeedTab({
             </div>
 
             <div className="flex items-center justify-between border-t p-3 flex-wrap gap-2 shrink-0 bg-inherit" style={{ borderColor: COLORS.border }}>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <input ref={fileInputRef} type="file" accept="image/*,video/*" className="hidden" onChange={handlePickFile} />
                 <button
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
-                  className="p-1.5 rounded-lg hover:bg-white/10 flex items-center gap-1.5 text-xs font-medium"
+                  className="p-1.5 rounded-lg hover:bg-white/10 flex items-center gap-1.5 text-xs font-medium transition-colors"
                   style={{ color: COLORS.gold }}
                 >
                   <ImageIcon size={16} />
                   <span>Média</span>
                 </button>
+
+                {!isRecording && !audioBlob && (
+                  <button
+                    type="button"
+                    onClick={startRecording}
+                    className="p-1.5 rounded-lg hover:bg-white/10 flex items-center gap-1.5 text-xs font-medium transition-colors"
+                    style={{ color: COLORS.teal }}
+                  >
+                    <Mic size={16} />
+                    <span>Vocal</span>
+                  </button>
+                )}
+
+                {isRecording && (
+                  <button
+                    type="button"
+                    onClick={stopRecording}
+                    className="p-1.5 rounded-lg bg-red-500/20 text-red-400 flex items-center gap-1.5 text-xs font-medium animate-pulse transition-colors"
+                  >
+                    <Square size={16} fill="currentColor" />
+                    <span>Arrêter</span>
+                  </button>
+                )}
+
+                {audioBlob && (
+                  <>
+                    <audio src={audioPreviewUrl} controls className="h-8 max-w-[150px] rounded" />
+                    <button
+                      type="button"
+                      onClick={discardRecording}
+                      className="p-1.5 rounded-lg hover:bg-red-500/20 text-red-400 transition-colors"
+                      title="Supprimer l'enregistrement"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </>
+                )}
               </div>
 
               <button
                 type="button"
                 onClick={handlePublish}
-                disabled={submitting || (!newText.trim() && !mediaFile && !pollData?.question?.trim())}
-                className="px-4 py-1.5 rounded-xl text-xs font-bold shadow-md flex items-center gap-1.5 disabled:opacity-50"
+                disabled={submitting || (!newText.trim() && !mediaFile && !audioBlob && !pollData?.question?.trim())}
+                className="px-4 py-1.5 rounded-xl text-xs font-bold shadow-md flex items-center gap-1.5 disabled:opacity-50 transition-opacity"
                 style={{ background: COLORS.gold, color: "#000" }}
               >
                 {submitting ? "Publication..." : "Publier"} <Send size={13} />
@@ -870,7 +934,7 @@ export function FeedTab({
               <p className="text-[10px]" style={{ color: COLORS.muted }}>Traduit par BAARO</p>
             )}
 
-            {/* Rendu Média (Images & Vidéos) */}
+            {/* Rendu Média (Images, Vidéos & Audio) */}
             {post.media_url && (
               <div className="rounded-xl overflow-hidden border bg-black/40 flex items-center justify-center">
                 {post.media_type === "video" || /\.(mp4|webm|ogg|mov)$/i.test(post.media_url) ? (
@@ -881,6 +945,13 @@ export function FeedTab({
                     preload="metadata"
                     className="w-full max-h-[500px] object-contain bg-black"
                   />
+                ) : post.media_type === "audio" || /\.(mp3|wav|m4a|webm|ogg)$/i.test(post.media_url) ? (
+                  <div className="w-full p-4 flex items-center gap-3 bg-slate-900/50 rounded-xl">
+                    <div className="p-2 rounded-full bg-teal-500/20 text-teal-400 shrink-0">
+                      <Mic size={20} />
+                    </div>
+                    <audio src={post.media_url} controls className="flex-1 h-8" />
+                  </div>
                 ) : (
                   <img src={post.media_url} alt="" className="w-full max-h-[500px] object-contain" />
                 )}
@@ -890,19 +961,9 @@ export function FeedTab({
             <PollCard postId={post.id} user_id={activeUserId} />
             <SocialPostEnhancements post={post} user_id={activeUserId} />
 
-            {/* Actions (Likes, Reposts, Commentaires, Traduction, IA, Tip) */}
+            {/* Actions (Reposts, Commentaires, Traduction, IA, Tip) - ❤ Supprimé */}
             <div className="flex items-center justify-between gap-2 pt-2 border-t flex-wrap" style={{ borderColor: COLORS.border }}>
               <div className="flex items-center gap-3 text-[11px] font-medium flex-wrap" style={{ color: COLORS.muted }}>
-                <button
-                  type="button"
-                  onClick={() => handleLike(post.id)}
-                  className="flex items-center gap-1 transition active:scale-95"
-                  style={{ color: likedPosts[post.id] ? "#F43F5E" : COLORS.muted }}
-                >
-                  <Heart size={15} fill={likedPosts[post.id] ? "currentColor" : "none"} />
-                  {Number(post.likes || 0)}
-                </button>
-
                 <button
                   type="button"
                   onClick={() => handleRepost(post)}
@@ -915,8 +976,6 @@ export function FeedTab({
 
                 {post.author_id === activeUserId && (
                   <div className="flex items-center gap-1.5 ml-1">
-                    <button type="button" onClick={() => setEngagement({ type: "postLikes", id: post.id })} className="text-[10px] underline hover:text-white">J'aime</button>
-                    <span>·</span>
                     <button type="button" onClick={() => setEngagement({ type: "postReposts", id: post.id })} className="text-[10px] underline hover:text-white">Reposts</button>
                     <span>·</span>
                     <button type="button" onClick={() => setEngagement({ type: "postViews", id: post.id })} className="text-[10px] underline hover:text-white flex items-center gap-0.5"><Eye size={11} /> Vues</button>
@@ -1034,7 +1093,7 @@ export function FeedTab({
         </div>
       )}
 
-      {/* Liste des engagements (Likes, Reposts, Vues) */}
+      {/* Liste des engagements (Reposts, Vues) */}
       {engagement && (
         <EngagementList
           type={engagement.type}
