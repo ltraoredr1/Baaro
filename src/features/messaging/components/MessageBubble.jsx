@@ -1,13 +1,13 @@
 /**
  * src/features/messaging/components/MessageBubble.jsx
  * Bulle de message : texte, image (agrandissable), vidéo, vocal (lecteur), fichier, supprimé,
- * réponse citée, menu d'actions (répondre / copier / transférer / favori / épingler / supprimer),
- * indicateur de message éphémère, envoi en cours / échec + réessayer.
+ * réponse citée, réactions, favori / épingle, menu d'actions, envoi en cours / échec + réessayer.
  */
 import React, { useEffect, useRef, useState } from "react";
 import {
-  Play, Pause, FileText, X, MoreHorizontal, Reply, Copy, Trash2, Star, Pin, Forward, Timer,
+  Play, Pause, FileText, X, MoreHorizontal, Reply, Copy, Trash2, Star, Pin,
 } from "lucide-react";
+import { CHAT_REACTIONS } from "../lib/chatFeatures.js";
 
 /** Texte court décrivant un message (aperçu dans les citations et la barre de réponse) */
 export function messagePreviewText(m) {
@@ -33,15 +33,6 @@ function formatSize(bytes) {
   if (bytes < 1024) return `${bytes} o`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} Ko`;
   return `${(bytes / 1024 / 1024).toFixed(1)} Mo`;
-}
-
-// Temps restant avant expiration d'un message éphémère
-function expiresLabel(iso) {
-  const ms = new Date(iso).getTime() - Date.now();
-  if (!Number.isFinite(ms) || ms <= 0) return "";
-  const h = Math.ceil(ms / 3600000);
-  if (h < 24) return `${h} h`;
-  return `${Math.ceil(h / 24)} j`;
 }
 
 const SPEEDS = [1, 1.5, 2];
@@ -157,28 +148,27 @@ function VoicePlayer({ src, duration, isMe }) {
   );
 }
 
-const PILL = "flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/10 text-[#F5F3EF]";
-
 /**
  * Props :
- *  - message, isMe
+ *  - message, isMe, domId (id HTML pour « aller au message »)
  *  - reply : { name, text } | null — contenu cité si message.reply_to_id (null = message d'origine introuvable)
- *  - starred, pinned
- *  - onRetry(message), onReply(message), onDelete(message), onForward(message)
- *  - onToggleStar(message), onTogglePin(message)
+ *  - reactions : [{ emoji, count, mine }], starred, pinned
+ *  - onRetry(message), onReply(message), onDelete(message), onReact(message, emoji), onStar(message), onPin(message)
  */
 export function MessageBubble({
   message,
   isMe,
+  domId,
   reply,
+  reactions = [],
   starred = false,
   pinned = false,
   onRetry,
   onReply,
   onDelete,
-  onForward,
-  onToggleStar,
-  onTogglePin,
+  onReact,
+  onStar,
+  onPin,
 }) {
   const [lightbox, setLightbox] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -201,7 +191,7 @@ export function MessageBubble({
   const isTmpId = String(message.id || "").startsWith("tmp-");
   const canAct = !pending && !message.failed && !isDeleted && !isTmpId;
   const canCopy = !isMedia && !isDeleted && !!body;
-  const expiresIn = !isDeleted && message.expires_at ? expiresLabel(message.expires_at) : "";
+  const hasMenu = onReply || onDelete || onReact || onStar || onPin || canCopy;
 
   const copyText = async () => {
     try {
@@ -214,18 +204,11 @@ export function MessageBubble({
     setMenuOpen(false);
   };
 
-  const hasMenu = !!(onReply || onDelete || onForward || canCopy || onToggleStar || onTogglePin);
-  const act = (fn) => () => {
-    setMenuOpen(false);
-    fn?.(message);
-  };
+  const pill = "flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/10 text-[#F5F3EF]";
 
   return (
-    <div
-      id={message.id ? `msg-${message.id}` : undefined}
-      className={`flex ${isMe ? "justify-end" : "justify-start"} px-3 py-1`}
-    >
-      <div className="flex flex-col max-w-[78%] min-w-0">
+    <div id={domId} className={`flex ${isMe ? "justify-end" : "justify-start"} px-3 py-1`}>
+      <div className={`flex flex-col max-w-[78%] min-w-0 ${isMe ? "items-end" : "items-start"}`}>
         <div
           className={`rounded-2xl px-3 py-2 text-sm ${
             isMe
@@ -304,12 +287,7 @@ export function MessageBubble({
 
           <div className={`text-[10px] mt-1 flex gap-1.5 items-center ${isMe ? "text-white/70 justify-end" : "opacity-50"}`}>
             {pinned && <Pin size={11} aria-label="Épinglé" />}
-            {starred && <Star size={11} className="fill-current" aria-label="Favori" />}
-            {expiresIn && (
-              <span className="flex items-center gap-0.5" title="Message éphémère">
-                <Timer size={11} /> {expiresIn}
-              </span>
-            )}
+            {starred && <Star size={11} fill="currentColor" aria-label="Favori" />}
             <span>{time}</span>
             {isMe && !message.failed && (pending ? <span>⏳</span> : <span>{read ? "✓✓" : "✓"}</span>)}
             {message.failed && (
@@ -331,42 +309,101 @@ export function MessageBubble({
           </div>
         </div>
 
-        {(menuOpen || copied) && canAct && (
-          <div className={`flex flex-wrap gap-1 mt-1 text-xs ${isMe ? "justify-end" : "justify-start"}`}>
-            {onReply && (
-              <button type="button" onClick={act(onReply)} className={PILL}>
-                <Reply size={12} /> Répondre
-              </button>
-            )}
-            {canCopy && (
-              <button type="button" onClick={copyText} className={PILL}>
-                <Copy size={12} /> {copied ? "Copié" : "Copier"}
-              </button>
-            )}
-            {onForward && (
-              <button type="button" onClick={act(onForward)} className={PILL}>
-                <Forward size={12} /> Transférer
-              </button>
-            )}
-            {onToggleStar && (
-              <button type="button" onClick={act(onToggleStar)} className={PILL}>
-                <Star size={12} className={starred ? "fill-current" : ""} /> {starred ? "Retirer favori" : "Favori"}
-              </button>
-            )}
-            {onTogglePin && (
-              <button type="button" onClick={act(onTogglePin)} className={PILL}>
-                <Pin size={12} /> {pinned ? "Désépingler" : "Épingler"}
-              </button>
-            )}
-            {isMe && onDelete && (
+        {reactions.length > 0 && !isDeleted && (
+          <div className={`flex flex-wrap gap-1 mt-1 ${isMe ? "justify-end" : "justify-start"}`}>
+            {reactions.map((r) => (
               <button
+                key={r.emoji}
                 type="button"
-                onClick={act(onDelete)}
-                className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-red-500/20 text-red-300"
+                disabled={!canAct || !onReact}
+                onClick={() => onReact?.(message, r.emoji)}
+                className={`text-xs px-2 py-0.5 rounded-full border ${
+                  r.mine ? "border-[#D9AE52] bg-[#D9AE52]/20 text-[#F5F3EF]" : "border-white/15 bg-white/5 text-[#F5F3EF]"
+                }`}
+                aria-label={`${r.emoji} ${r.count}`}
               >
-                <Trash2 size={12} /> Supprimer
+                {r.emoji}
+                {r.count > 1 ? ` ${r.count}` : ""}
               </button>
+            ))}
+          </div>
+        )}
+
+        {(menuOpen || copied) && canAct && (
+          <div className={`flex flex-col gap-1 mt-1 text-xs ${isMe ? "items-end" : "items-start"}`}>
+            {onReact && menuOpen && (
+              <div className="flex flex-wrap gap-0.5 px-2 py-1 rounded-2xl bg-white/10 max-w-[260px]">
+                {CHAT_REACTIONS.map((emoji) => (
+                  <button
+                    key={emoji}
+                    type="button"
+                    onClick={() => {
+                      onReact(message, emoji);
+                      setMenuOpen(false);
+                    }}
+                    className="text-lg leading-none p-1 rounded-full hover:bg-white/10"
+                    aria-label={`Réagir ${emoji}`}
+                  >
+                    {emoji}
+                  </button>
+                ))}
+              </div>
             )}
+            <div className="flex flex-wrap gap-1">
+              {onReply && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onReply(message);
+                    setMenuOpen(false);
+                  }}
+                  className={pill}
+                >
+                  <Reply size={12} /> Répondre
+                </button>
+              )}
+              {canCopy && (
+                <button type="button" onClick={copyText} className={pill}>
+                  <Copy size={12} /> {copied ? "Copié" : "Copier"}
+                </button>
+              )}
+              {onStar && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onStar(message);
+                    setMenuOpen(false);
+                  }}
+                  className={pill}
+                >
+                  <Star size={12} fill={starred ? "currentColor" : "none"} /> {starred ? "Retirer favori" : "Favori"}
+                </button>
+              )}
+              {onPin && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onPin(message);
+                    setMenuOpen(false);
+                  }}
+                  className={pill}
+                >
+                  <Pin size={12} /> {pinned ? "Désépingler" : "Épingler"}
+                </button>
+              )}
+              {isMe && onDelete && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    onDelete(message);
+                  }}
+                  className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-red-500/20 text-red-300"
+                >
+                  <Trash2 size={12} /> Supprimer
+                </button>
+              )}
+            </div>
           </div>
         )}
       </div>
