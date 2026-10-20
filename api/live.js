@@ -2,7 +2,7 @@
  * /api/live.js - V5 FINALE - FIX APPELS 1-1
  * - Fix 404 Live introuvable: insert calls côté serveur (service_role bypass RLS)
  * - Bypass total pour call-xxx même sans DB
- * - Compatible avec ton fusion Gemini existant
+ * - Compatible avec la dernière version de l'API Gemini
  */
 
 import {
@@ -107,7 +107,7 @@ async function invokeGemini(ctx) {
   const cfg = providerConfig("gemini");
   return callOpenAICompatible({
     key: cfg?.key || process.env.GEMINI_API_KEY,
-    model: publicModel || cfg?.model || process.env.GEMINI_MODEL || "gemini-2.0-flash",
+    model: publicModel || cfg?.model || process.env.GEMINI_MODEL || "gemini-2.5-flash",
     messages: normalizedMessages,
     system,
     maxTokens
@@ -178,7 +178,7 @@ async function handleAiGateway(req, res, admin, user) {
       reply: result.reply,
       sessionId,
       provider: "gemini",
-      model: publicModel || process.env.GEMINI_MODEL || "gemini-2.0-flash",
+      model: publicModel || process.env.GEMINI_MODEL || "gemini-2.5-flash",
       country: country || null,
       latencyMs: latency
     });
