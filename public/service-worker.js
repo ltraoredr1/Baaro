@@ -1,3 +1,9 @@
+/**
+ * LEGACY — ne pas enregistrer ce fichier.
+ * Le service worker actif est celui de VitePWA (/sw.js) + push-sw.js.
+ * Conservé uniquement pour référence / anciens caches.
+ */
+
 const CACHE_NAME = "baaro-cache-v7";
 
 const APP_SHELL = [
