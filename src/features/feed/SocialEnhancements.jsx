@@ -5,6 +5,8 @@ import { supabase } from "../../supabaseClient.js";
 import { useToast } from "../../components/ToastContext.jsx";
 import TranslatedText from "../../components/TranslatedText.jsx";
 import { checkRateLimit, rateLimitMessage } from "../../lib/rateLimit.js";
+import { runOrEnqueue } from "../../lib/offlineActions.js";
+import { recordFeedEvent } from "../../lib/feedEvents.js";
 
 function isValidAuthUserId(value) {
   if (typeof value !== "string" || !value.trim()) return false;
@@ -575,36 +577,27 @@ export const SocialPostEnhancements = memo(
 
       try {
         if (reaction === "like" && value === "like") {
-          const { error } = await supabase
-            .from("post_likes")
-            .delete()
-            .eq("post_id", post.id)
-            .eq("user_id", user_id);
-
-          if (error) throw error;
-
+          const result = await runOrEnqueue("unlike_post", { post_id: post.id });
+          if (result?.offline) {
+            showToast("Retrait du j'aime — sync au retour du réseau", "info");
+          }
           setReaction(null);
           setReactionCount((count) => Math.max(0, count - 1));
-
-          await load();
+          if (!result?.offline) await load();
           return;
         }
 
-        const { error } = await supabase
-          .from("post_likes")
-          .upsert(
-            { post_id: post.id, user_id },
-            { onConflict: "post_id,user_id" }
-          );
-
-        if (error) throw error;
+        const result = await runOrEnqueue("like_post", { post_id: post.id });
+        if (result?.offline) {
+          showToast("J'aime enregistré — sync au retour du réseau", "info");
+        } else {
+          await sendNotification("like");
+          void recordFeedEvent(post.id, "like");
+          await load();
+        }
 
         setReaction("like");
         onLiked?.(post.id);
-
-        await sendNotification("like");
-
-        await load();
       } catch (error) {
         console.error("[BAARO] Erreur enregistrement like :", error);
         showToast("Impossible d’enregistrer la réaction", "error");
