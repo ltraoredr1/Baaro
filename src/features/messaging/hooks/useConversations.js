@@ -1,11 +1,9 @@
 /**
  * src/features/messaging/hooks/useConversations.js
  * Utilise messageService pour alimenter l'UI
- *
- * NB : messageService vit dans ../services/ (son en-tête le dit) ; MessagesTab.jsx utilise le même chemin.
  */
 import { useState, useEffect, useCallback, useRef } from "react";
-import { messageService } from "../services/messageService.js";
+import { messageService } from "../lib/messageService.js";
 
 export function useConversations(currentUserId) {
   const [conversations, setConversations] = useState([]);
