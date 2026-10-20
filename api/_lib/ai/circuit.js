@@ -1,6 +1,9 @@
 /**
  * BAARO AI Router — Configuration des fournisseurs et Circuit Breaker
  * Priorité : Groq → Mistral → Gemini → Gemini fallback
+ *
+ * Gemini : gemini-3.8-flash par défaut.
+ * Les clés API restent exclusivement côté serveur.
  */
 
 const failures = new Map();
@@ -14,8 +17,25 @@ const GEMINI_BASE =
 const DEFAULT_MODELS = {
   groq: "openai/gpt-oss-20b",
   mistral: "ministral-3b-latest",
-  gemini: "gemini-2.5-flash-lite",
+  gemini: "gemini-3.8-flash",
 };
+
+const OBSOLETE_GEMINI_MODELS = new Set([
+  "gemini-2.5-flash",
+  "gemini-2.5-flash-lite",
+]);
+
+function normalizeGeminiModel(value, fallback = DEFAULT_MODELS.gemini) {
+  const model = String(value || "")
+    .trim()
+    .replace(/^models\//, "");
+
+  if (!model || OBSOLETE_GEMINI_MODELS.has(model)) {
+    return fallback;
+  }
+
+  return model;
+}
 
 export function isOpen(provider) {
   const state = failures.get(provider);
@@ -115,28 +135,34 @@ export function providerConfig(provider) {
       const key = process.env.GEMINI_API_KEY;
       if (!key) return null;
 
+      const configuredModel = getFirstModel(
+        process.env.GEMINI_MODEL || process.env.GEMINI_MODELS,
+        DEFAULT_MODELS.gemini
+      );
+
       return {
         key,
         base: GEMINI_BASE,
-        model: getFirstModel(
-          process.env.GEMINI_MODEL || process.env.GEMINI_MODELS,
-          DEFAULT_MODELS.gemini
-        ),
+        model: normalizeGeminiModel(configuredModel),
       };
     }
 
     case "gemini-fallback": {
       const key = process.env.GEMINI_API_KEY;
-      const model = String(
-        process.env.GEMINI_FALLBACK_MODEL || ""
-      ).trim();
+      if (!key) return null;
 
-      if (!key || !model) return null;
+      const configuredModel = getFirstModel(
+        process.env.GEMINI_FALLBACK_MODEL,
+        ""
+      );
+
+      // Pas de second modèle configuré : pas de fournisseur fallback.
+      if (!configuredModel) return null;
 
       return {
         key,
         base: GEMINI_BASE,
-        model,
+        model: normalizeGeminiModel(configuredModel),
       };
     }
 
@@ -159,6 +185,5 @@ export function chooseProvider() {
     }
   }
 
-  // Aucun fournisseur utilisable : signaler l'indisponibilité.
   return null;
 }
