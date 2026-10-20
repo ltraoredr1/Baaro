@@ -41,7 +41,7 @@ export function recordFailure(provider, cooldownMs = DEFAULT_COOLDOWN_MS) {
 }
 
 /**
- * Reinitialise l'état d'un provider après un succès.
+ * Réinitialise l'état d'un provider après un succès.
  */
 export function recordSuccess(provider) {
   if (!provider) return;
@@ -97,7 +97,7 @@ export function providerConfig(provider) {
       if (!process.env.GROQ_API_KEY) return null;
       const model = getFirstModel(
         process.env.GROQ_MODEL || process.env.GROQ_MODELS,
-        "llama-3.3-70b-versatile"
+        "llama-3.1-8b-instant"
       );
       return {
         key: process.env.GROQ_API_KEY,
@@ -110,7 +110,7 @@ export function providerConfig(provider) {
       if (!process.env.MISTRAL_API_KEY) return null;
       const model = getFirstModel(
         process.env.MISTRAL_MODEL,
-        "mistral-small-latest"
+        "ministral-3b-latest"
       );
       return {
         key: process.env.MISTRAL_API_KEY,
@@ -123,7 +123,7 @@ export function providerConfig(provider) {
       if (!process.env.GEMINI_API_KEY) return null;
       const model = getFirstModel(
         process.env.GEMINI_MODEL || process.env.GEMINI_MODELS,
-        "gemini-3.8-flash"
+        "gemini-2.5-flash-lite"
       );
       return {
         key: process.env.GEMINI_API_KEY,
