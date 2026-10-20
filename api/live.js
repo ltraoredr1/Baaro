@@ -92,7 +92,7 @@ async function createMeetingToken(roomName, { userId, userName, isOwner }) {
 // ============== AI CONFIG ==============
 // Ordre de secours : on passe au suivant si le précédent est en panne,
 // saturé (429) ou trop lent. Un fournisseur sans clé est ignoré.
-const AI_PROVIDER_CASCADE = ["gemini", "groq", "mistral"];
+const AI_PROVIDER_CASCADE = ["gemini", "gemini-fallback", "groq", "mistral"];
 const AI_PROVIDER_TIMEOUT_MS = 15000;
 const AI_ALLOWED_MODES = new Set(["chat", "cohost"]);
 const AI_MAX_REPLY_CHARS = 6000;
