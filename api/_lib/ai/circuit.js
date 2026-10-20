@@ -1,149 +1,164 @@
 /**
- * BAARO AI Router - Gestionnaire de routage et Circuit Breaker
- *
- * Priorité globale :
- *  1. Groq (Ultra-rapide, idéal pour éliminer les latences et 408)
- *  2. Mistral (Secours rapide et fiable)
- *  3. Gemini (Principal fallback avec support multi-modèles)
+ * BAARO AI Router — Configuration des fournisseurs et Circuit Breaker
+ * Priorité : Groq → Mistral → Gemini → Gemini fallback
  */
 
-// ============== CIRCUIT BREAKER =============
-const failures = new Map(); // provider → { count, openUntil }
+const failures = new Map();
 
-const DEFAULT_COOLDOWN_MS = 60_000; // Cooldown de 1 minute si trop d'échecs
-const FAILURE_THRESHOLD = 3;        // Bascule en "Open" après 3 échecs consécutifs
+const DEFAULT_COOLDOWN_MS = 60_000;
+const FAILURE_THRESHOLD = 3;
 
-/**
- * Vérifie si le circuit d'un provider est actuellement ouvert (bloqué).
- */
+const GEMINI_BASE =
+  "https://generativelanguage.googleapis.com/v1beta";
+
+const DEFAULT_MODELS = {
+  groq: "openai/gpt-oss-20b",
+  mistral: "ministral-3b-latest",
+  gemini: "gemini-2.5-flash-lite",
+};
+
 export function isOpen(provider) {
-  if (!provider) return false;
   const state = failures.get(provider);
   if (!state) return false;
-  if (Date.now() > state.openUntil) {
+
+  if (state.openUntil && Date.now() >= state.openUntil) {
     failures.delete(provider);
     return false;
   }
-  return true;
+
+  return Boolean(state.openUntil && Date.now() < state.openUntil);
 }
 
-/**
- * Enregistre un échec pour un provider et ouvre le circuit si le seuil est atteint.
- */
-export function recordFailure(provider, cooldownMs = DEFAULT_COOLDOWN_MS) {
+export function recordFailure(
+  provider,
+  cooldownMs = DEFAULT_COOLDOWN_MS
+) {
   if (!provider) return;
-  const state = failures.get(provider) || { count: 0, openUntil: 0 };
+
+  const state = failures.get(provider) || {
+    count: 0,
+    openUntil: 0,
+  };
+
   state.count += 1;
+
   if (state.count >= FAILURE_THRESHOLD) {
     state.openUntil = Date.now() + cooldownMs;
   }
+
   failures.set(provider, state);
 }
 
-/**
- * Réinitialise l'état d'un provider après un succès.
- */
 export function recordSuccess(provider) {
-  if (!provider) return;
-  failures.delete(provider);
+  if (provider) failures.delete(provider);
 }
 
-/**
- * Liste des providers actuellement en circuit ouvert (pour le debug/monitoring).
- */
 export function openProviders() {
   const now = Date.now();
   const result = [];
-  for (const [p, state] of failures) {
-    if (now <= state.openUntil) result.push(p);
+
+  for (const [provider, state] of failures) {
+    if (state.openUntil > now) {
+      result.push(provider);
+    } else if (state.openUntil) {
+      failures.delete(provider);
+    }
   }
+
   return result;
 }
-
-// ============== UTILS & CONFIGS =============
 
 export function normalizeCountry(value) {
   const country = String(value || "").trim().toUpperCase();
   return /^[A-Z]{2}$/.test(country) ? country : null;
 }
 
-/**
- * Sélectionne automatiquement le meilleur provider disponible non bloqué.
- */
-export function chooseProvider() {
-  const candidates = ["groq", "mistral", "gemini"];
-  for (const p of candidates) {
-    if (providerConfig(p) && !isOpen(p)) {
-      return p;
-    }
-  }
-  return "groq"; // Fallback par défaut si tous sont bloqués
-}
+function getFirstModel(value, fallback) {
+  const first = String(value || "")
+    .split(",")[0]
+    .trim();
 
-const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta";
-
-function getFirstModel(envVar, fallback) {
-  if (!envVar) return fallback;
-  const first = envVar.split(",")[0]?.trim();
   return first || fallback;
 }
 
-/**
- * Retourne la configuration complète (clé, URL de base, modèle) du provider demandé.
- */
 export function providerConfig(provider) {
   switch (provider) {
     case "groq": {
-      if (!process.env.GROQ_API_KEY) return null;
-      const model = getFirstModel(
-        process.env.GROQ_MODEL || process.env.GROQ_MODELS,
-        "llama-3.1-8b-instant"
-      );
+      const key = process.env.GROQ_API_KEY;
+      if (!key) return null;
+
       return {
-        key: process.env.GROQ_API_KEY,
+        key,
         base: "https://api.groq.com/openai/v1",
-        model,
+        model: getFirstModel(
+          process.env.GROQ_MODEL || process.env.GROQ_MODELS,
+          DEFAULT_MODELS.groq
+        ),
       };
     }
 
     case "mistral": {
-      if (!process.env.MISTRAL_API_KEY) return null;
-      const model = getFirstModel(
-        process.env.MISTRAL_MODEL,
-        "ministral-3b-latest"
-      );
+      const key = process.env.MISTRAL_API_KEY;
+      if (!key) return null;
+
       return {
-        key: process.env.MISTRAL_API_KEY,
+        key,
         base: "https://api.mistral.ai/v1",
-        model,
+        model: getFirstModel(
+          process.env.MISTRAL_MODEL,
+          DEFAULT_MODELS.mistral
+        ),
       };
     }
 
     case "gemini": {
-      if (!process.env.GEMINI_API_KEY) return null;
-      const model = getFirstModel(
-        process.env.GEMINI_MODEL || process.env.GEMINI_MODELS,
-        "gemini-2.5-flash-lite"
-      );
+      const key = process.env.GEMINI_API_KEY;
+      if (!key) return null;
+
       return {
-        key: process.env.GEMINI_API_KEY,
+        key,
         base: GEMINI_BASE,
-        model,
+        model: getFirstModel(
+          process.env.GEMINI_MODEL || process.env.GEMINI_MODELS,
+          DEFAULT_MODELS.gemini
+        ),
       };
     }
 
     case "gemini-fallback": {
-      if (!process.env.GEMINI_API_KEY || !process.env.GEMINI_FALLBACK_MODEL) {
-        return null;
-      }
+      const key = process.env.GEMINI_API_KEY;
+      const model = String(
+        process.env.GEMINI_FALLBACK_MODEL || ""
+      ).trim();
+
+      if (!key || !model) return null;
+
       return {
-        key: process.env.GEMINI_API_KEY,
+        key,
         base: GEMINI_BASE,
-        model: process.env.GEMINI_FALLBACK_MODEL,
+        model,
       };
     }
 
     default:
       return null;
   }
+}
+
+export function chooseProvider() {
+  const candidates = [
+    "groq",
+    "mistral",
+    "gemini",
+    "gemini-fallback",
+  ];
+
+  for (const provider of candidates) {
+    if (providerConfig(provider) && !isOpen(provider)) {
+      return provider;
+    }
+  }
+
+  // Aucun fournisseur utilisable : signaler l'indisponibilité.
+  return null;
 }
