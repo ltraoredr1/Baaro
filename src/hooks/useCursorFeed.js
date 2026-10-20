@@ -1,37 +1,56 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useRef } from "react";
 import { fetchFeedPage } from "../lib/feedPagination.js";
 
-export function useCursorFeed({ autoLoad = true } = {}) {
+/**
+ * Pagination du fil par curseur.
+ * - posts : lignes brutes Supabase (à formater côté composant)
+ * - setPosts : pour les mises à jour optimistes (reposts, commentaires, etc.)
+ * - reload({ silent }) : recharge la première page
+ * - loadMore() : charge la page suivante
+ */
+export function useCursorFeed({ onError } = {}) {
   const [posts, setPosts] = useState([]);
-  const [cursor, setCursor] = useState(null);
   const [hasMore, setHasMore] = useState(true);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const loadingRef = useRef(false);
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
 
-  const loadMore = useCallback(async (reset = false) => {
-    if (loadingRef.current) return;
-    loadingRef.current = true;
-    setLoading(true);
-    setError(null);
+  const cursorRef = useRef(null);
+  const busyRef = useRef(false);
+  const onErrorRef = useRef(onError);
+  onErrorRef.current = onError;
+
+  const load = useCallback(async ({ reset = false, silent = false } = {}) => {
+    if (busyRef.current) return null;
+    if (!reset && !cursorRef.current) return null;
+
+    busyRef.current = true;
+    if (reset && !silent) setLoading(true);
+    if (!reset) setLoadingMore(true);
+
     try {
       const { rows, nextCursor } = await fetchFeedPage({
-        cursor: reset? null : cursor,
+        cursor: reset ? null : cursorRef.current,
       });
-      setPosts((prev) => (reset? rows : [...prev,...rows]));
-      setCursor(nextCursor);
-      setHasMore(!!nextCursor);
+      setPosts((prev) => (reset ? rows : [...prev, ...rows]));
+      cursorRef.current = nextCursor;
+      setHasMore(Boolean(nextCursor));
+      return rows;
     } catch (e) {
-      setError(e?.message || "Erreur");
+      onErrorRef.current?.(e);
+      if (reset) {
+        if (!silent) setPosts([]);
+        setHasMore(false);
+      }
+      return null;
     } finally {
-      loadingRef.current = false;
+      busyRef.current = false;
       setLoading(false);
+      setLoadingMore(false);
     }
-  }, [cursor]);
+  }, []);
 
-  const refresh = useCallback(() => loadMore(true), [loadMore]);
+  const reload = useCallback((opts) => load({ ...opts, reset: true }), [load]);
+  const loadMore = useCallback(() => load({ reset: false }), [load]);
 
-  useEffect(() => { if (autoLoad) loadMore(true); }, []);
-
-  return { posts, loading, hasMore, error, loadMore: () => loadMore(false), refresh, cursor };
+  return { posts, setPosts, hasMore, loading, loadingMore, reload, loadMore };
 }
