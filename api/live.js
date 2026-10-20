@@ -168,9 +168,9 @@ function resolveProvider(name) {
   const key = cfg?.key || (name === "gemini" ? process.env.GEMINI_API_KEY : name === "groq" ? process.env.GROQ_API_KEY : name === "mistral" ? process.env.MISTRAL_API_KEY : undefined);
   if (!key) return null;
   const model = cfg?.model || (
-    name === "gemini" ? process.env.GEMINI_MODEL || "gemini-3.8-flash" :
-    name === "groq" ? process.env.GROQ_MODELS?.split(",")[0] || "llama-3.3-70b-versatile" :
-    name === "mistral" ? process.env.MISTRAL_MODEL || "mistral-small-latest" : undefined
+    name === "gemini" ? process.env.GEMINI_MODEL || process.env.GEMINI_MODELS?.split(",")[0] || "gemini-2.5-flash-lite" :
+    name === "groq" ? process.env.GROQ_MODEL || process.env.GROQ_MODELS?.split(",")[0] || "llama-3.1-8b-instruct" :
+    name === "mistral" ? process.env.MISTRAL_MODEL || "ministral-3b-latest" : undefined
   );
   return { ...(cfg || {}), key, model };
 }
