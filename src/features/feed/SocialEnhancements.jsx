@@ -705,7 +705,7 @@ export const SocialPostEnhancements = memo(
         if (isValidAuthUserId(user_id)) {
           const { error } = await supabase.from("post_shares").insert({
             post_id: post.id,
-            id: user_id,
+            user_id,
             channel: channelName,
           });
 
@@ -845,7 +845,6 @@ export const SocialPostEnhancements = memo(
               background: COLORS.surface2,
             }}
           >
-            {/* MODIFICATION : le pouce reste en scale-125 s'il est liké */}
             <span
               className={`inline-block transition-transform duration-300 ${
                 pop ? "scale-150" : reaction === "like" ? "scale-125" : "scale-100"
@@ -854,7 +853,6 @@ export const SocialPostEnhancements = memo(
               {current?.label || "👍"}
             </span>
 
-            {/* Bonus : le texte reste aussi en gras si liké, pour une meilleure cohérence visuelle */}
             <span
               className={`transition-all duration-300 ${
                 pop ? "scale-110 font-bold" : reaction === "like" ? "font-bold" : "scale-100"
