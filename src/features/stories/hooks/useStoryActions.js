@@ -1,17 +1,39 @@
 import { useState } from 'react';
+import { answerSticker, sendReply } from '../api/storiesApi.js';
 
-/** Réagir / partager / supprimer, avec état busy et message du viewer. */
-export function useStoryActions({ userId, toggleLike, removeStory, onRemoved }) {
+/** Réagir / répondre / partager / supprimer, avec état busy et message du viewer. */
+export function useStoryActions({ userId, toggleReaction, removeStory, onRemoved }) {
   const [busy, setBusy] = useState(false);
   const [modalMsg, setModalMsg] = useState(null);
 
-  const react = async (story) => {
-    if (!userId) return setModalMsg({ type: 'error', text: 'Connecte-toi pour réagir.' });
+  const fail = (prefix, e) => setModalMsg({ type: 'error', text: `${prefix} : ${e?.message || 'erreur'}` });
+  const needLogin = (what) => { setModalMsg({ type: 'error', text: `Connecte-toi pour ${what}.` }); };
+
+  const react = async (story, emoji) => {
+    if (!userId) return needLogin('réagir');
     if (busy) return;
     setBusy(true); setModalMsg(null);
-    try { await toggleLike(story); }
-    catch (e) { setModalMsg({ type: 'error', text: 'Réaction impossible : ' + (e.message || 'erreur') }); }
+    try { await toggleReaction(story, emoji); }
+    catch (e) { fail('Réaction impossible', e); }
     finally { setBusy(false); }
+  };
+
+  const reply = async (story, text) => {
+    if (!userId) { needLogin('répondre'); return false; }
+    try {
+      await sendReply(story.id, userId, text);
+      setModalMsg({ type: 'ok', text: 'Message envoyé' });
+      return true;
+    } catch (e) { fail('Envoi impossible', e); return false; }
+  };
+
+  const answerQuestion = async (story, sticker, text) => {
+    if (!userId) { needLogin('répondre'); return false; }
+    try {
+      await answerSticker(story.id, sticker.id, userId, text);
+      setModalMsg({ type: 'ok', text: 'Réponse envoyée' });
+      return true;
+    } catch (e) { fail('Envoi impossible', e); return false; }
   };
 
   const share = async (story) => {
@@ -34,9 +56,9 @@ export function useStoryActions({ userId, toggleLike, removeStory, onRemoved }) 
     if (!window.confirm('Supprimer cette story ?')) return;
     setBusy(true); setModalMsg(null);
     try { await removeStory(story); onRemoved?.(); }
-    catch (e) { setModalMsg({ type: 'error', text: 'Suppression impossible : ' + (e.message || 'erreur') }); }
+    catch (e) { fail('Suppression impossible', e); }
     finally { setBusy(false); }
   };
 
-  return { busy, modalMsg, clearMsg: () => setModalMsg(null), react, share, remove };
+  return { busy, modalMsg, clearMsg: () => setModalMsg(null), react, reply, answerQuestion, share, remove };
 }
