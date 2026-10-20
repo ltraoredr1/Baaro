@@ -442,17 +442,13 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
     else fetchConversations(true);
   };
 
-  // Insertion d'un message média/vocal dans la base (l'erreur Supabase est propagée)
+  // Insertion d'un message média/vocal : passe par le hook, qui l'affiche immédiatement (sans attendre le temps réel)
   const insertMediaMessage = async (fields, replyToId) => {
-    const { error } = await supabase.from("messages").insert({
-      conversation_id: activeChat.id,
-      sender_id: id,
-      recipient_id: activeChat.otherUserId,
-      client_message_id: makeClientMessageId(),
-      reply_to_id: replyToId || null,
-      ...fields,
+    const res = await messaging.sendMediaMessage(fields, {
+      clientMessageId: makeClientMessageId(),
+      replyToId,
     });
-    if (error) throw error;
+    if (!res?.ok) throw new Error(res?.error || "Échec de l’envoi");
   };
 
   const handleSendMedia = async (file) => {
