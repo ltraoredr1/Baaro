@@ -845,16 +845,19 @@ export const SocialPostEnhancements = memo(
               background: COLORS.surface2,
             }}
           >
+            {/* MODIFICATION : le pouce reste en scale-125 s'il est liké */}
             <span
               className={`inline-block transition-transform duration-300 ${
-                pop ? "scale-150" : "scale-100"
+                pop ? "scale-150" : reaction === "like" ? "scale-125" : "scale-100"
               }`}
             >
               {current?.label || "👍"}
             </span>
+
+            {/* Bonus : le texte reste aussi en gras si liké, pour une meilleure cohérence visuelle */}
             <span
               className={`transition-all duration-300 ${
-                pop ? "scale-110 font-bold" : "scale-100"
+                pop ? "scale-110 font-bold" : reaction === "like" ? "font-bold" : "scale-100"
               }`}
             >
               {reactionCount || "J’aime"}
