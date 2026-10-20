@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   X,
   Trash2,
@@ -22,11 +22,9 @@ import { COLORS } from "@/theme.js";
 import { useToast } from "@/components/ToastContext.jsx";
 import { supabase } from "@/supabaseClient.js";
 import { handleDbError } from "@/lib/dbErrors.js";
-import { fetchFeedPage } from "@/lib/feedPagination.js";
 import { recordFeedEvent } from "@/lib/feedEvents.js";
-import { runOrEnqueue } from "@/lib/offlineActions.js";
-import { checkRateLimit, rateLimitMessage } from "@/lib/rateLimit.js";
 import { uploadExternalMedia } from "@/lib/externalMedia.js";
+import { useCursorFeed } from "@/hooks/useCursorFeed.js";
 
 import { PollCard, SocialPostEnhancements, SocialSuggestions } from "./SocialEnhancements.jsx";
 import RichTextComposer from "@/components/RichTextComposer.jsx";
@@ -37,7 +35,6 @@ import { AskAiButton } from "@/components/AskAiButton.jsx";
 import { TranslateButton } from "@/components/TranslateButton.jsx";
 import { GuestBanner } from "@/components/GuestBanner.jsx";
 
-const PAGE_SIZE = 20;
 const MAX_MEDIA_BYTES = 50 * 1024 * 1024; // 50 Mo
 
 const REPORT_REASONS = [
@@ -82,7 +79,7 @@ function formatPost(post) {
     media_url: post.media_url,
     media_type: post.media_type,
     created_at: post.created_at,
-    likes: post.likes_count || 0, // Conservé pour compatibilité éventuelle, mais retiré de l'UI
+    likes: post.likes_count || 0,
     reposts_count: post.reposts_count || 0,
     comments_count: post.comments_count || 0,
     views_count: post.views_count || 0,
@@ -104,10 +101,31 @@ export function FeedTab({
   const propUserId = id || user_id || null;
 
   const { showToast, showPointsReward } = useToast();
-  const [posts, setPosts] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [hasMore, setHasMore] = useState(true);
+
+  // Flux paginé (hook partagé) : lignes brutes + formatage
+  const {
+    posts: rawPosts,
+    setPosts,
+    hasMore,
+    loading,
+    loadingMore,
+    reload,
+    loadMore,
+  } = useCursorFeed({
+    onError: (error) => handleDbError(error, showToast, "Erreur lors du chargement du fil"),
+  });
+
+  const posts = useMemo(() => rawPosts.map(formatPost), [rawPosts]);
+
+  const loadPosts = useCallback(
+    async (opts) => {
+      const rows = await reload(opts);
+      rows?.slice(0, 10).forEach((p) => {
+        if (p?.id) void recordFeedEvent(p.id, "impression");
+      });
+    },
+    [reload]
+  );
 
   // Saisie enrichie, sondages & médias
   const [newText, setNewText] = useState("");
@@ -137,7 +155,7 @@ export function FeedTab({
   const [reportPost, setReportPost] = useState(null);
   const [reportReason, setReportReason] = useState(REPORT_REASONS[0]);
 
-  // Reposts, commentaires, traduction (Likes supprimés)
+  // Reposts, commentaires, traduction
   const [repostedPosts, setRepostedPosts] = useState({});
   const [commentOpen, setCommentOpen] = useState({});
   const [commentsMap, setCommentsMap] = useState({});
@@ -145,7 +163,6 @@ export function FeedTab({
   const [translatedMap, setTranslatedMap] = useState({});
 
   const fileInputRef = useRef(null);
-  const cursorRef = useRef(null);
 
   const activeUserId = currentUserId || propUserId || null;
 
@@ -197,7 +214,7 @@ export function FeedTab({
     return () => document.removeEventListener("pointerdown", close);
   }, [menuOpenId]);
 
-  // Chargement des reposts de l'utilisateur (Likes supprimés)
+  // Chargement des reposts de l'utilisateur
   const postIdsKey = posts.map((p) => p.id).join(",");
   useEffect(() => {
     if (!activeUserId || !postIdsKey) return;
@@ -221,53 +238,7 @@ export function FeedTab({
     };
   }, [activeUserId, postIdsKey]);
 
-  // Chargement du flux
-  const loadPosts = useCallback(
-    async ({ silent = false } = {}) => {
-      if (!silent) setLoading(true);
-      cursorRef.current = null;
-      try {
-        const { rows, nextCursor } = await fetchFeedPage({
-          cursor: null,
-          pageSize: PAGE_SIZE,
-        });
-        const formatted = rows.map(formatPost);
-        setPosts(formatted);
-        cursorRef.current = nextCursor;
-        setHasMore(Boolean(nextCursor));
-        formatted.slice(0, 10).forEach((p) => {
-          if (p?.id) void recordFeedEvent(p.id, "impression");
-        });
-      } catch (error) {
-        handleDbError(error, showToast, "Erreur lors du chargement du fil");
-        if (!silent) setPosts([]);
-        setHasMore(false);
-      } finally {
-        setLoading(false);
-      }
-    },
-    [showToast]
-  );
-
-  const loadMorePosts = async () => {
-    if (!hasMore || loadingMore || !cursorRef.current) return;
-    setLoadingMore(true);
-    try {
-      const { rows, nextCursor } = await fetchFeedPage({
-        cursor: cursorRef.current,
-        pageSize: PAGE_SIZE,
-      });
-      const formatted = rows.map(formatPost);
-      setPosts((prev) => [...prev, ...formatted]);
-      cursorRef.current = nextCursor;
-      setHasMore(Boolean(nextCursor));
-    } catch (error) {
-      handleDbError(error, showToast, "Erreur lors du chargement de la suite");
-    } finally {
-      setLoadingMore(false);
-    }
-  };
-
+  // Premier chargement du flux
   useEffect(() => {
     loadPosts();
   }, [loadPosts]);
@@ -276,7 +247,11 @@ export function FeedTab({
   const handleDeletePost = async (postId) => {
     if (!window.confirm("Voulez-vous vraiment supprimer cette publication ?")) return;
     try {
-      const { error } = await supabase.from("posts").delete().eq("id", postId).eq("author_id", activeUserId);
+      const { error } = await supabase
+        .from("posts")
+        .delete()
+        .eq("id", postId)
+        .eq("author_id", activeUserId);
       if (error) throw error;
       setPosts((prev) => prev.filter((p) => p.id !== postId));
       showToast("Publication supprimée", "success");
@@ -557,7 +532,9 @@ export function FeedTab({
         mediaUrl = uploadResult.url;
         mediaType = mediaFile.type.startsWith("video") ? "video" : "image";
       } else if (audioBlob) {
-        const audioFile = new File([audioBlob], "voice-note.webm", { type: audioBlob.type || "audio/webm" });
+        const audioFile = new File([audioBlob], "voice-note.webm", {
+          type: audioBlob.type || "audio/webm",
+        });
         const uploadResult = await uploadExternalMedia(audioFile, {
           folder: "posts",
           user_id: activeUserId,
@@ -567,7 +544,7 @@ export function FeedTab({
         mediaType = "audio";
       }
 
-      const { data: newPost, error: postErr } = await supabase
+      const { error: postErr } = await supabase
         .from("posts")
         .insert([
           {
@@ -591,7 +568,7 @@ export function FeedTab({
       setAudioPreviewUrl(null);
       setTextToolsOpen(false);
       setIsCreateOpen?.(false);
-      
+
       showToast("Publication créée !", "success");
       loadPosts({ silent: true });
     } catch (err) {
@@ -611,10 +588,9 @@ export function FeedTab({
 
   return (
     <div className="flex flex-col gap-6 max-w-2xl mx-auto w-full pb-20">
-      
       {/* Modale de création */}
       {activeUserId && isCreateOpen && (
-        <div 
+        <div
           className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200"
           onClick={() => setIsCreateOpen?.(false)}
         >
@@ -667,7 +643,11 @@ export function FeedTab({
                   }
                   title="Rédiger avec l'IA"
                   className="px-3 py-1.5 rounded-xl transition-colors flex items-center gap-1.5 text-xs font-medium shadow-sm shrink-0"
-                  style={{ background: "rgba(20, 184, 166, 0.15)", color: COLORS.teal, border: `1px solid ${COLORS.teal}40` }}
+                  style={{
+                    background: "rgba(20, 184, 166, 0.15)",
+                    color: COLORS.teal,
+                    border: `1px solid ${COLORS.teal}40`,
+                  }}
                 >
                   <Sparkles size={14} />
                   <span>IA</span>
@@ -704,7 +684,10 @@ export function FeedTab({
               />
 
               {mediaPreview && (
-                <div className="relative rounded-xl overflow-hidden max-h-60 border" style={{ borderColor: COLORS.border }}>
+                <div
+                  className="relative rounded-xl overflow-hidden max-h-60 border"
+                  style={{ borderColor: COLORS.border }}
+                >
                   <button
                     type="button"
                     onClick={() => {
@@ -724,9 +707,18 @@ export function FeedTab({
               )}
             </div>
 
-            <div className="flex items-center justify-between border-t p-3 flex-wrap gap-2 shrink-0 bg-inherit" style={{ borderColor: COLORS.border }}>
+            <div
+              className="flex items-center justify-between border-t p-3 flex-wrap gap-2 shrink-0 bg-inherit"
+              style={{ borderColor: COLORS.border }}
+            >
               <div className="flex items-center gap-2 flex-wrap">
-                <input ref={fileInputRef} type="file" accept="image/*,video/*" className="hidden" onChange={handlePickFile} />
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*,video/*"
+                  className="hidden"
+                  onChange={handlePickFile}
+                />
                 <button
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
@@ -778,7 +770,10 @@ export function FeedTab({
               <button
                 type="button"
                 onClick={handlePublish}
-                disabled={submitting || (!newText.trim() && !mediaFile && !audioBlob && !pollData?.question?.trim())}
+                disabled={
+                  submitting ||
+                  (!newText.trim() && !mediaFile && !audioBlob && !pollData?.question?.trim())
+                }
                 className="px-4 py-1.5 rounded-xl text-xs font-bold shadow-md flex items-center gap-1.5 disabled:opacity-50 transition-opacity"
                 style={{ background: COLORS.gold, color: "#000" }}
               >
@@ -816,17 +811,20 @@ export function FeedTab({
                   {post.avatar ? (
                     <img src={post.avatar} alt="" className="w-full h-full object-cover" />
                   ) : (
-                    <span style={{ color: COLORS.gold }}>
-                      {post.display_name?.charAt(0) || "?"}
-                    </span>
+                    <span style={{ color: COLORS.gold }}>{post.display_name?.charAt(0) || "?"}</span>
                   )}
                 </button>
                 <div>
                   <div className="flex items-center gap-2">
-                    <p className="font-bold text-sm flex items-center gap-1" style={{ color: COLORS.ivory }}>
+                    <p
+                      className="font-bold text-sm flex items-center gap-1"
+                      style={{ color: COLORS.ivory }}
+                    >
                       {post.display_name} {post.flag}
                     </p>
-                    <span className="text-xs" style={{ color: COLORS.muted }}>·</span>
+                    <span className="text-xs" style={{ color: COLORS.muted }}>
+                      ·
+                    </span>
                     <span className="text-xs font-normal" style={{ color: COLORS.muted }}>
                       {formatDate(post.created_at)}
                     </span>
@@ -925,13 +923,22 @@ export function FeedTab({
                 </div>
               </div>
             ) : (
-              <div className="text-base leading-relaxed whitespace-pre-wrap" style={{ color: COLORS.ivory }}>
-                {translatedMap[post.id] ? translatedMap[post.id] : <RichTextRenderer content={post.text} />}
+              <div
+                className="text-base leading-relaxed whitespace-pre-wrap"
+                style={{ color: COLORS.ivory }}
+              >
+                {translatedMap[post.id] ? (
+                  translatedMap[post.id]
+                ) : (
+                  <RichTextRenderer content={post.text} />
+                )}
               </div>
             )}
 
             {translatedMap[post.id] && (
-              <p className="text-[10px]" style={{ color: COLORS.muted }}>Traduit par BAARO</p>
+              <p className="text-[10px]" style={{ color: COLORS.muted }}>
+                Traduit par BAARO
+              </p>
             )}
 
             {/* Rendu Média (Images, Vidéos & Audio) */}
@@ -945,7 +952,8 @@ export function FeedTab({
                     preload="metadata"
                     className="w-full max-h-[500px] object-contain bg-black"
                   />
-                ) : post.media_type === "audio" || /\.(mp3|wav|m4a|webm|ogg)$/i.test(post.media_url) ? (
+                ) : post.media_type === "audio" ||
+                  /\.(mp3|wav|m4a|webm|ogg)$/i.test(post.media_url) ? (
                   <div className="w-full p-4 flex items-center gap-3 bg-slate-900/50 rounded-xl">
                     <div className="p-2 rounded-full bg-teal-500/20 text-teal-400 shrink-0">
                       <Mic size={20} />
@@ -961,9 +969,15 @@ export function FeedTab({
             <PollCard postId={post.id} user_id={activeUserId} />
             <SocialPostEnhancements post={post} user_id={activeUserId} />
 
-            {/* Actions (Reposts, Commentaires, Traduction, IA, Tip) - ❤ Supprimé */}
-            <div className="flex items-center justify-between gap-2 pt-2 border-t flex-wrap" style={{ borderColor: COLORS.border }}>
-              <div className="flex items-center gap-3 text-[11px] font-medium flex-wrap" style={{ color: COLORS.muted }}>
+            {/* Actions (Reposts, Commentaires, Traduction, IA, Tip) */}
+            <div
+              className="flex items-center justify-between gap-2 pt-2 border-t flex-wrap"
+              style={{ borderColor: COLORS.border }}
+            >
+              <div
+                className="flex items-center gap-3 text-[11px] font-medium flex-wrap"
+                style={{ color: COLORS.muted }}
+              >
                 <button
                   type="button"
                   onClick={() => handleRepost(post)}
@@ -974,11 +988,32 @@ export function FeedTab({
                   {Number(post.reposts_count || 0)}
                 </button>
 
+                {/* Listes d'engagement : réservées à l'auteur du post */}
                 {post.author_id === activeUserId && (
                   <div className="flex items-center gap-1.5 ml-1">
-                    <button type="button" onClick={() => setEngagement({ type: "postReposts", id: post.id })} className="text-[10px] underline hover:text-white">Reposts</button>
+                    <button
+                      type="button"
+                      onClick={() => setEngagement({ type: "postLikes", id: post.id })}
+                      className="text-[10px] underline hover:text-white"
+                    >
+                      👍 J'aime
+                    </button>
                     <span>·</span>
-                    <button type="button" onClick={() => setEngagement({ type: "postViews", id: post.id })} className="text-[10px] underline hover:text-white flex items-center gap-0.5"><Eye size={11} /> Vues</button>
+                    <button
+                      type="button"
+                      onClick={() => setEngagement({ type: "postReposts", id: post.id })}
+                      className="text-[10px] underline hover:text-white"
+                    >
+                      Reposts
+                    </button>
+                    <span>·</span>
+                    <button
+                      type="button"
+                      onClick={() => setEngagement({ type: "postViews", id: post.id })}
+                      className="text-[10px] underline hover:text-white flex items-center gap-0.5"
+                    >
+                      <Eye size={11} /> {post.views_count || 0}
+                    </button>
                   </div>
                 )}
               </div>
@@ -998,7 +1033,9 @@ export function FeedTab({
                   text={typeof post.text === "string" ? post.text : ""}
                   isTranslated={!!translatedMap[post.id]}
                   preferredLang="fr"
-                  onTranslated={(translated) => setTranslatedMap((prev) => ({ ...prev, [post.id]: translated }))}
+                  onTranslated={(translated) =>
+                    setTranslatedMap((prev) => ({ ...prev, [post.id]: translated }))
+                  }
                   onClear={() => setTranslatedMap((prev) => ({ ...prev, [post.id]: null }))}
                 />
 
@@ -1014,12 +1051,23 @@ export function FeedTab({
             {commentOpen[post.id] && (
               <div className="pt-3 border-t space-y-2" style={{ borderColor: COLORS.border }}>
                 {(commentsMap[post.id] || []).map((c) => (
-                  <div key={c.id} className="text-xs flex items-start justify-between gap-2" style={{ color: COLORS.muted }}>
+                  <div
+                    key={c.id}
+                    className="text-xs flex items-start justify-between gap-2"
+                    style={{ color: COLORS.muted }}
+                  >
                     <div>
-                      <span className="font-bold" style={{ color: COLORS.ivory }}>{c.author}</span> : {c.text}
+                      <span className="font-bold" style={{ color: COLORS.ivory }}>
+                        {c.author}
+                      </span>{" "}
+                      : {c.text}
                     </div>
                     {c.author_id === activeUserId && (
-                      <button type="button" onClick={() => handleDeleteComment(post.id, c.id)} className="shrink-0 p-1 text-red-400 hover:text-red-300">
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteComment(post.id, c.id)}
+                        className="shrink-0 p-1 text-red-400 hover:text-red-300"
+                      >
                         <Trash2 size={12} />
                       </button>
                     )}
@@ -1029,13 +1077,24 @@ export function FeedTab({
                   <div className="flex gap-2 pt-1">
                     <input
                       value={newCommentText[post.id] || ""}
-                      onChange={(e) => setNewCommentText((prev) => ({ ...prev, [post.id]: e.target.value }))}
+                      onChange={(e) =>
+                        setNewCommentText((prev) => ({ ...prev, [post.id]: e.target.value }))
+                      }
                       onKeyDown={(e) => e.key === "Enter" && handleAddComment(post.id)}
                       placeholder="Ajouter un commentaire..."
                       className="flex-1 min-w-0 px-3 py-1.5 rounded-lg border text-xs outline-none"
-                      style={{ background: COLORS.surface2, borderColor: COLORS.border, color: COLORS.ivory }}
+                      style={{
+                        background: COLORS.surface2,
+                        borderColor: COLORS.border,
+                        color: COLORS.ivory,
+                      }}
                     />
-                    <button type="button" onClick={() => handleAddComment(post.id)} className="p-1.5 rounded-lg" style={{ background: COLORS.gold, color: "#000" }}>
+                    <button
+                      type="button"
+                      onClick={() => handleAddComment(post.id)}
+                      className="p-1.5 rounded-lg"
+                      style={{ background: COLORS.gold, color: "#000" }}
+                    >
                       <Send size={13} />
                     </button>
                   </div>
@@ -1051,7 +1110,7 @@ export function FeedTab({
         <div className="text-center pt-2">
           <button
             type="button"
-            onClick={loadMorePosts}
+            onClick={loadMore}
             disabled={loadingMore}
             className="px-4 py-2 rounded-xl text-xs font-semibold border transition hover:bg-white/5"
             style={{ borderColor: COLORS.border, color: COLORS.ivory }}
@@ -1064,12 +1123,23 @@ export function FeedTab({
       {/* Modale de signalement */}
       {reportPost && (
         <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
-          <div className="w-full max-w-md rounded-2xl p-5 border flex flex-col gap-4" style={{ background: COLORS.surface, borderColor: COLORS.border }}>
-            <h3 className="font-bold text-sm" style={{ color: COLORS.ivory }}>Signaler cette publication</h3>
-            <p className="text-xs" style={{ color: COLORS.muted }}>Choisissez le motif du signalement :</p>
+          <div
+            className="w-full max-w-md rounded-2xl p-5 border flex flex-col gap-4"
+            style={{ background: COLORS.surface, borderColor: COLORS.border }}
+          >
+            <h3 className="font-bold text-sm" style={{ color: COLORS.ivory }}>
+              Signaler cette publication
+            </h3>
+            <p className="text-xs" style={{ color: COLORS.muted }}>
+              Choisissez le motif du signalement :
+            </p>
             <div className="flex flex-col gap-2">
               {REPORT_REASONS.map((reason) => (
-                <label key={reason} className="flex items-center gap-2 text-xs cursor-pointer" style={{ color: COLORS.ivory }}>
+                <label
+                  key={reason}
+                  className="flex items-center gap-2 text-xs cursor-pointer"
+                  style={{ color: COLORS.ivory }}
+                >
                   <input
                     type="radio"
                     name="reportReason"
@@ -1081,11 +1151,23 @@ export function FeedTab({
                 </label>
               ))}
             </div>
-            <div className="flex justify-end gap-2 pt-2 border-t" style={{ borderColor: COLORS.border }}>
-              <button type="button" onClick={() => setReportPost(null)} className="px-3 py-1.5 rounded-lg text-xs" style={{ color: COLORS.muted }}>
+            <div
+              className="flex justify-end gap-2 pt-2 border-t"
+              style={{ borderColor: COLORS.border }}
+            >
+              <button
+                type="button"
+                onClick={() => setReportPost(null)}
+                className="px-3 py-1.5 rounded-lg text-xs"
+                style={{ color: COLORS.muted }}
+              >
                 Annuler
               </button>
-              <button type="button" onClick={handleSendReport} className="px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-500 text-black">
+              <button
+                type="button"
+                onClick={handleSendReport}
+                className="px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-500 text-black"
+              >
                 Envoyer le signalement
               </button>
             </div>
@@ -1093,7 +1175,7 @@ export function FeedTab({
         </div>
       )}
 
-      {/* Liste des engagements (Reposts, Vues) */}
+      {/* Liste des engagements (Likes, Reposts, Vues) */}
       {engagement && (
         <EngagementList
           type={engagement.type}
