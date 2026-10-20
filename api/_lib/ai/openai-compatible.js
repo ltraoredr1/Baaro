@@ -1,108 +1,263 @@
-export async function callOpenAICompatible({ key, base, model, messages, system, maxTokens }) {
-  const apiKey = key || process.env.GEMINI_API_KEY || process.env.API_KEY;
-  if (!apiKey) {
-    throw Object.assign(new Error("Clé API manquante côté serveur"), { status: 503 });
+/**
+ * BAARO AI — Client OpenAI-compatible + Gemini natif
+ * Fournisseurs : Groq, Mistral, Gemini
+ */
+
+const GROQ_DEFAULT_MODEL = "openai/gpt-oss-20b";
+const MISTRAL_DEFAULT_MODEL = "ministral-3b-latest";
+const GEMINI_DEFAULT_MODEL = "gemini-2.5-flash-lite";
+
+function parseModelList(value) {
+  return String(value || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function getGenericDefaultModel(base) {
+  const host = String(base || "").toLowerCase();
+
+  if (host.includes("api.groq.com")) {
+    return GROQ_DEFAULT_MODEL;
   }
 
-  // Détecte si l'on utilise un fournisseur OpenAI-compatible (Groq, Mistral, etc.) ou Gemini natif
-  const isGenericOpenAI = base && !base.includes("generativelanguage.googleapis.com");
+  if (host.includes("api.mistral.ai")) {
+    return MISTRAL_DEFAULT_MODEL;
+  }
 
-  if (isGenericOpenAI) {
-    // Format standard OpenAI / Groq / Mistral
-    const formattedMessages = [];
-    if (system) {
-      formattedMessages.push({ role: "system", content: system });
+  return null;
+}
+
+function httpError(message, status) {
+  return Object.assign(new Error(message), {
+    status: status >= 500 ? 502 : status,
+  });
+}
+
+export async function callOpenAICompatible({
+  key,
+  base,
+  model,
+  messages,
+  system,
+  maxTokens,
+}) {
+  const isGemini = String(base || "").includes(
+    "generativelanguage.googleapis.com"
+  );
+
+  const apiKey = key || (isGemini ? process.env.GEMINI_API_KEY : null);
+
+  if (!apiKey) {
+    throw Object.assign(
+      new Error("Clé API manquante pour le fournisseur IA"),
+      { status: 503 }
+    );
+  }
+
+  if (!Array.isArray(messages) || messages.length === 0) {
+    throw Object.assign(
+      new Error("Messages IA invalides"),
+      { status: 400 }
+    );
+  }
+
+  const tokenLimit = Math.min(
+    Math.max(Number(maxTokens) || 1200, 1),
+    2000
+  );
+
+  // ============== GROQ / MISTRAL / OPENAI-COMPATIBLE ==============
+
+  if (base && !isGemini) {
+    const activeModel =
+      String(model || "").trim() ||
+      getGenericDefaultModel(base);
+
+    if (!activeModel) {
+      throw Object.assign(
+        new Error("Modèle IA non configuré pour ce fournisseur"),
+        { status: 503 }
+      );
     }
-    for (const m of messages) {
-      if (m.role === "system") continue;
+
+    const formattedMessages = [];
+
+    if (system) {
       formattedMessages.push({
-        role: m.role === "assistant" ? "assistant" : "user",
-        content: String(m.content || "")
+        role: "system",
+        content: String(system),
       });
     }
 
-    // Sélection du modèle avec fallback mis à jour (Fin de llama-3.3-70b-versatile en dur)
-    const activeModel = model || process.env.GROQ_MODEL || "llama-3.1-8b-instruct";
+    for (const message of messages) {
+      if (message.role === "system") continue;
 
-    const url = `${base.replace(/\/+$/, "")}/chat/completions`;
+      formattedMessages.push({
+        role: message.role === "assistant" ? "assistant" : "user",
+        content: String(message.content ?? ""),
+      });
+    }
+
+    const url =
+      `${String(base).replace(/\/+$/, "")}/chat/completions`;
+
     const response = await fetch(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": `Bearer ${apiKey}`
+        Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
         model: activeModel,
         messages: formattedMessages,
-        max_tokens: maxTokens || 1200,
-        temperature: 0.7
+        max_tokens: tokenLimit,
+        temperature: 0.7,
       }),
     });
 
     const data = await response.json().catch(() => ({}));
 
     if (!response.ok) {
-      const err = new Error(data?.error?.message || `Erreur fournisseur (${response.status})`);
-      err.status = response.status >= 500 ? 502 : response.status;
-      throw err;
+      throw httpError(
+        data?.error?.message ||
+          `Erreur du fournisseur IA (${response.status})`,
+        response.status
+      );
     }
 
-    const reply = data.choices?.[0]?.message?.content;
-    if (!reply) {
-      throw Object.assign(new Error("Réponse vide du fournisseur"), { status: 502 });
+    const reply = data?.choices?.[0]?.message?.content;
+
+    if (typeof reply !== "string" || !reply.trim()) {
+      throw Object.assign(
+        new Error("Réponse vide du fournisseur IA"),
+        { status: 502 }
+      );
     }
 
-    return { reply, raw: data, modelUsed: activeModel };
+    return {
+      reply: reply.trim(),
+      raw: data,
+      modelUsed: activeModel,
+    };
   }
 
-  // --- COMPORTEMENT NATIF GEMINI (Si aucun base URL tiers n'est fourni) ---
-  const modelsEnv = process.env.GEMINI_MODELS || model || process.env.GEMINI_MODEL || "gemini-2.5-flash-lite,gemini-2.5-flash";
-  const modelList = modelsEnv.split(",").map(m => m.trim()).filter(Boolean);
+  // ============== GEMINI NATIF ==============
 
-  let lastError = null;
+  const configuredModels = model
+    ? [String(model).trim()]
+    : parseModelList(
+        process.env.GEMINI_MODEL ||
+          process.env.GEMINI_MODELS
+      );
+
+  const modelList = [
+    ...new Set(
+      [
+        ...configuredModels,
+        GEMINI_DEFAULT_MODEL,
+        "gemini-2.5-flash",
+      ].filter(Boolean)
+    ),
+  ];
 
   const contents = [];
-  if (system) {
-    contents.push({ role: "user", parts: [{ text: `System: ${system}` }] });
-    contents.push({ role: "model", parts: [{ text: "Compris." }] });
-  }
 
-  for (const m of messages) {
-    if (m.role === "system") continue;
+  for (const message of messages) {
+    if (message.role === "system") continue;
+
     contents.push({
-      role: m.role === "assistant" ? "model" : "user",
-      parts: [{ text: String(m.content || "") }]
+      role: message.role === "assistant" ? "model" : "user",
+      parts: [{ text: String(message.content ?? "") }],
     });
   }
 
+  const generationConfig = {
+    maxOutputTokens: tokenLimit,
+    temperature: 0.7,
+  };
+
+  let lastError = null;
+
   for (const currentModel of modelList) {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:generateContent?key=${apiKey}`;
+    const url =
+      `https://generativelanguage.googleapis.com/v1beta/models/` +
+      `${encodeURIComponent(currentModel)}:generateContent`;
 
     try {
       const response = await fetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": apiKey,
+        },
         body: JSON.stringify({
+          ...(system
+            ? { systemInstruction: { parts: [{ text: String(system) }] } }
+            : {}),
           contents,
-          generationConfig: { maxOutputTokens: maxTokens || 1200, temperature: 0.7 }
+          generationConfig,
         }),
       });
 
       const data = await response.json().catch(() => ({}));
 
       if (response.ok) {
-        const reply = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        const reply = data?.candidates?.[0]?.content?.parts
+          ?.map((part) => part.text || "")
+          .join("")
+          .trim();
+
         if (reply) {
-          return { reply, raw: data, modelUsed: currentModel };
+          return {
+            reply,
+            raw: data,
+            modelUsed: currentModel,
+          };
         }
+
+        lastError = Object.assign(
+          new Error("Gemini n'a retourné aucun texte"),
+          { status: 502 }
+        );
+
+        continue;
       }
 
-      lastError = new Error(data?.error?.message || `Erreur ${currentModel} (${response.status})`);
-      lastError.status = response.status;
-    } catch (err) {
-      lastError = err;
+      lastError = httpError(
+        data?.error?.message ||
+          `Erreur Gemini ${currentModel} (${response.status})`,
+        response.status
+      );
+
+      // Un modèle absent ou inaccessible peut être remplacé.
+      // Une erreur d'authentification ne sera pas résolue
+      // par un changement de modèle.
+      if (
+        response.status === 401 ||
+        response.status === 403 ||
+        response.status === 429
+      ) {
+        throw lastError;
+      }
+    } catch (error) {
+      lastError = error;
+
+      if (
+        error.status === 401 ||
+        error.status === 403 ||
+        error.status === 429
+      ) {
+        throw error;
+      }
     }
   }
 
-  throw Object.assign(lastError || new Error("Service IA temporairement surchargé. Réessayez dans un instant."), { status: 503 });
+  throw Object.assign(
+    lastError ||
+      new Error("Service IA temporairement indisponible"),
+    {
+      status: lastError?.status || 503,
+    }
+  );
 }
