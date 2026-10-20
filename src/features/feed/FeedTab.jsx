@@ -127,6 +127,7 @@ export function FeedTab({
   const [editText, setEditText] = useState("");
   const [savingEdit, setSavingEdit] = useState(false);
   const [reportPost, setReportPost] = useState(null);
+  const [reportReason, setReportReason] = useState(REPORT_REASONS[0]);
 
   // J'aime, Reposts, commentaires, traduction
   const [likedPosts, setLikedPosts] = useState({});
@@ -216,7 +217,6 @@ export function FeedTab({
         setPosts(formatted);
         cursorRef.current = nextCursor;
         setHasMore(Boolean(nextCursor));
-        // Analytics feed (file offline si hors-ligne)
         formatted.slice(0, 10).forEach((p) => {
           if (p?.id) void recordFeedEvent(p.id, "impression");
         });
@@ -224,18 +224,91 @@ export function FeedTab({
         handleDbError(error, showToast, "Erreur lors du chargement du fil");
         if (!silent) setPosts([]);
         setHasMore(false);
-      } finally {
+      } font-medium {
         setLoading(false);
       }
     },
     [showToast]
   );
 
+  const loadMorePosts = async () => {
+    if (!hasMore || loadingMore || !cursorRef.current) return;
+    setLoadingMore(true);
+    try {
+      const { rows, nextCursor } = await fetchFeedPage({
+        cursor: cursorRef.current,
+        pageSize: PAGE_SIZE,
+      });
+      const formatted = rows.map(formatPost);
+      setPosts((prev) => [...prev, ...formatted]);
+      cursorRef.current = nextCursor;
+      setHasMore(Boolean(nextCursor));
+    } catch (error) {
+      handleDbError(error, showToast, "Erreur lors du chargement de la suite");
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
   useEffect(() => {
     loadPosts();
   }, [loadPosts]);
 
-  // Action Reposter avec notification au créateur
+  // Supprimer une publication
+  const handleDeletePost = async (postId) => {
+    if (!window.confirm("Voulez-vous vraiment supprimer cette publication ?")) return;
+    try {
+      const { error } = await supabase.from("posts").delete().eq("id", postId).eq("author_id", activeUserId);
+      if (error) throw error;
+      setPosts((prev) => prev.filter((p) => p.id !== postId));
+      showToast("Publication supprimée", "success");
+    } catch (err) {
+      handleDbError(err, showToast, "Impossible de supprimer la publication");
+    }
+  };
+
+  // Modifier une publication
+  const handleSaveEdit = async (postId) => {
+    if (!editText.trim()) return;
+    setSavingEdit(true);
+    try {
+      const { error } = await supabase
+        .from("posts")
+        .update({ text: editText.trim() })
+        .eq("id", postId)
+        .eq("author_id", activeUserId);
+      if (error) throw error;
+
+      setPosts((prev) =>
+        prev.map((p) => (p.id === postId ? { ...p, text: editText.trim() } : p))
+      );
+      setEditingId(null);
+      showToast("Publication mise à jour", "success");
+    } catch (err) {
+      handleDbError(err, showToast, "Échec de la modification");
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
+  // Signaler une publication
+  const handleSendReport = async () => {
+    if (!reportPost || !activeUserId) return;
+    try {
+      const { error } = await supabase.from("post_reports").insert({
+        post_id: reportPost.id,
+        reporter_id: activeUserId,
+        reason: reportReason,
+      });
+      if (error) throw error;
+      showToast("Signalement envoyé avec succès", "success");
+      setReportPost(null);
+    } catch (err) {
+      handleDbError(err, showToast, "Erreur lors du signalement");
+    }
+  };
+
+  // Action Reposter
   const handleRepost = async (post) => {
     if (!activeUserId) {
       showToast("Vous devez être connecté pour republier", "error");
@@ -293,6 +366,7 @@ export function FeedTab({
     }
   };
 
+  // Action Like
   const handleLike = async (postId) => {
     if (!activeUserId) {
       showToast("Vous devez être connecté", "error");
@@ -314,7 +388,6 @@ export function FeedTab({
     );
 
     try {
-      // File offline si hors-ligne (offline_sync) — sinon exécution immédiate
       const result = await runOrEnqueue(
         wasLiked ? "unlike_post" : "like_post",
         { post_id: postId }
@@ -664,10 +737,10 @@ export function FeedTab({
           <article
             key={post.id}
             data-post-id={post.id}
-            className="glass-card rounded-2xl p-5 shadow-xl border flex flex-col gap-3"
+            className="glass-card rounded-2xl p-5 shadow-xl border flex flex-col gap-3 relative"
             style={{ borderColor: COLORS.border }}
           >
-            {/* En-tête de la publication : Photo, Nom, Pseudo & DATE / HEURE */}
+            {/* En-tête : Photo, Nom, Pseudo & Date */}
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <button
@@ -699,28 +772,127 @@ export function FeedTab({
                   </p>
                 </div>
               </div>
+
+              {/* Menu Options (...) */}
+              <div className="relative" data-post-menu>
+                <button
+                  type="button"
+                  onClick={() => setMenuOpenId(menuOpenId === post.id ? null : post.id)}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-colors"
+                >
+                  <MoreHorizontal size={18} />
+                </button>
+
+                {menuOpenId === post.id && (
+                  <div
+                    className="absolute right-0 top-full mt-1 w-44 rounded-xl border shadow-xl z-20 overflow-hidden py-1"
+                    style={{ background: COLORS.surface2, borderColor: COLORS.border }}
+                  >
+                    {post.author_id === activeUserId ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingId(post.id);
+                            setEditText(post.text || "");
+                            setMenuOpenId(null);
+                          }}
+                          className="w-full px-3 py-2 text-left text-xs font-medium flex items-center gap-2 hover:bg-white/10"
+                          style={{ color: COLORS.ivory }}
+                        >
+                          <Pencil size={14} /> Modifier
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setMenuOpenId(null);
+                            handleDeletePost(post.id);
+                          }}
+                          className="w-full px-3 py-2 text-left text-xs font-medium flex items-center gap-2 hover:bg-red-500/10 text-red-400"
+                        >
+                          <Trash2 size={14} /> Supprimer
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setReportPost(post);
+                          setMenuOpenId(null);
+                        }}
+                        className="w-full px-3 py-2 text-left text-xs font-medium flex items-center gap-2 hover:bg-white/10 text-amber-400"
+                      >
+                        <Flag size={14} /> Signaler
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
 
-            <div className="text-base leading-relaxed whitespace-pre-wrap" style={{ color: COLORS.ivory }}>
-              {translatedMap[post.id] ? translatedMap[post.id] : <RichTextRenderer content={post.text} />}
-            </div>
+            {/* Mode Édition / Contenu du post */}
+            {editingId === post.id ? (
+              <div className="flex flex-col gap-2 my-2">
+                <textarea
+                  value={editText}
+                  onChange={(e) => setEditText(e.target.value)}
+                  className="w-full p-3 rounded-xl border text-sm outline-none resize-none"
+                  style={{ background: COLORS.surface, borderColor: COLORS.border, color: COLORS.ivory }}
+                  rows={3}
+                />
+                <div className="flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setEditingId(null)}
+                    className="px-3 py-1 rounded-lg text-xs"
+                    style={{ color: COLORS.muted }}
+                  >
+                    Annuler
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSaveEdit(post.id)}
+                    disabled={savingEdit}
+                    className="px-3 py-1 rounded-lg text-xs font-bold"
+                    style={{ background: COLORS.gold, color: "#000" }}
+                  >
+                    {savingEdit ? "Enregistrement..." : "Enregistrer"}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="text-base leading-relaxed whitespace-pre-wrap" style={{ color: COLORS.ivory }}>
+                {translatedMap[post.id] ? translatedMap[post.id] : <RichTextRenderer content={post.text} />}
+              </div>
+            )}
+
             {translatedMap[post.id] && (
               <p className="text-[10px]" style={{ color: COLORS.muted }}>Traduit par BAARO</p>
             )}
 
+            {/* Rendu Média (Images & Vidéos) */}
             {post.media_url && (
               <div className="rounded-xl overflow-hidden border bg-black/40 flex items-center justify-center">
-                <img src={post.media_url} alt="" className="w-full max-h-[500px] object-contain" />
+                {post.media_type === "video" || /\.(mp4|webm|ogg|mov)$/i.test(post.media_url) ? (
+                  <video
+                    src={post.media_url}
+                    controls
+                    playsInline
+                    preload="metadata"
+                    className="w-full max-h-[500px] object-contain bg-black"
+                  />
+                ) : (
+                  <img src={post.media_url} alt="" className="w-full max-h-[500px] object-contain" />
+                )}
               </div>
             )}
 
             <PollCard postId={post.id} user_id={activeUserId} />
             <SocialPostEnhancements post={post} user_id={activeUserId} />
 
-            {/* Barre d'actions (Likes, Reposts, Commentaires, Traduction, IA, Tip) */}
+            {/* Actions (Likes, Reposts, Commentaires, Traduction, IA, Tip) */}
             <div className="flex items-center justify-between gap-2 pt-2 border-t flex-wrap" style={{ borderColor: COLORS.border }}>
               <div className="flex items-center gap-3 text-[11px] font-medium flex-wrap" style={{ color: COLORS.muted }}>
-                
                 <button
                   type="button"
                   onClick={() => handleLike(post.id)}
@@ -779,7 +951,7 @@ export function FeedTab({
               </div>
             </div>
 
-            {/* Commentaires */}
+            {/* Section Commentaires */}
             {commentOpen[post.id] && (
               <div className="pt-3 border-t space-y-2" style={{ borderColor: COLORS.border }}>
                 {(commentsMap[post.id] || []).map((c) => (
@@ -815,6 +987,54 @@ export function FeedTab({
         ))}
       </div>
 
+      {/* Bouton charger plus */}
+      {hasMore && (
+        <div className="text-center pt-2">
+          <button
+            type="button"
+            onClick={loadMorePosts}
+            disabled={loadingMore}
+            className="px-4 py-2 rounded-xl text-xs font-semibold border transition hover:bg-white/5"
+            style={{ borderColor: COLORS.border, color: COLORS.ivory }}
+          >
+            {loadingMore ? "Chargement..." : "Afficher plus de publications"}
+          </button>
+        </div>
+      )}
+
+      {/* Modale de signalement */}
+      {reportPost && (
+        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
+          <div className="w-full max-w-md rounded-2xl p-5 border flex flex-col gap-4" style={{ background: COLORS.surface, borderColor: COLORS.border }}>
+            <h3 className="font-bold text-sm" style={{ color: COLORS.ivory }}>Signaler cette publication</h3>
+            <p className="text-xs" style={{ color: COLORS.muted }}>Choisissez le motif du signalement :</p>
+            <div className="flex flex-col gap-2">
+              {REPORT_REASONS.map((reason) => (
+                <label key={reason} className="flex items-center gap-2 text-xs cursor-pointer" style={{ color: COLORS.ivory }}>
+                  <input
+                    type="radio"
+                    name="reportReason"
+                    value={reason}
+                    checked={reportReason === reason}
+                    onChange={(e) => setReportReason(e.target.value)}
+                  />
+                  <span>{reason}</span>
+                </label>
+              ))}
+            </div>
+            <div className="flex justify-end gap-2 pt-2 border-t" style={{ borderColor: COLORS.border }}>
+              <button type="button" onClick={() => setReportPost(null)} className="px-3 py-1.5 rounded-lg text-xs" style={{ color: COLORS.muted }}>
+                Annuler
+              </button>
+              <button type="button" onClick={handleSendReport} className="px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-500 text-black">
+                Envoyer le signalement
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Liste des engagements (Likes, Reposts, Vues) */}
       {engagement && (
         <EngagementList
           type={engagement.type}
