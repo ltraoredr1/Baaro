@@ -21,6 +21,9 @@ export async function callOpenAICompatible({ key, base, model, messages, system,
       });
     }
 
+    // Sélection du modèle avec fallback mis à jour (Fin de llama-3.3-70b-versatile en dur)
+    const activeModel = model || process.env.GROQ_MODEL || "llama-3.1-8b-instruct";
+
     const url = `${base.replace(/\/+$/, "")}/chat/completions`;
     const response = await fetch(url, {
       method: "POST",
@@ -29,7 +32,7 @@ export async function callOpenAICompatible({ key, base, model, messages, system,
         "Authorization": `Bearer ${apiKey}`
       },
       body: JSON.stringify({
-        model: model || "llama-3.3-70b-versatile",
+        model: activeModel,
         messages: formattedMessages,
         max_tokens: maxTokens || 1200,
         temperature: 0.7
@@ -49,11 +52,11 @@ export async function callOpenAICompatible({ key, base, model, messages, system,
       throw Object.assign(new Error("Réponse vide du fournisseur"), { status: 502 });
     }
 
-    return { reply, raw: data, modelUsed: model };
+    return { reply, raw: data, modelUsed: activeModel };
   }
 
   // --- COMPORTEMENT NATIF GEMINI (Si aucun base URL tiers n'est fourni) ---
-  const modelsEnv = process.env.GEMINI_MODELS || model || process.env.GEMINI_MODEL || "gemini-3.8-flash,gemini-3.5-flash-lite";
+  const modelsEnv = process.env.GEMINI_MODELS || model || process.env.GEMINI_MODEL || "gemini-2.5-flash-lite,gemini-2.5-flash";
   const modelList = modelsEnv.split(",").map(m => m.trim()).filter(Boolean);
 
   let lastError = null;
