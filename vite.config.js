@@ -74,7 +74,8 @@ export default defineConfig({
           'workbox-*.js',
         ],
 
-        navigateFallback: null,
+        navigateFallback: 'index.html',
+        navigateFallbackAllowlist: [/^\/(?!api).*/],
 
         // Ajoute les gestionnaires "push" et "notificationclick" au
         // service worker généré (/sw.js). Sans cela, les notifications
