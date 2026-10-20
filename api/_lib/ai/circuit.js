@@ -1,14 +1,21 @@
 /**
- * Circuit breaker simple pour les providers IA.
- * Mémoire process (suffisant sur Vercel serverless + cold starts).
- * Après 3 échecs consécutifs → open pendant cooldownMs.
+ * BAARO AI Router - Gestionnaire de routage et Circuit Breaker
+ *
+ * Priorité globale :
+ *  1. Groq (Ultra-rapide, idéal pour éliminer les latences et 408)
+ *  2. Mistral (Secours rapide et fiable)
+ *  3. Gemini (Principal fallback avec support multi-modèles)
  */
 
+// ============== CIRCUIT BREAKER =============
 const failures = new Map(); // provider → { count, openUntil }
 
-const DEFAULT_COOLDOWN_MS = 60_000; // 1 minute
-const FAILURE_THRESHOLD = 3;
+const DEFAULT_COOLDOWN_MS = 60_000; // Cooldown de 1 minute si trop d'échecs
+const FAILURE_THRESHOLD = 3;        // Bascule en "Open" après 3 échecs consécutifs
 
+/**
+ * Vérifie si le circuit d'un provider est actuellement ouvert (bloqué).
+ */
 export function isOpen(provider) {
   if (!provider) return false;
   const state = failures.get(provider);
@@ -20,6 +27,9 @@ export function isOpen(provider) {
   return true;
 }
 
+/**
+ * Enregistre un échec pour un provider et ouvre le circuit si le seuil est atteint.
+ */
 export function recordFailure(provider, cooldownMs = DEFAULT_COOLDOWN_MS) {
   if (!provider) return;
   const state = failures.get(provider) || { count: 0, openUntil: 0 };
@@ -30,12 +40,17 @@ export function recordFailure(provider, cooldownMs = DEFAULT_COOLDOWN_MS) {
   failures.set(provider, state);
 }
 
+/**
+ * Reinitialise l'état d'un provider après un succès.
+ */
 export function recordSuccess(provider) {
   if (!provider) return;
   failures.delete(provider);
 }
 
-/** Liste des providers actuellement en circuit ouvert (debug). */
+/**
+ * Liste des providers actuellement en circuit ouvert (pour le debug/monitoring).
+ */
 export function openProviders() {
   const now = Date.now();
   const result = [];
@@ -43,4 +58,92 @@ export function openProviders() {
     if (now <= state.openUntil) result.push(p);
   }
   return result;
+}
+
+// ============== UTILS & CONFIGS =============
+
+export function normalizeCountry(value) {
+  const country = String(value || "").trim().toUpperCase();
+  return /^[A-Z]{2}$/.test(country) ? country : null;
+}
+
+/**
+ * Sélectionne automatiquement le meilleur provider disponible non bloqué.
+ */
+export function chooseProvider() {
+  const candidates = ["groq", "mistral", "gemini"];
+  for (const p of candidates) {
+    if (providerConfig(p) && !isOpen(p)) {
+      return p;
+    }
+  }
+  return "groq"; // Fallback par défaut si tous sont bloqués
+}
+
+const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta";
+
+function getFirstModel(envVar, fallback) {
+  if (!envVar) return fallback;
+  const first = envVar.split(",")[0]?.trim();
+  return first || fallback;
+}
+
+/**
+ * Retourne la configuration complète (clé, URL de base, modèle) du provider demandé.
+ */
+export function providerConfig(provider) {
+  switch (provider) {
+    case "groq": {
+      if (!process.env.GROQ_API_KEY) return null;
+      const model = getFirstModel(
+        process.env.GROQ_MODEL || process.env.GROQ_MODELS,
+        "llama-3.3-70b-versatile"
+      );
+      return {
+        key: process.env.GROQ_API_KEY,
+        base: "https://api.groq.com/openai/v1",
+        model,
+      };
+    }
+
+    case "mistral": {
+      if (!process.env.MISTRAL_API_KEY) return null;
+      const model = getFirstModel(
+        process.env.MISTRAL_MODEL,
+        "mistral-small-latest"
+      );
+      return {
+        key: process.env.MISTRAL_API_KEY,
+        base: "https://api.mistral.ai/v1",
+        model,
+      };
+    }
+
+    case "gemini": {
+      if (!process.env.GEMINI_API_KEY) return null;
+      const model = getFirstModel(
+        process.env.GEMINI_MODEL || process.env.GEMINI_MODELS,
+        "gemini-3.8-flash"
+      );
+      return {
+        key: process.env.GEMINI_API_KEY,
+        base: GEMINI_BASE,
+        model,
+      };
+    }
+
+    case "gemini-fallback": {
+      if (!process.env.GEMINI_API_KEY || !process.env.GEMINI_FALLBACK_MODEL) {
+        return null;
+      }
+      return {
+        key: process.env.GEMINI_API_KEY,
+        base: GEMINI_BASE,
+        model: process.env.GEMINI_FALLBACK_MODEL,
+      };
+    }
+
+    default:
+      return null;
+  }
 }
