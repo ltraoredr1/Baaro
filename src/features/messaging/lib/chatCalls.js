@@ -1,5 +1,7 @@
 /**
  * src/features/messaging/lib/chatCalls.js - V5 - Envoie callee_id + conversation_id pour fix RLS
+ * V5.1 : lecture de la réponse API corrigée (le corps n'était lu qu'une fois, d'où des erreurs « body already read »
+ * qui masquaient le vrai message quand le serveur renvoyait du texte/HTML au lieu de JSON).
  */
 import DailyIframe from "@daily-co/daily-js";
 import { supabase } from "../../../supabaseClient.js";
@@ -24,7 +26,14 @@ async function callApi(body) {
     headers: { "Content-Type": "application/json", ...(await authHeaders()) },
     body: JSON.stringify(body),
   });
-  const data = await res.json().catch(async () => ({ error: await res.text() }));
+  // On lit le corps UNE seule fois (texte), puis on tente de l'interpréter comme JSON
+  const raw = await res.text();
+  let data;
+  try {
+    data = raw ? JSON.parse(raw) : {};
+  } catch {
+    data = { error: raw ? raw.slice(0, 200) : "" };
+  }
   if (!res.ok) throw new Error(data.error || `Erreur ${res.status}`);
   return data;
 }
