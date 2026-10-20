@@ -17,14 +17,49 @@ const GUEST_OK_KEY = "baaro_guest_ok";
 // Champs que le client a le droit d'envoyer. Les champs sensibles
 // (is_premium, is_verified, restricted, id, created_at...) sont ignorés.
 const EDITABLE_PROFILE_FIELDS = [
-  "display_name", "handle", "flag", "bio",
-  "avatar_url", "cover_url", "location", "country",
+  "display_name",
+  "handle",
+  "flag",
+  "bio",
+  "avatar_url",
+  "cover_url",
+  "location",
+  "country",
+  "first_name",
+  "last_name",
+  "birth_date",
 ];
+
+// Lecture profil : colonnes explicites (pas de select "*").
+// phone volontairement exclu ici — chargé uniquement dans Réglages si propriétaire.
+const PROFILE_SELECT = [
+  "id",
+  "display_name",
+  "handle",
+  "flag",
+  "bio",
+  "avatar_url",
+  "cover_url",
+  "location",
+  "country",
+  "registered_country",
+  "country_changed_at",
+  "country_change_available_at",
+  "first_name",
+  "last_name",
+  "birth_date",
+  "is_private",
+  "is_verified",
+  "created_at",
+  "updated_at",
+].join(",");
 
 function pickEditable(updates) {
   const out = {};
   for (const key of EDITABLE_PROFILE_FIELDS) {
-    if (updates && Object.prototype.hasOwnProperty.call(updates, key)) out[key] = updates[key];
+    if (updates && Object.prototype.hasOwnProperty.call(updates, key)) {
+      out[key] = updates[key];
+    }
   }
   return out;
 }
@@ -37,25 +72,63 @@ const DEFAULT_PROFILE = {
 };
 
 function safeGet(key, storage = localStorage) {
-  try { return storage.getItem(key); } catch { return null; }
+  try {
+    return storage.getItem(key);
+  } catch {
+    return null;
+  }
 }
 function safeSet(key, value, storage = localStorage) {
-  try { storage.setItem(key, value); } catch {}
+  try {
+    storage.setItem(key, value);
+  } catch {}
 }
 function safeRemove(key, storage = localStorage) {
-  try { storage.removeItem(key); } catch {}
+  try {
+    storage.removeItem(key);
+  } catch {}
 }
 
 function clearGuestFlags() {
   safeRemove(GUEST_KEY);
   safeRemove(GUEST_OK_KEY);
-  try { safeRemove(GUEST_OK_KEY, sessionStorage); } catch {}
+  try {
+    safeRemove(GUEST_OK_KEY, sessionStorage);
+  } catch {}
 }
 
 function isGuestOkThisSession() {
-  return safeGet(GUEST_OK_KEY) === "1" || (() => {
-    try { return sessionStorage.getItem(GUEST_OK_KEY) === "1"; } catch { return false; }
-  })();
+  return (
+    safeGet(GUEST_OK_KEY) === "1" ||
+    (() => {
+      try {
+        return sessionStorage.getItem(GUEST_OK_KEY) === "1";
+      } catch {
+        return false;
+      }
+    })()
+  );
+}
+
+function toUserProfile(data) {
+  return {
+    display_name: data.display_name || DEFAULT_PROFILE.display_name,
+    handle: data.handle || DEFAULT_PROFILE.handle,
+    flag: data.flag || DEFAULT_PROFILE.flag,
+    bio: data.bio || DEFAULT_PROFILE.bio,
+    avatar_url: data.avatar_url || null,
+    cover_url: data.cover_url || null,
+    location: data.location || "",
+    country: data.country || null,
+    registered_country: data.registered_country || null,
+    country_changed_at: data.country_changed_at || null,
+    country_change_available_at: data.country_change_available_at || null,
+    first_name: data.first_name || "",
+    last_name: data.last_name || "",
+    birth_date: data.birth_date || null,
+    is_private: !!data.is_private,
+    is_verified: !!data.is_verified,
+  };
 }
 
 export function AppProvider({ children }) {
@@ -84,7 +157,11 @@ export function AppProvider({ children }) {
       return null;
     }
     try {
-      let { data, error } = await supabase.from("profiles").select("*").eq("id", user_id).maybeSingle();
+      let { data, error } = await supabase
+        .from("profiles")
+        .select(PROFILE_SELECT)
+        .eq("id", user_id)
+        .maybeSingle();
       if (error) throw error;
 
       if (!data) {
@@ -101,54 +178,53 @@ export function AppProvider({ children }) {
         const created = await supabase
           .from("profiles")
           .upsert(fallback, { onConflict: "id", ignoreDuplicates: true })
-          .select("*")
+          .select(PROFILE_SELECT)
           .maybeSingle();
 
         if (!created.error && created.data) {
           data = created.data;
         } else {
-          // Le trigger auth peut encore être en train de créer la ligne.
-          // Relire avant de conclure à une absence de profil.
           const reread = await supabase
             .from("profiles")
-            .select("*")
+            .select(PROFILE_SELECT)
             .eq("id", user_id)
             .maybeSingle();
 
           if (reread.error) throw reread.error;
           data = reread.data || null;
 
-          if (!data && created.error) {
+          if (!data && created.error && import.meta.env.DEV) {
             console.error("[BAARO] Création profil échouée:", created.error);
           }
         }
       }
       if (data) {
-        const normalized = {...data, id: data.id || user_id };
+        const normalized = { ...data, id: data.id || user_id };
         setProfile(normalized);
-        setUserProfile({
-          display_name: normalized.display_name || DEFAULT_PROFILE.display_name,
-          handle: normalized.handle || DEFAULT_PROFILE.handle,
-          flag: normalized.flag || DEFAULT_PROFILE.flag,
-          bio: normalized.bio || DEFAULT_PROFILE.bio,
-         ...normalized,
-        });
+        setUserProfile(toUserProfile(normalized));
         return normalized;
       }
       return null;
     } catch (error) {
-      console.error("[BAARO] Erreur chargement profil:", error);
+      if (import.meta.env.DEV) {
+        console.error("[BAARO] Erreur chargement profil:", error);
+      }
       return null;
     }
   }, []);
 
   const registerDevice = useCallback(async () => {
-    const { data: { session: currentSession } } = await supabase.auth.getSession();
+    const {
+      data: { session: currentSession },
+    } = await supabase.auth.getSession();
     if (!currentSession?.access_token) return;
     try {
       await fetch(`${API_BASE}/api/register-device`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${currentSession.access_token}` },
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${currentSession.access_token}`,
+        },
         body: JSON.stringify({ deviceId: getDeviceId() }),
       });
     } catch {}
@@ -158,12 +234,19 @@ export function AppProvider({ children }) {
     let mounted = true;
     const initialize = async () => {
       try {
-        const { data: { session: currentSession }, error } = await supabase.auth.getSession();
-        if (error) console.error("[BAARO] Session error:", error);
+        const {
+          data: { session: currentSession },
+          error,
+        } = await supabase.auth.getSession();
+        if (error && import.meta.env.DEV) {
+          console.error("[BAARO] Session error:", error);
+        }
         if (!mounted) return;
         if (currentSession?.user?.is_anonymous) {
           if (!isGuestOkThisSession()) {
-            try { await supabase.auth.signOut({ scope: "local" }); } catch {}
+            try {
+              await supabase.auth.signOut({ scope: "local" });
+            } catch {}
             if (!mounted) return;
             resetUserData();
             setIsGuest(false);
@@ -188,17 +271,23 @@ export function AppProvider({ children }) {
           setIsAnonymous(false);
         }
       } catch (error) {
-        console.error("[BAARO] Erreur initialisation auth:", error);
+        if (import.meta.env.DEV) {
+          console.error("[BAARO] Erreur initialisation auth:", error);
+        }
       } finally {
         if (mounted) setLoading(false);
       }
     };
     initialize();
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, nextSession) => {
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(async (event, nextSession) => {
       if (!mounted) return;
       if (nextSession?.user?.is_anonymous) {
         if (!isGuestOkThisSession()) {
-          try { await supabase.auth.signOut({ scope: "local" }); } catch {}
+          try {
+            await supabase.auth.signOut({ scope: "local" });
+          } catch {}
           if (!mounted) return;
           resetUserData();
           setIsGuest(false);
@@ -241,7 +330,9 @@ export function AppProvider({ children }) {
       await registerDevice();
     };
     loadUserData().catch(() => {});
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [id, loadProfile, registerDevice]);
 
   const enableGuestMode = useCallback(() => {
@@ -254,59 +345,86 @@ export function AppProvider({ children }) {
 
   const logout = useCallback(async () => {
     clearGuestFlags();
-    try { await supabase.auth.signOut(); } catch {}
+    try {
+      await supabase.auth.signOut();
+    } catch {}
     setIsGuest(false);
     setIsAnonymous(false);
     resetUserData();
   }, [resetUserData]);
 
-  const updateProfile = useCallback(async (updates) => {
-    if (!id) return { ok: false, error: "Non authentifié" };
+  const updateProfile = useCallback(
+    async (updates) => {
+      if (!id) return { ok: false, error: "Non authentifié" };
 
-    const payload = {
-      ...pickEditable(updates),
-      id,
-      updated_at: new Date().toISOString(),
-    };
+      const payload = {
+        ...pickEditable(updates),
+        id,
+        updated_at: new Date().toISOString(),
+      };
 
-    const saved = await supabase
-      .from("profiles")
-      .upsert(payload, { onConflict: "id" })
-      .select("*")
-      .single();
-
-    if (saved.error) {
-      // Une ligne peut avoir été créée par le trigger entre deux lectures.
-      // Une seconde tentative rend la sauvegarde idempotente.
-      const retry = await supabase
+      const saved = await supabase
         .from("profiles")
         .upsert(payload, { onConflict: "id" })
-        .select("*")
+        .select(PROFILE_SELECT)
         .single();
 
-      if (retry.error) {
-        console.error("[BAARO] Persistance profil échouée:", saved.error, retry.error);
-        return { ok: false, error: retry.error };
+      if (saved.error) {
+        const retry = await supabase
+          .from("profiles")
+          .upsert(payload, { onConflict: "id" })
+          .select(PROFILE_SELECT)
+          .single();
+
+        if (retry.error) {
+          if (import.meta.env.DEV) {
+            console.error(
+              "[BAARO] Persistance profil échouée:",
+              saved.error,
+              retry.error
+            );
+          }
+          return { ok: false, error: retry.error };
+        }
+
+        setProfile(retry.data);
+        setUserProfile((previous) => ({
+          ...previous,
+          ...toUserProfile(retry.data),
+        }));
+        return { ok: true, profile: retry.data };
       }
 
-      setProfile(retry.data);
-      setUserProfile((previous) => ({ ...previous, ...retry.data }));
-      return { ok: true, profile: retry.data };
-    }
-
-    setProfile(saved.data);
-    setUserProfile((previous) => ({ ...previous, ...saved.data }));
-    return { ok: true, profile: saved.data };
-  }, [id]);
+      setProfile(saved.data);
+      setUserProfile((previous) => ({
+        ...previous,
+        ...toUserProfile(saved.data),
+      }));
+      return { ok: true, profile: saved.data };
+    },
+    [id]
+  );
 
   const value = {
-    id, user, session, profile, userProfile,
-    user_id: id, setProfile, setUserProfile,
-    isGuest, isAnonymous, loading, enableGuestMode, logout,
+    id,
+    user,
+    session,
+    profile,
+    userProfile,
+    user_id: id,
+    setProfile,
+    setUserProfile,
+    isGuest,
+    isAnonymous,
+    loading,
+    enableGuestMode,
+    logout,
     updateProfile,
   };
 
-  return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
+  return (
+    <AppContext.Provider value={value}>{children}</AppContext.Provider>
+  );
 }
 
 export function useApp() {
