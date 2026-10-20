@@ -86,29 +86,28 @@ export function OfflineTab() {
         className="rounded-3xl border p-6 space-y-3"
         style={{ borderColor: COLORS.border, background: COLORS.surface }}
       >
-        <div className="flex items-center gap-3">
-          <div
-            className="w-12 h-12 rounded-2xl flex items-center justify-center"
-            style={{ background: "rgba(239,68,68,0.12)", color: "#ef4444" }}
-          >
-            <WifiOff size={28} />
-          </div>
-          <div>
-            <h2
-              className="text-xl font-bold"
-              style={{ color: COLORS.ivory || "#fff" }}
+        {isNative && (
+          <div className="flex items-center gap-3">
+            <div
+              className="w-12 h-12 rounded-2xl flex items-center justify-center"
+              style={{ background: "rgba(239,68,68,0.12)", color: "#ef4444" }}
             >
-              {isNative
-                ? "P2P : plugin Nearby manquant"
-                : "P2P indisponible sur le web"}
-            </h2>
-            <p className="text-sm mt-1" style={{ color: COLORS.muted }}>
-              {isNative
-                ? "Installe le plugin Nearby, puis npx cap sync android et rebuild l’APK."
-                : "Le réseau maillé Bluetooth / Wi‑Fi Direct nécessite l’application Android BAARO."}
-            </p>
+              <WifiOff size={28} />
+            </div>
+            <div>
+              <h2
+                className="text-xl font-bold"
+                style={{ color: COLORS.ivory || "#fff" }}
+              >
+                P2P : plugin Nearby manquant
+              </h2>
+              <p className="text-sm mt-1" style={{ color: COLORS.muted }}>
+                Installe le plugin Nearby, puis npx cap sync android et rebuild
+                l’APK.
+              </p>
+            </div>
           </div>
-        </div>
+        )}
 
         <div
           className="rounded-2xl border p-4 space-y-2"
