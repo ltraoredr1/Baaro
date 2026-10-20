@@ -12,7 +12,7 @@ import {
 import { COLORS as THEME_COLORS } from "../../../theme.js";
 import { supabase } from "../../../supabaseClient.js";
 import { uploadChatFile, uploadVoiceBlob, mimeToMessageType } from "../../../lib/chatMedia.js";
-import { createCallRoom, getCallToken, createCallRecord, notifyCalleeOfIncomingCall } from "../lib/chatCalls.js";
+import { createCallRoom, getCallToken, createCallRecord } from "../lib/chatCalls.js";
 import { ChatCallModal } from "./ChatCallModal.jsx";
 import { deserializePayload, decryptMessage } from "../lib/crypto.js";
 import { makeClientMessageId, markMessageRead } from "../lib/chatFeatures.js";
@@ -531,9 +531,10 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
     }
     try {
       // callee_id + conversation_id sont indispensables côté serveur (insertion de l'appel, règles RLS)
+      // /api/live n'accepte que "text" | "audio" | "video" : "voice" était transformé en "video" (appel vocal enregistré comme vidéo)
       const roomRes = await createCallRoom({
         userName,
-        mode: type,
+        mode: type === "voice" ? "audio" : "video",
         callee_id: activeChat.otherUserId,
         conversation_id: activeChat.id,
       });
@@ -548,24 +549,11 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
         caller_name: userName,
       });
       if (!rec?.id) throw new Error("Appel non enregistré");
-      // L'identifiant réel de la ligne `calls` est renvoyé par le serveur s'il l'expose ; sinon on garde le nom de salle
-      const callId = roomRes.call_id ?? roomRes.callId ?? roomRes.call?.id ?? rec.id;
       const tokenRes = await getCallToken({ roomName, userName, isOwner: true });
-      // Prévient le correspondant (sonnerie / notification). Non bloquant : l'appel démarre même si ça échoue.
-      notifyCalleeOfIncomingCall({
-        callee_id: activeChat.otherUserId,
-        caller_id: id,
-        call_id: callId,
-        call_type: type,
-        daily_room_name: roomName,
-        caller_name: userName,
-      }).then((r) => {
-        if (r && r.ok === false) console.warn("[MessagesTab] notification d'appel:", r.error);
-      });
       setCallState({
         mode: "outgoing",
         callType: type,
-        callRecord: { ...rec, id: callId },
+        callRecord: rec,
         roomUrl: roomRes.url,
         token: tokenRes.token,
         otherUser: {
