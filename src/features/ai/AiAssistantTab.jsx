@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
   Sparkles,
   Send,
@@ -14,6 +14,9 @@ import {
   VolumeX,
   PlusCircle,
   Video,
+  Copy,
+  RotateCcw,
+  RefreshCw,
   Image as ImageIcon,
 } from "lucide-react";
 import { COLORS } from "../../theme.js";
@@ -39,28 +42,44 @@ const PROVIDER_LABELS = {
   moonshot: "Moonshot",
 };
 
-const HISTORY_LIMIT = 10;
+const HISTORY_LIMIT = 12;
+const STORED_LIMIT = 50;
 const MAX_INPUT_LENGTH = 4000;
-const AUTO_SPEAK = true;
+const REQUEST_TIMEOUT_MS = 45000;
+const STORAGE_PREFIX = "baaro_ai_chat_v1_";
+const SPEAK_KEY = "baaro_ai_autospeak";
+
+/* ---------- Utilitaires ---------- */
+
+// Prononciations phonétiques pour la synthèse vocale (modifiables ici).
+// Le texte affiché reste inchangé : seule la voix utilise ces remplacements.
+const SPEECH_PRONUNCIATIONS = [
+  { pattern: /\bB\.?A\.?A\.?R\.?O\b/gi, spoken: "Barreau" },
+  { pattern: /\bIA\b/g, spoken: "I A" },
+];
+
+function applyPronunciations(text) {
+  return SPEECH_PRONUNCIATIONS.reduce(
+    (result, { pattern, spoken }) => result.replace(pattern, spoken),
+    text
+  );
+}
 
 function cleanTextForSpeech(text) {
-  return String(text || "")
+  return applyPronunciations(String(text || ""))
     .replace(/```[\s\S]*?```/g, " bloc de code omis ")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
     .replace(/https?:\/\/\S+/gi, " lien ")
     .replace(/[*#_`~]/g, "")
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
     .replace(/\s+/g, " ")
     .trim();
 }
 
 function getSafeImageUrl(value) {
   if (typeof value !== "string" || !value.trim()) return null;
-
   try {
     const url = new URL(value);
-    if (url.protocol !== "https:" && url.protocol !== "http:") {
-      return null;
-    }
+    if (url.protocol !== "https:" && url.protocol !== "http:") return null;
     return url.href;
   } catch {
     return null;
@@ -68,13 +87,96 @@ function getSafeImageUrl(value) {
 }
 
 function getProviderLabel(provider) {
-  if (typeof provider !== "string" || !provider.trim()) {
-    return "IA Active";
-  }
-
+  if (typeof provider !== "string" || !provider.trim()) return "IA Active";
   const key = provider.trim().toLowerCase();
   return PROVIDER_LABELS[key] || provider.trim();
 }
+
+function makeWelcome(name) {
+  return {
+    id: "welcome",
+    role: "assistant",
+    text: `Salut ${name || "membre"} ! 👋\nJe suis l'Assistant IA de BAARO. Que souhaites-tu créer ou analyser aujourd'hui ?`,
+  };
+}
+
+function loadStoredMessages(key, name) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return [makeWelcome(name)];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed) || parsed.length === 0) {
+      return [makeWelcome(name)];
+    }
+    const valid = parsed.filter(
+      (m) =>
+        m &&
+        typeof m.id === "string" &&
+        (m.role === "user" || m.role === "assistant") &&
+        typeof m.text === "string" &&
+        !m.isError
+    );
+    if (valid.length === 0) return [makeWelcome(name)];
+    return valid[0].id === "welcome" ? valid : [makeWelcome(name), ...valid];
+  } catch {
+    return [makeWelcome(name)];
+  }
+}
+
+function isTouchDevice() {
+  return (
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(pointer: coarse)").matches
+  );
+}
+
+/* ---------- Rendu texte léger (gras, listes, titres) ---------- */
+
+function renderInline(line, prefix) {
+  return line.split(/(\*\*[^*]+\*\*)/g).map((part, i) =>
+    part.length > 4 && part.startsWith("**") && part.endsWith("**") ? (
+      <strong key={`${prefix}-${i}`}>{part.slice(2, -2)}</strong>
+    ) : (
+      part
+    )
+  );
+}
+
+function RichText({ text }) {
+  const lines = String(text || "").split("\n");
+
+  return (
+    <div className="space-y-1">
+      {lines.map((line, i) => {
+        if (!line.trim()) return <div key={i} className="h-2" />;
+
+        const heading = line.match(/^#{1,3}\s+(.*)/);
+        if (heading) {
+          return (
+            <p key={i} className="font-bold">
+              {renderInline(heading[1], i)}
+            </p>
+          );
+        }
+
+        const bullet = line.match(/^\s*(?:[-•*]|\d+\.)\s+(.*)/);
+        if (bullet) {
+          return (
+            <p key={i} className="pl-3 relative">
+              <span className="absolute left-0">•</span>
+              {renderInline(bullet[1], i)}
+            </p>
+          );
+        }
+
+        return <p key={i}>{renderInline(line, i)}</p>;
+      })}
+    </div>
+  );
+}
+
+/* ---------- Composant principal ---------- */
 
 export function AiAssistantTab({
   userProfile,
@@ -84,19 +186,28 @@ export function AiAssistantTab({
 }) {
   const { showToast, showPointsReward } = useToast();
 
-  const [messages, setMessages] = useState(() => [
-    {
-      id: "welcome",
-      role: "assistant",
-      text: `Salut ${userProfile?.display_name || "membre"} ! 👋\nJe suis l'Assistant IA de BAARO. Que souhaites-tu créer ou analyser aujourd'hui ?`,
-    },
-  ]);
+  const displayName = userProfile?.display_name;
+  const storageKey = useMemo(
+    () =>
+      `${STORAGE_PREFIX}${userProfile?.id || userProfile?.user_id || "anon"}`,
+    [userProfile?.id, userProfile?.user_id]
+  );
 
+  const [messages, setMessages] = useState(() =>
+    loadStoredMessages(storageKey, displayName)
+  );
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [provider, setProvider] = useState(null);
   const [speakingMessageId, setSpeakingMessageId] = useState(null);
   const [isListening, setIsListening] = useState(false);
+  const [autoSpeak, setAutoSpeak] = useState(() => {
+    try {
+      return localStorage.getItem(SPEAK_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
 
   const bottomRef = useRef(null);
   const recognitionRef = useRef(null);
@@ -106,23 +217,18 @@ export function AiAssistantTab({
   const speakingIdRef = useRef(null);
   const mountedRef = useRef(false);
 
+  /* ----- Voix ----- */
+
   const stopSpeech = useCallback(() => {
-    if (
-      typeof window !== "undefined" &&
-      "speechSynthesis" in window
-    ) {
+    if (typeof window !== "undefined" && "speechSynthesis" in window) {
       try {
         window.speechSynthesis.cancel();
       } catch {
-        // La synthèse vocale peut ne pas être disponible.
+        // Synthèse indisponible.
       }
     }
-
     speakingIdRef.current = null;
-
-    if (mountedRef.current) {
-      setSpeakingMessageId(null);
-    }
+    if (mountedRef.current) setSpeakingMessageId(null);
   }, []);
 
   const stopListening = useCallback(() => {
@@ -140,14 +246,11 @@ export function AiAssistantTab({
         try {
           recognition.stop();
         } catch {
-          // La reconnaissance peut déjà être arrêtée.
+          // Déjà arrêtée.
         }
       }
     }
-
-    if (mountedRef.current) {
-      setIsListening(false);
-    }
+    if (mountedRef.current) setIsListening(false);
   }, []);
 
   useEffect(() => {
@@ -156,13 +259,11 @@ export function AiAssistantTab({
     return () => {
       mountedRef.current = false;
       requestIdRef.current += 1;
-
       abortRef.current?.abort();
       abortRef.current = null;
 
       const recognition = recognitionRef.current;
       recognitionRef.current = null;
-
       if (recognition) {
         try {
           recognition.onstart = null;
@@ -175,17 +276,13 @@ export function AiAssistantTab({
         }
       }
 
-      if (
-        typeof window !== "undefined" &&
-        "speechSynthesis" in window
-      ) {
+      if (typeof window !== "undefined" && "speechSynthesis" in window) {
         try {
           window.speechSynthesis.cancel();
         } catch {
           // Nettoyage best effort.
         }
       }
-
       speakingIdRef.current = null;
     };
   }, []);
@@ -197,16 +294,27 @@ export function AiAssistantTab({
         stopListening();
       }
     };
-
     document.addEventListener("visibilitychange", handleVisibility);
-
-    return () => {
-      document.removeEventListener(
-        "visibilitychange",
-        handleVisibility
-      );
-    };
+    return () =>
+      document.removeEventListener("visibilitychange", handleVisibility);
   }, [stopSpeech, stopListening]);
+
+  /* ----- Persistance de la conversation ----- */
+
+  useEffect(() => {
+    try {
+      const toStore = messages.filter((m) => !m.isError).slice(-STORED_LIMIT);
+      if (toStore.length <= 1) {
+        localStorage.removeItem(storageKey);
+      } else {
+        localStorage.setItem(storageKey, JSON.stringify(toStore));
+      }
+    } catch {
+      // Stockage indisponible ou plein.
+    }
+  }, [messages, storageKey]);
+
+  /* ----- Scroll, prefill, auto-resize ----- */
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({
@@ -217,15 +325,17 @@ export function AiAssistantTab({
 
   useEffect(() => {
     if (!prefill?.text) return;
-
     setInput(String(prefill.text).slice(0, MAX_INPUT_LENGTH));
-
-    const timeoutId = setTimeout(() => {
-      inputRef.current?.focus();
-    }, 50);
-
+    const timeoutId = setTimeout(() => inputRef.current?.focus(), 50);
     return () => clearTimeout(timeoutId);
   }, [prefill?.key, prefill?.text]);
+
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
+  }, [input]);
 
   const speakText = useCallback(
     (messageId, text, { force = false } = {}) => {
@@ -262,46 +372,24 @@ export function AiAssistantTab({
 
       try {
         const voices = synth.getVoices() || [];
-
         const frenchVoice =
           voices.find(
-            (voice) =>
-              (voice.lang || "")
-                .toLowerCase()
-                .replace(/_/g, "-") === "fr-fr"
+            (v) => (v.lang || "").toLowerCase().replace(/_/g, "-") === "fr-fr"
           ) ||
-          voices.find((voice) =>
-            (voice.lang || "")
-              .toLowerCase()
-              .startsWith("fr")
-          );
-
-        if (frenchVoice) {
-          utterance.voice = frenchVoice;
-        }
+          voices.find((v) => (v.lang || "").toLowerCase().startsWith("fr"));
+        if (frenchVoice) utterance.voice = frenchVoice;
       } catch {
-        // La voix par défaut sera utilisée.
+        // Voix par défaut.
       }
 
-      utterance.onend = () => {
+      const done = () => {
         if (speakingIdRef.current === messageId) {
           speakingIdRef.current = null;
-
-          if (mountedRef.current) {
-            setSpeakingMessageId(null);
-          }
+          if (mountedRef.current) setSpeakingMessageId(null);
         }
       };
-
-      utterance.onerror = () => {
-        if (speakingIdRef.current === messageId) {
-          speakingIdRef.current = null;
-
-          if (mountedRef.current) {
-            setSpeakingMessageId(null);
-          }
-        }
-      };
+      utterance.onend = done;
+      utterance.onerror = done;
 
       speakingIdRef.current = messageId;
       setSpeakingMessageId(messageId);
@@ -311,24 +399,30 @@ export function AiAssistantTab({
       } catch {
         speakingIdRef.current = null;
         setSpeakingMessageId(null);
-
         if (force) {
-          showToast(
-            "Impossible de lire cette réponse à voix haute",
-            "error"
-          );
+          showToast("Impossible de lire cette réponse à voix haute", "error");
         }
       }
     },
     [showToast, stopSpeech]
   );
 
+  const toggleAutoSpeak = useCallback(() => {
+    setAutoSpeak((previous) => {
+      const next = !previous;
+      try {
+        localStorage.setItem(SPEAK_KEY, next ? "1" : "0");
+      } catch {
+        // Ignoré.
+      }
+      if (!next) stopSpeech();
+      return next;
+    });
+  }, [stopSpeech]);
+
   const toggleListening = useCallback(() => {
     if (typeof window === "undefined") {
-      showToast(
-        "La dictée vocale n'est pas disponible sur cet appareil",
-        "error"
-      );
+      showToast("La dictée vocale n'est pas disponible", "error");
       return;
     }
 
@@ -338,8 +432,7 @@ export function AiAssistantTab({
     }
 
     const SpeechRecognition =
-      window.SpeechRecognition ||
-      window.webkitSpeechRecognition;
+      window.SpeechRecognition || window.webkitSpeechRecognition;
 
     if (!SpeechRecognition) {
       showToast(
@@ -351,47 +444,35 @@ export function AiAssistantTab({
 
     try {
       const recognition = new SpeechRecognition();
-
       recognition.lang = "fr-FR";
       recognition.interimResults = false;
       recognition.maxAlternatives = 1;
       recognition.continuous = false;
 
       recognition.onstart = () => {
-        if (mountedRef.current) {
-          setIsListening(true);
-        }
+        if (mountedRef.current) setIsListening(true);
       };
 
       recognition.onresult = (event) => {
-        const transcript =
-          event.results?.[0]?.[0]?.transcript;
-
+        const transcript = event.results?.[0]?.[0]?.transcript;
         if (!transcript || !mountedRef.current) return;
-
-        setInput((previous) => {
-          const next = previous
-            ? `${previous} ${transcript}`
-            : transcript;
-
-          return next.slice(0, MAX_INPUT_LENGTH);
-        });
+        setInput((previous) =>
+          (previous ? `${previous} ${transcript}` : transcript).slice(
+            0,
+            MAX_INPUT_LENGTH
+          )
+        );
       };
 
       recognition.onerror = () => {
-        if (mountedRef.current) {
-          setIsListening(false);
-        }
+        if (mountedRef.current) setIsListening(false);
       };
 
       recognition.onend = () => {
         if (recognitionRef.current === recognition) {
           recognitionRef.current = null;
         }
-
-        if (mountedRef.current) {
-          setIsListening(false);
-        }
+        if (mountedRef.current) setIsListening(false);
       };
 
       recognitionRef.current = recognition;
@@ -399,33 +480,70 @@ export function AiAssistantTab({
     } catch {
       recognitionRef.current = null;
       setIsListening(false);
-
       showToast("Impossible d'activer le micro", "error");
     }
   }, [showToast, stopListening]);
 
-  const handleSend = useCallback(
-    async (customText) => {
-      const rawText =
-        typeof customText === "string" ? customText : input;
+  /* ----- Actions sur les messages ----- */
 
+  const copyMessage = useCallback(
+    async (text) => {
+      try {
+        await navigator.clipboard.writeText(text);
+        showToast("Réponse copiée", "success");
+      } catch {
+        showToast("Impossible de copier", "error");
+      }
+    },
+    [showToast]
+  );
+
+  const stopGeneration = useCallback(() => {
+    requestIdRef.current += 1;
+    abortRef.current?.abort();
+    abortRef.current = null;
+    if (mountedRef.current) setLoading(false);
+  }, []);
+
+  const resetConversation = useCallback(() => {
+    stopGeneration();
+    stopSpeech();
+    stopListening();
+    setInput("");
+    setMessages([makeWelcome(displayName)]);
+    try {
+      localStorage.removeItem(storageKey);
+    } catch {
+      // Ignoré.
+    }
+  }, [stopGeneration, stopSpeech, stopListening, displayName, storageKey]);
+
+  /* ----- Envoi ----- */
+
+  const handleSend = useCallback(
+    async (customText, { retry = false } = {}) => {
+      const rawText = typeof customText === "string" ? customText : input;
       const query = String(rawText || "")
         .trim()
         .slice(0, MAX_INPUT_LENGTH);
 
       if (!query || loading || !mountedRef.current) return;
 
-      setInput("");
+      if (!retry) setInput("");
       stopSpeech();
       stopListening();
 
-      // Invalider toute requête précédente avant de la remplacer.
       const requestId = ++requestIdRef.current;
-
       abortRef.current?.abort();
 
       const controller = new AbortController();
       abortRef.current = controller;
+
+      let timedOut = false;
+      const timeoutId = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, REQUEST_TIMEOUT_MS);
 
       const userMsg = {
         id: `u_${Date.now()}_${requestId}`,
@@ -433,16 +551,20 @@ export function AiAssistantTab({
         text: query,
       };
 
-      const history = [...messages, userMsg]
-        .filter((message) => !message.isError)
-        .filter((message) => message.id !== "welcome")
-        .slice(-HISTORY_LIMIT)
-        .map((message) => ({
-          role: message.role,
-          content: message.text,
-        }));
+      const baseMessages = retry
+        ? messages.filter((m) => !m.isError)
+        : [...messages.filter((m) => !m.isError), userMsg];
 
-      setMessages((previous) => [...previous, userMsg]);
+      const history = baseMessages
+        .filter((m) => m.id !== "welcome")
+        .slice(-HISTORY_LIMIT)
+        .map((m) => ({ role: m.role, content: m.text }));
+
+      setMessages((previous) =>
+        retry
+          ? previous.filter((m) => !m.isError)
+          : [...previous.filter((m) => !m.isError), userMsg]
+      );
       setLoading(true);
 
       try {
@@ -451,9 +573,7 @@ export function AiAssistantTab({
           error: sessionError,
         } = await supabase.auth.getSession();
 
-        if (sessionError) {
-          throw sessionError;
-        }
+        if (sessionError) throw sessionError;
 
         if (!session?.access_token) {
           throw new Error(
@@ -470,7 +590,9 @@ export function AiAssistantTab({
           body: JSON.stringify({
             messages: history,
             context: {
-              display_name: userProfile?.display_name,
+              display_name: displayName,
+              language: "fr",
+              app: "BAARO",
             },
           }),
           signal: controller.signal,
@@ -480,33 +602,24 @@ export function AiAssistantTab({
 
         if (!response.ok) {
           const serverMessage =
-            typeof data?.error === "string" &&
-            data.error.trim()
+            typeof data?.error === "string" && data.error.trim()
               ? data.error.trim()
-              : "IA temporairement indisponible";
-
+              : response.status === 429
+                ? "Trop de demandes, patiente quelques secondes."
+                : "IA temporairement indisponible";
           throw new Error(serverMessage);
         }
 
-        if (
-          !mountedRef.current ||
-          requestId !== requestIdRef.current
-        ) {
-          return;
-        }
+        if (!mountedRef.current || requestId !== requestIdRef.current) return;
 
-        if (typeof data.provider === "string") {
-          setProvider(data.provider);
-        }
+        if (typeof data.provider === "string") setProvider(data.provider);
 
         const replyText =
-          typeof data.reply === "string" &&
-          data.reply.trim()
+          typeof data.reply === "string" && data.reply.trim()
             ? data.reply.trim()
             : "Voici une suggestion personnalisée.";
 
         const imageUrl = getSafeImageUrl(data.imageUrl);
-
         const assistantMsgId = `a_${Date.now()}_${requestId}`;
 
         setMessages((previous) => [
@@ -521,31 +634,21 @@ export function AiAssistantTab({
           },
         ]);
 
-        if (AUTO_SPEAK) {
-          speakText(assistantMsgId, replyText);
-        }
+        if (autoSpeak) speakText(assistantMsgId, replyText);
 
         if (typeof showPointsReward === "function") {
           showPointsReward(2, "Échange avec l'IA");
         }
       } catch (error) {
-        if (
-          error?.name === "AbortError" ||
-          controller.signal.aborted
-        ) {
+        if (!timedOut && (error?.name === "AbortError" || controller.signal.aborted)) {
           return;
         }
 
-        if (
-          !mountedRef.current ||
-          requestId !== requestIdRef.current
-        ) {
-          return;
-        }
+        if (!mountedRef.current || requestId !== requestIdRef.current) return;
 
-        const errorText =
-          typeof error?.message === "string" &&
-          error.message.trim()
+        const errorText = timedOut
+          ? "L'IA met trop de temps à répondre. Réessaie."
+          : typeof error?.message === "string" && error.message.trim()
             ? error.message
             : "Une erreur est survenue. Réessayez.";
 
@@ -556,18 +659,14 @@ export function AiAssistantTab({
             role: "assistant",
             text: errorText,
             isError: true,
+            retryText: query,
           },
         ]);
       } finally {
-        if (
-          mountedRef.current &&
-          requestId === requestIdRef.current
-        ) {
+        clearTimeout(timeoutId);
+        if (mountedRef.current && requestId === requestIdRef.current) {
           setLoading(false);
-
-          if (abortRef.current === controller) {
-            abortRef.current = null;
-          }
+          if (abortRef.current === controller) abortRef.current = null;
         }
       }
     },
@@ -575,7 +674,8 @@ export function AiAssistantTab({
       input,
       loading,
       messages,
-      userProfile?.display_name,
+      displayName,
+      autoSpeak,
       showPointsReward,
       speakText,
       stopSpeech,
@@ -583,51 +683,90 @@ export function AiAssistantTab({
     ]
   );
 
-  return (
-    <div className="flex flex-col gap-4 max-w-3xl mx-auto w-full pb-4">
-      <div
-        className="rounded-2xl p-4 border flex items-center justify-between"
-        style={{
-          background: COLORS.surface,
-          borderColor: COLORS.borderGold,
-        }}
-      >
-        <div className="flex items-center gap-3">
-          <div
-            className="w-10 h-10 rounded-xl flex items-center justify-center font-bold"
-            style={{
-              background: COLORS.gold,
-              color: "#000",
-            }}
-          >
-            <Bot size={20} />
-          </div>
+  const handleKeyDown = (event) => {
+    if (
+      event.key === "Enter" &&
+      !event.shiftKey &&
+      !event.nativeEvent?.isComposing &&
+      !isTouchDevice()
+    ) {
+      event.preventDefault();
+      handleSend();
+    }
+  };
 
-          <div>
-            <h2 className="font-bold text-sm text-white">
-              Assistant IA BAARO
-            </h2>
-            <p className="text-xs text-white/50">
-              Moteur Unifié Multi-Providers
-            </p>
-          </div>
+  const hasConversation = messages.length > 1;
+
+  /* ----- Rendu ----- */
+
+  return (
+    <div className="flex flex-col gap-3 max-w-3xl mx-auto w-full pb-4">
+      {/* En-tête */}
+      <div
+        className="rounded-2xl p-3 border flex items-center gap-3"
+        style={{ background: COLORS.surface, borderColor: COLORS.borderGold }}
+      >
+        <div
+          className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
+          style={{ background: COLORS.gold, color: "#000" }}
+        >
+          <Bot size={20} />
+        </div>
+
+        <div className="min-w-0 flex-1">
+          <h2 className="font-bold text-sm text-white truncate">
+            Assistant IA BAARO
+          </h2>
+          <p className="text-xs text-white/50 truncate">Multi-IA intelligent</p>
         </div>
 
         <span
-          className="text-[10px] font-mono px-2 py-1 rounded-full border"
-          style={{
-            borderColor: COLORS.borderTeal,
-            color: COLORS.teal,
-          }}
+          className="text-[10px] font-mono px-2 py-1 rounded-full border whitespace-nowrap shrink-0"
+          style={{ borderColor: COLORS.borderTeal, color: COLORS.teal }}
         >
           {getProviderLabel(provider)}
         </span>
+
+        <button
+          type="button"
+          onClick={toggleAutoSpeak}
+          className="p-2 rounded-lg border shrink-0 transition-all active:scale-95"
+          style={{
+            background: autoSpeak ? `${COLORS.teal}20` : COLORS.surface2,
+            borderColor: autoSpeak ? COLORS.borderTeal : COLORS.border,
+            color: autoSpeak ? COLORS.teal : COLORS.muted,
+          }}
+          aria-label={
+            autoSpeak ? "Désactiver la lecture auto" : "Activer la lecture auto"
+          }
+          aria-pressed={autoSpeak}
+          title="Lecture vocale automatique"
+        >
+          {autoSpeak ? <Volume2 size={14} /> : <VolumeX size={14} />}
+        </button>
+
+        {hasConversation && (
+          <button
+            type="button"
+            onClick={resetConversation}
+            className="p-2 rounded-lg border shrink-0 transition-all active:scale-95"
+            style={{
+              background: COLORS.surface2,
+              borderColor: COLORS.border,
+              color: COLORS.muted,
+            }}
+            aria-label="Nouvelle conversation"
+            title="Nouvelle conversation"
+          >
+            <RotateCcw size={14} />
+          </button>
+        )}
       </div>
 
+      {/* Suggestions */}
       <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none">
         {PRESETS.map((preset) => {
           const PresetIcon = preset.icon;
-
           return (
             <button
               key={preset.text}
@@ -641,39 +780,34 @@ export function AiAssistantTab({
                 color: COLORS.ivory,
               }}
             >
-              <PresetIcon
-                size={13}
-                style={{ color: COLORS.gold }}
-              />
+              <PresetIcon size={13} style={{ color: COLORS.gold }} />
               {preset.text}
             </button>
           );
         })}
       </div>
 
+      {/* Conversation */}
       <div
-        className="rounded-2xl border p-4 flex flex-col min-h-[320px]"
-        style={{
-          background: COLORS.surface,
-          borderColor: COLORS.border,
-        }}
+        className="rounded-2xl border p-3 flex flex-col"
+        style={{ background: COLORS.surface, borderColor: COLORS.border }}
       >
         <div
-          className="flex-1 overflow-y-auto space-y-4 max-h-[380px] pr-1"
+          className="overflow-y-auto space-y-4 min-h-[180px] max-h-[48vh] pr-1"
           aria-live="polite"
           aria-relevant="additions"
         >
           {messages.map((message) => {
-            const isSpeaking =
-              speakingMessageId === message.id;
+            const isSpeaking = speakingMessageId === message.id;
+            const isAssistant = message.role === "assistant";
+            const showActions =
+              isAssistant && !message.isError && message.id !== "welcome";
 
             return (
               <div
                 key={message.id}
-                className={`flex gap-3 ${
-                  message.role === "user"
-                    ? "flex-row-reverse"
-                    : ""
+                className={`flex gap-2.5 ${
+                  message.role === "user" ? "flex-row-reverse" : ""
                 }`}
               >
                 <div
@@ -681,22 +815,18 @@ export function AiAssistantTab({
                   style={{
                     background: message.isError
                       ? "#ef4444"
-                      : message.role === "assistant"
+                      : isAssistant
                         ? COLORS.gold
                         : COLORS.teal,
                     color: "#000",
                   }}
                 >
-                  {message.role === "assistant" ? (
-                    <Bot size={15} />
-                  ) : (
-                    <User size={15} />
-                  )}
+                  {isAssistant ? <Bot size={15} /> : <User size={15} />}
                 </div>
 
-                <div className="max-w-[80%] min-w-0 flex flex-col gap-1.5">
+                <div className="max-w-[85%] min-w-0 flex flex-col gap-1.5">
                   <div
-                    className="px-4 py-3 rounded-2xl text-sm leading-relaxed whitespace-pre-line break-words border"
+                    className="px-3.5 py-2.5 rounded-2xl text-sm leading-relaxed break-words border"
                     style={{
                       background: message.isError
                         ? "rgba(239,68,68,0.12)"
@@ -707,7 +837,7 @@ export function AiAssistantTab({
                         : COLORS.border,
                     }}
                   >
-                    {message.text}
+                    <RichText text={message.text} />
 
                     {message.imageUrl && (
                       <div className="mt-3 rounded-xl overflow-hidden border border-white/10">
@@ -725,86 +855,107 @@ export function AiAssistantTab({
                     )}
                   </div>
 
-                  {message.role === "assistant" &&
-                    !message.isError && (
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            speakText(message.id, message.text, {
-                              force: true,
-                            })
-                          }
-                          className="flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg border transition-all active:scale-95"
-                          style={{
-                            background: isSpeaking
-                              ? `${COLORS.teal}20`
-                              : COLORS.surface2,
-                            borderColor: isSpeaking
-                              ? COLORS.borderTeal
-                              : COLORS.border,
-                            color: isSpeaking
-                              ? COLORS.teal
-                              : COLORS.muted,
-                          }}
-                          aria-label={
-                            isSpeaking
-                              ? "Arrêter la lecture"
-                              : "Écouter la réponse"
-                          }
-                          aria-pressed={isSpeaking}
-                        >
-                          {isSpeaking ? (
-                            <VolumeX size={13} />
-                          ) : (
-                            <Volume2 size={13} />
-                          )}
-                          <span>
-                            {isSpeaking ? "Arrêter" : "Écouter"}
-                          </span>
-                        </button>
+                  {message.isError && message.retryText && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        handleSend(message.retryText, { retry: true })
+                      }
+                      disabled={loading}
+                      className="self-start flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg border transition-all active:scale-95 disabled:opacity-50"
+                      style={{
+                        background: COLORS.surface2,
+                        borderColor: COLORS.border,
+                        color: COLORS.ivory,
+                      }}
+                    >
+                      <RefreshCw size={12} />
+                      Réessayer
+                    </button>
+                  )}
 
-                        {message.canGenerate &&
-                          typeof onGenerateMedia === "function" && (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                onGenerateMedia(message.text)
-                              }
-                              className="flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg border transition-all active:scale-95"
-                              style={{
-                                background: `${COLORS.gold}20`,
-                                borderColor: COLORS.borderGold,
-                                color: COLORS.gold,
-                              }}
-                              aria-label="Créer un visuel à partir de cette idée"
-                            >
-                              <Video size={13} />
-                              Créer le visuel
-                            </button>
-                          )}
+                  {showActions && (
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          speakText(message.id, message.text, { force: true })
+                        }
+                        className="flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg border transition-all active:scale-95"
+                        style={{
+                          background: isSpeaking
+                            ? `${COLORS.teal}20`
+                            : COLORS.surface2,
+                          borderColor: isSpeaking
+                            ? COLORS.borderTeal
+                            : COLORS.border,
+                          color: isSpeaking ? COLORS.teal : COLORS.muted,
+                        }}
+                        aria-label={
+                          isSpeaking ? "Arrêter la lecture" : "Écouter la réponse"
+                        }
+                        aria-pressed={isSpeaking}
+                      >
+                        {isSpeaking ? (
+                          <VolumeX size={13} />
+                        ) : (
+                          <Volume2 size={13} />
+                        )}
+                        <span>{isSpeaking ? "Arrêter" : "Écouter"}</span>
+                      </button>
 
-                        {message.canPublish &&
-                          typeof onPublishAction === "function" && (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                onPublishAction(message.text)
-                              }
-                              className="flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg border transition-all active:scale-95"
-                              style={{
-                                background: `${COLORS.teal}20`,
-                                borderColor: COLORS.borderTeal,
-                                color: COLORS.teal,
-                              }}
-                              aria-label="Publier cette idée"
-                            >
-                              <PlusCircle size={13} />
-                              Publier cette idée
-                            </button>
-                          )}
-                      </div>
-                    )}
+                      <button
+                        type="button"
+                        onClick={() => copyMessage(message.text)}
+                        className="flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg border transition-all active:scale-95"
+                        style={{
+                          background: COLORS.surface2,
+                          borderColor: COLORS.border,
+                          color: COLORS.muted,
+                        }}
+                        aria-label="Copier la réponse"
+                      >
+                        <Copy size={12} />
+                        Copier
+                      </button>
+
+                      {message.canGenerate &&
+                        typeof onGenerateMedia === "function" && (
+                          <button
+                            type="button"
+                            onClick={() => onGenerateMedia(message.text)}
+                            className="flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg border transition-all active:scale-95"
+                            style={{
+                              background: `${COLORS.gold}20`,
+                              borderColor: COLORS.borderGold,
+                              color: COLORS.gold,
+                            }}
+                            aria-label="Créer un visuel à partir de cette idée"
+                          >
+                            <Video size={13} />
+                            Créer le visuel
+                          </button>
+                        )}
+
+                      {message.canPublish &&
+                        typeof onPublishAction === "function" && (
+                          <button
+                            type="button"
+                            onClick={() => onPublishAction(message.text)}
+                            className="flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg border transition-all active:scale-95"
+                            style={{
+                              background: `${COLORS.teal}20`,
+                              borderColor: COLORS.borderTeal,
+                              color: COLORS.teal,
+                            }}
+                            aria-label="Publier cette idée"
+                          >
+                            <PlusCircle size={13} />
+                            Publier
+                          </button>
+                        )}
+                    </div>
+                  )}
                 </div>
               </div>
             );
@@ -824,83 +975,79 @@ export function AiAssistantTab({
           <div ref={bottomRef} />
         </div>
 
+        {/* Saisie */}
         <form
           onSubmit={(event) => {
             event.preventDefault();
             handleSend();
           }}
-          className="flex gap-2 pt-4 border-t mt-3"
+          className="flex items-end gap-2 pt-3 border-t mt-3"
           style={{ borderColor: COLORS.border }}
         >
           <button
             type="button"
             onClick={toggleListening}
             disabled={loading}
-            className={`p-2.5 rounded-xl border flex items-center justify-center transition-all ${
+            className={`p-2.5 rounded-xl border flex items-center justify-center shrink-0 transition-all ${
               isListening ? "animate-pulse" : ""
             }`}
             style={{
-              background: isListening
-                ? `${COLORS.teal}20`
-                : COLORS.surface2,
-              borderColor: isListening
-                ? COLORS.borderTeal
-                : COLORS.border,
-              color: isListening
-                ? COLORS.teal
-                : COLORS.ivory,
+              background: isListening ? `${COLORS.teal}20` : COLORS.surface2,
+              borderColor: isListening ? COLORS.borderTeal : COLORS.border,
+              color: isListening ? COLORS.teal : COLORS.ivory,
             }}
-            title="Dicter par la voix"
-            aria-label={
-              isListening
-                ? "Arrêter la dictée"
-                : "Dicter par la voix"
-            }
+            aria-label={isListening ? "Arrêter la dictée" : "Dicter par la voix"}
             aria-pressed={isListening}
           >
-            {isListening ? (
-              <Square size={16} />
-            ) : (
-              <Mic size={16} />
-            )}
+            {isListening ? <Square size={16} /> : <Mic size={16} />}
           </button>
 
-          <input
+          <textarea
             ref={inputRef}
+            rows={1}
             value={input}
             onChange={(event) =>
-              setInput(
-                event.target.value.slice(0, MAX_INPUT_LENGTH)
-              )
+              setInput(event.target.value.slice(0, MAX_INPUT_LENGTH))
             }
+            onKeyDown={handleKeyDown}
             maxLength={MAX_INPUT_LENGTH}
-            placeholder={
-              isListening
-                ? "Écoute en cours..."
-                : "Demandez du texte, une image ou une idée vidéo..."
-            }
+            placeholder={isListening ? "Écoute en cours..." : "Écris ton message…"}
             disabled={loading}
-            className="flex-1 min-w-0 px-4 py-2.5 rounded-xl border text-sm outline-none disabled:opacity-60"
+            className="flex-1 min-w-0 px-3.5 py-2.5 rounded-xl border text-sm outline-none resize-none disabled:opacity-60"
             style={{
               background: COLORS.surface2,
               borderColor: COLORS.border,
               color: COLORS.ivory,
+              maxHeight: 120,
             }}
             aria-label="Message à l'assistant IA"
           />
 
-          <button
-            type="submit"
-            disabled={!input.trim() || loading}
-            className="px-4 py-2.5 rounded-xl font-bold disabled:opacity-40 transition-all active:scale-95 flex items-center justify-center"
-            style={{
-              background: COLORS.gold,
-              color: "#000",
-            }}
-            aria-label="Envoyer"
-          >
-            <Send size={16} />
-          </button>
+          {loading ? (
+            <button
+              type="button"
+              onClick={stopGeneration}
+              className="p-2.5 rounded-xl border flex items-center justify-center shrink-0 transition-all active:scale-95"
+              style={{
+                background: "rgba(239,68,68,0.15)",
+                borderColor: "rgba(239,68,68,0.4)",
+                color: "#ef4444",
+              }}
+              aria-label="Arrêter la génération"
+            >
+              <Square size={16} />
+            </button>
+          ) : (
+            <button
+              type="submit"
+              disabled={!input.trim()}
+              className="p-2.5 rounded-xl font-bold disabled:opacity-40 transition-all active:scale-95 flex items-center justify-center shrink-0"
+              style={{ background: COLORS.gold, color: "#000" }}
+              aria-label="Envoyer"
+            >
+              <Send size={16} />
+            </button>
+          )}
         </form>
       </div>
     </div>
