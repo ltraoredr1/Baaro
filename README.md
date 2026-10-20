@@ -11,6 +11,7 @@ Le projet est conçu autour de quatre priorités :
 
 > **Conditions :
 > N'appliquer pas les migrations à n'importe comment sans maîtriser le projet
+>  Avant de créer une policy: DROP POLICY IF EXISTS d'abord
 
 ---
 
