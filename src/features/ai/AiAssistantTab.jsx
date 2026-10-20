@@ -45,21 +45,53 @@ const AUTO_SPEAK = true;
 
 function cleanTextForSpeech(text) {
   return String(text || "")
-    .replace(/[*#_`]/g, "")
-    .replace(/\bBAARO\b/gi, "Bâro")
-    .replace(/\bBaaro\b/g, "Bâro")
+    .replace(/```[\s\S]*?```/g, " bloc de code omis ")
+    .replace(/https?:\/\/\S+/gi, " lien ")
+    .replace(/[*#_`~]/g, "")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/\s+/g, " ")
     .trim();
 }
 
-export function AiAssistantTab({ userProfile, onPublishAction, onGenerateMedia, prefill }) {
+function getSafeImageUrl(value) {
+  if (typeof value !== "string" || !value.trim()) return null;
+
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" && url.protocol !== "http:") {
+      return null;
+    }
+    return url.href;
+  } catch {
+    return null;
+  }
+}
+
+function getProviderLabel(provider) {
+  if (typeof provider !== "string" || !provider.trim()) {
+    return "IA Active";
+  }
+
+  const key = provider.trim().toLowerCase();
+  return PROVIDER_LABELS[key] || provider.trim();
+}
+
+export function AiAssistantTab({
+  userProfile,
+  onPublishAction,
+  onGenerateMedia,
+  prefill,
+}) {
   const { showToast, showPointsReward } = useToast();
-  const [messages, setMessages] = useState([
+
+  const [messages, setMessages] = useState(() => [
     {
       id: "welcome",
       role: "assistant",
       text: `Salut ${userProfile?.display_name || "membre"} ! 👋\nJe suis l'Assistant IA de BAARO. Que souhaites-tu créer ou analyser aujourd'hui ?`,
     },
   ]);
+
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [provider, setProvider] = useState(null);
@@ -70,41 +102,93 @@ export function AiAssistantTab({ userProfile, onPublishAction, onGenerateMedia, 
   const recognitionRef = useRef(null);
   const inputRef = useRef(null);
   const abortRef = useRef(null);
+  const requestIdRef = useRef(0);
   const speakingIdRef = useRef(null);
-  const mountedRef = useRef(true);
+  const mountedRef = useRef(false);
 
   const stopSpeech = useCallback(() => {
-    if (typeof window !== "undefined" && "speechSynthesis" in window) {
+    if (
+      typeof window !== "undefined" &&
+      "speechSynthesis" in window
+    ) {
       try {
         window.speechSynthesis.cancel();
       } catch {
-        /* ignore */
+        // La synthèse vocale peut ne pas être disponible.
       }
     }
+
     speakingIdRef.current = null;
-    setSpeakingMessageId(null);
+
+    if (mountedRef.current) {
+      setSpeakingMessageId(null);
+    }
   }, []);
 
   const stopListening = useCallback(() => {
-    try {
-      recognitionRef.current?.stop?.();
-      recognitionRef.current?.abort?.();
-    } catch {
-      /* ignore */
-    }
+    const recognition = recognitionRef.current;
     recognitionRef.current = null;
-    setIsListening(false);
+
+    if (recognition) {
+      try {
+        recognition.onstart = null;
+        recognition.onresult = null;
+        recognition.onerror = null;
+        recognition.onend = null;
+        recognition.abort();
+      } catch {
+        try {
+          recognition.stop();
+        } catch {
+          // La reconnaissance peut déjà être arrêtée.
+        }
+      }
+    }
+
+    if (mountedRef.current) {
+      setIsListening(false);
+    }
   }, []);
 
   useEffect(() => {
     mountedRef.current = true;
+
     return () => {
       mountedRef.current = false;
-      stopSpeech();
-      stopListening();
+      requestIdRef.current += 1;
+
       abortRef.current?.abort();
+      abortRef.current = null;
+
+      const recognition = recognitionRef.current;
+      recognitionRef.current = null;
+
+      if (recognition) {
+        try {
+          recognition.onstart = null;
+          recognition.onresult = null;
+          recognition.onerror = null;
+          recognition.onend = null;
+          recognition.abort();
+        } catch {
+          // Nettoyage best effort.
+        }
+      }
+
+      if (
+        typeof window !== "undefined" &&
+        "speechSynthesis" in window
+      ) {
+        try {
+          window.speechSynthesis.cancel();
+        } catch {
+          // Nettoyage best effort.
+        }
+      }
+
+      speakingIdRef.current = null;
     };
-  }, [stopSpeech, stopListening]);
+  }, []);
 
   useEffect(() => {
     const handleVisibility = () => {
@@ -113,34 +197,54 @@ export function AiAssistantTab({ userProfile, onPublishAction, onGenerateMedia, 
         stopListening();
       }
     };
+
     document.addEventListener("visibilitychange", handleVisibility);
-    return () => document.removeEventListener("visibilitychange", handleVisibility);
+
+    return () => {
+      document.removeEventListener(
+        "visibilitychange",
+        handleVisibility
+      );
+    };
   }, [stopSpeech, stopListening]);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    bottomRef.current?.scrollIntoView({
+      behavior: "smooth",
+      block: "nearest",
+    });
   }, [messages, loading]);
 
   useEffect(() => {
-    if (prefill?.text) {
-      setInput(String(prefill.text).slice(0, MAX_INPUT_LENGTH));
-      const t = setTimeout(() => inputRef.current?.focus(), 50);
-      return () => clearTimeout(t);
-    }
+    if (!prefill?.text) return;
+
+    setInput(String(prefill.text).slice(0, MAX_INPUT_LENGTH));
+
+    const timeoutId = setTimeout(() => {
+      inputRef.current?.focus();
+    }, 50);
+
+    return () => clearTimeout(timeoutId);
   }, [prefill?.key, prefill?.text]);
 
   const speakText = useCallback(
     (messageId, text, { force = false } = {}) => {
-      if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+      if (
+        typeof window === "undefined" ||
+        !("speechSynthesis" in window) ||
+        typeof window.SpeechSynthesisUtterance !== "function"
+      ) {
         if (force) {
-          showToast("La synthèse vocale n'est pas disponible sur cet appareil", "error");
+          showToast(
+            "La synthèse vocale n'est pas disponible sur cet appareil",
+            "error"
+          );
         }
         return;
       }
 
       const synth = window.speechSynthesis;
 
-      // Toggle off if already speaking this message
       if (speakingIdRef.current === messageId) {
         stopSpeech();
         return;
@@ -151,146 +255,213 @@ export function AiAssistantTab({ userProfile, onPublishAction, onGenerateMedia, 
       const cleaned = cleanTextForSpeech(text);
       if (!cleaned) return;
 
-      const utterance = new SpeechSynthesisUtterance(cleaned);
+      const utterance = new window.SpeechSynthesisUtterance(cleaned);
       utterance.lang = "fr-FR";
-      utterance.rate = 1.0;
-      utterance.pitch = 1.0;
+      utterance.rate = 1;
+      utterance.pitch = 1;
 
-      const pickVoiceAndSpeak = () => {
-        if (!mountedRef.current) return;
-        try {
-          const voices = synth.getVoices() || [];
-          const frenchVoice =
-            voices.find((v) => (v.lang || "").toLowerCase().replace("_", "-") === "fr-fr") ||
-            voices.find((v) => (v.lang || "").toLowerCase().startsWith("fr"));
-          if (frenchVoice) utterance.voice = frenchVoice;
-        } catch {
-          /* ignore */
+      try {
+        const voices = synth.getVoices() || [];
+
+        const frenchVoice =
+          voices.find(
+            (voice) =>
+              (voice.lang || "")
+                .toLowerCase()
+                .replace(/_/g, "-") === "fr-fr"
+          ) ||
+          voices.find((voice) =>
+            (voice.lang || "")
+              .toLowerCase()
+              .startsWith("fr")
+          );
+
+        if (frenchVoice) {
+          utterance.voice = frenchVoice;
         }
+      } catch {
+        // La voix par défaut sera utilisée.
+      }
 
-        utterance.onend = () => {
-          if (speakingIdRef.current === messageId) {
-            speakingIdRef.current = null;
-            setSpeakingMessageId(null);
-          }
-        };
-        utterance.onerror = () => {
-          if (speakingIdRef.current === messageId) {
-            speakingIdRef.current = null;
-            setSpeakingMessageId(null);
-          }
-        };
-
-        speakingIdRef.current = messageId;
-        setSpeakingMessageId(messageId);
-        try {
-          synth.speak(utterance);
-        } catch {
+      utterance.onend = () => {
+        if (speakingIdRef.current === messageId) {
           speakingIdRef.current = null;
-          setSpeakingMessageId(null);
+
+          if (mountedRef.current) {
+            setSpeakingMessageId(null);
+          }
         }
       };
 
-      if ((synth.getVoices() || []).length > 0) {
-        pickVoiceAndSpeak();
-      } else {
-        const onVoices = () => {
-          synth.onvoiceschanged = null;
-          pickVoiceAndSpeak();
-        };
-        synth.onvoiceschanged = onVoices;
-        // Fallback if onvoiceschanged never fires
-        setTimeout(() => {
-          if (synth.onvoiceschanged === onVoices) {
-            synth.onvoiceschanged = null;
-            pickVoiceAndSpeak();
+      utterance.onerror = () => {
+        if (speakingIdRef.current === messageId) {
+          speakingIdRef.current = null;
+
+          if (mountedRef.current) {
+            setSpeakingMessageId(null);
           }
-        }, 250);
+        }
+      };
+
+      speakingIdRef.current = messageId;
+      setSpeakingMessageId(messageId);
+
+      try {
+        synth.speak(utterance);
+      } catch {
+        speakingIdRef.current = null;
+        setSpeakingMessageId(null);
+
+        if (force) {
+          showToast(
+            "Impossible de lire cette réponse à voix haute",
+            "error"
+          );
+        }
       }
     },
     [showToast, stopSpeech]
   );
 
   const toggleListening = useCallback(() => {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      showToast("La dictée vocale n'est pas supportée par votre navigateur", "error");
+    if (typeof window === "undefined") {
+      showToast(
+        "La dictée vocale n'est pas disponible sur cet appareil",
+        "error"
+      );
       return;
     }
 
-    if (isListening) {
+    if (recognitionRef.current) {
       stopListening();
+      return;
+    }
+
+    const SpeechRecognition =
+      window.SpeechRecognition ||
+      window.webkitSpeechRecognition;
+
+    if (!SpeechRecognition) {
+      showToast(
+        "La dictée vocale n'est pas supportée par votre navigateur",
+        "error"
+      );
       return;
     }
 
     try {
       const recognition = new SpeechRecognition();
+
       recognition.lang = "fr-FR";
       recognition.interimResults = false;
       recognition.maxAlternatives = 1;
       recognition.continuous = false;
 
       recognition.onstart = () => {
-        if (mountedRef.current) setIsListening(true);
+        if (mountedRef.current) {
+          setIsListening(true);
+        }
       };
+
       recognition.onresult = (event) => {
-        const transcript = event.results?.[0]?.[0]?.transcript;
-        if (!transcript) return;
-        setInput((prev) => {
-          const next = prev ? `${prev} ${transcript}` : transcript;
+        const transcript =
+          event.results?.[0]?.[0]?.transcript;
+
+        if (!transcript || !mountedRef.current) return;
+
+        setInput((previous) => {
+          const next = previous
+            ? `${previous} ${transcript}`
+            : transcript;
+
           return next.slice(0, MAX_INPUT_LENGTH);
         });
       };
+
       recognition.onerror = () => {
-        if (mountedRef.current) setIsListening(false);
+        if (mountedRef.current) {
+          setIsListening(false);
+        }
       };
+
       recognition.onend = () => {
-        if (mountedRef.current) setIsListening(false);
-        recognitionRef.current = null;
+        if (recognitionRef.current === recognition) {
+          recognitionRef.current = null;
+        }
+
+        if (mountedRef.current) {
+          setIsListening(false);
+        }
       };
 
       recognitionRef.current = recognition;
       recognition.start();
     } catch {
+      recognitionRef.current = null;
       setIsListening(false);
+
       showToast("Impossible d'activer le micro", "error");
     }
-  }, [isListening, showToast, stopListening]);
+  }, [showToast, stopListening]);
 
   const handleSend = useCallback(
     async (customText) => {
-      const query = String(customText || input).trim().slice(0, MAX_INPUT_LENGTH);
-      if (!query || loading) return;
+      const rawText =
+        typeof customText === "string" ? customText : input;
+
+      const query = String(rawText || "")
+        .trim()
+        .slice(0, MAX_INPUT_LENGTH);
+
+      if (!query || loading || !mountedRef.current) return;
 
       setInput("");
       stopSpeech();
       stopListening();
 
-      // Cancel previous in-flight request
+      // Invalider toute requête précédente avant de la remplacer.
+      const requestId = ++requestIdRef.current;
+
       abortRef.current?.abort();
+
       const controller = new AbortController();
       abortRef.current = controller;
 
-      const userMsg = { id: `u_${Date.now()}`, role: "user", text: query };
+      const userMsg = {
+        id: `u_${Date.now()}_${requestId}`,
+        role: "user",
+        text: query,
+      };
 
       const history = [...messages, userMsg]
-        .filter((m) => !m.isError && m.id !== "welcome")
+        .filter((message) => !message.isError)
+        .filter((message) => message.id !== "welcome")
         .slice(-HISTORY_LIMIT)
-        .map((m) => ({ role: m.role, content: m.text }));
+        .map((message) => ({
+          role: message.role,
+          content: message.text,
+        }));
 
-      setMessages((prev) => [...prev, userMsg]);
+      setMessages((previous) => [...previous, userMsg]);
       setLoading(true);
 
       try {
         const {
           data: { session },
+          error: sessionError,
         } = await supabase.auth.getSession();
 
-        if (!session?.access_token) {
-          throw new Error("Session expirée. Reconnectez-vous pour utiliser l'assistant.");
+        if (sessionError) {
+          throw sessionError;
         }
 
-        const res = await fetch(`${API_BASE}/api/chat`, {
+        if (!session?.access_token) {
+          throw new Error(
+            "Session expirée. Reconnectez-vous pour utiliser l'assistant."
+          );
+        }
+
+        const response = await fetch(`${API_BASE}/api/chat`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -298,28 +469,48 @@ export function AiAssistantTab({ userProfile, onPublishAction, onGenerateMedia, 
           },
           body: JSON.stringify({
             messages: history,
-            context: { display_name: userProfile?.display_name },
+            context: {
+              display_name: userProfile?.display_name,
+            },
           }),
           signal: controller.signal,
         });
 
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          throw new Error(data.error || "IA temporairement indisponible");
+        const data = await response.json().catch(() => ({}));
+
+        if (!response.ok) {
+          const serverMessage =
+            typeof data?.error === "string" &&
+            data.error.trim()
+              ? data.error.trim()
+              : "IA temporairement indisponible";
+
+          throw new Error(serverMessage);
         }
 
-        if (!mountedRef.current) return;
+        if (
+          !mountedRef.current ||
+          requestId !== requestIdRef.current
+        ) {
+          return;
+        }
 
-        if (data.provider) setProvider(data.provider);
+        if (typeof data.provider === "string") {
+          setProvider(data.provider);
+        }
 
         const replyText =
-          (typeof data.reply === "string" && data.reply.trim()) ||
-          "Voici une suggestion personnalisée.";
-        const imageUrl = typeof data.imageUrl === "string" ? data.imageUrl : null;
+          typeof data.reply === "string" &&
+          data.reply.trim()
+            ? data.reply.trim()
+            : "Voici une suggestion personnalisée.";
 
-        const assistantMsgId = `a_${Date.now()}`;
-        setMessages((prev) => [
-          ...prev,
+        const imageUrl = getSafeImageUrl(data.imageUrl);
+
+        const assistantMsgId = `a_${Date.now()}_${requestId}`;
+
+        setMessages((previous) => [
+          ...previous,
           {
             id: assistantMsgId,
             role: "assistant",
@@ -331,31 +522,53 @@ export function AiAssistantTab({ userProfile, onPublishAction, onGenerateMedia, 
         ]);
 
         if (AUTO_SPEAK) {
-          setTimeout(() => {
-            if (mountedRef.current) speakText(assistantMsgId, replyText);
-          }, 300);
+          speakText(assistantMsgId, replyText);
         }
 
         if (typeof showPointsReward === "function") {
           showPointsReward(2, "Échange avec l'IA");
         }
-      } catch (e) {
-        if (e?.name === "AbortError") return;
-        if (!mountedRef.current) return;
+      } catch (error) {
+        if (
+          error?.name === "AbortError" ||
+          controller.signal.aborted
+        ) {
+          return;
+        }
 
-        const errorText = e?.message || "Une erreur est survenue";
-        setMessages((prev) => [
-          ...prev,
+        if (
+          !mountedRef.current ||
+          requestId !== requestIdRef.current
+        ) {
+          return;
+        }
+
+        const errorText =
+          typeof error?.message === "string" &&
+          error.message.trim()
+            ? error.message
+            : "Une erreur est survenue. Réessayez.";
+
+        setMessages((previous) => [
+          ...previous,
           {
-            id: `err_${Date.now()}`,
+            id: `err_${Date.now()}_${requestId}`,
             role: "assistant",
             text: errorText,
             isError: true,
           },
         ]);
-        // Do not auto-speak errors
       } finally {
-        if (mountedRef.current) setLoading(false);
+        if (
+          mountedRef.current &&
+          requestId === requestIdRef.current
+        ) {
+          setLoading(false);
+
+          if (abortRef.current === controller) {
+            abortRef.current = null;
+          }
+        }
       }
     },
     [
@@ -374,162 +587,246 @@ export function AiAssistantTab({ userProfile, onPublishAction, onGenerateMedia, 
     <div className="flex flex-col gap-4 max-w-3xl mx-auto w-full pb-4">
       <div
         className="rounded-2xl p-4 border flex items-center justify-between"
-        style={{ background: COLORS.surface, borderColor: COLORS.borderGold }}
+        style={{
+          background: COLORS.surface,
+          borderColor: COLORS.borderGold,
+        }}
       >
         <div className="flex items-center gap-3">
           <div
             className="w-10 h-10 rounded-xl flex items-center justify-center font-bold"
-            style={{ background: COLORS.gold, color: "#000" }}
+            style={{
+              background: COLORS.gold,
+              color: "#000",
+            }}
           >
             <Bot size={20} />
           </div>
+
           <div>
-            <h2 className="font-bold text-sm text-white">Assistant IA BAARO</h2>
-            <p className="text-xs text-white/50">Moteur Unifié Multi-Providers</p>
+            <h2 className="font-bold text-sm text-white">
+              Assistant IA BAARO
+            </h2>
+            <p className="text-xs text-white/50">
+              Moteur Unifié Multi-Providers
+            </p>
           </div>
         </div>
+
         <span
           className="text-[10px] font-mono px-2 py-1 rounded-full border"
-          style={{ borderColor: COLORS.borderTeal, color: COLORS.teal }}
+          style={{
+            borderColor: COLORS.borderTeal,
+            color: COLORS.teal,
+          }}
         >
-          {provider ? PROVIDER_LABELS[provider] || provider : "IA Active"}
+          {getProviderLabel(provider)}
         </span>
       </div>
 
       <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none">
-        {PRESETS.map((p, i) => (
-          <button
-            key={i}
-            type="button"
-            onClick={() => handleSend(p.text)}
-            disabled={loading}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs whitespace-nowrap shrink-0 hover:bg-white/5 transition-all active:scale-95 disabled:opacity-50"
-            style={{
-              background: COLORS.surface,
-              borderColor: COLORS.border,
-              color: COLORS.ivory,
-            }}
-          >
-            <p.icon size={13} style={{ color: COLORS.gold }} />
-            {p.text}
-          </button>
-        ))}
+        {PRESETS.map((preset) => {
+          const PresetIcon = preset.icon;
+
+          return (
+            <button
+              key={preset.text}
+              type="button"
+              onClick={() => handleSend(preset.text)}
+              disabled={loading}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs whitespace-nowrap shrink-0 hover:bg-white/5 transition-all active:scale-95 disabled:opacity-50"
+              style={{
+                background: COLORS.surface,
+                borderColor: COLORS.border,
+                color: COLORS.ivory,
+              }}
+            >
+              <PresetIcon
+                size={13}
+                style={{ color: COLORS.gold }}
+              />
+              {preset.text}
+            </button>
+          );
+        })}
       </div>
 
       <div
         className="rounded-2xl border p-4 flex flex-col min-h-[320px]"
-        style={{ background: COLORS.surface, borderColor: COLORS.border }}
+        style={{
+          background: COLORS.surface,
+          borderColor: COLORS.border,
+        }}
       >
-        <div className="flex-1 overflow-y-auto space-y-4 max-h-[380px] pr-1">
-          {messages.map((m) => {
-            const isSpeaking = speakingMessageId === m.id;
+        <div
+          className="flex-1 overflow-y-auto space-y-4 max-h-[380px] pr-1"
+          aria-live="polite"
+          aria-relevant="additions"
+        >
+          {messages.map((message) => {
+            const isSpeaking =
+              speakingMessageId === message.id;
 
             return (
               <div
-                key={m.id}
-                className={`flex gap-3 ${m.role === "user" ? "flex-row-reverse" : ""}`}
+                key={message.id}
+                className={`flex gap-3 ${
+                  message.role === "user"
+                    ? "flex-row-reverse"
+                    : ""
+                }`}
               >
                 <div
                   className="w-8 h-8 rounded-full flex items-center justify-center shrink-0"
                   style={{
-                    background: m.isError
+                    background: message.isError
                       ? "#ef4444"
-                      : m.role === "assistant"
+                      : message.role === "assistant"
                         ? COLORS.gold
                         : COLORS.teal,
                     color: "#000",
                   }}
                 >
-                  {m.role === "assistant" ? <Bot size={15} /> : <User size={15} />}
+                  {message.role === "assistant" ? (
+                    <Bot size={15} />
+                  ) : (
+                    <User size={15} />
+                  )}
                 </div>
-                <div className="max-w-[80%] flex flex-col gap-1.5">
+
+                <div className="max-w-[80%] min-w-0 flex flex-col gap-1.5">
                   <div
-                    className="px-4 py-3 rounded-2xl text-sm leading-relaxed whitespace-pre-line border"
+                    className="px-4 py-3 rounded-2xl text-sm leading-relaxed whitespace-pre-line break-words border"
                     style={{
-                      background: m.isError ? "rgba(239,68,68,0.12)" : COLORS.surface2,
+                      background: message.isError
+                        ? "rgba(239,68,68,0.12)"
+                        : COLORS.surface2,
                       color: COLORS.ivory,
-                      borderColor: m.isError ? "rgba(239,68,68,0.35)" : COLORS.border,
+                      borderColor: message.isError
+                        ? "rgba(239,68,68,0.35)"
+                        : COLORS.border,
                     }}
                   >
-                    {m.text}
-                    {m.imageUrl && (
+                    {message.text}
+
+                    {message.imageUrl && (
                       <div className="mt-3 rounded-xl overflow-hidden border border-white/10">
                         <img
-                          src={m.imageUrl}
-                          alt="Génération IA"
-                          className="w-full max-h-64 object-cover"
+                          src={message.imageUrl}
+                          alt="Visuel généré par l'IA"
+                          className="w-full max-h-64 object-contain"
                           loading="lazy"
+                          referrerPolicy="no-referrer"
+                          onError={(event) => {
+                            event.currentTarget.style.display = "none";
+                          }}
                         />
                       </div>
                     )}
                   </div>
 
-                  {m.role === "assistant" && !m.isError && (
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <button
-                        type="button"
-                        onClick={() => speakText(m.id, m.text, { force: true })}
-                        className="flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg border transition-all active:scale-95"
-                        style={{
-                          background: isSpeaking ? `${COLORS.teal}20` : COLORS.surface2,
-                          borderColor: isSpeaking ? COLORS.borderTeal : COLORS.border,
-                          color: isSpeaking ? COLORS.teal : COLORS.muted,
-                        }}
-                        aria-label={isSpeaking ? "Arrêter la lecture" : "Écouter la réponse"}
-                      >
-                        {isSpeaking ? <VolumeX size={13} /> : <Volume2 size={13} />}
-                        <span>{isSpeaking ? "Arrêter" : "Écouter"}</span>
-                      </button>
-
-                      {m.canGenerate && typeof onGenerateMedia === "function" && (
+                  {message.role === "assistant" &&
+                    !message.isError && (
+                      <div className="flex items-center gap-2 flex-wrap">
                         <button
                           type="button"
-                          onClick={() => onGenerateMedia(m.text)}
+                          onClick={() =>
+                            speakText(message.id, message.text, {
+                              force: true,
+                            })
+                          }
                           className="flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg border transition-all active:scale-95"
                           style={{
-                            background: `${COLORS.gold}20`,
-                            borderColor: COLORS.borderGold,
-                            color: COLORS.gold,
+                            background: isSpeaking
+                              ? `${COLORS.teal}20`
+                              : COLORS.surface2,
+                            borderColor: isSpeaking
+                              ? COLORS.borderTeal
+                              : COLORS.border,
+                            color: isSpeaking
+                              ? COLORS.teal
+                              : COLORS.muted,
                           }}
-                          aria-label="Créer un visuel à partir de cette idée"
+                          aria-label={
+                            isSpeaking
+                              ? "Arrêter la lecture"
+                              : "Écouter la réponse"
+                          }
+                          aria-pressed={isSpeaking}
                         >
-                          <Video size={13} /> Créer le visuel
+                          {isSpeaking ? (
+                            <VolumeX size={13} />
+                          ) : (
+                            <Volume2 size={13} />
+                          )}
+                          <span>
+                            {isSpeaking ? "Arrêter" : "Écouter"}
+                          </span>
                         </button>
-                      )}
 
-                      {m.canPublish && typeof onPublishAction === "function" && (
-                        <button
-                          type="button"
-                          onClick={() => onPublishAction(m.text)}
-                          className="flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg border transition-all active:scale-95"
-                          style={{
-                            background: `${COLORS.teal}20`,
-                            borderColor: COLORS.borderTeal,
-                            color: COLORS.teal,
-                          }}
-                          aria-label="Publier cette idée"
-                        >
-                          <PlusCircle size={13} /> Publier cette idée
-                        </button>
-                      )}
-                    </div>
-                  )}
+                        {message.canGenerate &&
+                          typeof onGenerateMedia === "function" && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onGenerateMedia(message.text)
+                              }
+                              className="flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg border transition-all active:scale-95"
+                              style={{
+                                background: `${COLORS.gold}20`,
+                                borderColor: COLORS.borderGold,
+                                color: COLORS.gold,
+                              }}
+                              aria-label="Créer un visuel à partir de cette idée"
+                            >
+                              <Video size={13} />
+                              Créer le visuel
+                            </button>
+                          )}
+
+                        {message.canPublish &&
+                          typeof onPublishAction === "function" && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onPublishAction(message.text)
+                              }
+                              className="flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg border transition-all active:scale-95"
+                              style={{
+                                background: `${COLORS.teal}20`,
+                                borderColor: COLORS.borderTeal,
+                                color: COLORS.teal,
+                              }}
+                              aria-label="Publier cette idée"
+                            >
+                              <PlusCircle size={13} />
+                              Publier cette idée
+                            </button>
+                          )}
+                      </div>
+                    )}
                 </div>
               </div>
             );
           })}
+
           {loading && (
-            <div className="flex items-center gap-2 text-xs" style={{ color: COLORS.gold }}>
+            <div
+              className="flex items-center gap-2 text-xs"
+              style={{ color: COLORS.gold }}
+              role="status"
+            >
               <Sparkles size={14} className="animate-spin" />
               L&apos;Assistant BAARO réfléchit...
             </div>
           )}
+
           <div ref={bottomRef} />
         </div>
 
         <form
-          onSubmit={(e) => {
-            e.preventDefault();
+          onSubmit={(event) => {
+            event.preventDefault();
             handleSend();
           }}
           className="flex gap-2 pt-4 border-t mt-3"
@@ -543,20 +840,39 @@ export function AiAssistantTab({ userProfile, onPublishAction, onGenerateMedia, 
               isListening ? "animate-pulse" : ""
             }`}
             style={{
-              background: isListening ? `${COLORS.teal}20` : COLORS.surface2,
-              borderColor: isListening ? COLORS.borderTeal : COLORS.border,
-              color: isListening ? COLORS.teal : COLORS.ivory,
+              background: isListening
+                ? `${COLORS.teal}20`
+                : COLORS.surface2,
+              borderColor: isListening
+                ? COLORS.borderTeal
+                : COLORS.border,
+              color: isListening
+                ? COLORS.teal
+                : COLORS.ivory,
             }}
             title="Dicter par la voix"
-            aria-label={isListening ? "Arrêter la dictée" : "Dicter par la voix"}
+            aria-label={
+              isListening
+                ? "Arrêter la dictée"
+                : "Dicter par la voix"
+            }
             aria-pressed={isListening}
           >
-            {isListening ? <Square size={16} /> : <Mic size={16} />}
+            {isListening ? (
+              <Square size={16} />
+            ) : (
+              <Mic size={16} />
+            )}
           </button>
+
           <input
             ref={inputRef}
             value={input}
-            onChange={(e) => setInput(e.target.value.slice(0, MAX_INPUT_LENGTH))}
+            onChange={(event) =>
+              setInput(
+                event.target.value.slice(0, MAX_INPUT_LENGTH)
+              )
+            }
             maxLength={MAX_INPUT_LENGTH}
             placeholder={
               isListening
@@ -572,11 +888,15 @@ export function AiAssistantTab({ userProfile, onPublishAction, onGenerateMedia, 
             }}
             aria-label="Message à l'assistant IA"
           />
+
           <button
             type="submit"
             disabled={!input.trim() || loading}
             className="px-4 py-2.5 rounded-xl font-bold disabled:opacity-40 transition-all active:scale-95 flex items-center justify-center"
-            style={{ background: COLORS.gold, color: "#000" }}
+            style={{
+              background: COLORS.gold,
+              color: "#000",
+            }}
             aria-label="Envoyer"
           >
             <Send size={16} />
