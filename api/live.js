@@ -1,7 +1,8 @@
 /**
- * /api/live.js - V5 FINALE - FIX APPELS 1-1 + GEMINI 3.8
+ * /api/live.js - V5.1 FINALE - FIX APPELS 1-1 + GEMINI 3.8 & ROUTAGE CHAT
  * - Fix 404 Live introuvable: insert calls côté serveur (service_role bypass RLS)
  * - Bypass total pour call-xxx même sans DB
+ * - Intégration de la passerelle Chat/Assistant IA (/api/chat)
  * - Compatible avec la gamme Gemini 3.8 & cascade de secours
  */
 
@@ -318,12 +319,17 @@ export default async function handler(req, res) {
   if (applyCors(req, res)) return;
   const urlPath = (req.url || "").split("?")[0];
   const isRouting = req.method === "GET" || urlPath.includes("ai-routing") || urlPath.includes("routing");
-  const rateKey = isRouting ? "ai-routing" : urlPath.includes("live") || req.body?.liveId ? "live" : "chat";
+  
+  // Support direct des requêtes de chat (/api/chat)
+  const isChatRoute = urlPath.includes("chat");
+  const rateKey = isRouting ? "ai-routing" : isChatRoute || urlPath.includes("live") || req.body?.liveId ? "live" : "chat";
+  
   const limit = await rateLimitAsync(req, { key: rateKey, max: rateKey === "chat" ? 20 : 30, windowMs: 60_000 });
   if (!limit.ok) {
     Object.entries(limit.headers || {}).forEach(([k, v]) => res.setHeader(k, v));
     return res.status(limit.status).json(limit.body);
   }
+  
   let admin, user;
   try {
     admin = getAdminClient();
@@ -331,10 +337,12 @@ export default async function handler(req, res) {
   } catch (e) {
     return res.status(e.status || 500).json({ error: e.message });
   }
+  
   try {
     if (isRouting) return await handleAiRouting(req, res, user);
     const body = req.body || {};
     const action = (body.action || "").toLowerCase();
+    
     if (urlPath.includes("create-room") || action === "create-room" || action === "create_room") {
       return await handleCreateRoom(req, res, user, admin);
     }
@@ -344,10 +352,11 @@ export default async function handler(req, res) {
     if (action === "notify_call" || body.callee_id) {
       return res.status(200).json({ ok: true });
     }
-    if (body.liveId || body.roomName || action === "token" || urlPath.includes("live")) {
+    if (body.liveId || body.roomName || action === "token" || (urlPath.includes("live") && !urlPath.includes("chat"))) {
       if (!body.messages) return await handleToken(req, res, user, admin);
     }
-    if (Array.isArray(body.messages)) {
+    // Redirection automatique vers la passerelle IA pour /api/chat ou les tableaux de messages
+    if (Array.isArray(body.messages) || isChatRoute) {
       return await handleAiGateway(req, res, admin, user);
     }
     if (body.roomId && body.question) {
