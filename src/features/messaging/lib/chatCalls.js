@@ -123,7 +123,15 @@ export async function createCallRecord({ conversation_id, caller_id, callee_id, 
 }
 export async function updateCallStatus(call_id, updates) {
   if (!call_id) return null;
-  const { data, error } = await supabase.from("calls").update(updates).eq("id", call_id).select().single();
+  // createCallRecord renvoie le NOM DE SALLE comme id (le serveur n'expose pas l'id de la ligne `calls`) :
+  // comparer une colonne uuid à « call-xxxx » provoquait une erreur. Si ce n'est pas un uuid, on cible daily_room_name.
+  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(call_id));
+  const { data, error } = await supabase
+    .from("calls")
+    .update(updates)
+    .eq(isUuid ? "id" : "daily_room_name", call_id)
+    .select()
+    .single();
   if (error) throw error;
   return data;
 }
