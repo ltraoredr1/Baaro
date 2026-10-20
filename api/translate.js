@@ -84,6 +84,9 @@ export default async function handler(req, res) {
   }
 
   const ai = new GoogleGenAI({ apiKey });
+  
+  // Utilise la variable d'environnement ou le modèle par défaut mis à jour
+  const modelToUse = process.env.GEMINI_MODEL || "gemini-3.8-flash";
 
   // ==========================================================
   // BRANCHE 1 : TRADUCTION DE MÉDIA / VIDÉO
@@ -101,7 +104,7 @@ export default async function handler(req, res) {
       Renvoie UNIQUEMENT le contenu WebVTT commençant par WEBVTT sans aucun texte de politesse ni bloc markdown.`;
 
       const response = await ai.models.generateContent({
-        model: "gemini-2.0-flash", // Mis à jour
+        model: modelToUse, // Mis à jour avec gemini-3.8-flash
         contents: prompt,
       });
 
@@ -177,7 +180,7 @@ export default async function handler(req, res) {
 
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-2.0-flash", // Mis à jour
+      model: modelToUse, // Mis à jour avec gemini-3.8-flash
       contents: prompt,
     });
 
