@@ -7,7 +7,6 @@
  * - Réponse à un message (reply_to_id), suppression (deleted_at), indicateur "écrit…" (broadcast, sans table)
  * - Filtrage expires_at côté client
  * - Médias : pas de gros fichiers dans Supabase, media_url pointe vers R2
- * - addMessage(row) : ajoute tout de suite à l'écran un message média/vocal déjà inséré en base
  */
 import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "../../../supabaseClient.js";
@@ -94,16 +93,6 @@ export function useMessaging(conversation_id, current_user_id, recipient_id) {
   }, [conversation_id, recipient_id]);
 
   useEffect(() => () => clearTimeout(typingTimerRef.current), []);
-
-  // Messages éphémères : retire de l'écran ceux qui expirent pendant la session
-  useEffect(() => {
-    const t = setInterval(() => {
-      const now = Date.now();
-      const expired = (m) => m.expires_at && new Date(m.expires_at).getTime() < now;
-      setMessages((prev) => (prev.some(expired) ? prev.filter((m) => !expired(m)) : prev));
-    }, 15000);
-    return () => clearInterval(t);
-  }, []);
 
   const decryptOne = useCallback(
     async (rawMsg) => {
@@ -424,91 +413,54 @@ export function useMessaging(conversation_id, current_user_id, recipient_id) {
     ]
   );
 
-  // Ajoute immédiatement à l'écran un message média/vocal déjà inséré en base
-  // (sans attendre le temps réel, qui ne renvoie pas toujours à l'expéditeur)
-  const addMessage = useCallback((row) => {
-    if (!row) return;
-    setMessages((prev) =>
-      mergeMessages(prev, [
-        {
-          ...row,
-          plaintext: row.text || row.file_name || "",
-          encrypted: false,
-          pending: false,
-          failed: false,
-        },
-      ])
-    );
-  }, []);
-
-  // Transfère un message (texte rechiffré pour le nouveau destinataire, ou média tel quel)
-  const forwardMessage = useCallback(
-    async (msg, target) => {
-      if (!msg || !target?.conversationId || !target?.recipientId) {
-        return { ok: false, error: "Destinataire manquant" };
+  /**
+   * Insère un message média / vocal / fichier (déjà uploadé sur R2) et l'AFFICHE IMMÉDIATEMENT,
+   * sans attendre l'événement temps réel (le message est fusionné par client_message_id : pas de doublon).
+   * fields : { text, type, media_url, media_mime, media_size, file_name, media_duration }
+   * options : { clientMessageId, replyToId }
+   */
+  const sendMediaMessage = useCallback(
+    async (fields, options = {}) => {
+      if (!conversation_id || !current_user_id || !recipient_id) {
+        return { ok: false, error: "Paramètres manquants" };
       }
-      if (!keysReady || !myPublicKeyJwk) {
-        return { ok: false, error: keysError || "Clés de chiffrement pas encore prêtes." };
-      }
+      const clientId =
+        options.clientMessageId ||
+        (crypto?.randomUUID
+          ? crypto.randomUUID()
+          : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
       try {
-        const base = {
-          conversation_id: target.conversationId,
-          sender_id: current_user_id,
-          recipient_id: target.recipientId,
-          client_message_id: crypto?.randomUUID
-            ? crypto.randomUUID()
-            : `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-        };
-        let row;
-        if (msg.type && msg.type !== "text" && msg.media_url) {
-          row = {
-            ...base,
-            type: msg.type,
-            text: msg.text || msg.file_name || "",
-            media_url: msg.media_url,
-            media_mime: msg.media_mime,
-            media_size: msg.media_size,
-            file_name: msg.file_name,
-            media_duration: msg.media_duration,
-          };
-        } else {
-          const clean = (msg.plaintext || "").trim();
-          if (!clean) return { ok: false, error: "Message vide" };
-          const pub = await fetchRecipientPublicKey(target.recipientId);
-          if (!pub) throw new Error(NO_RECIPIENT_KEY);
-          const payload = await encryptMessage(clean, [
-            { user_id: target.recipientId, publicKeyJwk: pub },
-            { user_id: current_user_id, publicKeyJwk: myPublicKeyJwk },
-          ]);
-          row = { ...base, type: "text", text: serializePayload(payload) };
+        const { data, error } = await supabase
+          .from("messages")
+          .insert({
+            conversation_id,
+            sender_id: current_user_id,
+            recipient_id,
+            client_message_id: clientId,
+            reply_to_id: options.replyToId || null,
+            ...fields,
+          })
+          .select()
+          .single();
+        if (error) {
+          if (
+            error.code === "23505" ||
+            error.message?.includes("duplicate") ||
+            error.message?.includes("unique")
+          ) {
+            return { ok: true, data: { id: clientId, duplicate: true } };
+          }
+          throw error;
         }
-        const { error } = await supabase.from("messages").insert(row);
-        if (error) throw error;
-        return { ok: true };
-      } catch (e) {
-        return { ok: false, error: e?.message || "Transfert impossible" };
+        const full = await decryptOne(data);
+        setMessages((prev) => mergeMessages(prev, [{ ...full, pending: false, failed: false }]));
+        return { ok: true, data };
+      } catch (err) {
+        return { ok: false, error: err?.message || "Échec envoi" };
       }
     },
-    [current_user_id, keysReady, keysError, myPublicKeyJwk, fetchRecipientPublicKey]
+    [conversation_id, current_user_id, recipient_id, decryptOne]
   );
-
-  // Code de sécurité à comparer avec le contact (identique des deux côtés)
-  const getSafetyNumber = useCallback(async () => {
-    if (!myPublicKeyJwk || !recipient_id) return null;
-    const theirs = recipientKeyCache.current || (await fetchRecipientPublicKey(recipient_id));
-    if (!theirs) return null;
-    recipientKeyCache.current = theirs;
-    const a = String(myPublicKeyJwk.n || JSON.stringify(myPublicKeyJwk));
-    const b = String(theirs.n || JSON.stringify(theirs));
-    const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode([a, b].sort().join("|")));
-    const bytes = new Uint8Array(buf);
-    const groups = [];
-    for (let i = 0; i < 30; i += 5) {
-      const n = (bytes[i] * 16777216 + bytes[i + 1] * 65536 + bytes[i + 2] * 256 + bytes[i + 3]) % 100000;
-      groups.push(String(n).padStart(5, "0"));
-    }
-    return groups.join(" ");
-  }, [myPublicKeyJwk, recipient_id, fetchRecipientPublicKey]);
 
   // Suppression "pour tous" de MES messages (marque deleted_at ; le contenu n'est plus affiché)
   const deleteMessage = useCallback(
@@ -536,9 +488,7 @@ export function useMessaging(conversation_id, current_user_id, recipient_id) {
     // Plus de spinner infini si les clés échouent : l'erreur est exposée via keysError
     loading: loading || (!keysReady && !keysError),
     sendMessage,
-    addMessage,
-    forwardMessage,
-    getSafetyNumber,
+    sendMediaMessage,
     deleteMessage,
     loadOlder,
     hasMore,
