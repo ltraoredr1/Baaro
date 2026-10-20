@@ -1,8 +1,8 @@
 /**
- * /api/live.js - V5 FINALE - FIX APPELS 1-1
+ * /api/live.js - V5 FINALE - FIX APPELS 1-1 + GEMINI 3.8
  * - Fix 404 Live introuvable: insert calls côté serveur (service_role bypass RLS)
  * - Bypass total pour call-xxx même sans DB
- * - Compatible avec la dernière version de l'API Gemini
+ * - Compatible avec la gamme Gemini 3.8 & cascade de secours
  */
 
 import {
@@ -107,7 +107,7 @@ async function invokeGemini(ctx) {
   const cfg = providerConfig("gemini");
   return callOpenAICompatible({
     key: cfg?.key || process.env.GEMINI_API_KEY,
-    model: publicModel || cfg?.model || process.env.GEMINI_MODEL || "gemini-2.5-flash",
+    model: publicModel || cfg?.model || process.env.GEMINI_MODEL || "gemini-3.8-flash",
     messages: normalizedMessages,
     system,
     maxTokens
@@ -178,7 +178,7 @@ async function handleAiGateway(req, res, admin, user) {
       reply: result.reply,
       sessionId,
       provider: "gemini",
-      model: publicModel || process.env.GEMINI_MODEL || "gemini-2.5-flash",
+      model: publicModel || process.env.GEMINI_MODEL || "gemini-3.8-flash",
       country: country || null,
       latencyMs: latency
     });
@@ -198,7 +198,6 @@ async function handleCreateRoom(req, res, user, admin) {
   const inviteCode = sanitizeRoomName(body.inviteCode || body.invite_code);
   const maxParticipants = Math.min(Math.max(Number(body.maxParticipants) || 12, 2), 50);
 
-  // FIX V5: Appels 1-1 - création serveur complète
   if (inviteCode.startsWith('call-')) {
     let dailyRoom = null;
     try {
@@ -209,7 +208,6 @@ async function handleCreateRoom(req, res, user, admin) {
       return res.status(500).json({ error: "Daily create failed: " + e.message });
     }
 
-    // INSERT SERVEUR dans calls avec service_role (bypass RLS)
     try {
       const insertPayload = {
         caller_id: user.id,
@@ -236,7 +234,6 @@ async function handleCreateRoom(req, res, user, admin) {
     });
   }
 
-  // Cas normal debate_rooms
   let dailyRoomName = null; let dailyUrl = null;
   if (mode !== "text") {
     try { const room = await createDailyRoom(inviteCode, { maxParticipants }); dailyRoomName = room.name; dailyUrl = room.url || roomUrl(room.name); }
@@ -256,7 +253,6 @@ async function handleToken(req, res, user, admin) {
   console.log('[live] TOKEN REQ', { liveId, userId: user.id });
   if (!liveId) return res.status(400).json({ error: "liveId requis" });
 
-  // BYPASS TOTAL pour call-xxx - marche même sans DB
   if (liveId.startsWith('call-')) {
     try {
       let roomName = liveId;
@@ -266,7 +262,6 @@ async function handleToken(req, res, user, admin) {
         userName: body.userName || "Participant",
         isOwner: body.isOwner !== false
       });
-      // update status si existe
       try { await admin.from("calls").update({ status: 'ongoing' }).eq("daily_room_name", liveId); } catch {}
       return res.status(200).json({ ok: true, token, roomName, url: roomUrl(roomName), isOwner: true });
     } catch (e) {
@@ -275,7 +270,6 @@ async function handleToken(req, res, user, admin) {
     }
   }
 
-  // Recherche debate_rooms
   let { data: room } = await admin.from("debate_rooms").select("id, host_id, daily_room_name, invite_code, status, mode").or(`invite_code.eq.${liveId},id.eq.${liveId},daily_room_name.eq.${liveId}`).maybeSingle();
   let callData = null;
 
