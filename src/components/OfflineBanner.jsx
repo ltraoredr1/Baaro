@@ -1,17 +1,22 @@
 /**
  * Bandeau hors-ligne discret + reconnect.
- * Baaro - 100% efficace
  */
 import { useEffect, useState } from "react";
 import { WifiOff } from "lucide-react";
+import { flushOfflineEvents } from "../lib/feedEvents.js";
+import { flushOfflineActions } from "../lib/offlineActions.js";
 
 export function useOnlineStatus() {
   const [online, setOnline] = useState(
-    typeof navigator!== "undefined"? navigator.onLine : true
+    typeof navigator !== "undefined" ? navigator.onLine : true
   );
 
   useEffect(() => {
-    const on = () => setOnline(true);
+    const on = () => {
+      setOnline(true);
+      void flushOfflineEvents();
+      void flushOfflineActions();
+    };
     const off = () => setOnline(false);
     window.addEventListener("online", on);
     window.addEventListener("offline", off);
@@ -40,7 +45,7 @@ export function OfflineBanner() {
       aria-live="polite"
     >
       <WifiOff size={14} aria-hidden />
-      Pas de connexion — certaines actions sont indisponibles
+      Hors ligne — actions mises en file, sync au retour du réseau
     </div>
   );
 }
