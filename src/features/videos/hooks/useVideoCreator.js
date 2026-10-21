@@ -2,6 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import { useToast } from "../../../components/ToastContext.jsx";
 import { uploadExternalMedia } from "../../../lib/externalMedia.js";
 import { generateAIImage } from "../../../lib/geminiAI.js";
+import {
+  looksLikeVideo,
+  uploadLargeVideo,
+} from "../../../lib/largeVideoUpload.js";
 import { supabase } from "../../../supabaseClient.js";
 import { MAX_PHOTOS } from "../constants.js";
 import { formatTime } from "../utils/format.js";
@@ -213,7 +217,8 @@ export function useVideoCreator({
 
   const handleFileSelected = (file) => {
     if (!file) return;
-    if (!file.type.startsWith("video/")) {
+    // Certains mobiles envoient un fichier vidéo sans type MIME : on teste aussi l'extension
+    if (!looksLikeVideo(file)) {
       showToast("Sélectionne un fichier vidéo.", "error");
       return;
     }
@@ -240,8 +245,13 @@ export function useVideoCreator({
     setUploadProgress(10);
 
     try {
-      setUploadProgress(30);
-      const uploaded = await uploadExternalMedia(selectedFile, "videos");
+      // <= 500 Mo : R2 direct (/api/media) ; > 500 Mo : worker multipart.
+      // La progression réelle occupe la plage 10 -> 65 %.
+      const uploaded = await uploadLargeVideo(selectedFile, {
+        user_id: user.id,
+        onProgress: (pct) =>
+          setUploadProgress(10 + Math.round((pct / 100) * 55)),
+      });
       const publicUrl = uploaded.publicUrl || uploaded.url;
       setUploadProgress(65);
 
