@@ -17,9 +17,18 @@ export function StoryCard({ story: s, isMine, counts, onOpen }) {
 
       {hasMedia ? (
         s.media_type === 'video' ? (
-          <video src={s.media_url} className="w-full h-32 object-cover rounded-lg my-2 pointer-events-none" muted playsInline />
+          <video
+            src={s.media_url}
+            className="w-full aspect-[4/5] object-cover object-top rounded-lg my-2 pointer-events-none"
+            muted
+            playsInline
+          />
         ) : (
-          <img src={s.media_url} alt="story" className="w-full h-32 object-cover rounded-lg my-2" />
+          <img
+            src={s.media_url}
+            alt="story"
+            className="w-full aspect-[4/5] object-cover object-top rounded-lg my-2"
+          />
         )
       ) : (
         <div className="text-sm line-clamp-4 my-auto">
