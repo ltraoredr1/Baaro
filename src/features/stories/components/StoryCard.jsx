@@ -16,20 +16,37 @@ export function StoryCard({ story: s, isMine, counts, onOpen }) {
       </div>
 
       {hasMedia ? (
-        s.media_type === 'video' ? (
-          <video
-            src={s.media_url}
-            className="w-full aspect-[4/5] object-cover object-top rounded-lg my-2 pointer-events-none"
-            muted
-            playsInline
-          />
-        ) : (
-          <img
-            src={s.media_url}
-            alt="story"
-            className="w-full aspect-[4/5] object-cover object-top rounded-lg my-2"
-          />
-        )
+        // Vignette 4:5 : l'image est affichée en entier (object-contain), sans zoom ni rognage.
+        // Le fond flouté de la même image remplit les bandes.
+        <div className="relative w-full aspect-[4/5] rounded-lg my-2 overflow-hidden bg-black/40">
+          {s.media_type === 'video' ? (
+            <video
+              src={s.media_url}
+              className="absolute inset-0 w-full h-full object-contain pointer-events-none"
+              muted
+              playsInline
+              preload="metadata"
+            />
+          ) : (
+            <>
+              <img
+                src={s.media_url}
+                alt=""
+                aria-hidden="true"
+                loading="lazy"
+                decoding="async"
+                className="absolute inset-0 w-full h-full object-cover blur-xl scale-110 opacity-40 pointer-events-none"
+              />
+              <img
+                src={s.media_url}
+                alt="story"
+                loading="lazy"
+                decoding="async"
+                className="absolute inset-0 w-full h-full object-contain"
+              />
+            </>
+          )}
+        </div>
       ) : (
         <div className="text-sm line-clamp-4 my-auto">
           <AutoTranslate text={s.caption} showToggle={false}>
