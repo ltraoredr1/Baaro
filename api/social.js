@@ -3,6 +3,11 @@
  * (like, commentaire, partage, repost). Appelé avec action = "notify_interaction".
  * + demandes d'ami (friend_request) et acceptations (friend_accepted).
  * + action "comment" : insertion serveur du commentaire + notification.
+ * + actions "get_preferences" / "save_preferences" : préférences de notification
+ *   de l'utilisateur connecté (table notification_preferences). Le client ne
+ *   touche plus à cette table directement ; l'identité vient toujours du JWT.
+ * + actions "save_push_token" / "delete_push_token" : jetons push de l'appareil
+ *   (RPC upsert_push_token / table push_tokens), toujours pour l'utilisateur du JWT.
  * Les simples abonnements sont notifiés par le trigger SQL on_follow_created : pas géré ici.
  *
  * Le destinataire est TOUJOURS déterminé côté serveur (auteur du contenu), jamais
@@ -92,16 +97,22 @@ async function interactionHappened(
       .eq("follower_id", actorId)
       .eq("followed_id", recipientId)
       .maybeSingle();
-    if (interactionType === "friend_request") {
-      return sent?.is_friend === true && sent?.status === "pending";
-    }
-    // friend_accepted : l'acceptation met à jour la ligne de la personne qui avait demandé
+    // Ligne inverse : celle de l'autre personne vers l'acteur. Pour une demande
+    // d'ami, si elle suivait déjà l'acteur, sendFriendRequest met à jour CETTE
+    // ligne (is_friend + pending) au lieu d'en créer une nouvelle.
     const { data: received } = await admin
       .from("follows")
       .select("status, is_friend")
       .eq("follower_id", recipientId)
       .eq("followed_id", actorId)
       .maybeSingle();
+    if (interactionType === "friend_request") {
+      return (
+        (sent?.is_friend === true && sent?.status === "pending") ||
+        (received?.is_friend === true && received?.status === "pending")
+      );
+    }
+    // friend_accepted : l'acceptation met à jour la ligne de la personne qui avait demandé
     return (
       (received?.is_friend === true && received?.status === "accepted") ||
       (sent?.is_friend === true && sent?.status === "accepted")
@@ -172,7 +183,7 @@ async function insertNotificationAndPush(admin, {
     body: preview ? `${rule.verb} : « ${preview} »` : rule.verb,
     url,
     category: "social",
-    tag: `social-\( {rule.type}- \){sourceId}`,
+    tag: `social-${rule.type}-${sourceId}`,
     data: { type: rule.type, source_id: sourceId, actor_id: actorId },
   }).catch((err) => console.warn("[social] push", err?.message || err));
 }
@@ -374,6 +385,166 @@ async function handleComment(admin, user, body) {
   };
 }
 
+// ========== Préférences de notification ==========
+const DEFAULT_PREFERENCES = {
+  push_enabled: true,
+  messages: true,
+  social: true,
+  live: true,
+  earnings: true,
+  marketing: false,
+};
+const PREFERENCE_KEYS = Object.keys(DEFAULT_PREFERENCES);
+
+// Ancienne colonne "wallet" → "earnings"
+function normalizePreferences(row) {
+  const source = row ? { ...row } : {};
+  if (source.wallet !== undefined && source.earnings === undefined) {
+    source.earnings = source.wallet;
+  }
+  const out = { ...DEFAULT_PREFERENCES };
+  for (const key of PREFERENCE_KEYS) {
+    if (typeof source[key] === "boolean") out[key] = source[key];
+  }
+  return out;
+}
+
+async function handleGetPreferences(admin, user) {
+  const { data, error } = await admin
+    .from("notification_preferences")
+    .select("*")
+    .eq("user_id", user.id)
+    .maybeSingle();
+  if (error) {
+    console.error("[social] get_preferences", error.message || error);
+    return {
+      status: 500,
+      body: { ok: false, error: "Préférences indisponibles" },
+    };
+  }
+  return {
+    status: 200,
+    body: { ok: true, data: { user_id: user.id, ...normalizePreferences(data) } },
+  };
+}
+
+async function handleSavePreferences(admin, user, body) {
+  const patch =
+    body.preferences && typeof body.preferences === "object"
+      ? body.preferences
+      : body;
+
+  const safe = {};
+  for (const key of PREFERENCE_KEYS) {
+    if (key in patch) safe[key] = Boolean(patch[key]);
+  }
+  if ("wallet" in patch && !("earnings" in safe)) {
+    safe.earnings = Boolean(patch.wallet);
+  }
+  if (Object.keys(safe).length === 0) {
+    return { status: 400, body: { ok: false, error: "Aucune préférence valide" } };
+  }
+
+  const { data, error } = await admin
+    .from("notification_preferences")
+    .upsert(
+      { user_id: user.id, ...safe, updated_at: new Date().toISOString() },
+      { onConflict: "user_id" }
+    )
+    .select("*")
+    .maybeSingle();
+  if (error) {
+    console.error("[social] save_preferences", error.message || error);
+    return {
+      status: 500,
+      body: { ok: false, error: "Impossible d'enregistrer les préférences" },
+    };
+  }
+  return {
+    status: 200,
+    body: {
+      ok: true,
+      data: { user_id: user.id, ...normalizePreferences(data || safe) },
+    },
+  };
+}
+
+// ========== Jetons push ==========
+const PUSH_PLATFORMS = new Set(["web", "android", "ios"]);
+const MAX_PUSH_TOKEN_LEN = 4096;
+
+function cleanPushToken(value) {
+  if (typeof value !== "string") return "";
+  const token = value.trim();
+  return token.length <= MAX_PUSH_TOKEN_LEN ? token : "";
+}
+
+async function handleSavePushToken(admin, user, body) {
+  const token = cleanPushToken(body.token);
+  const platform = String(body.platform || "").toLowerCase();
+  if (!token) {
+    return { status: 400, body: { ok: false, error: "Jeton invalide" } };
+  }
+  if (!PUSH_PLATFORMS.has(platform)) {
+    return { status: 400, body: { ok: false, error: "Plateforme invalide" } };
+  }
+
+  const { error } = await admin.rpc("upsert_push_token", {
+    p_user_id: user.id,
+    p_token: token,
+    p_platform: platform,
+    p_user_agent: clip(body.user_agent, 200) || null,
+  });
+  if (error) {
+    console.error("[social] save_push_token", error.message || error);
+    return {
+      status: 500,
+      body: { ok: false, error: "Impossible d'enregistrer le jeton" },
+    };
+  }
+  return { status: 200, body: { ok: true } };
+}
+
+// Suppression : tous les jetons de la plateforme, ou un seul (token),
+// ou tous sauf un (except_token, nettoyage des anciens jetons web).
+async function handleDeletePushToken(admin, user, body) {
+  const platform = String(body.platform || "").toLowerCase();
+  if (!PUSH_PLATFORMS.has(platform)) {
+    return { status: 400, body: { ok: false, error: "Plateforme invalide" } };
+  }
+
+  let query = admin
+    .from("push_tokens")
+    .delete()
+    .eq("user_id", user.id)
+    .eq("platform", platform);
+
+  if (body.token !== undefined && body.token !== null) {
+    const token = cleanPushToken(body.token);
+    if (!token) {
+      return { status: 400, body: { ok: false, error: "Jeton invalide" } };
+    }
+    query = query.eq("token", token);
+  }
+  if (body.except_token !== undefined && body.except_token !== null) {
+    const exceptToken = cleanPushToken(body.except_token);
+    if (!exceptToken) {
+      return { status: 400, body: { ok: false, error: "Jeton invalide" } };
+    }
+    query = query.neq("token", exceptToken);
+  }
+
+  const { error } = await query;
+  if (error) {
+    console.error("[social] delete_push_token", error.message || error);
+    return {
+      status: 500,
+      body: { ok: false, error: "Impossible de supprimer le jeton" },
+    };
+  }
+  return { status: 200, body: { ok: true } };
+}
+
 export default async function handler(req, res) {
   if (applyCors(req, res)) return;
 
@@ -423,6 +594,26 @@ export default async function handler(req, res) {
 
     if (action === "comment") {
       const result = await handleComment(admin, user, body);
+      return res.status(result.status).json(result.body);
+    }
+
+    if (action === "get_preferences") {
+      const result = await handleGetPreferences(admin, user);
+      return res.status(result.status).json(result.body);
+    }
+
+    if (action === "save_preferences") {
+      const result = await handleSavePreferences(admin, user, body);
+      return res.status(result.status).json(result.body);
+    }
+
+    if (action === "save_push_token") {
+      const result = await handleSavePushToken(admin, user, body);
+      return res.status(result.status).json(result.body);
+    }
+
+    if (action === "delete_push_token") {
+      const result = await handleDeletePushToken(admin, user, body);
       return res.status(result.status).json(result.body);
     }
 
