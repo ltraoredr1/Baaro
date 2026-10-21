@@ -70,18 +70,23 @@ function sanitizeComment(value) {
 
 async function loadContent(admin, contentType, id) {
   const table = contentType === "post" ? "posts" : "videos";
-  const { data } = await admin
+  // Colonnes réelles : posts(author_id, text) ; videos(author_id, title, description).
+  const columns =
+    contentType === "post" ? "author_id, text" : "author_id, title, description";
+  const { data, error } = await admin
     .from(table)
-    .select("author_id, user_id, text, content, title, description")
+    .select(columns)
     .eq("id", id)
     .maybeSingle();
+  if (error) {
+    console.error("[social] loadContent", table, error.message || error);
+    return null;
+  }
   if (!data) return null;
   const text =
-    contentType === "post"
-      ? data.text || data.content
-      : data.title || data.description;
+    contentType === "post" ? data.text : data.title || data.description;
   return {
-    authorId: data.author_id || data.user_id,
+    authorId: data.author_id,
     preview: clip(text, 120),
   };
 }
