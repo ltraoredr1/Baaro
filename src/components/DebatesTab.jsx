@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback, memo } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef, memo } from "react";
 import {
   Swords,
   Plus,
@@ -15,6 +15,19 @@ import { supabase } from "../supabaseClient.js";
 import { CreateDebateModal } from "./CreateDebateModal.jsx";
 import { DebateRoom } from "./DebateRoom.jsx";
 import { useDebates } from "../hooks/useDebates.js";
+
+// Couleurs avec valeurs de secours : évite un bouton invisible si une clé manque dans theme.js
+const C = {
+  bg: (COLORS && COLORS.bg) || "#0f172a",
+  surface: (COLORS && COLORS.surface) || "#111c33",
+  surface2: (COLORS && COLORS.surface2) || "#1a2740",
+  border: (COLORS && COLORS.border) || "rgba(148,163,184,0.2)",
+  borderGold: (COLORS && COLORS.borderGold) || "rgba(217,174,82,0.4)",
+  ivory: (COLORS && COLORS.ivory) || "#f8f5ec",
+  muted: (COLORS && COLORS.muted) || "#94a3b8",
+  gold: (COLORS && COLORS.gold) || "#d9ae52",
+  teal: (COLORS && COLORS.teal) || "#2dbfa6",
+};
 
 const FILTERS = [
   { id: "all", label: "Tous" },
@@ -58,18 +71,18 @@ const DebateCard = memo(function DebateCard({ debate, onOpen }) {
   return (
     <button
       type="button"
-      onClick={() => onOpen(debate.invite_code)}
+      onClick={() => onOpen(debate.invite_code || debate.id)}
       className="w-full text-left p-4 rounded-2xl border transition-all active:scale-[0.99] group"
       style={{
         background:
           "linear-gradient(135deg, rgba(26,39,64,0.95) 0%, rgba(15,23,42,0.98) 100%)",
-        borderColor: COLORS.border,
+        borderColor: C.border,
       }}
       onMouseEnter={(e) => {
-        e.currentTarget.style.borderColor = COLORS.borderGold;
+        e.currentTarget.style.borderColor = C.borderGold;
       }}
       onMouseLeave={(e) => {
-        e.currentTarget.style.borderColor = COLORS.border;
+        e.currentTarget.style.borderColor = C.border;
       }}
     >
       <div className="flex items-start gap-3">
@@ -84,10 +97,10 @@ const DebateCard = memo(function DebateCard({ debate, onOpen }) {
                   : "rgba(148,163,184,0.12)",
             color:
               debate.mode === "video"
-                ? COLORS.gold
+                ? C.gold
                 : debate.mode === "audio"
-                  ? COLORS.teal
-                  : COLORS.muted,
+                  ? C.teal
+                  : C.muted,
           }}
         >
           <Icon size={22} />
@@ -108,7 +121,7 @@ const DebateCard = memo(function DebateCard({ debate, onOpen }) {
           <div className="flex items-center gap-2 mb-1">
             <h3
               className="font-bold text-sm truncate"
-              style={{ color: COLORS.ivory }}
+              style={{ color: C.ivory }}
             >
               {debate.title || "Débat"}
             </h3>
@@ -121,7 +134,7 @@ const DebateCard = memo(function DebateCard({ debate, onOpen }) {
           </div>
           <div
             className="flex items-center gap-1.5 text-xs mb-2 truncate"
-            style={{ color: COLORS.muted }}
+            style={{ color: C.muted }}
           >
             <Hash size={12} className="shrink-0" />
             <span className="truncate">{debate.topic || "Général"}</span>
@@ -129,11 +142,11 @@ const DebateCard = memo(function DebateCard({ debate, onOpen }) {
           <div className="flex items-center justify-between text-[11px]">
             <span
               className="px-2 py-0.5 rounded-md font-medium"
-              style={{ background: COLORS.surface2, color: COLORS.muted }}
+              style={{ background: C.surface2, color: C.muted }}
             >
               {modeLabel(debate.mode)}
             </span>
-            <span style={{ color: COLORS.muted }}>
+            <span style={{ color: C.muted }}>
               {formatWhen(debate.created_at)}
             </span>
           </div>
@@ -147,25 +160,25 @@ function SkeletonCard() {
   return (
     <div
       className="p-4 rounded-2xl border animate-pulse"
-      style={{ background: COLORS.surface, borderColor: COLORS.border }}
+      style={{ background: C.surface, borderColor: C.border }}
     >
       <div className="flex gap-3">
         <div
           className="w-12 h-12 rounded-xl"
-          style={{ background: COLORS.surface2 }}
+          style={{ background: C.surface2 }}
         />
         <div className="flex-1 space-y-2">
           <div
             className="h-4 w-2/3 rounded"
-            style={{ background: COLORS.surface2 }}
+            style={{ background: C.surface2 }}
           />
           <div
             className="h-3 w-1/2 rounded"
-            style={{ background: COLORS.surface2 }}
+            style={{ background: C.surface2 }}
           />
           <div
             className="h-3 w-1/3 rounded"
-            style={{ background: COLORS.surface2 }}
+            style={{ background: C.surface2 }}
           />
         </div>
       </div>
@@ -173,9 +186,14 @@ function SkeletonCard() {
   );
 }
 
-export default function DebatesTab({ id, currentUserId, onRewardPoints, onOpenProfile }) {
+export default function DebatesTab({
+  id,
+  currentUserId,
+  onRewardPoints,
+  onOpenProfile,
+}) {
   const user_id = currentUserId || id || null;
-  const { rooms: myRooms, loadingRooms, createRoom, joinByCode, loadRooms } = useDebates(user_id);
+  const { rooms: myRooms } = useDebates(user_id) || {};
   const [debates, setDebates] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -184,19 +202,21 @@ export default function DebatesTab({ id, currentUserId, onRewardPoints, onOpenPr
   const [joinCode, setJoinCode] = useState("");
   const [joining, setJoining] = useState(false);
   const [filter, setFilter] = useState("all");
+  const refetchTimer = useRef(null);
 
+  // Fusionne mes salles (hook) sans écraser la liste
   useEffect(() => {
     if (!myRooms?.length) return;
     setDebates((prev) => {
       const ids = new Set(prev.map((d) => d.id));
-      const extra = myRooms.filter((r) => r?.id && !ids.has(r.id));
+      const extra = myRooms.filter(
+        (r) => r?.id && r.status !== "ended" && !ids.has(r.id)
+      );
       return extra.length ? [...extra, ...prev] : prev;
     });
   }, [myRooms]);
 
-
   const fetchDebates = useCallback(async () => {
-    setError(null);
     try {
       const { data, error: qErr } = await supabase
         .from("debate_rooms")
@@ -204,14 +224,28 @@ export default function DebatesTab({ id, currentUserId, onRewardPoints, onOpenPr
           "id, title, topic, mode, invite_code, status, created_at, host_id, daily_room_name"
         )
         .eq("status", "active")
-        .gte("created_at", new Date(Date.now() - 12 * 3600 * 1000).toISOString())
+        .gte(
+          "created_at",
+          new Date(Date.now() - 12 * 3600 * 1000).toISOString()
+        )
         .order("created_at", { ascending: false })
         .limit(40);
       if (qErr) {
         setError(qErr.message);
-        setDebates([]);
       } else {
-        setDebates(data || []);
+        setError(null);
+        // Garde les salles ajoutées localement qui ne seraient pas encore visibles
+        setDebates((prev) => {
+          const list = data || [];
+          const ids = new Set(list.map((d) => d.id));
+          const localOnly = prev.filter(
+            (d) =>
+              d?.id &&
+              !ids.has(d.id) &&
+              Date.now() - new Date(d.created_at || 0).getTime() < 60000
+          );
+          return [...localOnly, ...list];
+        });
       }
     } catch (err) {
       setError(err.message);
@@ -227,10 +261,15 @@ export default function DebatesTab({ id, currentUserId, onRewardPoints, onOpenPr
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "debate_rooms" },
-        () => fetchDebates()
+        () => {
+          // Débounce pour éviter les rafales de requêtes
+          clearTimeout(refetchTimer.current);
+          refetchTimer.current = setTimeout(fetchDebates, 400);
+        }
       )
       .subscribe();
     return () => {
+      clearTimeout(refetchTimer.current);
       supabase.removeChannel(channel);
     };
   }, [fetchDebates]);
@@ -249,9 +288,10 @@ export default function DebatesTab({ id, currentUserId, onRewardPoints, onOpenPr
     try {
       // Normaliser en minuscules (aligné CreateDebateModal)
       const code = raw.toLowerCase();
-      const { data, error: rpcErr } = await supabase.rpc("join_debate_by_code", {
-        p_code: code,
-      });
+      const { data, error: rpcErr } = await supabase.rpc(
+        "join_debate_by_code",
+        { p_code: code }
+      );
       if (rpcErr) throw rpcErr;
       const row = Array.isArray(data) ? data[0] : data;
       if (!row) throw new Error("Code invalide");
@@ -274,7 +314,7 @@ export default function DebatesTab({ id, currentUserId, onRewardPoints, onOpenPr
     return (
       <DebateRoom
         inviteCode={activeDebateCode}
-        id={id}
+        id={user_id}
         onBack={() => {
           setActiveDebateCode(null);
           fetchDebates();
@@ -286,33 +326,30 @@ export default function DebatesTab({ id, currentUserId, onRewardPoints, onOpenPr
 
   return (
     <>
-      <div className="flex flex-col gap-4 max-w-2xl mx-auto w-full pb-24 px-1">
+      <div className="flex flex-col gap-4 max-w-2xl mx-auto w-full pb-32 px-1">
         <div
           className="rounded-3xl p-5 border relative overflow-hidden"
           style={{
-            borderColor: COLORS.borderGold,
+            borderColor: C.borderGold,
             background:
               "linear-gradient(135deg, rgba(217,174,82,0.12) 0%, rgba(45,191,166,0.08) 50%, rgba(15,23,42,0.9) 100%)",
           }}
         >
           <div className="flex items-start justify-between gap-3 relative z-10">
-            <div>
+            <div className="min-w-0">
               <div className="flex items-center gap-2 mb-1">
-                <Radio size={20} style={{ color: COLORS.gold }} />
-                <h2
-                  className="text-xl font-bold"
-                  style={{ color: COLORS.ivory }}
-                >
+                <Radio size={20} style={{ color: C.gold }} />
+                <h2 className="text-xl font-bold" style={{ color: C.ivory }}>
                   Lives & Débats
                 </h2>
               </div>
-              <p className="text-xs" style={{ color: COLORS.muted }}>
+              <p className="text-xs" style={{ color: C.muted }}>
                 Rejoins un live, débat en texte, audio ou vidéo.
               </p>
               {!loading && (
                 <p
                   className="text-[11px] mt-2 font-mono"
-                  style={{ color: COLORS.teal }}
+                  style={{ color: C.teal }}
                 >
                   {debates.length} salle{debates.length !== 1 ? "s" : ""} active
                   {debates.length !== 1 ? "s" : ""}
@@ -323,7 +360,7 @@ export default function DebatesTab({ id, currentUserId, onRewardPoints, onOpenPr
               type="button"
               onClick={() => setIsCreateOpen(true)}
               className="shrink-0 flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-xs font-bold shadow-lg transition active:scale-95"
-              style={{ background: COLORS.gold, color: COLORS.bg }}
+              style={{ background: C.gold, color: C.bg }}
             >
               <Plus size={16} /> Créer
             </button>
@@ -332,13 +369,13 @@ export default function DebatesTab({ id, currentUserId, onRewardPoints, onOpenPr
 
         <div
           className="flex gap-2 p-3 rounded-2xl border"
-          style={{ background: COLORS.surface, borderColor: COLORS.border }}
+          style={{ background: C.surface, borderColor: C.border }}
         >
           <div className="flex items-center gap-2 flex-1 min-w-0">
             <KeyRound
               size={16}
               className="shrink-0"
-              style={{ color: COLORS.muted }}
+              style={{ color: C.muted }}
             />
             <input
               type="text"
@@ -347,7 +384,7 @@ export default function DebatesTab({ id, currentUserId, onRewardPoints, onOpenPr
               placeholder="Code d'invitation"
               maxLength={8}
               className="flex-1 bg-transparent outline-none text-sm uppercase tracking-widest font-mono min-w-0"
-              style={{ color: COLORS.ivory }}
+              style={{ color: C.ivory }}
               onKeyDown={(e) => e.key === "Enter" && handleJoinByCode()}
             />
           </div>
@@ -356,7 +393,7 @@ export default function DebatesTab({ id, currentUserId, onRewardPoints, onOpenPr
             onClick={handleJoinByCode}
             disabled={!joinCode.trim() || joining}
             className="px-4 py-2 rounded-xl text-xs font-bold disabled:opacity-40 shrink-0"
-            style={{ background: COLORS.teal, color: COLORS.bg }}
+            style={{ background: C.teal, color: C.bg }}
           >
             {joining ? "…" : "Rejoindre"}
           </button>
@@ -373,9 +410,9 @@ export default function DebatesTab({ id, currentUserId, onRewardPoints, onOpenPr
                 onClick={() => setFilter(f.id)}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold border shrink-0 transition"
                 style={{
-                  background: active ? `${COLORS.gold}22` : COLORS.surface,
-                  borderColor: active ? COLORS.gold : COLORS.border,
-                  color: active ? COLORS.gold : COLORS.muted,
+                  background: active ? `${C.gold}22` : C.surface,
+                  borderColor: active ? C.gold : C.border,
+                  color: active ? C.gold : C.muted,
                 }}
               >
                 {Icon && <Icon size={12} />} {f.label}
@@ -386,7 +423,7 @@ export default function DebatesTab({ id, currentUserId, onRewardPoints, onOpenPr
 
         {error && (
           <div
-            className="p-3 rounded-xl text-xs border"
+            className="p-3 rounded-xl text-xs border break-words"
             style={{
               background: "rgba(239,68,68,0.1)",
               borderColor: "rgba(239,68,68,0.3)",
@@ -415,23 +452,23 @@ export default function DebatesTab({ id, currentUserId, onRewardPoints, onOpenPr
             <div className="text-center py-14 px-4">
               <div
                 className="w-16 h-16 rounded-2xl mx-auto mb-4 flex items-center justify-center"
-                style={{ background: COLORS.surface }}
+                style={{ background: C.surface }}
               >
-                <Swords size={28} style={{ color: COLORS.muted }} />
+                <Swords size={28} style={{ color: C.muted }} />
               </div>
-              <p className="font-bold mb-1" style={{ color: COLORS.ivory }}>
+              <p className="font-bold mb-1" style={{ color: C.ivory }}>
                 {filter === "all"
                   ? "Aucun live pour le moment"
                   : "Aucun live dans ce format"}
               </p>
-              <p className="text-xs mb-5" style={{ color: COLORS.muted }}>
+              <p className="text-xs mb-5" style={{ color: C.muted }}>
                 Lance un débat ou entre un code d&apos;invitation
               </p>
               <button
                 type="button"
                 onClick={() => setIsCreateOpen(true)}
                 className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-bold"
-                style={{ background: COLORS.gold, color: COLORS.bg }}
+                style={{ background: C.gold, color: C.bg }}
               >
                 <Sparkles size={14} /> Créer un débat
               </button>
@@ -444,14 +481,35 @@ export default function DebatesTab({ id, currentUserId, onRewardPoints, onOpenPr
         </div>
       </div>
 
+      {/* Bouton flottant : toujours visible, au-dessus de la barre de navigation */}
+      <button
+        type="button"
+        onClick={() => setIsCreateOpen(true)}
+        aria-label="Créer un débat ou un live"
+        className="fixed right-4 flex items-center gap-2 px-5 py-3.5 rounded-full text-sm font-bold shadow-2xl active:scale-95 transition"
+        style={{
+          background: C.gold,
+          color: C.bg,
+          bottom: "calc(5.5rem + env(safe-area-inset-bottom, 0px))",
+          zIndex: 40,
+        }}
+      >
+        <Plus size={18} /> Créer
+      </button>
+
       <CreateDebateModal
         isOpen={isCreateOpen}
         onClose={() => setIsCreateOpen(false)}
-        id={id}
+        id={user_id}
         onSuccess={(room) => {
           setIsCreateOpen(false);
-          if (room?.invite_code) setActiveDebateCode(room.invite_code);
-          else if (room?.id) setActiveDebateCode(room.id);
+          if (room?.id) {
+            setDebates((prev) =>
+              prev.some((d) => d.id === room.id) ? prev : [room, ...prev]
+            );
+          }
+          const code = room?.invite_code || room?.id;
+          if (code) setActiveDebateCode(String(code));
           fetchDebates();
         }}
       />
