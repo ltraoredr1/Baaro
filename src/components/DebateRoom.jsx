@@ -5,6 +5,18 @@ import { ArrowLeft, Hash, Users, Send, Copy, Check } from "lucide-react";
 import { COLORS } from "../theme.js";
 import { supabase } from "../supabaseClient.js";
 
+// Couleurs avec valeurs de secours
+const C = {
+  bg: (COLORS && COLORS.bg) || "#0f172a",
+  surface: (COLORS && COLORS.surface) || "#111c33",
+  surface2: (COLORS && COLORS.surface2) || "#1a2740",
+  border: (COLORS && COLORS.border) || "rgba(148,163,184,0.2)",
+  ivory: (COLORS && COLORS.ivory) || "#f8f5ec",
+  muted: (COLORS && COLORS.muted) || "#94a3b8",
+  gold: (COLORS && COLORS.gold) || "#d9ae52",
+  teal: (COLORS && COLORS.teal) || "#2dbfa6",
+};
+
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -19,11 +31,11 @@ const ChatMessage = memo(function ChatMessage({ msg, currentId }) {
         }`}
         style={{
           background: isMe
-            ? COLORS.gold
+            ? C.gold
             : isAI
               ? "rgba(167,139,250,0.15)"
-              : COLORS.surface2,
-          color: isMe ? "#000" : COLORS.ivory,
+              : C.surface2,
+          color: isMe ? "#000" : C.ivory,
         }}
       >
         <p className="break-words">{msg.text}</p>
@@ -50,8 +62,11 @@ export function DebateRoom({ inviteCode, onBack }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [codeCopied, setCodeCopied] = useState(false);
+  const [reopening, setReopening] = useState(false);
+  const [reopenError, setReopenError] = useState(null);
   const messagesEndRef = useRef(null);
   const isHost = room?.host_id === user_id;
+  const isEnded = room?.status === "ended";
   const live = useDebateLive(room, user_id, isHost);
 
   useEffect(() => {
@@ -180,6 +195,16 @@ export function DebateRoom({ inviteCode, onBack }) {
                 prev.some((m) => m.id === p.new.id) ? prev : [...prev, p.new]
               )
           )
+          .on(
+            "postgres_changes",
+            {
+              event: "UPDATE",
+              schema: "public",
+              table: "debate_rooms",
+              filter: `id=eq.${roomData.id}`,
+            },
+            (p) => setRoom((prev) => (prev ? { ...prev, ...p.new } : p.new))
+          )
           .subscribe();
       } catch (e) {
         if (mounted) setError(e.message || "Salle introuvable");
@@ -216,26 +241,53 @@ export function DebateRoom({ inviteCode, onBack }) {
     }
   };
 
+  // Retour : la salle n'est terminée que si l'hôte avait réellement démarré le live.
+  // Avant, un simple retour en arrière terminait la salle et rendait le live introuvable.
   const handleBack = async () => {
-    try { await live.leaveLive(); } catch (_) {}
-    if (isHost && room && room.mode !== "text") {
-      await supabase.from("debate_rooms").update({ status: "ended" }).eq("id", room.id).eq("host_id", user_id);
+    const wasLive = Boolean(live?.joined);
+    try {
+      await live.leaveLive();
+    } catch (_) {}
+    if (isHost && wasLive && room && room.mode !== "text") {
+      await supabase
+        .from("debate_rooms")
+        .update({ status: "ended" })
+        .eq("id", room.id)
+        .eq("host_id", user_id);
     }
     onBack();
+  };
+
+  // L'hôte peut relancer une salle terminée
+  const handleReopen = async () => {
+    if (!room || !isHost || reopening) return;
+    setReopening(true);
+    setReopenError(null);
+    const { error: upErr } = await supabase
+      .from("debate_rooms")
+      .update({ status: "active" })
+      .eq("id", room.id)
+      .eq("host_id", user_id);
+    if (upErr) {
+      setReopenError(upErr.message || "Impossible de relancer la salle");
+    } else {
+      setRoom((prev) => (prev ? { ...prev, status: "active" } : prev));
+    }
+    setReopening(false);
   };
 
   if (error) {
     return (
       <div
         className="flex flex-col items-center justify-center h-full p-6"
-        style={{ background: COLORS.surface }}
+        style={{ background: C.surface }}
       >
         <p className="text-red-400 mb-4 text-center">{error}</p>
         <button
           type="button"
           onClick={onBack}
           className="px-6 py-3 rounded-xl font-bold"
-          style={{ background: COLORS.gold, color: COLORS.bg }}
+          style={{ background: C.gold, color: C.bg }}
         >
           Retour
         </button>
@@ -247,7 +299,7 @@ export function DebateRoom({ inviteCode, onBack }) {
     return (
       <div
         className="flex items-center justify-center h-full"
-        style={{ background: COLORS.surface }}
+        style={{ background: C.surface }}
       >
         <div className="animate-spin w-8 h-8 border-4 border-yellow-500 border-t-transparent rounded-full" />
       </div>
@@ -255,42 +307,47 @@ export function DebateRoom({ inviteCode, onBack }) {
   }
 
   return (
-    <div className="flex flex-col h-full relative" style={{ background: COLORS.surface }}>
+    <div
+      className="flex flex-col h-full relative"
+      style={{ background: C.surface }}
+    >
       <div
-        className="flex items-center gap-3 p-4 border-b"
-        style={{ borderColor: COLORS.border }}
+        className="flex items-center gap-3 p-4 border-b shrink-0"
+        style={{ borderColor: C.border }}
       >
         <button
           type="button"
           onClick={handleBack}
           className="p-2 rounded-full"
-          style={{ color: COLORS.ivory }}
+          style={{ color: C.ivory }}
         >
           <ArrowLeft size={20} />
         </button>
         <div className="flex-1 min-w-0">
           <h2
             className="font-bold text-sm truncate"
-            style={{ color: COLORS.ivory }}
+            style={{ color: C.ivory }}
           >
             {room?.title}
           </h2>
           <div
             className="text-xs flex items-center gap-1"
-            style={{ color: COLORS.muted }}
+            style={{ color: C.muted }}
           >
             <Hash size={12} /> {room?.topic}
             <button
               type="button"
               onClick={() => {
-                navigator.clipboard.writeText(room.invite_code);
+                try {
+                  navigator.clipboard.writeText(room.invite_code);
+                } catch (_) {}
                 setCodeCopied(true);
                 setTimeout(() => setCodeCopied(false), 2000);
               }}
               className="ml-2 inline-flex items-center gap-1 px-2 py-0.5 rounded-lg border text-[11px] font-bold"
               style={{
-                borderColor: codeCopied ? COLORS.teal : COLORS.border,
-                color: codeCopied ? COLORS.teal : COLORS.gold,
+                borderColor: codeCopied ? C.teal : C.border,
+                color: codeCopied ? C.teal : C.gold,
               }}
             >
               {codeCopied ? (
@@ -305,53 +362,101 @@ export function DebateRoom({ inviteCode, onBack }) {
             </button>
           </div>
         </div>
-        <Users size={14} style={{ color: COLORS.gold }} />
+        <Users size={14} style={{ color: C.gold }} />
       </div>
 
-      
       {room?.mode !== "text" && (
-        <>
-          <div ref={live.containerRef} className={(live.joined || live.joining) ? "h-[45vh] w-full" : "hidden"} />
-          {!live.joined && (
-            <button type="button" onClick={live.joinLive} disabled={live.joining}
-              className="m-3 py-3 rounded-xl font-bold"
-              style={{ background: COLORS.gold, color: "#000" }}>
-              {live.joining ? "Connexion..." : isHost ? "Démarrer le live" : "Rejoindre le live"}
-            </button>
+        <div className="shrink-0">
+          <div
+            ref={live.containerRef}
+            className={
+              live.joined || live.joining ? "h-[45vh] w-full" : "hidden"
+            }
+          />
+
+          {isEnded ? (
+            <div
+              className="m-3 p-3 rounded-xl border text-sm"
+              style={{ borderColor: C.border, color: C.muted }}
+            >
+              <p className="mb-2">Ce live est terminé.</p>
+              {isHost ? (
+                <button
+                  type="button"
+                  onClick={handleReopen}
+                  disabled={reopening}
+                  className="w-full py-3 rounded-xl font-bold disabled:opacity-50"
+                  style={{ background: C.gold, color: "#000" }}
+                >
+                  {reopening ? "Relance..." : "Relancer le live"}
+                </button>
+              ) : null}
+              {reopenError ? (
+                <p className="text-red-400 text-xs mt-2">{reopenError}</p>
+              ) : null}
+            </div>
+          ) : (
+            !live.joined && (
+              <button
+                type="button"
+                onClick={live.joinLive}
+                disabled={live.joining}
+                className="m-3 py-3 rounded-xl font-bold"
+                style={{
+                  background: C.gold,
+                  color: "#000",
+                  width: "calc(100% - 1.5rem)",
+                }}
+              >
+                {live.joining
+                  ? "Connexion..."
+                  : isHost
+                    ? "Démarrer le live"
+                    : "Rejoindre le live"}
+              </button>
+            )
           )}
-          {live.error && <p className="text-red-400 text-xs px-4">{live.error}</p>}
-        </>
+
+          {live.error && !isEnded && (
+            <p className="text-red-400 text-xs px-4">{live.error}</p>
+          )}
+        </div>
       )}
 
-      <div className="flex-1 overflow-y-auto p-4 space-y-3">
+      <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3">
         {messages.map((m) => (
           <ChatMessage key={m.id} msg={m} currentId={user_id} />
         ))}
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Flash cadeau */}
+      {/* Zone de saisie : dégagée de la barre de navigation du bas
+          et du bouton flottant de l'assistant IA (à droite) */}
       <form
         onSubmit={handleSendMessage}
-        className="p-4 border-t flex gap-2 relative"
-        style={{ borderColor: COLORS.border }}
+        className="px-4 pt-3 border-t flex gap-2 relative shrink-0"
+        style={{
+          borderColor: C.border,
+          paddingBottom: "calc(5.5rem + env(safe-area-inset-bottom, 0px))",
+          paddingRight: "5rem",
+        }}
       >
         <input
           value={newMessage}
           onChange={(e) => setNewMessage(e.target.value)}
           placeholder="Ton message..."
-          className="flex-1 px-4 py-3 rounded-xl border text-sm outline-none"
+          className="flex-1 min-w-0 px-4 py-3 rounded-xl border text-sm outline-none"
           style={{
-            background: COLORS.surface2,
-            borderColor: COLORS.border,
-            color: COLORS.ivory,
+            background: C.surface2,
+            borderColor: C.border,
+            color: C.ivory,
           }}
         />
         <button
           type="submit"
           disabled={!newMessage.trim()}
-          className="p-3 rounded-xl disabled:opacity-40"
-          style={{ background: COLORS.gold, color: "#000" }}
+          className="p-3 rounded-xl disabled:opacity-40 shrink-0"
+          style={{ background: C.gold, color: "#000" }}
         >
           <Send size={18} />
         </button>
@@ -359,3 +464,5 @@ export function DebateRoom({ inviteCode, onBack }) {
     </div>
   );
 }
+
+export default DebateRoom;
