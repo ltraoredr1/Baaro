@@ -1,5 +1,4 @@
-
- // Orchestrateur : branche les hooks sur les composants. Aucune logique métier ici.
+// Orchestrateur : branche les hooks sur les composants. Aucune logique métier ici.
 import { useCallback, useState } from 'react';
 import { BarChart3 } from 'lucide-react';
 import { COLORS as C } from '../../theme.js';
@@ -7,6 +6,7 @@ import { ConnectionStatus } from '../../components/ConnectionStatus.jsx';
 import { FutureModulePanel } from '../../components/FutureModulePanel.jsx';
 import { EngagementList } from '../../components/EngagementList.jsx';
 import { ConfirmDialog } from '../../components/ConfirmDialog.jsx';
+import { callSocial } from '../../lib/notifyInteraction.js';
 
 import { productRoute } from './constants.js';
 import { recordStoryView } from './api/storiesApi.js';
@@ -94,6 +94,10 @@ export function StoriesTab({ id, onOpenProfile, onOpenProduct }) {
               timeStyle: 'short',
             })
         );
+      } else {
+        // Story publiée tout de suite : notifie abonnés et amis (liste + push).
+        // Les stories programmées sont notifiées à l'échéance (balayage dans App.jsx).
+        callSocial('story_published').catch(() => {});
       }
     },
   });
