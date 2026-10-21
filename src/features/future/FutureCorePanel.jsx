@@ -1,17 +1,6 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../../supabaseClient.js";
-import {
-  ShieldAlert,
-  Languages,
-  WifiOff,
-  Store,
-  Activity,
-  KeyRound,
-  Download,
-  ChevronRight,
-  Video,
-  Database,
-} from "lucide-react";
+import { ShieldAlert, Languages, WifiOff, Store, Activity, KeyRound, Download, ChevronRight, Video, Database } from "lucide-react";
 
 const MODULES = [
   { key: "ai_editing", title: "AI Editing (Gemini)", desc: "Smart hooks, chapitrage automatique, surbrillance et cadrage intelligent.", icon: Video },
@@ -28,68 +17,34 @@ export function FutureCorePanel({ user_id }) {
   const [prefs, setPrefs] = useState({});
   const [busy, setBusy] = useState(null);
   const [notice, setNotice] = useState("");
-
   useEffect(() => {
     if (!user_id) return;
-    // UNIFORME: une seule table user_settings.enabled_modules
-    supabase
-      .from("user_settings")
-      .select("enabled_modules")
-      .eq("user_id", user_id)
-      .maybeSingle()
-      .then(({ data }) => {
-        setPrefs(data?.enabled_modules || {});
-      });
+    supabase.from("user_settings").select("enabled_modules").eq("user_id", user_id).maybeSingle()
+      .then(({ data }) => setPrefs(data?.enabled_modules || {}));
   }, [user_id]);
-
   async function toggle(moduleKey) {
     if (!user_id || busy) return;
     setBusy(moduleKey);
-    setNotice("");
-    
-    const currentlyEnabled = prefs[moduleKey] ?? true;
-    const enabled = !currentlyEnabled;
-
-    // Merge dans le JSON enabled_modules
-    const nextPrefs = { ...prefs, [moduleKey]: enabled };
-
+    const nextPrefs = { ...prefs, [moduleKey]: !(prefs[moduleKey] ?? true) };
     const { error } = await supabase.from("user_settings").upsert(
-      { 
-        user_id: user_id, 
-        enabled_modules: nextPrefs,
-        updated_at: new Date().toISOString()
-      },
-      { onConflict: "user_id" }
+      { user_id, enabled_modules: nextPrefs, updated_at: new Date().toISOString() }, { onConflict: "user_id" }
     );
-
-    if (error) {
-      setNotice("Impossible d'enregistrer cette préférence pour le moment.");
-    } else {
-      setPrefs(nextPrefs);
-    }
+    if (!error) setPrefs(nextPrefs); else setNotice("Impossible d'enregistrer cette préférence pour le moment.");
     setBusy(null);
   }
-
   async function exportData() {
     if (!user_id) return;
     setBusy("export");
-    setNotice("");
     const { data, error } = await supabase.rpc("future_export_user_data");
-    if (error) {
-      setNotice("L'export est temporairement indisponible.");
-    } else {
+    if (error) setNotice("L'export est temporairement indisponible.");
+    else {
       const blob = new Blob([JSON.stringify(data || {}, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `baaro-data-${new Date().toISOString().slice(0, 10)}.json`;
-      a.click();
-      URL.revokeObjectURL(url);
+      const a = document.createElement("a"); a.href = url; a.download = `baaro-data-${new Date().toISOString().slice(0, 10)}.json`; a.click(); URL.revokeObjectURL(url);
       setNotice("Export préparé. Aucun secret ni jeton n'est inclus.");
     }
     setBusy(null);
   }
-
   return (
     <section className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -101,9 +56,7 @@ export function FutureCorePanel({ user_id }) {
           <Download size={15} /> Exporter mes données
         </button>
       </div>
-
       {notice && <div className="rounded-xl border border-amber-300/20 bg-amber-300/5 px-3 py-2 text-xs text-amber-200">{notice}</div>}
-
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {MODULES.map(({ key, title, desc, icon: Icon }) => {
           const enabled = prefs[key] ?? true;
@@ -125,5 +78,4 @@ export function FutureCorePanel({ user_id }) {
     </section>
   );
 }
-
 export default FutureCorePanel;
