@@ -14,6 +14,7 @@
  * pris tel quel depuis le client. Chaque interaction est vérifiée quand c'est possible,
  * puis : 1) ligne dans `notifications` (liste dans l'appli), 2) push (FCM / Web Push).
  */
+import { createClient } from "@supabase/supabase-js";
 import {
   applyCors,
   getAdminClient,
@@ -479,7 +480,21 @@ function cleanPushToken(value) {
   return token.length <= MAX_PUSH_TOKEN_LEN ? token : "";
 }
 
-async function handleSavePushToken(admin, user, body) {
+// Client Supabase au nom de l'utilisateur (JWT du client) : auth.uid() est alors
+// renseigné pour les fonctions SQL qui le vérifient (ex. upsert_push_token).
+function getUserClient(req) {
+  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+  const anonKey =
+    process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
+  const header = req.headers.authorization || "";
+  if (!url || !anonKey || !header.startsWith("Bearer ")) return null;
+  return createClient(url, anonKey, {
+    global: { headers: { Authorization: header } },
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+}
+
+async function handleSavePushToken(req, user, body) {
   const token = cleanPushToken(body.token);
   const platform = String(body.platform || "").toLowerCase();
   if (!token) {
@@ -489,7 +504,16 @@ async function handleSavePushToken(admin, user, body) {
     return { status: 400, body: { ok: false, error: "Plateforme invalide" } };
   }
 
-  const { error } = await admin.rpc("upsert_push_token", {
+  const userClient = getUserClient(req);
+  if (!userClient) {
+    console.error("[social] save_push_token : SUPABASE_ANON_KEY manquante");
+    return {
+      status: 500,
+      body: { ok: false, error: "Configuration serveur incomplète" },
+    };
+  }
+
+  const { error } = await userClient.rpc("upsert_push_token", {
     p_user_id: user.id,
     p_token: token,
     p_platform: platform,
@@ -608,7 +632,7 @@ export default async function handler(req, res) {
     }
 
     if (action === "save_push_token") {
-      const result = await handleSavePushToken(admin, user, body);
+      const result = await handleSavePushToken(req, user, body);
       return res.status(result.status).json(result.body);
     }
 
