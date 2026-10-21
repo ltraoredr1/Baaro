@@ -1,8 +1,16 @@
 /**
- * /api/live.js - V5.4
+ * /api/live.js - V5.5
  * BAARO — appels Daily + lives + passerelle IA
  *
- * Corrections :
+ * Corrections V5.5 :
+ * - handleToken : la recherche de salle ne fait plus `id.eq.<code>` dans un .or().
+ *   Avec un code court (ex. 7fho99), PostgreSQL levait une erreur de cast UUID,
+ *   la requête échouait entièrement et le live apparaissait "introuvable".
+ *   Les recherches sont maintenant séparées (invite_code, daily_room_name, id si UUID).
+ * - URL Daily : utilise l'URL renvoyée par Daily si DAILY_DOMAIN n'est pas défini.
+ * - Message distinct : "Live introuvable" (404) / "Ce live est terminé" (410).
+ *
+ * Conserve V5.4 :
  * - Cascade IA avec secours après erreur fournisseur, y compris 404.
  * - Suppression du fallback Groq llama-3.1-8b-instant.
  * - Intégration défensive du circuit breaker.
@@ -35,6 +43,9 @@ import { callOpenAICompatible } from "./_lib/ai/openai-compatible.js";
 
 const DAILY_API = "https://api.daily.co/v1";
 const TOKEN_TTL_SEC = 60 * 60 * 4;
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function dailyHeaders() {
   const key = process.env.DAILY_API_KEY;
@@ -936,6 +947,78 @@ async function handleCreateRoom(req, res, user, admin) {
   });
 }
 
+// Recherche d'une salle de débat SANS .or() : `id.eq.<code court>` provoquait
+// une erreur de cast UUID qui faisait échouer toute la requête.
+async function findDebateRoom(admin, liveId) {
+  const cols = "id, host_id, daily_room_name, invite_code, status, mode";
+  const lower = liveId.toLowerCase();
+
+  const attempts = [["invite_code", liveId]];
+  if (lower !== liveId) attempts.push(["invite_code", lower]);
+  attempts.push(["daily_room_name", liveId]);
+  if (lower !== liveId) attempts.push(["daily_room_name", lower]);
+  if (UUID_RE.test(liveId)) attempts.push(["id", liveId]);
+
+  for (const [column, value] of attempts) {
+    try {
+      const { data, error } = await admin
+        .from("debate_rooms")
+        .select(cols)
+        .eq(column, value)
+        .order("created_at", { ascending: false })
+        .limit(1);
+
+      if (error) {
+        logWarn("live", `debate room lookup failed (${column})`, {
+          message: error.message,
+        });
+        continue;
+      }
+
+      if (data && data.length) return data[0];
+    } catch (err) {
+      logWarn("live", `debate room lookup exception (${column})`, {
+        message: err?.message,
+      });
+    }
+  }
+
+  return null;
+}
+
+async function findCall(admin, liveId) {
+  const cols =
+    "id, caller_id, callee_id, daily_room_name, conversation_id, status, type";
+
+  const attempts = [["daily_room_name", liveId]];
+  if (UUID_RE.test(liveId)) attempts.push(["id", liveId]);
+
+  for (const [column, value] of attempts) {
+    try {
+      const { data, error } = await admin
+        .from("calls")
+        .select(cols)
+        .eq(column, value)
+        .limit(1);
+
+      if (error) {
+        logWarn("live", `call lookup failed (${column})`, {
+          message: error.message,
+        });
+        continue;
+      }
+
+      if (data && data.length) return data[0];
+    } catch (err) {
+      logWarn("live", `call lookup exception (${column})`, {
+        message: err?.message,
+      });
+    }
+  }
+
+  return null;
+}
+
 async function handleToken(req, res, user, admin) {
   const body = req.body || {};
 
@@ -954,8 +1037,10 @@ async function handleToken(req, res, user, admin) {
   // les privilèges propriétaire par une valeur envoyée dans le body.
   if (liveId.startsWith("call-")) {
     try {
+      let callDailyRoom = null;
+
       try {
-        await createDailyRoom(liveId, {
+        callDailyRoom = await createDailyRoom(liveId, {
           maxParticipants: 2,
           expHours: 2,
         });
@@ -1025,7 +1110,7 @@ async function handleToken(req, res, user, admin) {
         ok: true,
         token,
         roomName: liveId,
-        url: roomUrl(liveId),
+        url: callDailyRoom?.url || roomUrl(liveId),
         isOwner,
       });
     } catch (err) {
@@ -1037,40 +1122,11 @@ async function handleToken(req, res, user, admin) {
     }
   }
 
-  let { data: room, error: roomError } = await admin
-    .from("debate_rooms")
-    .select(
-      "id, host_id, daily_room_name, invite_code, status, mode"
-    )
-    .or(
-      `invite_code.eq.${liveId},id.eq.${liveId},daily_room_name.eq.${liveId}`
-    )
-    .maybeSingle();
-
-  if (roomError) {
-    logWarn("live", "debate room lookup failed", {
-      message: roomError.message,
-    });
-  }
-
+  let room = await findDebateRoom(admin, liveId);
   let callData = null;
 
   if (!room) {
-    const { data: call, error: callError } = await admin
-      .from("calls")
-      .select(
-        "id, caller_id, callee_id, daily_room_name, conversation_id, status, type"
-      )
-      .or(
-        `daily_room_name.eq.${liveId},id.eq.${liveId}`
-      )
-      .maybeSingle();
-
-    if (callError) {
-      logWarn("live", "call lookup failed", {
-        message: callError.message,
-      });
-    }
+    const call = await findCall(admin, liveId);
 
     if (call) {
       callData = call;
@@ -1088,8 +1144,8 @@ async function handleToken(req, res, user, admin) {
         call.status === "ended" ||
         call.status === "rejected"
       ) {
-        return res.status(404).json({
-          error: "Live introuvable ou terminé",
+        return res.status(410).json({
+          error: "Ce live est terminé",
         });
       }
 
@@ -1104,11 +1160,19 @@ async function handleToken(req, res, user, admin) {
     }
   }
 
-  if (!room || room.status === "ended") {
+  if (!room) {
     logWarn("live", "room not found", { liveId });
 
     return res.status(404).json({
-      error: "Live introuvable ou terminé",
+      error: "Live introuvable",
+    });
+  }
+
+  if (room.status === "ended") {
+    logWarn("live", "room ended", { liveId });
+
+    return res.status(410).json({
+      error: "Ce live est terminé",
     });
   }
 
@@ -1143,8 +1207,10 @@ async function handleToken(req, res, user, admin) {
     room.daily_room_name ||
     sanitizeRoomName(room.invite_code || liveId);
 
+  let dailyRoom = null;
+
   try {
-    await createDailyRoom(roomName);
+    dailyRoom = await createDailyRoom(roomName);
   } catch (err) {
     logWarn("live", "ensure Daily room", {
       message: err.message,
@@ -1185,7 +1251,7 @@ async function handleToken(req, res, user, admin) {
     ok: true,
     token,
     roomName,
-    url: roomUrl(roomName),
+    url: dailyRoom?.url || roomUrl(roomName),
     isOwner,
   });
 }
