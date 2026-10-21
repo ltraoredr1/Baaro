@@ -1,638 +1,637 @@
-import { useEffect, useRef, useState } from "react";
-
-import CommentsSheet from "./components/CommentsSheet.jsx";
+import { useState, useRef, useEffect } from "react";
 import {
-  FeedEmpty,
-  FeedError,
-  FeedLoading,
-} from "./components/FeedStatus.jsx";
-import HandsFreeControls from "./components/HandsFreeControls.jsx";
-import UploadModal from "./components/UploadModal.jsx";
-import VideoCard, { isImageVideo } from "./components/VideoCard.jsx";
+  Check,
+  Clock3,
+  Expand,
+  Gauge,
+  Heart,
+  MessageCircle,
+  Eye,
+  Music2,
+  Play,
+  Repeat2,
+  Share2,
+  Trash2,
+  Volume2,
+  VolumeX,
+} from "lucide-react";
+import { COLORS } from "../../../theme.js";
+import { VideoTranslateControls } from "../../../components/VideoTranslateControls.jsx";
+import { TipButton } from "../../../components/TipButton.jsx";
+import { baaroLogo } from "../constants.js";
+import { formatCount } from "../utils/format.js";
 
-import { useCamera } from "./hooks/useCamera.js";
-import { useFeedPlayback } from "./hooks/useFeedPlayback.js";
-import { useSoundPicker } from "./hooks/useSoundPicker.js";
-import { useSounds } from "./hooks/useSounds.js";
-import { useVideoActions } from "./hooks/useVideoActions.js";
-import { useVideoComments } from "./hooks/useVideoComments.js";
-import { useVideoCreator } from "./hooks/useVideoCreator.js";
-import { useVideoFeed } from "./hooks/useVideoFeed.js";
+const IMAGE_EXT = /\.(jpe?g|png|webp|gif|avif)(\?|#|$)/i;
 
-import VideoNextGenStudio from "./VideoNextGenStudio.jsx";
+// Un média est une image si media_type le dit, ou si l'URL a une extension d'image
+export function isImageVideo(video) {
+  if (!video) return false;
+  if (video.media_type === "image" || video.type === "image") return true;
+  const url = video.video_url || video.media_url || "";
+  return IMAGE_EXT.test(url);
+}
 
-import { useToast } from "../../components/ToastContext.jsx";
-import { EngagementList } from "../../components/EngagementList.jsx";
-
-import { Volume2, VolumeX, Sparkles } from "lucide-react";
-
-const IMAGE_DURATION_MS = 6000;
-
-export function VideosTab({ onRewardPoints, onExit }) {
-  const feed = useVideoFeed();
+// Une vidéo (ou image) plein écran du flux, avec ses boutons d'action.
+// loadMode : "active" (chargement complet), "preload" (métadonnées), "none" (rien).
+export default function VideoCard({
+  video,
+  sound,
+  liked,
+  user,
+  playback,
+  actions,
+  hideVolumeControl = false,
+  isActive = false,
+  loadMode = "active",
+  onShowViewers,
+}) {
+  const {
+    videoRefs,
+    audioRefs,
+    playingId,
+    setPlayingId,
+    muted,
+    progress,
+    videoErrors,
+    setVideoErrors,
+    syncAudioTime,
+    playAudioFor,
+    toggleMute,
+    toggleFullscreen,
+    handleTimeUpdate,
+  } = playback;
 
   const {
-    setVideos,
-    user,
-    loading,
-    loadError,
-    loadVideos,
-    likedMap,
-    setLikedMap,
-    visibleVideos,
-  } = feed;
+    openComments,
+    handleRepost,
+    handleShare,
+    handleDelete,
+    shareId,
+    onUseSound,
+  } = actions;
 
-  const { sounds, getVideoSound } = useSounds();
-  const playback = useFeedPlayback({ visibleVideos });
-  const soundPicker = useSoundPicker(sounds);
+  // Tolère les deux noms possibles selon la version du hook
+  const handleLike = actions.handleLike || actions.toggleLike;
 
-  const creator = useVideoCreator({
-    user,
-    loadVideos,
-    onRewardPoints,
-    soundPicker,
-  });
+  const [captionOpen, setCaptionOpen] = useState(false);
+  const [playbackRate, setPlaybackRate] = useState(1);
+  const [showHeartAnim, setShowHeartAnim] = useState(false);
+  const [dragging, setDragging] = useState(false);
 
-  const camera = useCamera({
-    onOpen: () => creator.setShowUpload(true),
-    onRecorded: creator.handleFileSelected,
-  });
-
-  const videoActions = useVideoActions({
-    user,
-    setVideos,
-    likedMap,
-    setLikedMap,
-    loadVideos,
-    videoRefs: playback.videoRefs,
-    onRewardPoints,
-  });
-
-  const commentsState = useVideoComments({
-    user,
-    setVideos,
-    onRewardPoints,
-  });
-
-  const { showToast } = useToast();
-
-  const openUpload = () => creator.setShowUpload(true);
-
-  // Garder la dernière version de la fonction pour l'événement global.
-  const openUploadRef = useRef(openUpload);
-  openUploadRef.current = openUpload;
+  const clickTimeoutRef = useRef(null);
+  const heartTimeoutRef = useRef(null);
+  const lastClickTimeRef = useRef(0);
+  const draggingRef = useRef(false);
 
   useEffect(() => {
-    const handleGlobalVideoCreate = () => {
-      openUploadRef.current();
-    };
-
-    window.addEventListener(
-      "baaro:open-video-create",
-      handleGlobalVideoCreate
-    );
-
     return () => {
-      window.removeEventListener(
-        "baaro:open-video-create",
-        handleGlobalVideoCreate
-      );
+      if (clickTimeoutRef.current) clearTimeout(clickTimeoutRef.current);
+      if (heartTimeoutRef.current) clearTimeout(heartTimeoutRef.current);
     };
   }, []);
 
-  const handleUseSound = (video, sound) => {
-    const handle =
-      video.profiles?.handle?.replace(/^@/, "") || "membre";
+  const id = String(video.id);
+  const isImage = isImageVideo(video);
+  const shouldLoad = loadMode !== "none";
+  const mediaSrc =
+    video.media_url || video.video_url || video.image_url || video.thumbnail_url;
+  const isPlaying = playingId === id;
+  const profile = video.profiles || {};
+  const caption = [video.title, video.description].filter(Boolean).join(" · ");
+  const handleClean = profile.handle?.replace(/^@/, "") || "membre";
 
-    const title = sound?.title || `Son original · @${handle}`;
+  const authorId = video.author_id || video.user_id || profile.id;
+  const isOwner = !!user?.id && authorId === user.id;
+  const canTip = !!user?.id && !!authorId && !isOwner;
 
-    soundPicker.chooseSound({
-      id: video.sound_id || null,
-      title,
-      artist: sound?.artist || `@${handle}`,
-      audio_url: sound?.url || video.video_url,
-    });
+  const videoPreload =
+    loadMode === "active" ? "auto" : loadMode === "preload" ? "metadata" : "none";
 
-    openUpload();
-    showToast(`Son « ${title} » sélectionné`, "success");
-  };
-
-  const actions = {
-    ...videoActions,
-    handleLike:
-      videoActions.handleLike || videoActions.toggleLike,
-    openComments: commentsState.openComments,
-    onUseSound: handleUseSound,
-  };
-
-  const [studioOpen, setStudioOpen] = useState(false);
-  const [viewersVideoId, setViewersVideoId] = useState(null);
-
-  const handleStudioCreate = (selectedFeatures) => {
-    setStudioOpen(false);
-
-    if (selectedFeatures?.length > 0) {
-      showToast(
-        `${selectedFeatures.length} outils Studio activés`,
-        "info"
-      );
+  // Hors de la zone de chargement : on coupe la lecture et on libère le réseau et la mémoire.
+  useEffect(() => {
+    if (loadMode !== "none" || isImage) return;
+    const el = videoRefs.current[video.id];
+    if (el) {
+      el.pause();
+      try {
+        el.load();
+      } catch {
+        // rien à libérer
+      }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadMode]);
 
-    openUpload();
-  };
-
-  // --------------------------------------------------
-  // FLUX VIDÉO ET DÉTECTION DE LA VIDÉO ACTIVE
-  // --------------------------------------------------
-
-  const rootRef = useRef(null);
-  const scrollRef = useRef(null);
-  const slideRefs = useRef({});
-  const ratiosRef = useRef({});
-  const [activeId, setActiveId] = useState(null);
-
-  // Toujours la dernière valeur, utilisable dans les écouteurs d'événements.
-  const activeIdRef = useRef(null);
-  activeIdRef.current = activeId;
-
-  // Vidéo à relancer quand l'application / l'onglet redevient visible.
-  const resumeIdRef = useRef(null);
-  const feedVisibleRef = useRef(true);
-  const lastAutoplayRef = useRef(null);
-
-  // Clé stable : ne change que si la liste des publications change vraiment
-  // (et non à chaque like ou commentaire), pour ne pas relancer les effets.
-  const feedKey = visibleVideos.map((video) => String(video.id)).join("|");
-
-  const getElement = (id) =>
-    id == null ? null : playback.videoRefs?.current?.[id] || null;
-
-  const pauseAll = () => {
-    const refs = playback.videoRefs?.current || {};
-
-    Object.entries(refs).forEach(([id, element]) => {
-      if (!element) return;
-
-      if (
-        String(id) === String(activeIdRef.current) &&
-        !element.paused
-      ) {
-        resumeIdRef.current = id;
-      }
-
-      element.pause();
-    });
-  };
-
-  const resumeActive = () => {
-    if (!feedVisibleRef.current || document.hidden) return;
-
-    const id = resumeIdRef.current;
-    if (id == null) return;
-
-    resumeIdRef.current = null;
-    getElement(id)?.play?.().catch(() => {});
-  };
-
-  const goToNext = (currentId) => {
-    if (currentId == null) return false;
-
-    const index = visibleVideos.findIndex(
-      (video) => String(video.id) === String(currentId)
-    );
-
-    const nextVideo = visibleVideos[index + 1];
-
-    if (!nextVideo) return false;
-
-    slideRefs.current[String(nextVideo.id)]?.scrollIntoView({
-      behavior: "smooth",
-      block: "start",
-    });
-
-    return true;
-  };
-
-  const goToPrevious = (currentId) => {
-    if (currentId == null) return false;
-
-    const index = visibleVideos.findIndex(
-      (video) => String(video.id) === String(currentId)
-    );
-
-    const previousVideo = visibleVideos[index - 1];
-
-    if (!previousVideo) return false;
-
-    slideRefs.current[String(previousVideo.id)]?.scrollIntoView({
-      behavior: "smooth",
-      block: "start",
-    });
-
-    return true;
-  };
-
-  // Pause / reprise de la vidéo active (directement sur l'élément).
-  const toggleActivePlayback = () => {
-    if (activeId == null) return;
-
-    const element = getElement(activeId);
-
-    if (element) {
-      if (element.paused) element.play().catch(() => {});
-      else element.pause();
-      return;
+  // Le son associé ne joue que pour la vidéo active.
+  useEffect(() => {
+    if (!isActive) {
+      audioRefs.current[video.id]?.pause();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isActive]);
 
-    playback.togglePlay?.(activeId);
-  };
-
-  const pauseActive = () => {
-    getElement(activeId)?.pause();
-  };
-
-  const resumeActiveVideo = () => {
-    getElement(activeId)?.play?.().catch(() => {});
-  };
-
-  const muteActive = () => {
-    if (!playback.muted) playback.toggleMute();
-  };
-
-  const unmuteActive = () => {
-    if (playback.muted) playback.toggleMute();
-  };
-
-  // Un seul like par commande mains libres.
-  const likeActiveVideo = (videoId) => {
-    const targetId = videoId ?? activeId;
-
-    if (targetId == null) return;
-
-    if (likedMap[targetId]) return;
-
-    const likeHandler =
-      videoActions.handleLike || videoActions.toggleLike;
-
-    likeHandler?.(targetId);
-  };
-
-  const openActiveComments = (videoId) => {
-    const targetId = videoId ?? activeId;
-
-    if (targetId == null) return;
-
-    commentsState.openComments(targetId);
-  };
-
-  const toggleActiveFullscreen = (videoId) => {
-    const targetId = videoId ?? activeId;
-
-    if (targetId == null) return;
-
-    playback.toggleFullscreen(targetId);
-  };
-
-  // Identifier la publication visible à au moins 60 %
-  // et couper immédiatement celles qui sortent de l'écran.
+  // Vitesse de lecture rétablie quand la vidéo n'est plus active.
   useEffect(() => {
-    const root = scrollRef.current;
-
-    if (!root || visibleVideos.length === 0) {
-      setActiveId(null);
-      return;
+    if (!isActive && playbackRate !== 1) {
+      setPlaybackRate(1);
+      const el = videoRefs.current[video.id];
+      if (el) el.playbackRate = 1;
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isActive]);
 
-    ratiosRef.current = {};
+  // --- PLAY / PAUSE direct sur l'élément (indépendant du hook) ---
+  const togglePlayPause = () => {
+    if (isImage) return;
+    const el = videoRefs.current[video.id];
+    if (!el) return;
+    if (el.paused) el.play().catch(() => {});
+    else el.pause();
+  };
 
-    const observer = new IntersectionObserver(
-      (entries) => {
-        entries.forEach((entry) => {
-          const id = entry.target.dataset.videoId;
+  // --- TAP (play/pause) ET DOUBLE-TAP (like) ---
+  const handleCardClick = (e) => {
+    e.stopPropagation();
+    const now = Date.now();
+    const delta = now - lastClickTimeRef.current;
 
-          ratiosRef.current[id] = entry.isIntersecting
-            ? entry.intersectionRatio
-            : 0;
-
-          // Presque sortie de l'écran : on coupe tout de suite.
-          if (entry.intersectionRatio < 0.3) {
-            playback.videoRefs?.current?.[id]?.pause();
-          }
-        });
-
-        let bestId = null;
-        let bestRatio = 0;
-
-        Object.entries(ratiosRef.current).forEach(([id, ratio]) => {
-          if (ratio >= 0.6 && ratio > bestRatio) {
-            bestId = id;
-            bestRatio = ratio;
-          }
-        });
-
-        if (bestId != null) setActiveId(bestId);
-      },
-      {
-        root,
-        threshold: [0, 0.3, 0.6, 1],
+    if (delta > 0 && delta < 300) {
+      // DOUBLE TAP : LIKE + ANIMATION
+      if (clickTimeoutRef.current) {
+        clearTimeout(clickTimeoutRef.current);
+        clickTimeoutRef.current = null;
       }
-    );
-
-    Object.values(slideRefs.current).forEach((node) => {
-      if (node) observer.observe(node);
-    });
-
-    return () => observer.disconnect();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [feedKey, loading]);
-
-  // Lire la vidéo active et mettre toutes les autres en pause.
-  useEffect(() => {
-    if (activeId == null) return;
-
-    const refs = playback.videoRefs?.current || {};
-    const changed = lastAutoplayRef.current !== String(activeId);
-    lastAutoplayRef.current = String(activeId);
-
-    Object.entries(refs).forEach(([id, element]) => {
-      if (!element) return;
-
-      if (String(id) === String(activeId)) {
-        // Lecture automatique seulement au changement de vidéo :
-        // une pause volontaire n'est pas annulée par un simple like.
-        if (!changed) return;
-
-        if (!feedVisibleRef.current || document.hidden) {
-          resumeIdRef.current = id;
-          return;
-        }
-
-        if (element.ended) {
-          element.currentTime = 0;
-        }
-
-        element.play().catch(() => {});
-      } else {
-        element.pause();
-      }
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeId, feedKey]);
-
-  // Pause quand l'application passe en arrière-plan ou que le flux n'est plus affiché.
-  useEffect(() => {
-    const handleVisibility = () => {
-      if (document.hidden) pauseAll();
-      else resumeActive();
-    };
-
-    document.addEventListener("visibilitychange", handleVisibility);
-
-    return () => {
-      document.removeEventListener(
-        "visibilitychange",
-        handleVisibility
-      );
-      pauseAll();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Le composant peut rester monté sous un autre onglet : on coupe alors la lecture.
-  useEffect(() => {
-    const node = rootRef.current;
-
-    if (!node) return undefined;
-
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        feedVisibleRef.current = entry.isIntersecting;
-
-        if (entry.isIntersecting) resumeActive();
-        else pauseAll();
-      },
-      { threshold: 0.1 }
-    );
-
-    observer.observe(node);
-
-    return () => observer.disconnect();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loading]);
-
-  // Passer automatiquement à la vidéo suivante à la fin.
-  useEffect(() => {
-    if (activeId == null) return;
-
-    const element = getElement(activeId);
-
-    if (!element) return;
-
-    element.loop = false;
-
-    const handleEnded = () => {
-      if (!goToNext(activeId)) {
-        element.currentTime = 0;
-        element.play().catch(() => {});
-      }
-    };
-
-    element.addEventListener("ended", handleEnded);
-
-    return () => {
-      element.removeEventListener("ended", handleEnded);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeId, feedKey]);
-
-  // Afficher les images pendant six secondes avant de passer à la suite.
-  useEffect(() => {
-    if (activeId == null) return;
-
-    const currentVideo = visibleVideos.find(
-      (video) => String(video.id) === String(activeId)
-    );
-
-    if (!currentVideo || !isImageVideo(currentVideo)) {
-      return;
+      lastClickTimeRef.current = 0;
+      setShowHeartAnim(true);
+      if (heartTimeoutRef.current) clearTimeout(heartTimeoutRef.current);
+      heartTimeoutRef.current = setTimeout(() => setShowHeartAnim(false), 800);
+      if (!liked) handleLike?.(video.id);
+    } else {
+      // SIMPLE TAP : PLAY / PAUSE
+      lastClickTimeRef.current = now;
+      if (clickTimeoutRef.current) clearTimeout(clickTimeoutRef.current);
+      clickTimeoutRef.current = setTimeout(() => {
+        togglePlayPause();
+        clickTimeoutRef.current = null;
+      }, 300);
     }
+  };
 
-    const timer = setTimeout(() => {
-      if (feedVisibleRef.current && !document.hidden) {
-        goToNext(activeId);
-      }
-    }, IMAGE_DURATION_MS);
+  // --- VITESSE (1x, 1.25x, 1.5x, 2x) ---
+  const toggleSpeed = (e) => {
+    e.stopPropagation();
+    const rates = [1, 1.25, 1.5, 2];
+    const nextRate = rates[(rates.indexOf(playbackRate) + 1) % rates.length];
+    setPlaybackRate(nextRate);
+    const videoEl = videoRefs.current[video.id];
+    if (videoEl) videoEl.playbackRate = nextRate;
+  };
 
-    return () => clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeId, feedKey]);
+  // --- SCRUBBING (tap + glisser, souris et tactile) ---
+  const seekToPointer = (e) => {
+    const videoEl = videoRefs.current[video.id];
+    if (!videoEl || !videoEl.duration) return;
 
-  if (loading) {
-    return <FeedLoading />;
-  }
+    const rect = e.currentTarget.getBoundingClientRect();
+    if (!rect.width) return;
+    const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+    videoEl.currentTime = ratio * videoEl.duration;
 
-  // Économie de données : seule la vidéo active est chargée en entier,
-  // la suivante en métadonnées, les autres ne sont pas téléchargées.
-  const activeIndex = Math.max(
-    0,
-    visibleVideos.findIndex(
-      (video) => String(video.id) === String(activeId)
-    )
-  );
+    const audioEl = audioRefs.current[video.id];
+    if (audioEl) syncAudioTime(videoEl, audioEl);
+  };
 
-  const getLoadMode = (index) => {
-    if (index === activeIndex) return "active";
-    if (index === activeIndex + 1) return "preload";
-    return "none";
+  const handleSeekStart = (e) => {
+    e.stopPropagation();
+    draggingRef.current = true;
+    setDragging(true);
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      // capture non supportée : le glisser reste limité à la barre
+    }
+    seekToPointer(e);
+  };
+
+  const handleSeekMove = (e) => {
+    if (!draggingRef.current) return;
+    e.stopPropagation();
+    seekToPointer(e);
+  };
+
+  const handleSeekEnd = (e) => {
+    if (!draggingRef.current) return;
+    e.stopPropagation();
+    draggingRef.current = false;
+    setDragging(false);
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      // déjà relâché
+    }
   };
 
   return (
-    <div
-      ref={rootRef}
-      className="relative flex h-screen w-full flex-col overflow-hidden bg-black"
-      style={{ height: "100dvh" }}
+    <article
+      className="relative h-full w-full bg-black overflow-hidden select-none"
+      onClick={handleCardClick}
     >
-      {/* Studio et contrôle du son */}
-      <div className="absolute right-4 top-4 z-[70] flex items-center gap-2">
-        <button
-          type="button"
-          onClick={() => setStudioOpen(true)}
-          className="flex h-9 items-center gap-1.5 rounded-full border border-white/20 bg-black/40 px-3 text-xs font-bold text-white shadow-lg backdrop-blur-xl transition-all hover:bg-black/60 active:scale-95"
-          title="Studio NextGen"
-        >
-          <Sparkles size={14} className="text-yellow-400" />
-          <span>Studio</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={playback.toggleMute}
-          className="flex h-9 w-9 items-center justify-center rounded-full border border-white/20 bg-black/40 text-white shadow-lg backdrop-blur-xl transition-all hover:bg-black/60 active:scale-95"
-          aria-label={
-            playback.muted ? "Activer le son" : "Couper le son"
-          }
-          title={
-            playback.muted ? "Activer le son" : "Couper le son"
-          }
-        >
-          {playback.muted ? (
-            <VolumeX size={17} />
-          ) : (
-            <Volume2 size={17} />
-          )}
-        </button>
-      </div>
-
-      {/* Flux vertical plein écran */}
-      <div
-        ref={scrollRef}
-        className="h-full w-full snap-y snap-mandatory overflow-y-scroll overscroll-contain bg-black scrollbar-none"
-        style={{ WebkitOverflowScrolling: "touch" }}
-      >
-        {loadError ? (
-          <div className="flex h-full items-center justify-center">
-            <FeedError
-              message={loadError}
-              onRetry={loadVideos}
+      {isImage ? (
+        shouldLoad ? (
+          <>
+            {/* Fond flou + image entière (sans recadrage) */}
+            <img
+              src={mediaSrc}
+              alt=""
+              aria-hidden="true"
+              loading="lazy"
+              decoding="async"
+              className="absolute inset-0 h-full w-full object-cover blur-2xl scale-110 opacity-50"
             />
-          </div>
-        ) : visibleVideos.length === 0 ? (
-          <div className="flex h-full items-center justify-center">
-            <FeedEmpty onPublish={openUpload} />
-          </div>
-        ) : (
-          visibleVideos.map((video, index) => (
-            <div
-              key={video.id}
-              ref={(node) => {
-                const id = String(video.id);
+            <img
+              src={mediaSrc}
+              alt={caption || "Image BAARO"}
+              decoding="async"
+              className="absolute inset-0 h-full w-full object-contain"
+              draggable={false}
+            />
+          </>
+        ) : null
+      ) : (
+        <video
+          ref={(el) => {
+            if (el) videoRefs.current[video.id] = el;
+            else delete videoRefs.current[video.id];
+          }}
+          data-id={id}
+          src={shouldLoad ? video.video_url : undefined}
+          poster={video.thumbnail_url || undefined}
+          className="absolute inset-0 h-full w-full object-cover"
+          playsInline
+          crossOrigin="anonymous"
+          muted={muted || !!video.mute_original}
+          data-mute-original={video.mute_original ? "1" : "0"}
+          preload={videoPreload}
+          onPlay={(event) => {
+            // Sécurité : une vidéo qui n'est plus active ne doit jamais jouer.
+            if (!isActive && loadMode === "none") {
+              event.currentTarget.pause();
+              return;
+            }
+            setPlayingId(id);
+            playAudioFor(video.id, event.currentTarget);
+          }}
+          onPause={() => {
+            setPlayingId((current) => (current === id ? null : current));
+            audioRefs.current[video.id]?.pause();
+          }}
+          onSeeked={(event) =>
+            syncAudioTime(event.currentTarget, audioRefs.current[video.id])
+          }
+          onTimeUpdate={(event) => {
+            if (isActive) handleTimeUpdate(video.id, event);
+          }}
+          onError={() => {
+            if (shouldLoad) {
+              setVideoErrors((prev) => ({ ...prev, [video.id]: true }));
+            }
+          }}
+        />
+      )}
 
-                if (node) {
-                  slideRefs.current[id] = node;
-                } else {
-                  delete slideRefs.current[id];
+      {sound && shouldLoad && (
+        <audio
+          ref={(el) => {
+            if (el) audioRefs.current[video.id] = el;
+            else delete audioRefs.current[video.id];
+          }}
+          src={sound.url}
+          loop
+          preload={loadMode === "active" ? "auto" : "none"}
+          muted={muted}
+        />
+      )}
+
+      <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-transparent to-black/30 pointer-events-none" />
+
+      {/* Animation cœur au double-tap */}
+      {showHeartAnim && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-40 animate-ping">
+          <Heart
+            size={96}
+            className="text-pink-500 fill-pink-500 drop-shadow-lg"
+          />
+        </div>
+      )}
+
+      {/* Vitesse de lecture (vidéos uniquement) */}
+      {!isImage && (
+        <button
+          type="button"
+          onClick={toggleSpeed}
+          className="absolute top-16 left-4 z-30 flex items-center gap-1 bg-black/45 backdrop-blur-md text-white px-2.5 py-1.5 rounded-full text-[11px] font-mono border border-white/20 active:scale-95"
+        >
+          <Gauge size={13} />
+          <span>{playbackRate}x</span>
+        </button>
+      )}
+
+      {!isImage && videoErrors[video.id] && (
+        <div
+          className="absolute inset-0 z-20 flex items-center justify-center bg-black/85 text-center px-6"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div>
+            <div className="text-5xl mb-4">⚠️</div>
+            <p className="font-black text-lg">Vidéo indisponible</p>
+            <p className="text-xs text-white/50 mt-2 mb-5">
+              Le fichier n&apos;a pas pu être lu.
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                setVideoErrors((prev) => {
+                  const copy = { ...prev };
+                  delete copy[video.id];
+                  return copy;
+                });
+                const el = videoRefs.current[video.id];
+                if (el) {
+                  el.load();
+                  el.play().catch(() => {});
                 }
               }}
-              data-video-id={String(video.id)}
-              className="relative h-full w-full shrink-0 snap-start snap-always overflow-hidden bg-black"
+              className="px-5 py-2.5 rounded-xl font-bold"
+              style={{ background: COLORS.gold, color: "#000" }}
             >
-              <VideoCard
-                video={video}
-                sound={getVideoSound(video)}
-                liked={!!likedMap[video.id]}
-                user={user}
-                playback={playback}
-                actions={actions}
-                isActive={String(video.id) === String(activeId)}
-                loadMode={getLoadMode(index)}
-                hideVolumeControl
-                onShowViewers={() =>
-                  setViewersVideoId(video.id)
-                }
+              Réessayer
+            </button>
+          </div>
+        </div>
+      )}
+
+      {!isImage && !isPlaying && !videoErrors[video.id] && (
+        <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none">
+          <span className="h-16 w-16 rounded-full bg-black/45 backdrop-blur-md flex items-center justify-center">
+            <Play size={30} fill="white" className="ml-1" />
+          </span>
+        </div>
+      )}
+
+      {video.is_repost && (
+        <div className="absolute top-24 left-4 z-20 px-3 py-1.5 rounded-full bg-black/55 backdrop-blur-md border border-yellow-400/30 text-yellow-300 text-[10px] font-black flex items-center gap-1.5">
+          <Repeat2 size={12} />
+          REPOST
+        </div>
+      )}
+
+      {/* Infos auteur + légende + son */}
+      <div
+        className="absolute left-3 right-20 bottom-28 z-20"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center gap-2 mb-2">
+          <div className="h-10 w-10 rounded-full overflow-hidden border-2 border-white bg-zinc-800 shrink-0">
+            {profile.avatar_url ? (
+              <img
+                src={profile.avatar_url}
+                alt=""
+                loading="lazy"
+                className="h-full w-full object-cover"
               />
+            ) : (
+              <img
+                src={baaroLogo}
+                alt="BAARO"
+                className="h-full w-full object-cover"
+              />
+            )}
+          </div>
+
+          <div className="min-w-0">
+            <div className="font-black text-sm truncate">
+              @{handleClean} {profile.flag || ""}
             </div>
-          ))
+            <div className="text-[10px] text-white/50 truncate">
+              {profile.display_name || "Membre BAARO"}
+            </div>
+          </div>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => setCaptionOpen(!captionOpen)}
+          className="text-left"
+        >
+          <p
+            className={`text-sm font-medium leading-snug ${
+              captionOpen ? "" : "line-clamp-2"
+            }`}
+          >
+            {caption || "Publication BAARO"}
+          </p>
+
+          {caption.length > 90 && (
+            <span className="text-[10px] text-white/50">
+              {captionOpen ? "Réduire" : "Plus"}
+            </span>
+          )}
+        </button>
+
+        {!isImage && isActive && (
+          <div className="mt-2">
+            <VideoTranslateControls
+              mediaUrl={video.media_url || video.video_url}
+              videoId={video.id}
+              videoRef={{ current: videoRefs.current[video.id] }}
+            />
+          </div>
+        )}
+
+        <div className="mt-2 flex items-center gap-2 min-w-0">
+          <div className="flex items-center gap-1.5 text-[11px] text-white/65 min-w-0 flex-1">
+            <Music2 size={13} className="shrink-0" />
+            <span className="truncate">
+              {sound
+                ? `${sound.title}${sound.artist ? ` · ${sound.artist}` : ""}`
+                : "Son original"}
+            </span>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => onUseSound?.(video, sound)}
+            className="shrink-0 flex items-center gap-1 rounded-full px-3 py-1.5 text-[11px] font-black shadow-lg active:scale-95"
+            style={{ background: COLORS.gold, color: "#000" }}
+            aria-label="Utiliser ce son pour créer une vidéo"
+          >
+            <Music2 size={12} />
+            Utiliser ce son
+          </button>
+        </div>
+      </div>
+
+      {/* Colonne d'actions (droite) */}
+      <div
+        className="absolute right-2 bottom-28 z-30 flex flex-col items-center gap-2.5"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <button
+          type="button"
+          onClick={() => handleLike?.(video.id)}
+          className="flex flex-col items-center"
+          aria-label="J'aime"
+        >
+          <span
+            className={`h-11 w-11 rounded-full backdrop-blur-md flex items-center justify-center ${
+              liked ? "bg-pink-500/25" : "bg-white/10"
+            }`}
+          >
+            <Heart
+              size={22}
+              className={liked ? "text-pink-500" : "text-white"}
+              fill={liked ? "currentColor" : "none"}
+            />
+          </span>
+          <span className="text-[10px] font-black mt-1">
+            {formatCount(video.likes)}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => openComments(video.id)}
+          className="flex flex-col items-center"
+          aria-label="Commentaires"
+        >
+          <span className="h-11 w-11 rounded-full bg-white/10 backdrop-blur-md flex items-center justify-center">
+            <MessageCircle size={21} />
+          </span>
+          <span className="text-[10px] font-black mt-1">
+            {formatCount(video.comments_count)}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => handleRepost(video)}
+          className="h-11 w-11 rounded-full bg-white/10 backdrop-blur-md flex items-center justify-center"
+          aria-label="Reposter"
+        >
+          <Repeat2 size={21} />
+        </button>
+
+        <button
+          type="button"
+          onClick={() => handleShare(video)}
+          className="h-11 w-11 rounded-full bg-white/10 backdrop-blur-md flex items-center justify-center"
+          aria-label="Partager"
+        >
+          {shareId === video.id ? (
+            <Check size={21} className="text-green-400" />
+          ) : (
+            <Share2 size={21} />
+          )}
+        </button>
+
+        {/* POURBOIRE : visible pour tout le monde sauf l'auteur */}
+        {canTip && (
+          <div className="flex items-center justify-center">
+            <TipButton recipientId={authorId} videoId={video.id} compact />
+          </div>
+        )}
+
+        {!isImage && (
+          <button
+            type="button"
+            onClick={() => toggleFullscreen(video.id)}
+            className="h-11 w-11 rounded-full bg-white/10 backdrop-blur-md flex items-center justify-center"
+            aria-label="Plein écran"
+          >
+            <Expand size={20} />
+          </button>
+        )}
+
+        {isOwner && (
+          <button
+            type="button"
+            onClick={() => handleDelete(video.id)}
+            className="h-11 w-11 rounded-full bg-red-500/20 backdrop-blur-md flex items-center justify-center"
+            aria-label="Supprimer"
+          >
+            <Trash2 size={19} className="text-red-300" />
+          </button>
         )}
       </div>
 
-      {/* Commandes vocales, gestes de la main et mouvements de tête */}
-      <HandsFreeControls
-        activeVideoId={activeId}
-        isMuted={playback.muted}
-        onNext={() => goToNext(activeId)}
-        onPrevious={() => goToPrevious(activeId)}
-        onLike={likeActiveVideo}
-        onTogglePlayback={toggleActivePlayback}
-        onPause={pauseActive}
-        onResume={resumeActiveVideo}
-        onToggleMute={playback.toggleMute}
-        onMute={muteActive}
-        onUnmute={unmuteActive}
-        onOpenComments={openActiveComments}
-        onToggleFullscreen={toggleActiveFullscreen}
-      />
-
-      {/* Commentaires */}
-      {commentsState.showComments && (
-        <CommentsSheet
-          comments={
-            commentsState.comments[
-              commentsState.showComments
-            ] || []
-          }
-          newComment={commentsState.newComment}
-          setNewComment={commentsState.setNewComment}
-          onSend={commentsState.sendComment}
-          onClose={commentsState.closeComments}
-        />
+      {/* Barre de progression : tap ou glisser (vidéos uniquement) */}
+      {!isImage && (
+        <div
+          className="absolute left-3 right-3 bottom-[88px] z-30 h-7 flex items-end pb-2 cursor-pointer"
+          style={{ touchAction: "none" }}
+          onClick={(e) => e.stopPropagation()}
+          onPointerDown={handleSeekStart}
+          onPointerMove={handleSeekMove}
+          onPointerUp={handleSeekEnd}
+          onPointerCancel={handleSeekEnd}
+        >
+          <div
+            className={`w-full rounded-full bg-white/20 overflow-hidden transition-[height] ${
+              dragging ? "h-2" : "h-1"
+            }`}
+          >
+            <div
+              className={`h-full ${
+                dragging ? "" : "transition-[width] duration-100"
+              }`}
+              style={{
+                width: `${(progress[video.id] || 0) * 100}%`,
+                background: COLORS.gold,
+              }}
+            />
+          </div>
+        </div>
       )}
 
-      {/* Publication */}
-      <UploadModal
-        creator={creator}
-        soundPicker={soundPicker}
-        camera={camera}
-      />
+      <div
+        className="absolute bottom-8 left-3 right-3 z-30 flex items-center justify-between text-[10px] text-white/65"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <span className="flex items-center gap-1">
+          {!isImage && (
+            <>
+              <Clock3 size={12} />
+              {video.duration || "00:00"}
+            </>
+          )}
+        </span>
 
-      {/* Studio NextGen */}
-      <VideoNextGenStudio
-        open={studioOpen}
-        onClose={() => setStudioOpen(false)}
-        onCreate={handleStudioCreate}
-      />
+        {isOwner && (
+          <button
+            type="button"
+            onClick={() => onShowViewers?.(video.id)}
+            className="flex items-center gap-1 underline text-white"
+            aria-label="Voir les spectateurs de cette vidéo"
+          >
+            <Eye size={13} />
+            Voir les spectateurs
+          </button>
+        )}
 
-      {/* Liste des spectateurs */}
-      {viewersVideoId && (
-        <EngagementList
-          type="videoViews"
-          targetId={viewersVideoId}
-          ownerId={user?.id}
-          viewerId={user?.id}
-          onClose={() => setViewersVideoId(null)}
-        />
-      )}
-    </div>
+        <div className="flex items-center gap-2">
+          <span>{formatCount(video.views)} vues</span>
+          {!hideVolumeControl && !isImage && (
+            <button
+              type="button"
+              onClick={() => toggleMute()}
+              className="h-8 w-8 rounded-full bg-black/35 backdrop-blur-md flex items-center justify-center"
+              aria-label={muted ? "Activer le son" : "Couper le son"}
+            >
+              {muted ? <VolumeX size={15} /> : <Volume2 size={15} />}
+            </button>
+          )}
+        </div>
+      </div>
+    </article>
   );
 }
-
-export default VideosTab;
