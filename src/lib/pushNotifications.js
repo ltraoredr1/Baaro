@@ -13,10 +13,12 @@
  * - Désactivation volontaire respectée (pas de réactivation automatique).
  * - Événements window "baaro:push-received" et "baaro:push-open" pour l'app.
  *
- * Tables / RPC : push_tokens via la fonction upsert_push_token (inchangée).
+ * Jetons : enregistrés et supprimés via /api/social (save_push_token /
+ * delete_push_token), plus aucun accès direct à push_tokens depuis le client.
  */
 
 import { supabase } from "../supabaseClient.js";
+import { callSocial } from "./notifyInteraction.js";
 
 const VAPID_PUBLIC = import.meta.env.VITE_VAPID_PUBLIC_KEY || "";
 
@@ -233,16 +235,16 @@ export async function getPermissionStateAsync() {
 // Authentification et sauvegarde des jetons
 // -----------------------------------------------------------------------------
 
-async function getAuthenticatedUser() {
-  const { data, error } = await supabase.auth.getUser();
+async function callSocialOrThrow(action, payload) {
+  const result = await callSocial(action, payload);
 
-  if (error) throw error;
+  if (!result) throw new Error("Non authentifié");
 
-  if (!data?.user) {
-    throw new Error("Non authentifié");
+  if (!result.ok) {
+    throw new Error(result.body?.error || `Erreur serveur (${result.status})`);
   }
 
-  return data.user;
+  return result;
 }
 
 async function savePushToken({ token, platform }) {
@@ -250,23 +252,16 @@ async function savePushToken({ token, platform }) {
     throw new Error("Le jeton de notification est vide.");
   }
 
-  const user = await getAuthenticatedUser();
-
   const userAgent =
     typeof navigator !== "undefined" && navigator.userAgent
       ? navigator.userAgent.slice(0, 200)
       : null;
 
-  const { error } = await supabase.rpc("upsert_push_token", {
-    p_user_id: user.id,
-    p_token: token,
-    p_platform: platform,
-    p_user_agent: userAgent,
+  await callSocialOrThrow("save_push_token", {
+    token,
+    platform,
+    user_agent: userAgent,
   });
-
-  if (error) throw error;
-
-  return user;
 }
 
 // -----------------------------------------------------------------------------
@@ -669,20 +664,13 @@ export async function disablePushNotifications() {
     setOptedOut(true);
 
     const native = await isNativePlatform();
-    const user = await getAuthenticatedUser();
 
     if (native) {
       const Capacitor = await getCapacitor();
 
       const platform = Capacitor?.getPlatform?.() === "ios" ? "ios" : "android";
 
-      const { error } = await supabase
-        .from("push_tokens")
-        .delete()
-        .eq("user_id", user.id)
-        .eq("platform", platform);
-
-      if (error) throw error;
+      await callSocialOrThrow("delete_push_token", { platform });
 
       return {
         ok: true,
@@ -714,14 +702,7 @@ export async function disablePushNotifications() {
     }
 
     if (token) {
-      const { error } = await supabase
-        .from("push_tokens")
-        .delete()
-        .eq("user_id", user.id)
-        .eq("platform", "web")
-        .eq("token", token);
-
-      if (error) throw error;
+      await callSocialOrThrow("delete_push_token", { platform: "web", token });
     }
 
     return { ok: true };
@@ -749,8 +730,6 @@ export async function pruneCurrentUserPushTokens() {
       return { ok: true };
     }
 
-    const user = await getAuthenticatedUser();
-
     const registration = await getWebRegistration();
     const subscription = await registration.pushManager.getSubscription();
 
@@ -760,14 +739,10 @@ export async function pruneCurrentUserPushTokens() {
 
     const currentToken = JSON.stringify(subscription.toJSON());
 
-    const { error } = await supabase
-      .from("push_tokens")
-      .delete()
-      .eq("user_id", user.id)
-      .eq("platform", "web")
-      .neq("token", currentToken);
-
-    if (error) throw error;
+    await callSocialOrThrow("delete_push_token", {
+      platform: "web",
+      except_token: currentToken,
+    });
 
     return { ok: true };
   } catch (error) {
