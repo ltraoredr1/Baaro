@@ -40,6 +40,7 @@
     "@aws-sdk/s3-request-presigner": "^3.637.0",
     "@capacitor-community/contacts": "^7.0.1",
     "@capacitor-community/privacy-screen": "^6.1.0",
+    "@capacitor-community/speech-recognition": "^7.0.0",
     "@capacitor/android": "^8.5.3",
     "@capacitor/app": "^8.1.2",
     "@capacitor/core": "^8.5.3",
