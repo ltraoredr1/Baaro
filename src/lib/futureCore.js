@@ -39,9 +39,54 @@ export async function enqueueOfflineOperation({ user_id, clientId, operation, pa
   }, { onConflict: 'user_id,client_id' });
 }
 
+// --- PARTIE CORRIGÉE: PLUS DE TABLE future_preferences ---
+
 export async function getFuturePreferences(user_id) {
   if (!user_id) return {};
-  const { data, error } = await supabase.from('future_preferences').select('module_key,enabled').eq('user_id', user_id);
+  const { data, error } = await supabase
+    .from('user_settings')
+    .select('enabled_modules')
+    .eq('user_id', user_id)
+    .maybeSingle();
+  
+  if (error && error.code !== 'PGRST116') throw error;
+  
+  // Si pas encore de settings, tous activés par défaut
+  if (!data?.enabled_modules || Object.keys(data.enabled_modules).length === 0) {
+    return Object.fromEntries(FUTURE_CORE_MODULES.map(k => [k, true]));
+  }
+  return data.enabled_modules;
+}
+
+export async function setFuturePreference(user_id, module_key, enabled) {
+  if (!user_id || !module_key) throw new Error('invalid_preference');
+  if (!FUTURE_CORE_MODULES.includes(module_key)) throw new Error('unknown_module');
+  
+  const current = await getFuturePreferences(user_id);
+  const next = { ...current, [module_key]: !!enabled };
+  
+  const { data, error } = await supabase
+    .from('user_settings')
+    .upsert({ 
+      user_id: user_id, 
+      enabled_modules: next,
+      updated_at: new Date().toISOString()
+    }, { onConflict: 'user_id' })
+    .select('enabled_modules')
+    .single();
+  
   if (error) throw error;
-  return Object.fromEntries((data || []).map(row => [row.module_key, row.enabled]));
+  return data.enabled_modules;
+}
+
+export async function toggleFutureModule(user_id, module_key) {
+  const current = await getFuturePreferences(user_id);
+  const newValue = !current[module_key];
+  return setFuturePreference(user_id, module_key, newValue);
+}
+
+// Helper pour checker si un module est actif (pour ton UI)
+export async function isModuleEnabled(user_id, module_key) {
+  const prefs = await getFuturePreferences(user_id);
+  return !!prefs[module_key];
 }
