@@ -41,6 +41,22 @@ async function destroyExistingCall() {
   } catch (_) {}
 }
 
+/**
+ * Teste l'accès aux périphériques puis les libère aussitôt.
+ * Retourne true si l'accès est accordé.
+ */
+async function probeMedia(constraints) {
+  try {
+    var s = await navigator.mediaDevices.getUserMedia(constraints);
+    s.getTracks().forEach(function (t) {
+      t.stop();
+    });
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 export function useDebates(user_id) {
   const [rooms, setRooms] = useState([]);
   const [loadingRooms, setLoadingRooms] = useState(true);
@@ -346,6 +362,8 @@ export function useDebateLive(room, user_id, isHost) {
   const [micOn, setMicOn] = useState(true);
   const [joined, setJoined] = useState(false);
   const [error, setError] = useState(null);
+  const [notice, setNotice] = useState(null);
+  const [audioOnly, setAudioOnly] = useState(false);
   const [joining, setJoining] = useState(false);
 
   const joinLive = useCallback(
@@ -356,21 +374,47 @@ export function useDebateLive(room, user_id, isHost) {
       joiningRef.current = true;
       setJoining(true);
       setError(null);
+      setNotice(null);
+      setAudioOnly(false);
       try {
-        // Pré-test des permissions caméra/micro, puis libération
-        try {
-          var s = await navigator.mediaDevices.getUserMedia({
-            video: room.mode !== "audio",
-            audio: true,
-          });
-          s.getTracks().forEach(function (t) {
-            t.stop();
-          });
+        // ---- Repli automatique si caméra / micro indisponibles ----
+        var wantVideo = room.mode !== "audio";
+        var videoOff = !wantVideo;
+        var audioOff = false;
+        var message = null;
+        var probed = false;
+
+        if (
+          typeof navigator !== "undefined" &&
+          navigator.mediaDevices &&
+          navigator.mediaDevices.getUserMedia
+        ) {
+          probed = true;
+          if (wantVideo) {
+            if (await probeMedia({ video: true, audio: true })) {
+              // tout est accessible
+            } else if (await probeMedia({ audio: true })) {
+              videoOff = true;
+              message = "Caméra indisponible : tu rejoins en audio seul.";
+            } else {
+              videoOff = true;
+              audioOff = true;
+              message =
+                "Caméra et micro indisponibles : tu rejoins en écoute seule. Autorise-les dans les réglages du site pour participer.";
+            }
+          } else if (!(await probeMedia({ audio: true }))) {
+            audioOff = true;
+            message =
+              "Micro indisponible : tu rejoins en écoute seule. Autorise le micro dans les réglages du site.";
+          }
+        }
+
+        if (probed) {
           // Laisse Android libérer la caméra avant que Daily la reprenne
           await new Promise(function (r) {
             setTimeout(r, 400);
           });
-        } catch (_) {}
+        }
 
         var sessionRes = await supabase.auth.getSession();
         var session = sessionRes.data?.session;
@@ -412,13 +456,18 @@ export function useDebateLive(room, user_id, isHost) {
         var call = DailyIframe.createFrame(containerRef.current, {
           iframeStyle: { width: "100%", height: "100%", border: "0" },
           showLeaveButton: false,
-          startVideoOff: room.mode === "audio",
-          startAudioOff: false,
+          startVideoOff: videoOff,
+          startAudioOff: audioOff,
         });
         callRef.current = call;
-        call.on("camera-error", function (ev) {
-          var m = ev && ev.errorMsg && ev.errorMsg.errorMsg;
-          setError("Caméra : " + (m || "accès refusé ou déjà utilisée"));
+        call.on("camera-error", function () {
+          // Pas d'erreur bloquante : on continue en audio seul
+          setNotice("Caméra indisponible : tu continues en audio seul.");
+          setAudioOnly(true);
+          setCamOn(false);
+          try {
+            call.setLocalVideo(false);
+          } catch (_) {}
         });
         call.on("left-meeting", function () {
           setJoined(false);
@@ -436,9 +485,19 @@ export function useDebateLive(room, user_id, isHost) {
             }, 15000);
           }),
         ]);
-        await call.setLocalAudio(true);
-        await call.setLocalVideo(room.mode !== "audio");
 
+        // Ces réglages ne doivent jamais faire échouer la connexion
+        try {
+          await call.setLocalAudio(!audioOff);
+        } catch (_) {}
+        try {
+          await call.setLocalVideo(!videoOff);
+        } catch (_) {}
+
+        setMicOn(!audioOff);
+        setCamOn(!videoOff);
+        setAudioOnly(wantVideo && videoOff);
+        if (message) setNotice(message);
         setJoined(true);
       } catch (e) {
         // En cas d'échec, on nettoie pour que le prochain essai reparte propre
@@ -455,17 +514,23 @@ export function useDebateLive(room, user_id, isHost) {
   );
 
   const toggleCam = useCallback(function () {
-    setCamOn(function (p) {
-      if (callRef.current) callRef.current.setLocalVideo(!p);
-      return !p;
-    });
+    var call = callRef.current;
+    if (!call) return;
+    try {
+      var next = !call.localVideo();
+      call.setLocalVideo(next);
+      setCamOn(next);
+    } catch (_) {}
   }, []);
 
   const toggleMic = useCallback(function () {
-    setMicOn(function (p) {
-      if (callRef.current) callRef.current.setLocalAudio(!p);
-      return !p;
-    });
+    var call = callRef.current;
+    if (!call) return;
+    try {
+      var next = !call.localAudio();
+      call.setLocalAudio(next);
+      setMicOn(next);
+    } catch (_) {}
   }, []);
 
   const leaveLive = useCallback(async function () {
@@ -474,6 +539,8 @@ export function useDebateLive(room, user_id, isHost) {
     } finally {
       callRef.current = null;
       setJoined(false);
+      setNotice(null);
+      setAudioOnly(false);
     }
   }, []);
 
@@ -495,6 +562,8 @@ export function useDebateLive(room, user_id, isHost) {
     joined,
     joining,
     error,
+    notice,
+    audioOnly,
     callRef,
     containerRef,
   };
