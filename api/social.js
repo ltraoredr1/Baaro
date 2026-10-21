@@ -8,6 +8,10 @@
  *   touche plus à cette table directement ; l'identité vient toujours du JWT.
  * + actions "save_push_token" / "delete_push_token" : jetons push de l'appareil
  *   (RPC upsert_push_token / table push_tokens), toujours pour l'utilisateur du JWT.
+ * + action "story_published" : notifie (liste + push) les abonnés et amis de l'auteur
+ *   qu'il vient de publier une story. Identité = JWT.
+ * + action "publish_due" : balayage des stories programmées dont l'heure est passée
+ *   (déclenché par l'appli des utilisateurs connectés, sans cron ; idempotent).
  * Les simples abonnements sont notifiés par le trigger SQL on_follow_created : pas géré ici.
  *
  * Le destinataire est TOUJOURS déterminé côté serveur (auteur du contenu), jamais
@@ -391,6 +395,130 @@ async function handleComment(admin, user, body) {
   };
 }
 
+// ========== Stories : notification aux abonnés et amis ==========
+
+/**
+ * Notifie (liste + push) les abonnés et amis de l'auteur pour UNE story.
+ * Idempotent : si une notification "new_story" existe déjà pour cette story, ne fait rien.
+ * Destinataires : lignes follows acceptées vers l'auteur (l'acceptation d'une demande
+ * d'ami crée la ligne réciproque, donc les amis y sont déjà inclus).
+ */
+async function notifyStoryAudience(admin, authorId, storyId) {
+  const { data: done } = await admin
+    .from("notifications")
+    .select("notification_id")
+    .eq("type", "new_story")
+    .eq("actor_id", authorId)
+    .eq("source_id", storyId)
+    .limit(1);
+  if (done?.length) return { notified: false, reason: "duplicate" };
+
+  const { data: rows, error } = await admin
+    .from("follows")
+    .select("follower_id")
+    .eq("followed_id", authorId)
+    .eq("status", "accepted")
+    .limit(5000);
+  if (error) throw error;
+
+  const userIds = [
+    ...new Set((rows || []).map((r) => r.follower_id)),
+  ].filter((id) => id && id !== authorId);
+  if (!userIds.length) return { notified: false, reason: "no_audience" };
+
+  const { data: actor } = await admin
+    .from("profiles")
+    .select("display_name, handle")
+    .eq("id", authorId)
+    .maybeSingle();
+  const name =
+    clip(actor?.display_name, 40) ||
+    (actor?.handle ? `@${String(actor.handle).replace(/^@/, "")}` : "Quelqu'un");
+
+  for (let i = 0; i < userIds.length; i += 500) {
+    const chunk = userIds.slice(i, i + 500);
+    const { error: insertError } = await admin.from("notifications").insert(
+      chunk.map((uid) => ({
+        user_id: uid,
+        actor_id: authorId,
+        type: "new_story",
+        source_id: storyId,
+        message: `${name} a publié une nouvelle story`,
+      }))
+    );
+    if (insertError) throw insertError;
+
+    // Le push ne doit jamais faire échouer la notification enregistrée
+    await sendPushToUsers(admin, {
+      userIds: chunk,
+      title: name,
+      body: "a publié une nouvelle story",
+      url: "/",
+      category: "social",
+      tag: `story-${storyId}`,
+      data: { type: "new_story", source_id: storyId, actor_id: authorId },
+    }).catch((err) => console.warn("[social] story push", err?.message || err));
+  }
+
+  return { notified: true, count: userIds.length };
+}
+
+// action "story_published" : l'auteur vient de publier (pas programmée).
+async function handleStoryPublished(admin, user, body) {
+  let query = admin.from("stories").select("id, author_id").eq("author_id", user.id);
+  query = body.story_id
+    ? query.eq("id", String(body.story_id))
+    : query.gte("created_at", new Date(Date.now() - 2 * 60_000).toISOString());
+  const { data: story } = await query
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (!story) {
+    return { status: 404, body: { ok: false, error: "Story introuvable" } };
+  }
+
+  const result = await notifyStoryAudience(admin, user.id, String(story.id));
+  return { status: 200, body: { ok: true, ...result } };
+}
+
+// action "publish_due" : stories programmées dont l'heure est passée.
+// Déclenchée par l'appli de n'importe quel utilisateur connecté (pas de cron) ;
+// sans danger : elle ne notifie que des stories déjà échues, une seule fois chacune.
+// ⚠️ Colonne de date de publication supposée : publish_at (adapter si différente).
+let lastDueSweep = 0;
+async function handleDueStories(admin) {
+  const now = Date.now();
+  // Évite de refaire le balayage si une autre requête vient de le faire
+  if (now - lastDueSweep < 20_000) {
+    return { status: 200, body: { ok: true, skipped: true } };
+  }
+  lastDueSweep = now;
+  const { data: due, error } = await admin
+    .from("stories")
+    .select("id, author_id, created_at, publish_at, expires_at")
+    .lte("publish_at", new Date(now).toISOString())
+    .gte("publish_at", new Date(now - 24 * 3600_000).toISOString())
+    .limit(200);
+  if (error) throw error;
+
+  let notified = 0;
+  for (const story of due || []) {
+    // Story immédiate (publish_at ≈ created_at) : déjà gérée par "story_published"
+    const scheduledLater =
+      new Date(story.publish_at).getTime() - new Date(story.created_at).getTime() > 60_000;
+    if (!scheduledLater) continue;
+    if (story.expires_at && new Date(story.expires_at).getTime() <= now) continue;
+
+    try {
+      const result = await notifyStoryAudience(admin, story.author_id, String(story.id));
+      if (result.notified) notified += 1;
+    } catch (err) {
+      console.warn("[social] publish_due", story.id, err?.message || err);
+    }
+  }
+  return { status: 200, body: { ok: true, checked: (due || []).length, notified } };
+}
+
 // ========== Préférences de notification ==========
 const DEFAULT_PREFERENCES = {
   push_enabled: true,
@@ -603,6 +731,9 @@ export default async function handler(req, res) {
       .json({ ok: false, error: "Configuration serveur indisponible" });
   }
 
+  const body = req.body || {};
+  const action = String(body.action || "").toLowerCase();
+
   let user;
   try {
     user = await requireUser(req, admin);
@@ -612,9 +743,6 @@ export default async function handler(req, res) {
       .json({ ok: false, error: error.message || "Non authentifié" });
   }
 
-  const body = req.body || {};
-  const action = String(body.action || "").toLowerCase();
-
   try {
     if (action === "notify_interaction") {
       const result = await handleNotifyInteraction(admin, user, body);
@@ -623,6 +751,16 @@ export default async function handler(req, res) {
 
     if (action === "comment") {
       const result = await handleComment(admin, user, body);
+      return res.status(result.status).json(result.body);
+    }
+
+    if (action === "story_published") {
+      const result = await handleStoryPublished(admin, user, body);
+      return res.status(result.status).json(result.body);
+    }
+
+    if (action === "publish_due") {
+      const result = await handleDueStories(admin);
       return res.status(result.status).json(result.body);
     }
 
