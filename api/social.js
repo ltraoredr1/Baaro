@@ -290,13 +290,14 @@ async function handleComment(admin, user, body) {
     };
   }
 
+  // ========== CORRIGÉ : table comments + colonne text ==========
   if (isUuid(postId)) {
     const { data, error } = await admin
-      .from("post_comments")
+      .from("comments")                    // ← était "post_comments"
       .insert({
         post_id: postId,
         author_id: user.id,
-        content: text,
+        text: text,                        // ← était "content"
       })
       .select("id")
       .single();
@@ -328,6 +329,7 @@ async function handleComment(admin, user, body) {
     return { status: 200, body: { ok: true, comment_id: data?.id } };
   }
 
+  // Vidéo : inchangé (table video_comments + colonne content)
   if (isUuid(videoId)) {
     const { data, error } = await admin
       .from("video_comments")
