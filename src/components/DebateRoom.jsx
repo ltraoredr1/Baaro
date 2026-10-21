@@ -1,7 +1,20 @@
 import { useDebateLive } from "../hooks/useDebates.js";
 import * as liveRoles from "../lib/liveRoles.js";
 import { useState, useEffect, useRef, memo } from "react";
-import { ArrowLeft, Hash, Users, Send, Copy, Check } from "lucide-react";
+import {
+  ArrowLeft,
+  Hash,
+  Users,
+  Send,
+  Copy,
+  Check,
+  Mic,
+  MicOff,
+  Video,
+  VideoOff,
+  PhoneOff,
+  Power,
+} from "lucide-react";
 import { COLORS } from "../theme.js";
 import { supabase } from "../supabaseClient.js";
 
@@ -19,6 +32,13 @@ const C = {
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const DAILY_EVENTS = [
+  "joined-meeting",
+  "participant-joined",
+  "participant-left",
+  "participant-updated",
+];
 
 const ChatMessage = memo(function ChatMessage({ msg, currentId }) {
   const isMe = msg.sender_id === currentId;
@@ -54,6 +74,35 @@ const ChatMessage = memo(function ChatMessage({ msg, currentId }) {
   );
 });
 
+function ControlButton({ onClick, active, danger, label, children }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={label}
+      className="flex flex-col items-center gap-1 active:scale-95 transition"
+    >
+      <span
+        className="w-12 h-12 rounded-full flex items-center justify-center border"
+        style={{
+          background: danger
+            ? "#dc2626"
+            : active
+              ? C.surface2
+              : "rgba(239,68,68,0.2)",
+          borderColor: danger ? "#dc2626" : C.border,
+          color: danger ? "#fff" : active ? C.ivory : "#f87171",
+        }}
+      >
+        {children}
+      </span>
+      <span className="text-[10px]" style={{ color: C.muted }}>
+        {label}
+      </span>
+    </button>
+  );
+}
+
 export function DebateRoom({ inviteCode, onBack }) {
   const [user_id, setUserId] = useState(null);
   const [room, setRoom] = useState(null);
@@ -64,11 +113,15 @@ export function DebateRoom({ inviteCode, onBack }) {
   const [codeCopied, setCodeCopied] = useState(false);
   const [reopening, setReopening] = useState(false);
   const [reopenError, setReopenError] = useState(null);
+  const [dbCount, setDbCount] = useState(0);
+  const [liveState, setLiveState] = useState({ count: 0, mic: true, cam: true });
   const messagesEndRef = useRef(null);
   const isHost = room?.host_id === user_id;
   const isEnded = room?.status === "ended";
   const live = useDebateLive(room, user_id, isHost);
+  const roomId = room?.id;
 
+  // ---- Chargement de la salle + messages ----
   useEffect(() => {
     let mounted = true;
     let channel = null;
@@ -224,6 +277,65 @@ export function DebateRoom({ inviteCode, onBack }) {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  // ---- Nombre de participants (base de données) ----
+  useEffect(() => {
+    if (!roomId) return;
+    let cancelled = false;
+
+    const refreshCount = async () => {
+      try {
+        const { count, error: cErr } = await supabase
+          .from("debate_participants")
+          .select("user_id", { count: "exact", head: true })
+          .eq("room_id", roomId)
+          .is("left_at", null);
+        if (!cancelled && !cErr && typeof count === "number") {
+          setDbCount(count);
+        }
+      } catch (_) {}
+    };
+
+    refreshCount();
+    const timer = setInterval(refreshCount, 15000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [roomId]);
+
+  // ---- Compteur et état micro/caméra synchronisés depuis Daily ----
+  useEffect(() => {
+    const call = live.callRef?.current;
+    if (!live.joined || !call) return;
+
+    const sync = () => {
+      try {
+        const parts = call.participants ? call.participants() : {};
+        const local = parts.local;
+        setLiveState({
+          count: Object.keys(parts).length,
+          mic: Boolean(local?.audio),
+          cam: Boolean(local?.video),
+        });
+      } catch (_) {}
+    };
+
+    sync();
+    DAILY_EVENTS.forEach((ev) => {
+      try {
+        call.on(ev, sync);
+      } catch (_) {}
+    });
+
+    return () => {
+      DAILY_EVENTS.forEach((ev) => {
+        try {
+          call.off(ev, sync);
+        } catch (_) {}
+      });
+    };
+  }, [live.joined, live.callRef]);
+
   const handleSendMessage = async (e) => {
     e.preventDefault();
     if (!newMessage.trim() || !room || !user_id) return;
@@ -241,8 +353,52 @@ export function DebateRoom({ inviteCode, onBack }) {
     }
   };
 
+  // ---- Contrôles du live ----
+  const handleToggleMic = () => {
+    const call = live.callRef?.current;
+    if (!call) return;
+    const next = !liveState.mic;
+    setLiveState((s) => ({ ...s, mic: next }));
+    try {
+      call.setLocalAudio(next);
+    } catch (_) {}
+  };
+
+  const handleToggleCam = () => {
+    const call = live.callRef?.current;
+    if (!call) return;
+    const next = !liveState.cam;
+    setLiveState((s) => ({ ...s, cam: next }));
+    try {
+      call.setLocalVideo(next);
+    } catch (_) {}
+  };
+
+  const handleLeaveLive = async () => {
+    try {
+      await live.leaveLive();
+    } catch (_) {}
+  };
+
+  const handleEndLive = async () => {
+    if (!room || !isHost) return;
+    const ok =
+      typeof window !== "undefined"
+        ? window.confirm("Terminer le live pour tout le monde ?")
+        : true;
+    if (!ok) return;
+    try {
+      await live.leaveLive();
+    } catch (_) {}
+    const { error: endErr } = await supabase
+      .from("debate_rooms")
+      .update({ status: "ended" })
+      .eq("id", room.id)
+      .eq("host_id", user_id);
+    if (!endErr) setRoom((prev) => (prev ? { ...prev, status: "ended" } : prev));
+  };
+
   // Retour : la salle n'est terminée que si l'hôte avait réellement démarré le live.
-  // Avant, un simple retour en arrière terminait la salle et rendait le live introuvable.
   const handleBack = async () => {
     const wasLive = Boolean(live?.joined);
     try {
@@ -254,6 +410,16 @@ export function DebateRoom({ inviteCode, onBack }) {
         .update({ status: "ended" })
         .eq("id", room.id)
         .eq("host_id", user_id);
+    }
+    // Marque le départ pour que le compteur de participants reste exact
+    if (room && user_id) {
+      try {
+        await supabase
+          .from("debate_participants")
+          .update({ left_at: new Date().toISOString() })
+          .eq("room_id", room.id)
+          .eq("user_id", user_id);
+      } catch (_) {}
     }
     onBack();
   };
@@ -305,6 +471,10 @@ export function DebateRoom({ inviteCode, onBack }) {
       </div>
     );
   }
+
+  const participantCount = live.joined
+    ? Math.max(liveState.count, 1)
+    : dbCount;
 
   return (
     <div
@@ -362,7 +532,14 @@ export function DebateRoom({ inviteCode, onBack }) {
             </button>
           </div>
         </div>
-        <Users size={14} style={{ color: C.gold }} />
+        <div
+          className="flex items-center gap-1 text-xs font-bold"
+          style={{ color: C.gold }}
+          title="Participants"
+        >
+          <Users size={14} />
+          <span>{participantCount}</span>
+        </div>
       </div>
 
       {room?.mode !== "text" && (
@@ -373,6 +550,42 @@ export function DebateRoom({ inviteCode, onBack }) {
               live.joined || live.joining ? "h-[45vh] w-full" : "hidden"
             }
           />
+
+          {/* Contrôles pendant le live */}
+          {live.joined && !isEnded && (
+            <div
+              className="flex items-center justify-center gap-4 py-3 border-b"
+              style={{ borderColor: C.border }}
+            >
+              <ControlButton
+                onClick={handleToggleMic}
+                active={liveState.mic}
+                label={liveState.mic ? "Micro" : "Micro coupé"}
+              >
+                {liveState.mic ? <Mic size={20} /> : <MicOff size={20} />}
+              </ControlButton>
+
+              {room?.mode !== "audio" && !live.audioOnly && (
+                <ControlButton
+                  onClick={handleToggleCam}
+                  active={liveState.cam}
+                  label={liveState.cam ? "Caméra" : "Caméra coupée"}
+                >
+                  {liveState.cam ? <Video size={20} /> : <VideoOff size={20} />}
+                </ControlButton>
+              )}
+
+              <ControlButton onClick={handleLeaveLive} danger label="Quitter">
+                <PhoneOff size={20} />
+              </ControlButton>
+
+              {isHost && (
+                <ControlButton onClick={handleEndLive} danger label="Terminer">
+                  <Power size={20} />
+                </ControlButton>
+              )}
+            </div>
+          )}
 
           {isEnded ? (
             <div
@@ -415,6 +628,15 @@ export function DebateRoom({ inviteCode, onBack }) {
                     : "Rejoindre le live"}
               </button>
             )
+          )}
+
+          {live.notice && !isEnded && (
+            <p
+              className="text-xs px-4 py-2"
+              style={{ color: "#fbbf24" }}
+            >
+              {live.notice}
+            </p>
           )}
 
           {live.error && !isEnded && (
