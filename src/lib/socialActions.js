@@ -1,13 +1,17 @@
 import { supabase } from "@/supabaseClient.js";
+import { notifyInteraction } from "@/lib/notifyInteraction.js";
 
 /**
- * Gère la républication d'une publication (Repost) et envoie une notification.
+ * Gère la républication d'une publication (Repost).
+ * La notification (liste dans l'appli + push) est créée par /api/social :
+ * le destinataire est déterminé côté serveur, `authorId` n'est plus utilisé
+ * pour écrire dans la table notifications (paramètre conservé pour ne pas
+ * casser les appels existants).
  */
-export async function toggleRepost({ postId, userId, authorId, wasReposted }) {
+export async function toggleRepost({ postId, userId, wasReposted }) {
   if (!userId) throw new Error("Utilisateur non connecté");
 
   if (wasReposted) {
-    // Annuler le repost
     const { error } = await supabase
       .from("post_reposts")
       .delete()
@@ -16,37 +20,28 @@ export async function toggleRepost({ postId, userId, authorId, wasReposted }) {
 
     if (error) throw error;
     return { action: "unreposted" };
-  } else {
-    // Ajouter le repost
-    const { error } = await supabase
-      .from("post_reposts")
-      .insert({ post_id: postId, user_id: userId });
-
-    if (error) throw error;
-
-    // Envoi de la notification au destinataire (authorId)
-    if (authorId && authorId !== userId) {
-      try {
-        await supabase.from("notifications").insert({
-          user_id: authorId,
-          actor_id: userId,
-          type: "repost",
-          source_id: postId,
-          message: "a républié votre publication.",
-        });
-      } catch (notifError) {
-        console.warn("Erreur d'envoi de la notification :", notifError);
-      }
-    }
-
-    return { action: "reposted" };
   }
+
+  const { error } = await supabase
+    .from("post_reposts")
+    .insert({ post_id: postId, user_id: userId });
+
+  if (error) throw error;
+
+  // Sans await bloquant : une notification ratée n'annule jamais le repost.
+  notifyInteraction({
+    contentType: "post",
+    interactionType: "repost",
+    targetId: postId,
+  });
+
+  return { action: "reposted" };
 }
 
 /**
  * Gère la réaction 'J'aime' sur une publication.
  */
-export async function toggleLike({ postId, userId, authorId, wasLiked }) {
+export async function toggleLike({ postId, userId, wasLiked }) {
   if (!userId) throw new Error("Utilisateur non connecté");
 
   if (wasLiked) {
@@ -58,28 +53,20 @@ export async function toggleLike({ postId, userId, authorId, wasLiked }) {
 
     if (error) throw error;
     return { action: "unliked" };
-  } else {
-    const { error } = await supabase
-      .from("post_likes")
-      .insert({ post_id: postId, user_id: userId });
-
-    if (error) throw error;
-
-    // Notification pour le 'Like'
-    if (authorId && authorId !== userId) {
-      try {
-        await supabase.from("notifications").insert({
-          user_id: authorId,
-          actor_id: userId,
-          type: "like",
-          source_id: postId,
-          message: "a aimé votre publication.",
-        });
-      } catch (notifError) {
-        console.warn("Erreur d'envoi de la notification :", notifError);
-      }
-    }
-
-    return { action: "liked" };
   }
+
+  const { error } = await supabase
+    .from("post_likes")
+    .insert({ post_id: postId, user_id: userId });
+
+  if (error) throw error;
+
+  // Le serveur vérifie que le like existe bien avant de notifier.
+  notifyInteraction({
+    contentType: "post",
+    interactionType: "like",
+    targetId: postId,
+  });
+
+  return { action: "liked" };
 }
