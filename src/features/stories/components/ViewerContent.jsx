@@ -29,7 +29,10 @@ export function ViewerContent({ story, userId, viewer, cart, videoRef, readOnly,
   const hasStack = story.stickers?.length > 0 || story.poll?.question;
 
   return (
-    <div className="absolute inset-0 flex items-center justify-center bg-zinc-900" style={hasBackground ? { background: story.background } : undefined}>
+    <div
+      className="absolute inset-0 flex items-center justify-center bg-black overflow-hidden"
+      style={hasBackground ? { background: story.background } : undefined}
+    >
       {mediaLoading && (
         <div className="absolute inset-0 flex items-center justify-center bg-zinc-950/60 z-20">
           <div className="w-8 h-8 border-3 border-primary border-t-transparent rounded-full animate-spin" />
@@ -41,7 +44,7 @@ export function ViewerContent({ story, userId, viewer, cart, videoRef, readOnly,
           <video
             ref={videoRef}
             src={story.media_url}
-            className="w-full h-full object-cover"
+            className="w-full h-full object-contain"
             autoPlay
             playsInline
             onLoadedData={() => setMediaLoading(false)}
@@ -49,7 +52,22 @@ export function ViewerContent({ story, userId, viewer, cart, videoRef, readOnly,
             onEnded={next}
           />
         ) : (
-          <img src={story.media_url} alt="story content" className="w-full h-full object-cover" onLoad={() => setMediaLoading(false)} />
+          <>
+            {/* Fond flouté : remplit les bandes sans rogner l'image principale */}
+            <img
+              src={story.media_url}
+              alt=""
+              aria-hidden="true"
+              className="absolute inset-0 w-full h-full object-cover blur-2xl scale-110 opacity-40 pointer-events-none"
+            />
+            <img
+              src={story.media_url}
+              alt="story content"
+              className="relative max-w-full max-h-full w-auto h-auto object-contain"
+              onLoad={() => setMediaLoading(false)}
+              onError={() => setMediaLoading(false)}
+            />
+          </>
         )
       ) : (
         <div className={`p-8 text-center w-full space-y-3 ${hasBackground ? 'text-white' : ''}`}>
