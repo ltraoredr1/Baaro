@@ -1,4 +1,3 @@
-
 import { useEffect, useRef, useState } from "react";
 
 import CommentsSheet from "./components/CommentsSheet.jsx";
@@ -146,9 +145,54 @@ export function VideosTab({ onRewardPoints, onExit }) {
   // FLUX VIDÉO ET DÉTECTION DE LA VIDÉO ACTIVE
   // --------------------------------------------------
 
+  const rootRef = useRef(null);
   const scrollRef = useRef(null);
   const slideRefs = useRef({});
+  const ratiosRef = useRef({});
   const [activeId, setActiveId] = useState(null);
+
+  // Toujours la dernière valeur, utilisable dans les écouteurs d'événements.
+  const activeIdRef = useRef(null);
+  activeIdRef.current = activeId;
+
+  // Vidéo à relancer quand l'application / l'onglet redevient visible.
+  const resumeIdRef = useRef(null);
+  const feedVisibleRef = useRef(true);
+  const lastAutoplayRef = useRef(null);
+
+  // Clé stable : ne change que si la liste des publications change vraiment
+  // (et non à chaque like ou commentaire), pour ne pas relancer les effets.
+  const feedKey = visibleVideos.map((video) => String(video.id)).join("|");
+
+  const getElement = (id) =>
+    id == null ? null : playback.videoRefs?.current?.[id] || null;
+
+  const pauseAll = () => {
+    const refs = playback.videoRefs?.current || {};
+
+    Object.entries(refs).forEach(([id, element]) => {
+      if (!element) return;
+
+      if (
+        String(id) === String(activeIdRef.current) &&
+        !element.paused
+      ) {
+        resumeIdRef.current = id;
+      }
+
+      element.pause();
+    });
+  };
+
+  const resumeActive = () => {
+    if (!feedVisibleRef.current || document.hidden) return;
+
+    const id = resumeIdRef.current;
+    if (id == null) return;
+
+    resumeIdRef.current = null;
+    getElement(id)?.play?.().catch(() => {});
+  };
 
   const goToNext = (currentId) => {
     if (currentId == null) return false;
@@ -188,10 +232,35 @@ export function VideosTab({ onRewardPoints, onExit }) {
     return true;
   };
 
-  // Pause / reprise de la vidéo active.
+  // Pause / reprise de la vidéo active (directement sur l'élément).
   const toggleActivePlayback = () => {
     if (activeId == null) return;
-    playback.togglePlay(activeId);
+
+    const element = getElement(activeId);
+
+    if (element) {
+      if (element.paused) element.play().catch(() => {});
+      else element.pause();
+      return;
+    }
+
+    playback.togglePlay?.(activeId);
+  };
+
+  const pauseActive = () => {
+    getElement(activeId)?.pause();
+  };
+
+  const resumeActiveVideo = () => {
+    getElement(activeId)?.play?.().catch(() => {});
+  };
+
+  const muteActive = () => {
+    if (!playback.muted) playback.toggleMute();
+  };
+
+  const unmuteActive = () => {
+    if (playback.muted) playback.toggleMute();
   };
 
   // Un seul like par commande mains libres.
@@ -224,7 +293,8 @@ export function VideosTab({ onRewardPoints, onExit }) {
     playback.toggleFullscreen(targetId);
   };
 
-  // Identifier la publication visible à au moins 60 %.
+  // Identifier la publication visible à au moins 60 %
+  // et couper immédiatement celles qui sortent de l'écran.
   useEffect(() => {
     const root = scrollRef.current;
 
@@ -233,26 +303,38 @@ export function VideosTab({ onRewardPoints, onExit }) {
       return;
     }
 
+    ratiosRef.current = {};
+
     const observer = new IntersectionObserver(
       (entries) => {
-        const visibleEntry = entries
-          .filter(
-            (entry) =>
-              entry.isIntersecting &&
-              entry.intersectionRatio >= 0.6
-          )
-          .sort(
-            (a, b) =>
-              b.intersectionRatio - a.intersectionRatio
-          )[0];
+        entries.forEach((entry) => {
+          const id = entry.target.dataset.videoId;
 
-        if (visibleEntry) {
-          setActiveId(visibleEntry.target.dataset.videoId);
-        }
+          ratiosRef.current[id] = entry.isIntersecting
+            ? entry.intersectionRatio
+            : 0;
+
+          // Presque sortie de l'écran : on coupe tout de suite.
+          if (entry.intersectionRatio < 0.3) {
+            playback.videoRefs?.current?.[id]?.pause();
+          }
+        });
+
+        let bestId = null;
+        let bestRatio = 0;
+
+        Object.entries(ratiosRef.current).forEach(([id, ratio]) => {
+          if (ratio >= 0.6 && ratio > bestRatio) {
+            bestId = id;
+            bestRatio = ratio;
+          }
+        });
+
+        if (bestId != null) setActiveId(bestId);
       },
       {
         root,
-        threshold: [0.6],
+        threshold: [0, 0.3, 0.6, 1],
       }
     );
 
@@ -261,18 +343,30 @@ export function VideosTab({ onRewardPoints, onExit }) {
     });
 
     return () => observer.disconnect();
-  }, [visibleVideos]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [feedKey, loading]);
 
-  // Lire la vidéo active et mettre les autres en pause.
+  // Lire la vidéo active et mettre toutes les autres en pause.
   useEffect(() => {
     if (activeId == null) return;
 
     const refs = playback.videoRefs?.current || {};
+    const changed = lastAutoplayRef.current !== String(activeId);
+    lastAutoplayRef.current = String(activeId);
 
     Object.entries(refs).forEach(([id, element]) => {
       if (!element) return;
 
       if (String(id) === String(activeId)) {
+        // Lecture automatique seulement au changement de vidéo :
+        // une pause volontaire n'est pas annulée par un simple like.
+        if (!changed) return;
+
+        if (!feedVisibleRef.current || document.hidden) {
+          resumeIdRef.current = id;
+          return;
+        }
+
         if (element.ended) {
           element.currentTime = 0;
         }
@@ -282,16 +376,55 @@ export function VideosTab({ onRewardPoints, onExit }) {
         element.pause();
       }
     });
-    // Le hook de lecture gère également la visibilité.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeId, visibleVideos]);
+  }, [activeId, feedKey]);
+
+  // Pause quand l'application passe en arrière-plan ou que le flux n'est plus affiché.
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.hidden) pauseAll();
+      else resumeActive();
+    };
+
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    return () => {
+      document.removeEventListener(
+        "visibilitychange",
+        handleVisibility
+      );
+      pauseAll();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Le composant peut rester monté sous un autre onglet : on coupe alors la lecture.
+  useEffect(() => {
+    const node = rootRef.current;
+
+    if (!node) return undefined;
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        feedVisibleRef.current = entry.isIntersecting;
+
+        if (entry.isIntersecting) resumeActive();
+        else pauseAll();
+      },
+      { threshold: 0.1 }
+    );
+
+    observer.observe(node);
+
+    return () => observer.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading]);
 
   // Passer automatiquement à la vidéo suivante à la fin.
   useEffect(() => {
     if (activeId == null) return;
 
-    const element =
-      playback.videoRefs?.current?.[activeId];
+    const element = getElement(activeId);
 
     if (!element) return;
 
@@ -310,7 +443,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
       element.removeEventListener("ended", handleEnded);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeId, visibleVideos]);
+  }, [activeId, feedKey]);
 
   // Afficher les images pendant six secondes avant de passer à la suite.
   useEffect(() => {
@@ -325,19 +458,37 @@ export function VideosTab({ onRewardPoints, onExit }) {
     }
 
     const timer = setTimeout(() => {
-      goToNext(activeId);
+      if (feedVisibleRef.current && !document.hidden) {
+        goToNext(activeId);
+      }
     }, IMAGE_DURATION_MS);
 
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeId, visibleVideos]);
+  }, [activeId, feedKey]);
 
   if (loading) {
     return <FeedLoading />;
   }
 
+  // Économie de données : seule la vidéo active est chargée en entier,
+  // la suivante en métadonnées, les autres ne sont pas téléchargées.
+  const activeIndex = Math.max(
+    0,
+    visibleVideos.findIndex(
+      (video) => String(video.id) === String(activeId)
+    )
+  );
+
+  const getLoadMode = (index) => {
+    if (index === activeIndex) return "active";
+    if (index === activeIndex + 1) return "preload";
+    return "none";
+  };
+
   return (
     <div
+      ref={rootRef}
       className="relative flex h-screen w-full flex-col overflow-hidden bg-black"
       style={{ height: "100dvh" }}
     >
@@ -390,7 +541,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
             <FeedEmpty onPublish={openUpload} />
           </div>
         ) : (
-          visibleVideos.map((video) => (
+          visibleVideos.map((video, index) => (
             <div
               key={video.id}
               ref={(node) => {
@@ -412,6 +563,8 @@ export function VideosTab({ onRewardPoints, onExit }) {
                 user={user}
                 playback={playback}
                 actions={actions}
+                isActive={String(video.id) === String(activeId)}
+                loadMode={getLoadMode(index)}
                 hideVolumeControl
                 onShowViewers={() =>
                   setViewersVideoId(video.id)
@@ -425,11 +578,16 @@ export function VideosTab({ onRewardPoints, onExit }) {
       {/* Commandes vocales, gestes de la main et mouvements de tête */}
       <HandsFreeControls
         activeVideoId={activeId}
+        isMuted={playback.muted}
         onNext={() => goToNext(activeId)}
         onPrevious={() => goToPrevious(activeId)}
         onLike={likeActiveVideo}
         onTogglePlayback={toggleActivePlayback}
+        onPause={pauseActive}
+        onResume={resumeActiveVideo}
         onToggleMute={playback.toggleMute}
+        onMute={muteActive}
+        onUnmute={unmuteActive}
         onOpenComments={openActiveComments}
         onToggleFullscreen={toggleActiveFullscreen}
       />
