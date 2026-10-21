@@ -1,9 +1,12 @@
-import { supabase } from "../supabaseClient";
+import { callSocial } from "./notifyInteraction.js";
 
 /**
  * Préférences push BAARO.
- * Plus de notion "crypto wallet" — catégorie "earnings"
- * (gains créateur, tips, payouts, économie réelle XOF).
+ * Catégorie "earnings" (gains créateur, tips, payouts, économie réelle XOF).
+ *
+ * Toutes les lectures / écritures serveur passent par /api/social
+ * (actions "get_preferences" et "save_preferences"). Ce module ne touche
+ * plus directement à la table notification_preferences.
  */
 export const DEFAULT_NOTIFICATION_PREFERENCES = {
   push_enabled: true,
@@ -41,37 +44,18 @@ function saveLocal(prefs) {
 
 export async function getNotificationPreferences() {
   try {
-    const userRes = await supabase.auth.getUser();
-    const user = userRes.data?.user;
-    if (!user) {
+    const result = await callSocial("get_preferences");
+    if (!result) {
       return { ok: true, data: loadLocal(), local: true };
     }
 
-    const res = await supabase
-      .from("notification_preferences")
-      .select("*")
-      .eq("user_id", user.id)
-      .maybeSingle();
-
-    if (res.error) {
-      console.error("getNotificationPreferences:", res.error);
-      return {
-        ok: true,
-        data: loadLocal(),
-        local: true,
-        error: res.error.message,
-      };
+    if (!result.ok) {
+      const message = result.body?.error || `HTTP ${result.status}`;
+      console.error("getNotificationPreferences:", message);
+      return { ok: true, data: loadLocal(), local: true, error: message };
     }
 
-    let row = res.data || {};
-    if (row.wallet !== undefined && row.earnings === undefined) {
-      row = { ...row, earnings: row.wallet };
-    }
-
-    const data = res.data
-      ? { ...DEFAULT_NOTIFICATION_PREFERENCES, ...row, user_id: user.id }
-      : { user_id: user.id, ...DEFAULT_NOTIFICATION_PREFERENCES };
-
+    const data = { ...DEFAULT_NOTIFICATION_PREFERENCES, ...result.body.data };
     delete data.wallet;
     saveLocal(data);
     return { ok: true, data };
@@ -98,24 +82,15 @@ export async function saveNotificationPreferences(patch) {
     delete merged.wallet;
     saveLocal(merged);
 
-    const userRes = await supabase.auth.getUser();
-    const user = userRes.data?.user;
-    if (!user) {
+    const result = await callSocial("save_preferences", { preferences: safe });
+    if (!result) {
       return { ok: true, local: true };
     }
 
-    const res = await supabase.from("notification_preferences").upsert(
-      {
-        user_id: user.id,
-        ...safe,
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: "user_id" }
-    );
-
-    if (res.error) {
-      console.error("saveNotificationPreferences:", res.error);
-      return { ok: true, local: true, error: res.error.message };
+    if (!result.ok) {
+      const message = result.body?.error || `HTTP ${result.status}`;
+      console.error("saveNotificationPreferences:", message);
+      return { ok: true, local: true, error: message };
     }
     return { ok: true };
   } catch (e) {
