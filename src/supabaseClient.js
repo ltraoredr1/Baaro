@@ -71,6 +71,11 @@ export const sendFriendRequest = async (targetUserId) => {
     { follower_id: user_id, followed_id: targetUserId, status: "pending", is_friend: true },
     { onConflict: "follower_id,followed_id" }
   ).select().single();
+  if (!error) {
+    import("./lib/notifyInteraction.js").then((m) =>
+      m.notifyInteraction({ contentType: "user", interactionType: "friend_request", targetId: targetUserId })
+    );
+  }
   return { data, error };
 };
 
@@ -114,7 +119,7 @@ export const getFriends = async () => {
     .select("follower_id,followed_id")
     .eq("is_friend", true)
     .eq("status", "accepted")
-    .or(`follower_id.eq.\( {user_id},followed_id.eq. \){user_id}`);
+    .or(`follower_id.eq.${user_id},followed_id.eq.${user_id}`);
   const ids = (data || []).map((row) => (row.follower_id === user_id ? row.followed_id : row.follower_id));
   return { data: [...new Set(ids)], error };
 };
@@ -155,19 +160,9 @@ export const getUserById = async (user_id) => {
 
 // ========== COMMENTS FIX 7/12 ==========
 export const addComment = async ({ post_id, video_id, text }) => {
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-  if (!session?.access_token) throw new Error("Non authentifié");
-  const res = await fetch(`/api/social`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${session.access_token}`,
-    },
-    body: JSON.stringify({ action: "comment", post_id, video_id, text }),
-  });
-  const json = await res.json();
-  if (!json.ok) throw new Error(json.error);
-  return json;
+  const { callSocial } = await import("./lib/notifyInteraction.js");
+  const result = await callSocial("comment", { post_id, video_id, text });
+  if (!result) throw new Error("Non authentifié");
+  if (!result.ok) throw new Error(result.body?.error || `Erreur serveur (${result.status})`);
+  return result.body;
 };
