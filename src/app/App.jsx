@@ -8,6 +8,7 @@ import InvitePage from "../pages/InvitePage.jsx";
 import { PrivacyPage } from "../components/PrivacyPage.jsx";
 import { LegalPage } from "../components/LegalPage.jsx";
 import { ErrorBoundary } from "../components/ErrorBoundary.jsx";
+import { callSocial } from "../lib/notifyInteraction.js";
 
 function InviteRouteGate() {
   const { code } = useParams();
@@ -38,7 +39,7 @@ function AppShell() {
 
   // 1. Invite en attente après login
   useEffect(() => {
-    if (loading ||!user?.id) return;
+    if (loading || !user?.id) return;
     try {
       const pending = localStorage.getItem("pending_invite_code");
       if (pending) {
@@ -83,13 +84,33 @@ function AppShell() {
     };
   }, [navigate]);
 
+  // 3. Stories programmées arrivées à échéance : notifie abonnés et amis (sans cron).
+  //    Le serveur est idempotent et ignore les appels trop rapprochés.
+  useEffect(() => {
+    if (loading || !user?.id || user.is_anonymous === true) return;
+
+    const sweep = () => {
+      if (document.visibilityState === "hidden") return;
+      callSocial("publish_due").catch(() => {});
+    };
+
+    sweep();
+    const timer = setInterval(sweep, 60_000);
+    document.addEventListener("visibilitychange", sweep);
+
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", sweep);
+    };
+  }, [user?.id, user?.is_anonymous, loading]);
+
   if (loading) return <LoadingScreen />;
 
   // Auth simple et unique : plus de guestOk en sessionStorage
-  const isRealUser = Boolean(user?.id && user.is_anonymous!== true);
+  const isRealUser = Boolean(user?.id && user.is_anonymous !== true);
   const isAllowedGuest = Boolean(isGuest || user?.is_anonymous);
 
-  if (!isRealUser &&!isAllowedGuest) {
+  if (!isRealUser && !isAllowedGuest) {
     return <AuthScreen />;
   }
 
