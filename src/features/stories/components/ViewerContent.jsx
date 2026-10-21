@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { PollDisplay } from '../../../components/PollDisplay.jsx';
 import ProductCard from '../../../components/ProductCard.jsx';
 import { RichTextRenderer } from '../../../components/RichTextRenderer.jsx';
@@ -8,6 +8,11 @@ import { recordProductEvent } from '../api/storiesApi.js';
 import { useLiveProduct } from '../hooks/useLiveProduct.js';
 import { ProductCTA } from './ProductCTA.jsx';
 import { StickerLayer } from './StickerLayer.jsx';
+import { supabase, followUser, unfollowUser, sendFriendRequest, acceptFriendRequest } from '../../../supabaseClient.js';
+
+const pill = 'flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium backdrop-blur-md border disabled:opacity-60';
+const pillOff = `${pill} bg-white/15 text-white border-white/25 hover:bg-white/25`;
+const pillOn = `${pill} bg-amber-400/90 text-black border-amber-300`;
 
 export function ViewerContent({ story, userId, viewer, cart, videoRef, readOnly, actions, onOpenProfile, onOpenProduct }) {
   const { mediaLoading, setMediaLoading, setProgress, translatedCaption, setTranslatedCaption, next, setIsPaused } = viewer;
@@ -27,6 +32,48 @@ export function ViewerContent({ story, userId, viewer, cart, videoRef, readOnly,
   const hasMedia = story.media_url && story.media_type !== 'text';
   const hasBackground = !hasMedia && !!story.background;
   const hasStack = story.stickers?.length > 0 || story.poll?.question;
+
+  // Abonnement / ami : seulement sur la story d'un autre, hors highlights
+  const authorId = story.author_id;
+  const showRelation = !readOnly && !!userId && !!authorId && !isMine;
+  const [rel, setRel] = useState(null); // { following, friend: 'none'|'pending_out'|'pending_in'|'friends' }
+  const [relBusy, setRelBusy] = useState(false);
+
+  const loadRelation = useCallback(async () => {
+    if (!showRelation) return null;
+    const { data } = await supabase
+      .from('follows')
+      .select('follower_id,followed_id,status,is_friend')
+      .or(`and(follower_id.eq.${userId},followed_id.eq.${authorId}),and(follower_id.eq.${authorId},followed_id.eq.${userId})`);
+    const mine = data?.find((r) => r.follower_id === userId);
+    const theirs = data?.find((r) => r.follower_id === authorId);
+    let friend = 'none';
+    if ((mine?.is_friend && mine.status === 'accepted') || (theirs?.is_friend && theirs.status === 'accepted')) friend = 'friends';
+    else if (mine?.is_friend && mine.status === 'pending') friend = 'pending_out';
+    else if (theirs?.is_friend && theirs.status === 'pending') friend = 'pending_in';
+    return { following: mine?.status === 'accepted', friend };
+  }, [showRelation, userId, authorId]);
+
+  useEffect(() => {
+    let alive = true;
+    setRel(null);
+    loadRelation().then((r) => alive && setRel(r)).catch(() => {});
+    return () => { alive = false; };
+  }, [loadRelation]);
+
+  const runRelation = async (action) => {
+    if (relBusy) return;
+    setRelBusy(true);
+    try {
+      await action();
+      setRel(await loadRelation());
+    } catch {
+      /* l'état affiché reste celui de la base */
+    } finally {
+      setRelBusy(false);
+    }
+  };
+  const showRelButtons = showRelation && !!rel;
 
   return (
     <div
@@ -87,8 +134,37 @@ export function ViewerContent({ story, userId, viewer, cart, videoRef, readOnly,
         </div>
       )}
 
+      {showRelButtons && (
+        <div className="absolute top-[76px] left-4 z-30 flex items-center gap-2" onClick={stop}>
+          {rel.friend === 'friends' && <span className={pillOn}>✓ Amis</span>}
+
+          {rel.friend !== 'friends' && rel.friend !== 'pending_out' && (
+            <button
+              type="button"
+              disabled={relBusy}
+              className={rel.following ? pillOn : pillOff}
+              onClick={() => runRelation(() => (rel.following ? unfollowUser(authorId) : followUser(authorId)))}
+            >
+              {rel.following ? '✓ Abonné' : "+ S'abonner"}
+            </button>
+          )}
+
+          {rel.friend === 'none' && (
+            <button type="button" disabled={relBusy} className={pillOff} onClick={() => runRelation(() => sendFriendRequest(authorId))}>
+              Ajouter en ami
+            </button>
+          )}
+          {rel.friend === 'pending_in' && (
+            <button type="button" disabled={relBusy} className={pillOn} onClick={() => runRelation(() => acceptFriendRequest(authorId))}>
+              Accepter
+            </button>
+          )}
+          {rel.friend === 'pending_out' && <span className={pillOff}>Demande envoyée</span>}
+        </div>
+      )}
+
       {product && (
-        <div className="absolute top-20 inset-x-6 z-30 space-y-2" onClick={stop}>
+        <div className={`absolute ${showRelButtons ? 'top-32' : 'top-20'} inset-x-6 z-30 space-y-2`} onClick={stop}>
           <ProductCard
             product={product}
             quantity={cart.quantities[product.id] || 0}
