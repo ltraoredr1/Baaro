@@ -137,7 +137,9 @@ export default async function handler(req, res) {
       Key: key,
       Metadata: { "baaro-user-id": user.id },
     });
-    const uploadUrl = await getSignedUrl(r2.client, command, { expiresIn: 900 });
+    // Lien valable plus longtemps pour les gros fichiers (connexion lente = envoi long).
+    const expiresIn = size > 50 * 1024 * 1024 ? 3600 : 900;
+    const uploadUrl = await getSignedUrl(r2.client, command, { expiresIn });
     return res.status(200).json({
       ok: true,
       uploadUrl,
