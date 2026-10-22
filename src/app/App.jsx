@@ -18,7 +18,6 @@ function InviteRouteGate() {
 
   useEffect(() => {
     if (!code || loading) return;
-    // Si pas connecté, on garde le code pour après login
     if (!user?.id) {
       try { localStorage.setItem("pending_invite_code", code); } catch {}
     }
@@ -55,10 +54,8 @@ function AppShell() {
   useEffect(() => {
     let listener;
     let cancelled = false;
-
     const setup = async () => {
       try {
-        // Dynamic import pour ne pas crasher sur web
         const { App: CapApp } = await import('@capacitor/app');
         if (cancelled) return;
         const l = await CapApp.addListener('appUrlOpen', (event) => {
@@ -73,38 +70,24 @@ function AppShell() {
             if (code) navigate(`/invite/${code}`, { replace: true });
           } catch {}
         });
-        // Démonté pendant l'await : on retire tout de suite l'écouteur.
-        if (cancelled) {
-          l.remove();
-          return;
-        }
+        if (cancelled) { l.remove(); return; }
         listener = l;
-      } catch {
-        // Pas sur mobile natif, on ignore
-      }
+      } catch {}
     };
     setup();
-
-    return () => {
-      cancelled = true;
-      listener?.remove();
-    };
+    return () => { cancelled = true; listener?.remove(); };
   }, [navigate]);
 
-  // 3. Stories programmées arrivées à échéance : notifie abonnés et amis (sans cron).
-  //    Le serveur est idempotent et ignore les appels trop rapprochés.
+  // 3. Stories programmées
   useEffect(() => {
     if (loading || !user?.id || user.is_anonymous === true) return;
-
     const sweep = () => {
       if (document.visibilityState === "hidden") return;
       callSocial("publish_due").catch(() => {});
     };
-
     sweep();
     const timer = setInterval(sweep, 60_000);
     document.addEventListener("visibilitychange", sweep);
-
     return () => {
       clearInterval(timer);
       document.removeEventListener("visibilitychange", sweep);
@@ -113,7 +96,6 @@ function AppShell() {
 
   if (loading) return <LoadingScreen />;
 
-  // Auth simple et unique : plus de guestOk en sessionStorage
   const isRealUser = Boolean(user?.id && user.is_anonymous !== true);
   const isAllowedGuest = Boolean(isGuest || user?.is_anonymous);
 
@@ -129,16 +111,40 @@ function AppShell() {
 }
 
 export default function App() {
-  // Réglages natifs (anti-capture, biométrie) appliqués dès le démarrage,
-  // sur toutes les routes, sans attendre l'ouverture de l'onglet Réglages.
   const { settings } = useSettings();
 
   useEffect(() => {
     void applyNativeSettings(settings).catch((e) =>
       console.warn("[app] native settings:", e)
     );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings.block_screenshots, settings.biometric]);
+
+  // ✅ CAPGO LIVE UPDATE - C'est ça que j'ajoute
+  useEffect(() => {
+    const initCapgo = async () => {
+      try {
+        // On importe seulement sur natif, pas sur web
+        const { CapacitorUpdater } = await import('@capgo/capacitor-updater');
+        const { Capacitor } = await import('@capacitor/core');
+        
+        if (!Capacitor.isNativePlatform()) return;
+
+        // Dit à Capgo que l'app est prête, pas de bug
+        await CapacitorUpdater.notifyAppReady();
+        
+        console.log("[Capgo] App ready, listening for updates...");
+
+        // Écoute les mises à jour
+        CapacitorUpdater.addListener('updateAvailable', async () => {
+          console.log("[Capgo] Update available, downloading...");
+        });
+
+      } catch (e) {
+        console.log("[Capgo] Not on native:", e.message);
+      }
+    };
+    initCapgo();
+  }, []);
 
   return (
     <ErrorBoundary>
