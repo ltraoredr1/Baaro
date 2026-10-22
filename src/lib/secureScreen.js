@@ -1,8 +1,9 @@
 /**
  * Protection anti-capture d'écran
- * - Android natif : FLAG_SECURE via @capacitor-community/privacy-screen
- *   (import dynamique : le plugin n'est jamais chargé sur le web, le build Vercel ne casse pas)
- * - Web / PWA : flou (classe .privacy-blur de index.css) quand l'onglet perd le focus.
+ * - Natif (Android / iOS) : @capacitor-community/privacy-screen
+ *   (FLAG_SECURE sur Android ; masquage de l'aperçu multitâche sur iOS).
+ *   Import dynamique : le plugin n'est jamais chargé sur le web, le build Vercel ne casse pas.
+ * - Web / PWA : flou quand l'onglet perd le focus.
  *   C'est une dissuasion, pas un vrai blocage.
  *
  * enableSecureScreen / disableSecureScreen sont idempotents et laissent
@@ -11,13 +12,12 @@
 import { Capacitor } from "@capacitor/core";
 
 const BLUR_CLASS = "privacy-blur";
-const ROOT_ID = "root";
+const OVERLAY_ID = "privacy-overlay";
 
 let detachWeb = null;
 
 /**
- * Active la protection : FLAG_SECURE sur Android natif,
- * flou de toute l'application sur le web.
+ * Active la protection : plugin natif, ou flou de toute l'application sur le web.
  */
 export async function enableSecureScreen() {
   if (Capacitor.isNativePlatform()) {
@@ -40,24 +40,52 @@ export async function disableSecureScreen() {
 }
 
 /**
- * Protection web : floute un élément quand la page perd le focus.
- * Sans elementId (ou si l'élément n'existe pas dans la page courante,
- * par exemple dans les Réglages), c'est toute l'application (#root) qui est floutée.
- * On ne met jamais le filtre sur <html> : un filter y casserait les éléments
- * position: fixed (navigation basse).
+ * Voile flouté plein écran ajouté à <body>.
+ * Contrairement à un filter sur #root, il couvre AUSSI les modales et toasts
+ * rendus en portail hors de #root, et ne casse pas les éléments position: fixed
+ * (un filter sur un ancêtre devient leur bloc conteneur).
+ */
+function showOverlay() {
+  if (document.getElementById(OVERLAY_ID)) return;
+  const el = document.createElement("div");
+  el.id = OVERLAY_ID;
+  el.setAttribute("aria-hidden", "true");
+  Object.assign(el.style, {
+    position: "fixed",
+    inset: "0",
+    zIndex: "2147483647",
+    background: "rgba(0,0,0,.35)",
+    backdropFilter: "blur(24px)",
+    webkitBackdropFilter: "blur(24px)",
+    pointerEvents: "none",
+  });
+  document.body.appendChild(el);
+}
+
+function hideOverlay() {
+  document.getElementById(OVERLAY_ID)?.remove();
+}
+
+/**
+ * Protection web : floute quand la page perd le focus.
+ * - Avec elementId (et si l'élément existe) : seul cet élément reçoit la classe .privacy-blur.
+ * - Sinon : voile flouté sur toute la page (voir showOverlay).
  * Retourne une fonction de nettoyage.
  */
 export function attachWebPrivacyBlur(elementId = "chat-content") {
   if (typeof window === "undefined") return () => {};
 
-  const getEl = () =>
-    (elementId ? document.getElementById(elementId) : null) ||
-    document.getElementById(ROOT_ID);
+  const getTarget = () => (elementId ? document.getElementById(elementId) : null);
 
-  const blur = () => getEl()?.classList.add(BLUR_CLASS);
+  const blur = () => {
+    const target = getTarget();
+    if (target) target.classList.add(BLUR_CLASS);
+    else showOverlay();
+  };
+
   const unblur = () => {
-    document.getElementById(ROOT_ID)?.classList.remove(BLUR_CLASS);
-    if (elementId) document.getElementById(elementId)?.classList.remove(BLUR_CLASS);
+    getTarget()?.classList.remove(BLUR_CLASS);
+    hideOverlay();
   };
 
   const onVisibility = () => {
