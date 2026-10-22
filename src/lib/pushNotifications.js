@@ -754,3 +754,10 @@ export async function pruneCurrentUserPushTokens() {
     };
   }
 }
+
+/**
+ * Indique si l'utilisateur a volontairement désactivé les notifications.
+ */
+export function isPushOptedOut() {
+  return isOptedOut();
+}
