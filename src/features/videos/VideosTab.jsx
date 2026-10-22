@@ -6,6 +6,7 @@ import {
   FeedError,
   FeedLoading,
 } from "./components/FeedStatus.jsx";
+import CreateVideoFab from "./components/CreateVideoFab.jsx";
 import HandsFreeControls from "./components/HandsFreeControls.jsx";
 import UploadModal from "./components/UploadModal.jsx";
 import VideoCard, { isImageVideo } from "./components/VideoCard.jsx";
@@ -590,6 +591,17 @@ export function VideosTab({ onRewardPoints, onExit }) {
         onUnmute={unmuteActive}
         onOpenComments={openActiveComments}
         onToggleFullscreen={toggleActiveFullscreen}
+      />
+
+      {/* Bouton flottant déplaçable : créer une vidéo */}
+      <CreateVideoFab
+        onClick={openUpload}
+        hidden={
+          !!creator.showUpload ||
+          studioOpen ||
+          !!commentsState.showComments ||
+          !!viewersVideoId
+        }
       />
 
       {/* Commentaires */}
