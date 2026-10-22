@@ -1,20 +1,39 @@
+import { useId } from "react";
 import { User, ChevronDown, ChevronUp } from "lucide-react";
 import { COLORS } from "../../theme.js";
 
+/**
+ * Corrections :
+ * - Toggle cassé en langues RTL (arabe, n'ko) : la pastille sortait du bouton.
+ *   Le bouton est forcé en dir="ltr".
+ * - Toggle : aria-label / aria-labelledby, prop `disabled`.
+ * - Chevron des lignes d'action tourné dans le bon sens en RTL.
+ * - Sections repliables : aria-controls + région associée.
+ */
 export function Toggle({
   enabled,
   onChange,
+  disabled = false,
+  label,
+  labelledBy,
 }: {
   enabled: boolean;
   onChange: (v: boolean) => void;
+  disabled?: boolean;
+  label?: string;
+  labelledBy?: string;
 }) {
   return (
     <button
       type="button"
       role="switch"
+      dir="ltr"
       aria-checked={enabled}
+      aria-label={label}
+      aria-labelledby={labelledBy}
+      disabled={disabled}
       onClick={() => onChange(!enabled)}
-      className="relative inline-flex h-[30px] w-[52px] shrink-0 items-center rounded-full transition-colors"
+      className="relative inline-flex h-[30px] w-[52px] shrink-0 items-center rounded-full transition-colors disabled:opacity-50"
       style={{
         backgroundColor: enabled ? COLORS.teal : "rgba(255,255,255,0.12)",
       }}
@@ -32,26 +51,39 @@ export function ToggleRow({
   desc,
   enabled,
   onChange,
+  disabled = false,
 }: {
   title: string;
   desc: string;
   enabled: boolean;
   onChange: (v: boolean) => void;
+  disabled?: boolean;
 }) {
+  const titleId = useId();
+
   return (
     <div
       className="flex items-center justify-between gap-3 py-2.5 border-t first:border-t-0"
       style={{ borderColor: COLORS.border }}
     >
       <div className="min-w-0">
-        <p className="text-[13.5px] font-medium" style={{ color: COLORS.ivory }}>
+        <p
+          id={titleId}
+          className="text-[13.5px] font-medium"
+          style={{ color: COLORS.ivory }}
+        >
           {title}
         </p>
         <p className="text-[11px] mt-0.5" style={{ color: COLORS.muted }}>
           {desc}
         </p>
       </div>
-      <Toggle enabled={enabled} onChange={onChange} />
+      <Toggle
+        enabled={!!enabled}
+        onChange={onChange}
+        disabled={disabled}
+        labelledBy={titleId}
+      />
     </div>
   );
 }
@@ -77,7 +109,7 @@ export function ActionRow({
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className="w-full flex items-center gap-3 py-3.5 text-left disabled:opacity-50"
+      className="w-full flex items-center gap-3 py-3.5 text-start disabled:opacity-50"
     >
       <div
         className="grid h-8 w-8 place-items-center rounded-lg shrink-0"
@@ -90,7 +122,7 @@ export function ActionRow({
       </span>
       <ChevronDown
         size={14}
-        className="-rotate-90"
+        className="-rotate-90 rtl:rotate-90"
         style={{ color: COLORS.muted, opacity: 0.6 }}
       />
     </button>
@@ -116,6 +148,8 @@ export function CollapsibleSection({
   onToggle: () => void;
   children: React.ReactNode;
 }) {
+  const panelId = `settings-panel-${id}`;
+
   return (
     <section
       className="rounded-2xl border overflow-hidden"
@@ -125,8 +159,9 @@ export function CollapsibleSection({
       <button
         type="button"
         onClick={onToggle}
-        className="w-full px-4 py-4 flex items-center gap-3 text-left"
+        className="w-full px-4 py-4 flex items-center gap-3 text-start"
         aria-expanded={open}
+        aria-controls={panelId}
       >
         <div
           className="grid h-9 w-9 place-items-center rounded-xl shrink-0"
@@ -158,6 +193,8 @@ export function CollapsibleSection({
       </button>
       {open && (
         <div
+          id={panelId}
+          role="region"
           className="px-4 pb-5 pt-1 flex flex-col gap-3 border-t"
           style={{ borderColor: COLORS.border }}
         >
