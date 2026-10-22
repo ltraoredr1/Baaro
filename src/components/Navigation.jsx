@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { useApp } from "../contexts/AppContext.jsx";
 import { COLORS as THEME_COLORS } from "../theme.js";
+import { useFeedTabPulse } from "../lib/feedTabRefresh.jsx";
 
 const FALLBACK = {
   bg: "#0B1220",
@@ -55,6 +56,9 @@ export function Navigation({ activeTab, setActiveTab }) {
   const { t } = useTranslation();
   const [moreOpen, setMoreOpen] = useState(false);
 
+  // Animation de l'icône du Fil (double appui sur l'onglet Feed uniquement)
+  const feedPulse = useFeedTabPulse();
+
   useApp();
 
   const goTo = (id) => {
@@ -74,6 +78,7 @@ export function Navigation({ activeTab, setActiveTab }) {
         {MAIN_ITEMS.map((item) => {
           const Icon = item.icon;
           const isActive = activeTab === item.id;
+          const pulsing = item.id === "feed" && feedPulse;
 
           return (
             <button
@@ -89,7 +94,12 @@ export function Navigation({ activeTab, setActiveTab }) {
                 borderWidth: isActive ? "1px" : "0px",
               }}
             >
-              <Icon size={19} className={`transition-transform group-hover:scale-110 ${isActive ? "text-amber-400" : "text-white/70"}`} />
+              <Icon
+                size={19}
+                className={`${
+                  pulsing ? "baaro-tab-pulse" : "transition-transform group-hover:scale-110"
+                } ${isActive ? "text-amber-400" : "text-white/70"}`}
+              />
 
               <span className={`font-semibold text-xs tracking-wide ${isActive ? "font-bold" : ""}`}>
                 {t(`nav.${item.id}`, item.label)}
@@ -141,6 +151,7 @@ export function Navigation({ activeTab, setActiveTab }) {
           {MAIN_ITEMS.map((item) => {
             const Icon = item.icon;
             const isActive = activeTab === item.id;
+            const pulsing = item.id === "feed" && feedPulse;
 
             return (
               <button
@@ -154,7 +165,9 @@ export function Navigation({ activeTab, setActiveTab }) {
                 }}
               >
                 <div className={`p-1 rounded-xl transition-all ${isActive ? "bg-amber-400/15 shadow-inner" : ""}`}>
-                  <Icon size={19} />
+                  <span className={pulsing ? "baaro-tab-pulse" : "inline-flex"}>
+                    <Icon size={19} />
+                  </span>
                 </div>
                 <span className="text-[9px] sm:text-[10px] font-semibold tracking-tight">
                   {t(`nav.${item.id}`, item.label)}
