@@ -3,7 +3,7 @@ import { Capacitor } from "@capacitor/core";
 import { SpeechRecognition } from "@capacitor-community/speech-recognition";
 import { FilesetResolver, HandLandmarker, FaceLandmarker } from "@mediapipe/tasks-vision";
 import {
-  Mic, MicOff, Camera, CameraOff, Sparkles,
+  Mic, MicOff, Camera, CameraOff, Sparkles, X,
 } from "lucide-react";
 
 const VISION_WASM =
@@ -92,6 +92,17 @@ export default function HandsFreeControls({
   const [cameraEnabled, setCameraEnabled] = useState(false);
   const [status, setStatus] = useState("Mode mains libres désactivé");
   const [error, setError] = useState("");
+  const [expanded, setExpanded] = useState(false);
+  const [flash, setFlash] = useState("");
+
+  // Panneau fermé : on affiche brièvement l'action reconnue.
+  useEffect(() => {
+    if (expanded) return undefined;
+    if (!/^(Commande|Geste|Tête)/.test(status)) return undefined;
+    setFlash(status);
+    const timer = setTimeout(() => setFlash(""), 1600);
+    return () => clearTimeout(timer);
+  }, [status, expanded]);
 
   const videoRef = useRef(null);
   const streamRef = useRef(null);
@@ -508,8 +519,10 @@ export default function HandsFreeControls({
     };
   }, [cameraEnabled, runAction]);
 
+  const active = voiceEnabled || cameraEnabled;
+
   return (
-    <section className="fixed bottom-24 left-3 z-[60] w-[min(290px,calc(100vw-24px))] rounded-2xl border border-white/15 bg-zinc-950/95 p-3 text-white shadow-2xl backdrop-blur-xl">
+    <>
       {/* Hors écran plutôt que display:none, sinon certains WebView refusent de lire le flux. */}
       <video
         ref={videoRef}
@@ -527,36 +540,81 @@ export default function HandsFreeControls({
         }}
       />
 
-      <div className="mb-3 flex items-center gap-2">
-        <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-yellow-400 text-black">
-          <Sparkles size={19} />
-        </span>
-        <div className="min-w-0 flex-1">
-          <p className="text-sm font-bold">BAARO mains libres</p>
-          <p className="truncate text-[11px] text-white/60">{status}</p>
+      {!expanded && (
+        <div className="fixed right-4 top-16 z-[60] flex flex-col items-end gap-1.5">
+          <button
+            type="button"
+            onClick={() => setExpanded(true)}
+            aria-label="Ouvrir les commandes mains libres"
+            className={`relative flex h-9 w-9 items-center justify-center rounded-full border border-white/20 shadow-lg backdrop-blur-xl transition-all active:scale-95 ${
+              active ? "bg-yellow-400 text-black" : "bg-black/40 text-white"
+            }`}
+          >
+            <Sparkles size={16} />
+            {active && (
+              <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 animate-pulse rounded-full bg-green-400 ring-2 ring-black/60" />
+            )}
+          </button>
+
+          {flash && (
+            <span className="max-w-[200px] truncate rounded-full bg-black/60 px-2.5 py-1 text-[10px] font-bold text-white backdrop-blur-md">
+              {flash}
+            </span>
+          )}
+
+          {error && (
+            <button
+              type="button"
+              onClick={() => setExpanded(true)}
+              className="max-w-[220px] rounded-xl bg-red-500/85 px-2.5 py-1.5 text-left text-[10px] font-bold text-white"
+            >
+              {error}
+            </button>
+          )}
         </div>
-      </div>
+      )}
 
-      <div className="grid grid-cols-2 gap-2">
-        <button type="button" onClick={() => { setError(""); setVoiceEnabled((v) => !v); }}
-          className={`flex items-center justify-center gap-2 rounded-xl px-2 py-3 text-xs font-bold ${voiceEnabled ? "bg-yellow-400 text-black" : "bg-white/10 text-white"}`}>
-          {voiceEnabled ? <Mic size={16} /> : <MicOff size={16} />}
-          {voiceEnabled ? "Voix active" : "Activer la voix"}
-        </button>
-        <button type="button" onClick={() => { setError(""); setCameraEnabled((v) => !v); }}
-          className={`flex items-center justify-center gap-2 rounded-xl px-2 py-3 text-xs font-bold ${cameraEnabled ? "bg-yellow-400 text-black" : "bg-white/10 text-white"}`}>
-          {cameraEnabled ? <Camera size={16} /> : <CameraOff size={16} />}
-          {cameraEnabled ? "Gestes actifs" : "Activer les gestes"}
-        </button>
-      </div>
+      {expanded && (
+        <section className="fixed right-3 top-28 z-[60] w-[min(250px,calc(100vw-24px))] rounded-2xl border border-white/15 bg-zinc-950/90 p-3 text-white shadow-2xl backdrop-blur-xl">
+          <div className="mb-3 flex items-center gap-2">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-yellow-400 text-black">
+              <Sparkles size={16} />
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-bold">BAARO mains libres</p>
+              <p className="truncate text-[10px] text-white/60">{status}</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setExpanded(false)}
+              aria-label="Fermer"
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white/10 active:scale-95"
+            >
+              <X size={14} />
+            </button>
+          </div>
 
-      {error && <p role="alert" className="mt-3 rounded-lg bg-red-500/15 p-2 text-xs text-red-200">{error}</p>}
+          <div className="grid grid-cols-2 gap-2">
+            <button type="button" onClick={() => { setError(""); setVoiceEnabled((v) => !v); }}
+              className={`flex flex-col items-center justify-center gap-1 rounded-xl px-2 py-2.5 text-[11px] font-bold ${voiceEnabled ? "bg-yellow-400 text-black" : "bg-white/10 text-white"}`}>
+              {voiceEnabled ? <Mic size={16} /> : <MicOff size={16} />}
+              {voiceEnabled ? "Voix active" : "Voix"}
+            </button>
+            <button type="button" onClick={() => { setError(""); setCameraEnabled((v) => !v); }}
+              className={`flex flex-col items-center justify-center gap-1 rounded-xl px-2 py-2.5 text-[11px] font-bold ${cameraEnabled ? "bg-yellow-400 text-black" : "bg-white/10 text-white"}`}>
+              {cameraEnabled ? <Camera size={16} /> : <CameraOff size={16} />}
+              {cameraEnabled ? "Gestes actifs" : "Gestes"}
+            </button>
+          </div>
 
-      <p className="mt-3 text-[10px] leading-relaxed text-white/50">
-        Voix : « vidéo suivante », « précédente », « j'aime », « pause », « reprendre »,
-        « couper le son », « activer le son », « commentaires », « plein écran ».
-        La caméra s'arrête lorsque les gestes sont désactivés.
-      </p>
-    </section>
+          {error && <p role="alert" className="mt-2 rounded-lg bg-red-500/15 p-2 text-[11px] text-red-200">{error}</p>}
+
+          <p className="mt-2 text-[10px] leading-relaxed text-white/50">
+            Voix : « suivante », « précédente », « j'aime », « pause », « reprendre »,
+            « couper le son », « activer le son », « commentaires », « plein écran ».
+          </p>
+        </section>
+      )}
+    </>
   );
 }
