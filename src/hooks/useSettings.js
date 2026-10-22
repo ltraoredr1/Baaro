@@ -1,148 +1,148 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { supabase } from "../supabaseClient.js";
 import {
   applySettingsToDom,
+  broadcastSettings,
   saveLocalSettings,
   loadLocalSettings,
+  loadCloudSettings,
   saveCloudSettings,
+  syncPrivateProfile,
+  sanitizeSettings,
   DEFAULT_SETTINGS,
+  SETTINGS_EVENT,
 } from "../lib/appSettings.js";
 
+/**
+ * Hook unique pour les réglages : état React + stockage local + DOM + cloud.
+ * Plusieurs composants peuvent l'utiliser : ils restent synchronisés
+ * grâce à l'événement "baaro:settings".
+ */
 export function useSettings() {
   const [settings, setSettings] = useState(() => loadLocalSettings());
   const [loading, setLoading] = useState(true);
 
-  // Applique immédiatement les réglages locaux à l'interface.
+  const settingsRef = useRef(settings);
+  const dirtyKeysRef = useRef(new Set());
+  const saveQueueRef = useRef(Promise.resolve());
+  const privateDirtyRef = useRef(false);
+
+  // Applique à l'interface à chaque changement.
   useEffect(() => {
+    settingsRef.current = settings;
     applySettingsToDom(settings);
   }, [settings]);
 
-  // Charge les réglages locaux, puis les réglages du compte connecté.
+  // Garde les autres instances du hook synchronisées.
+  useEffect(() => {
+    const onChange = (event) => {
+      const incoming = event?.detail;
+      if (!incoming) return;
+      if (JSON.stringify(incoming) === JSON.stringify(settingsRef.current)) return;
+      settingsRef.current = incoming;
+      setSettings(incoming);
+    };
+
+    window.addEventListener(SETTINGS_EVENT, onChange);
+    return () => window.removeEventListener(SETTINGS_EVENT, onChange);
+  }, []);
+
+  // Chargement initial + rechargement à la connexion.
   useEffect(() => {
     let active = true;
 
-    async function loadSettings() {
+    async function loadCloud(userId) {
+      const result = await loadCloudSettings(userId);
+
+      if (!active || !result.ok || !result.data) return;
+
+      const cloud = { ...result.data };
+      for (const key of dirtyKeysRef.current) delete cloud[key];
+
+      const merged = { ...settingsRef.current, ...cloud };
+
+      settingsRef.current = merged;
+      setSettings(merged);
+      saveLocalSettings(merged);
+      broadcastSettings(merged);
+    }
+
+    async function init() {
       try {
-        const localSettings = loadLocalSettings();
-
-        if (active) {
-          setSettings(localSettings);
-          applySettingsToDom(localSettings);
-        }
-
         const {
-          data: { user },
+          data: { session },
           error: authError,
-        } = await supabase.auth.getUser();
+        } = await supabase.auth.getSession();
 
         if (authError) {
           console.warn("[useSettings] Authentification :", authError.message);
           return;
         }
 
-        if (!user || !active) return;
-
-        const { data, error } = await supabase
-          .from("user_settings")
-          .select("*")
-          .eq("user_id", user.id)
-          .maybeSingle();
-
-        if (error) {
-          console.warn("[useSettings] Chargement cloud :", error.message);
-          return;
-        }
-
-        if (!data || !active) return;
-
-        // Ne fusionne que les réglages connus pour éviter de mettre
-        // des colonnes Supabase étrangères dans l'état de l'application.
-        const cloudSettings = {};
-
-        for (const key of Object.keys(DEFAULT_SETTINGS)) {
-          if (data[key] !== null && data[key] !== undefined) {
-            cloudSettings[key] = data[key];
-          }
-        }
-
-        const merged = {
-          ...localSettings,
-          ...cloudSettings,
-        };
-
-        if (!active) return;
-
-        setSettings(merged);
-        saveLocalSettings(merged);
-        applySettingsToDom(merged);
+        if (session?.user && active) await loadCloud(session.user.id);
       } catch (error) {
         console.warn("[useSettings] Chargement des réglages :", error);
       } finally {
+        dirtyKeysRef.current.clear();
         if (active) setLoading(false);
       }
     }
 
-    void loadSettings();
+    void init();
+
+    const { data: authListener } = supabase.auth.onAuthStateChange(
+      (event, session) => {
+        if (event !== "SIGNED_IN" || !session?.user) return;
+
+        setTimeout(() => {
+          if (!active) return;
+          loadCloud(session.user.id).catch((error) =>
+            console.warn("[useSettings] Rechargement :", error),
+          );
+        }, 0);
+      },
+    );
 
     return () => {
       active = false;
+      authListener?.subscription?.unsubscribe();
     };
   }, []);
 
-  // Met à jour l'interface et l'appareil immédiatement,
-  // puis synchronise les réglages avec le compte si connecté.
-  const update = useCallback(async (patch) => {
-    if (!patch || typeof patch !== "object" || Array.isArray(patch)) {
-      return { ok: false, error: "Réglages invalides." };
-    }
-
-    let nextSettings;
-
-    setSettings((previous) => {
-      nextSettings = { ...previous, ...patch };
-      saveLocalSettings(nextSettings);
-      applySettingsToDom(nextSettings);
-      return nextSettings;
-    });
-
-    // La mise à jour React est asynchrone : calcule aussi la prochaine
-    // valeur depuis le stockage local pour la synchronisation.
-    const currentSettings = loadLocalSettings();
-    nextSettings = { ...currentSettings, ...patch };
-
-    saveLocalSettings(nextSettings);
-    applySettingsToDom(nextSettings);
-
+  const syncToCloud = useCallback(async () => {
     try {
       const {
-        data: { user },
+        data: { session },
         error: authError,
-      } = await supabase.auth.getUser();
+      } = await supabase.auth.getSession();
 
       if (authError) {
-        console.warn("[useSettings] Authentification :", authError.message);
         return { ok: false, localOnly: true, error: authError.message };
       }
 
-      if (!user) {
-        return { ok: true, localOnly: true };
+      if (!session?.user) return { ok: true, localOnly: true };
+
+      const userId = session.user.id;
+      const current = settingsRef.current;
+
+      if (privateDirtyRef.current) {
+        privateDirtyRef.current = false;
+        await syncPrivateProfile(userId, !!current.private_profile);
       }
 
-      const result = await saveCloudSettings(user.id, nextSettings);
+      const result = await saveCloudSettings(userId, current);
 
-      if (!result.ok) {
-        console.warn("[useSettings] Synchronisation cloud :", result.error);
+      if (!result?.ok) {
         return {
           ok: false,
           localOnly: true,
-          error: result.error || "Échec de synchronisation.",
+          error: result?.error || "Échec de synchronisation.",
         };
       }
 
       return { ok: true };
     } catch (error) {
-      console.warn("[useSettings] Mise à jour :", error);
-
+      console.warn("[useSettings] Synchronisation :", error);
       return {
         ok: false,
         localOnly: true,
@@ -154,5 +154,47 @@ export function useSettings() {
     }
   }, []);
 
-  return { settings, loading, update };
+  const update = useCallback(
+    (patch) => {
+      if (!patch || typeof patch !== "object" || Array.isArray(patch)) {
+        return Promise.resolve({ ok: false, error: "Réglages invalides." });
+      }
+
+      const clean = sanitizeSettings(patch);
+      const keys = Object.keys(clean);
+
+      if (keys.length === 0) {
+        return Promise.resolve({ ok: false, error: "Aucun réglage valide." });
+      }
+
+      const next = { ...settingsRef.current, ...clean };
+
+      settingsRef.current = next;
+      for (const key of keys) dirtyKeysRef.current.add(key);
+      if (keys.includes("private_profile")) privateDirtyRef.current = true;
+
+      setSettings(next);
+      saveLocalSettings(next);
+      applySettingsToDom(next);
+      broadcastSettings(next);
+
+      const task = saveQueueRef.current.then(syncToCloud);
+      saveQueueRef.current = task.catch(() => {});
+      return task;
+    },
+    [syncToCloud],
+  );
+
+  // Réinitialise (garde la langue courante).
+  const reset = useCallback(
+    () =>
+      update({
+        ...DEFAULT_SETTINGS,
+        lang: settingsRef.current.lang,
+        customTheme: null,
+      }),
+    [update],
+  );
+
+  return { settings, loading, update, reset };
 }
