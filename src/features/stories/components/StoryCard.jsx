@@ -4,6 +4,8 @@ import { AutoTranslate } from '../../../components/TranslatedText.jsx';
 
 export function StoryCard({ story: s, isMine, counts, onOpen }) {
   const hasMedia = s.media_url && s.media_type !== 'text';
+  // Le pseudo peut déjà contenir un « @ » en base : on le retire avant d'en afficher un seul
+  const handle = String(s.profiles?.handle || '').replace(/^@+/, '').trim();
   return (
     <button
       onClick={onOpen}
@@ -12,7 +14,7 @@ export function StoryCard({ story: s, isMine, counts, onOpen }) {
     >
       <div className="z-10">
         <b className="truncate block">{s.profiles?.display_name || 'Membre'}</b>
-        <div className="text-xs opacity-70">@{s.profiles?.handle || ''}</div>
+        {handle && <div className="text-xs opacity-70">@{handle}</div>}
       </div>
 
       {hasMedia ? (
