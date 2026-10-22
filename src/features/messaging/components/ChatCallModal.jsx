@@ -1,17 +1,23 @@
 /**
- * BAARO ChatCallModal — écran d'appel type téléphone (VERSION CORRIGÉE)
+ * BAARO ChatCallModal — écran d'appel type téléphone (v3)
  *
- * Corrections :
- * - acceptIncoming : la mise à jour de la table `calls` ne bloque plus l'appel
- *   (avant, un échec fermait l'appel dès qu'on décrochait)
- * - acceptIncoming : l'erreur réelle de connexion Daily s'affiche dans une alerte
- * - attachTracks : ne recrée plus les flux à chaque appel (son stable)
- * - pistes audio/vidéo rattrapées dès que l'appel devient actif
- * - endCall protégé contre les doubles appels (left-meeting + bouton)
+ * Corrections par rapport à la version précédente :
+ * - Les callbacks parent (onClose, onAccepted, onRejected) passent par des refs :
+ *   avant, un parent qui recréait ces fonctions à chaque rendu relançait l'effet
+ *   « appel sortant » et rejoignait la salle Daily plusieurs fois.
+ * - mountedRef est remis à true au montage (React StrictMode le laissait à false
+ *   pour les appels entrants → plus aucune mise à jour d'état).
+ * - L'anneau de l'avatar utilisait `ringColor` (propriété CSS inexistante) :
+ *   remplacé par un box-shadow.
+ * - L'alerte d'erreur ne s'affiche plus si le composant est déjà démonté.
+ * - Timeout de sécurité : un appel sans réponse est clôturé en « missed ».
  *
- * - Sonnerie entrante (boucle + vibration)
- * - Ton d'attente sortant (ringback)
- * - UI plein écran, avatar, boutons décrocher / raccrocher
+ * Nouveautés :
+ * - Vibration réelle pendant la sonnerie entrante (si supportée)
+ * - Sans réponse après 45 s (sortant et entrant) → statut « missed »
+ * - Écran maintenu allumé pendant l'appel (Wake Lock)
+ * - Indicateur de micro coupé de l'interlocuteur n'est pas ajouté (dépend de lib/chatCalls)
+ * - Prévisualisation caméra locale pendant la sonnerie d'un appel vidéo sortant
  */
 import { useEffect, useRef, useState, useCallback } from "react";
 import {
@@ -45,6 +51,8 @@ import {
 } from "../../../lib/callRingtone.js";
 
 const baaroLogo = "/brand/baaro-logo.png";
+
+const NO_ANSWER_TIMEOUT_MS = 45000;
 
 const FALLBACK = {
   surface: "#12141F",
@@ -99,6 +107,17 @@ export function ChatCallModal({
   const mountedRef = useRef(true);
   const unsubscribeRef = useRef(null);
   const endedRef = useRef(false);
+  const wakeLockRef = useRef(null);
+
+  // Callbacks parent stockés en refs → dépendances d'effets stables
+  const onCloseRef = useRef(onClose);
+  const onAcceptedRef = useRef(onAccepted);
+  const onRejectedRef = useRef(onRejected);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+    onAcceptedRef.current = onAccepted;
+    onRejectedRef.current = onRejected;
+  });
 
   const cleanupMedia = useCallback(() => {
     clearInterval(timerRef.current);
@@ -130,6 +149,9 @@ export function ChatCallModal({
 
   const stopAllSounds = useCallback(() => {
     stopRingtone();
+    try {
+      navigator.vibrate?.(0);
+    } catch {}
   }, []);
 
   const attachTracks = useCallback(() => {
@@ -151,7 +173,6 @@ export function ChatCallModal({
 
         // Vidéo distante : l'élément <video> porte aussi le son
         if (videoTrack && remoteVideoRef.current) {
-          // Évite le son en double : l'élément <video> joue déjà l'audio
           const stale = document.getElementById("baaro-call-remote-audio");
           if (stale) {
             stale.srcObject = null;
@@ -205,28 +226,82 @@ export function ChatCallModal({
       }
       cleanupMedia();
       if (mountedRef.current) setStatus("ended");
-      onClose?.();
+      onCloseRef.current?.();
     },
-    [callRecord?.id, cleanupMedia, onClose, stopAllSounds]
+    [callRecord?.id, cleanupMedia, stopAllSounds]
   );
 
-  // ── Sonnerie selon le mode ────────────────────────────────────────────────
+  // ── Sonnerie + vibration selon le mode ────────────────────────────────────
   useEffect(() => {
+    let vibrateTimer = null;
     if (status === "incoming") {
       startIncomingRingtone();
+      if (typeof navigator !== "undefined" && navigator.vibrate) {
+        const buzz = () => navigator.vibrate([500, 300, 500]);
+        buzz();
+        vibrateTimer = setInterval(buzz, 2000);
+      }
     } else if (status === "outgoing") {
       startOutgoingRingback();
     } else {
       stopRingtone();
     }
     return () => {
+      clearInterval(vibrateTimer);
+      try {
+        navigator.vibrate?.(0);
+      } catch {}
       stopRingtone();
     };
   }, [status]);
 
-  // ── Appel sortant : rejoindre la room Daily ───────────────────────────────
+  // ── Sans réponse : clôture automatique ────────────────────────────────────
   useEffect(() => {
-    mountedRef.current = true;
+    if (status !== "outgoing" && status !== "incoming") return;
+    const t = setTimeout(() => {
+      if (status === "incoming") {
+        stopAllSounds();
+        if (callRecord?.id) {
+          updateCallStatus(callRecord.id, {
+            status: "missed",
+            ended_at: new Date().toISOString(),
+          }).catch(() => {});
+        }
+        endedRef.current = true;
+        onRejectedRef.current?.();
+        onCloseRef.current?.();
+      } else {
+        endCall("missed");
+      }
+    }, NO_ANSWER_TIMEOUT_MS);
+    return () => clearTimeout(t);
+  }, [status, callRecord?.id, endCall, stopAllSounds]);
+
+  // ── Écran allumé pendant l'appel ──────────────────────────────────────────
+  useEffect(() => {
+    if (status === "ended") return;
+    let cancelled = false;
+    (async () => {
+      try {
+        if (navigator.wakeLock?.request) {
+          const lock = await navigator.wakeLock.request("screen");
+          if (cancelled) {
+            lock.release().catch(() => {});
+          } else {
+            wakeLockRef.current = lock;
+          }
+        }
+      } catch {}
+    })();
+    return () => {
+      cancelled = true;
+      wakeLockRef.current?.release?.().catch(() => {});
+      wakeLockRef.current = null;
+    };
+  }, [status === "ended"]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Appel sortant : rejoindre la room Daily (une seule fois) ──────────────
+  useEffect(() => {
     if (mode !== "outgoing" || !roomUrl || !token) return;
     let cancelled = false;
     (async () => {
@@ -245,7 +320,7 @@ export function ChatCallModal({
                 started_at: new Date().toISOString(),
               }).catch(() => {});
             }
-            onAccepted?.();
+            onAcceptedRef.current?.();
           },
           onParticipantLeft: () => endCall("ended"),
           onTrackStarted: () => attachTracks(),
@@ -255,36 +330,27 @@ export function ChatCallModal({
       } catch (e) {
         console.error(e);
         stopAllSounds();
-        alert(
-          "Connexion à l'appel impossible : " +
-            (e?.errorMsg || e?.message || JSON.stringify(e))
-        );
-        if (mountedRef.current) onClose?.();
+        if (!cancelled && mountedRef.current) {
+          alert(
+            "Connexion à l'appel impossible : " +
+              (e?.errorMsg || e?.message || JSON.stringify(e))
+          );
+          onCloseRef.current?.();
+        }
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [
-    mode,
-    roomUrl,
-    token,
-    callType,
-    callRecord?.id,
-    attachTracks,
-    endCall,
-    onAccepted,
-    onClose,
-    stopAllSounds,
-  ]);
+  }, [mode, roomUrl, token, callType, callRecord?.id, attachTracks, endCall, stopAllSounds]);
 
   // Appel actif : rattraper les pistes déjà présentes et surveiller les changements
   useEffect(() => {
-    if (status !== "active") return;
+    if (status !== "active" && !(status === "outgoing" && callType === "video")) return;
     attachTracks();
     const t = setInterval(attachTracks, 1500);
     return () => clearInterval(t);
-  }, [status, attachTracks]);
+  }, [status, callType, attachTracks]);
 
   // Timer durée
   useEffect(() => {
@@ -297,23 +363,23 @@ export function ChatCallModal({
     return () => clearInterval(timerRef.current);
   }, [status]);
 
-  // Cleanup au démontage
+  // Montage / démontage
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
       mountedRef.current = false;
-      stopRingtone();
+      stopAllSounds();
       clearInterval(timerRef.current);
       cleanupMedia();
       leaveCall().catch(() => {});
     };
-  }, [cleanupMedia]);
+  }, [cleanupMedia, stopAllSounds]);
 
   // ── Appel entrant : décrocher ─────────────────────────────────────────────
   const acceptIncoming = async () => {
     if (!roomUrl || !token) return;
     stopAllSounds();
 
-    // 1. Rejoindre la salle Daily (seule étape qui peut vraiment faire échouer l'appel)
     try {
       await joinCall({ roomUrl, token, video: callType === "video" });
     } catch (e) {
@@ -322,11 +388,11 @@ export function ChatCallModal({
         "Connexion à l'appel impossible : " +
           (e?.errorMsg || e?.message || JSON.stringify(e))
       );
-      onClose?.();
+      onCloseRef.current?.();
       return;
     }
 
-    // 2. Passer en mode actif et écouter les événements
+    if (!mountedRef.current) return;
     setStatus("active");
     startedAtRef.current = Date.now();
     unsubscribeRef.current = subscribeCallEvents({
@@ -336,17 +402,18 @@ export function ChatCallModal({
     });
     setTimeout(attachTracks, 400);
 
-    // 3. Mise à jour de la table calls : jamais bloquante
     if (callRecord?.id) {
       updateCallStatus(callRecord.id, {
         status: "accepted",
         started_at: new Date().toISOString(),
       }).catch((e) => console.warn("updateCallStatus :", e));
     }
-    onAccepted?.();
+    onAcceptedRef.current?.();
   };
 
   const rejectIncoming = async () => {
+    if (endedRef.current) return;
+    endedRef.current = true;
     stopAllSounds();
     if (callRecord?.id) {
       await updateCallStatus(callRecord.id, {
@@ -354,26 +421,29 @@ export function ChatCallModal({
         ended_at: new Date().toISOString(),
       }).catch(() => {});
     }
-    onRejected?.();
-    onClose?.();
+    onRejectedRef.current?.();
+    onCloseRef.current?.();
   };
 
   const toggleMic = async () => {
     try {
       await enableMic(!micOn);
       setMicOn((v) => !v);
-    } catch {}
+    } catch (e) {
+      console.warn("Micro :", e);
+    }
   };
 
   const toggleCam = async () => {
     try {
       await enableCamera(!camOn);
       setCamOn((v) => !v);
-    } catch {}
+    } catch (e) {
+      console.warn("Caméra :", e);
+    }
   };
 
-  // Haut-parleur / écouteur : possible seulement si le navigateur expose
-  // les sorties audio (setSinkId). Sinon, un message explique la limite.
+  // Haut-parleur / écouteur : possible seulement si le navigateur expose setSinkId
   const toggleSpeaker = async () => {
     const next = !speakerOn;
     const outputs = canSelectAudioOutput() ? await listAudioOutputs() : [];
@@ -395,7 +465,7 @@ export function ChatCallModal({
     const elements = [
       remoteVideoRef.current,
       document.getElementById("baaro-call-remote-audio"),
-    ].filter(Boolean);
+    ].filter((el) => el && typeof el.setSinkId === "function");
     try {
       await Promise.all(elements.map((el) => el.setSinkId(target.deviceId)));
       outputSinkId = target.deviceId;
@@ -423,6 +493,8 @@ export function ChatCallModal({
           : "Terminé";
 
   const isRinging = status === "incoming" || status === "outgoing";
+  const videoActive = callType === "video" && status === "active";
+  const ringColor = status === "incoming" ? "#22C55E" : C.gold;
 
   return (
     <div
@@ -434,8 +506,7 @@ export function ChatCallModal({
     >
       {/* Zone principale */}
       <div className="flex-1 flex flex-col items-center justify-center px-6 pt-12 pb-8 relative">
-        {/* Vidéo distante (plein écran en appel vidéo actif) */}
-        {callType === "video" && status === "active" && (
+        {videoActive && (
           <video
             ref={remoteVideoRef}
             autoPlay
@@ -444,18 +515,15 @@ export function ChatCallModal({
           />
         )}
 
-        {/* Overlay sombre si vidéo active pour lisibilité */}
-        {callType === "video" && status === "active" && (
+        {videoActive && (
           <div className="absolute inset-0 bg-gradient-to-b from-black/50 via-transparent to-black/70 pointer-events-none" />
         )}
 
-        {/* Contenu centré (avatar + nom) — visible surtout hors vidéo active */}
         <div
           className={`relative z-10 flex flex-col items-center text-center transition-opacity ${
-            callType === "video" && status === "active" ? "opacity-0 pointer-events-none" : "opacity-100"
+            videoActive ? "opacity-0 pointer-events-none" : "opacity-100"
           }`}
         >
-          {/* Anneaux de sonnerie animés */}
           {isRinging && (
             <>
               <div
@@ -478,26 +546,23 @@ export function ChatCallModal({
 
           {/* Avatar */}
           <div
-            className={`relative w-28 h-28 rounded-full overflow-hidden ring-4 shadow-2xl ${
+            className={`relative w-28 h-28 rounded-full overflow-hidden shadow-2xl ${
               isRinging ? "animate-pulse" : ""
             }`}
             style={{
-              ringColor: status === "incoming" ? "#22C55E" : C.gold,
+              boxShadow: `0 0 0 4px ${ringColor}, 0 20px 40px rgba(0,0,0,0.4)`,
               background: "rgba(255,255,255,0.08)",
             }}
           >
-            {otherUser.avatar ? (
-              <img
-                src={otherUser.avatar}
-                alt=""
-                className="w-full h-full object-cover"
-                onError={(e) => {
-                  e.target.src = baaroLogo;
-                }}
-              />
-            ) : (
-              <img src={baaroLogo} alt="" className="w-full h-full object-cover" />
-            )}
+            <img
+              src={otherUser.avatar || baaroLogo}
+              alt=""
+              className="w-full h-full object-cover"
+              onError={(e) => {
+                if (e.target.src.endsWith(baaroLogo)) return;
+                e.target.src = baaroLogo;
+              }}
+            />
           </div>
 
           <h2
@@ -533,15 +598,15 @@ export function ChatCallModal({
           )}
         </div>
 
-        {/* Mini vidéo locale (coin bas-droit) en appel vidéo actif */}
-        {callType === "video" && status === "active" && (
+        {/* Mini vidéo locale : pendant la sonnerie sortante et en appel actif */}
+        {callType === "video" && (status === "active" || status === "outgoing") && camOn && (
           <video
             ref={localVideoRef}
             autoPlay
             playsInline
             muted
             className="absolute bottom-28 right-4 w-28 h-40 rounded-2xl object-cover border-2 z-20 shadow-xl"
-            style={{ borderColor: C.gold }}
+            style={{ borderColor: C.gold, transform: "scaleX(-1)" }}
           />
         )}
       </div>
@@ -551,14 +616,12 @@ export function ChatCallModal({
         className="relative z-20 px-6 pb-10 pt-4"
         style={{
           paddingBottom: "calc(2.5rem + env(safe-area-inset-bottom))",
-          background:
-            callType === "video" && status === "active"
-              ? "linear-gradient(transparent, rgba(0,0,0,0.75))"
-              : "transparent",
+          background: videoActive
+            ? "linear-gradient(transparent, rgba(0,0,0,0.75))"
+            : "transparent",
         }}
       >
-        {/* Durée en mode vidéo actif */}
-        {callType === "video" && status === "active" && (
+        {videoActive && (
           <p
             className="text-center text-sm font-semibold mb-4 tabular-nums"
             style={{ color: C.ivory }}
@@ -570,7 +633,6 @@ export function ChatCallModal({
         <div className="flex items-center justify-center gap-5">
           {status === "incoming" ? (
             <>
-              {/* Refuser */}
               <button
                 type="button"
                 onClick={rejectIncoming}
@@ -580,7 +642,6 @@ export function ChatCallModal({
               >
                 <PhoneOff size={28} />
               </button>
-              {/* Accepter */}
               <button
                 type="button"
                 onClick={acceptIncoming}
@@ -593,7 +654,6 @@ export function ChatCallModal({
             </>
           ) : (
             <>
-              {/* Micro */}
               <button
                 type="button"
                 onClick={toggleMic}
@@ -608,7 +668,6 @@ export function ChatCallModal({
                 {micOn ? <Mic size={22} /> : <MicOff size={22} />}
               </button>
 
-              {/* Haut-parleur */}
               <button
                 type="button"
                 onClick={toggleSpeaker}
@@ -623,7 +682,6 @@ export function ChatCallModal({
                 {speakerOn ? <Volume2 size={22} /> : <VolumeX size={22} />}
               </button>
 
-              {/* Caméra (vidéo seulement) */}
               {callType === "video" && (
                 <button
                   type="button"
@@ -640,10 +698,9 @@ export function ChatCallModal({
                 </button>
               )}
 
-              {/* Raccrocher */}
               <button
                 type="button"
-                onClick={() => endCall("ended")}
+                onClick={() => endCall(status === "outgoing" ? "cancelled" : "ended")}
                 className="w-16 h-16 rounded-full flex items-center justify-center shadow-lg active:scale-95 transition"
                 style={{ background: "#EF4444", color: "#fff" }}
                 aria-label="Raccrocher"
@@ -654,11 +711,10 @@ export function ChatCallModal({
           )}
         </div>
 
-        {/* Bouton fermer discret (sortant / actif) */}
         {status !== "incoming" && (
           <button
             type="button"
-            onClick={() => endCall("ended")}
+            onClick={() => endCall(status === "outgoing" ? "cancelled" : "ended")}
             className="absolute top-0 right-4 p-2 rounded-full opacity-50 hover:opacity-100 transition"
             style={{ color: C.muted }}
             aria-label="Fermer"
