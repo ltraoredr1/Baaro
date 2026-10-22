@@ -5,6 +5,11 @@
 // Version corrigée :
 // - Réglages gérés par useSettings (état + stockage local + DOM + cloud, un seul chemin).
 // - Thème et langue appliqués par des effets (aussi quand ils viennent du cloud).
+// - Réglages natifs (anti-capture, biométrie) appliqués dans App.jsx dès le démarrage
+//   (plus ici : ils ne s'appliquaient qu'à l'ouverture de cet onglet).
+// - Activation de la biométrie vérifiée avant d'être enregistrée (confirmBiometricEnable).
+// - Messages : couleur ⚠️ dédiée et disparition automatique.
+// - Section 2FA comptée dans « aucun résultat ».
 // - Import / export / copie du JSON remplacés par : télécharger mes données,
 //   inviter des amis, vider le cache, aide & support.
 // - Section « Utilisateurs bloqués ».
@@ -49,7 +54,7 @@ import { supabase } from "../../supabaseClient.js";
 import { uploadExternalMedia } from "../../lib/externalMedia.js";
 import { useSettings } from "../../hooks/useSettings.js";
 import { STORAGE_KEY as LOCAL_KEY } from "../../lib/appSettings.js";
-import { applyNativeSettings } from "../../lib/nativeSettings.js";
+import { confirmBiometricEnable } from "../../lib/nativeSettings.js";
 import { NotificationPrefsPanel } from "./NotificationPrefsPanel.jsx";
 import NotificationSoundSettings from "./NotificationSoundSettings.jsx";
 import BlockedUsersPanel from "./BlockedUsersPanel.jsx";
@@ -209,14 +214,16 @@ export default function SettingsTab({
   const toggleSection = (id: string) =>
     setOpenSections((s) => ({ ...s, [id]: !s[id] }));
 
-  // ---- Effets : réglages natifs, thème, langue ----
+  // ---- Effets : message, thème, langue ----
 
-  // Réglages natifs (captures d'écran, biométrie, etc.)
+  // Les messages d'information disparaissent seuls.
   useEffect(() => {
-    void applyNativeSettings(settings).catch((error: unknown) => {
-      console.warn("[settings] native settings:", error);
-    });
-  }, [settings]);
+    if (!message) return;
+    const timer = window.setTimeout(() => setMessage(""), 5000);
+    return () => window.clearTimeout(timer);
+  }, [message]);
+
+  // NB : les réglages natifs (anti-capture, biométrie) sont appliqués dans App.jsx.
 
   // Synchronisation thème réglages <-> application, sans boucle.
   const themeSyncRef = useRef<string | undefined>(currentTheme);
@@ -344,7 +351,7 @@ export default function SettingsTab({
 
   /**
    * Enregistre un ou plusieurs réglages. useSettings s'occupe du stockage local,
-   * du DOM, du cloud et de profiles.is_private (private_profile).
+   * du DOM, du cloud (regroupé) et de profiles.is_private (private_profile).
    */
   async function save(patch: Partial<SettingsState>) {
     const res = await updateSettings(patch as Record<string, unknown>);
@@ -618,6 +625,16 @@ export default function SettingsTab({
     setMessage(t("reset_done"));
   };
 
+  // Active / désactive la biométrie. À l'activation, on vérifie que l'utilisateur
+  // peut réellement s'authentifier : sinon il se verrouillerait hors de l'app.
+  const handleBiometricChange = async (value: boolean) => {
+    if (value && !(await confirmBiometricEnable())) {
+      setMessage("❌ " + t("action_error"));
+      return;
+    }
+    void save({ biometric: value });
+  };
+
   // ---- Actions générales ----
 
   const handleInvite = async () => {
@@ -875,7 +892,17 @@ export default function SettingsTab({
     [match, isAnonymous, user]
   );
 
-  const anyVisible = Object.values(visible).some(Boolean);
+  // La section 2FA s'affiche avec « privacy » ou sur sa propre recherche :
+  // elle doit aussi compter pour le message « aucun résultat ».
+  const mfaVisible = visible.privacy || match("mfa_section", "mfa_enabled");
+  const anyVisible = Object.values(visible).some(Boolean) || mfaVisible;
+
+  // Couleurs du bandeau de message (✅ succès, ⚠️ avertissement, sinon erreur).
+  const messageTone = message.startsWith("✅")
+    ? { bg: "rgba(45,191,166,0.15)", fg: COLORS.teal }
+    : message.startsWith("⚠️")
+      ? { bg: "rgba(217,174,82,0.15)", fg: COLORS.gold }
+      : { bg: "rgba(239,68,68,0.15)", fg: "#F87171" };
 
   if (showPrivacy) {
     return (
@@ -957,12 +984,7 @@ export default function SettingsTab({
       {message && (
         <div
           className="p-3 rounded-xl text-sm"
-          style={{
-            background: message.startsWith("✅")
-              ? "rgba(45,191,166,0.15)"
-              : "rgba(239,68,68,0.15)",
-            color: message.startsWith("✅") ? COLORS.teal : "#F87171",
-          }}
+          style={{ background: messageTone.bg, color: messageTone.fg }}
         >
           {message}
         </div>
@@ -1803,7 +1825,7 @@ export default function SettingsTab({
             title={t("biometric")}
             desc={t("biometric_desc")}
             enabled={settings.biometric}
-            onChange={(v) => save({ biometric: v })}
+            onChange={(v) => void handleBiometricChange(v)}
           />
         </CollapsibleSection>
       )}
@@ -1824,7 +1846,7 @@ export default function SettingsTab({
       )}
 
       {/* 2FA status (affichage) */}
-      {(visible.privacy || match("mfa_section", "mfa_enabled")) && (
+      {mfaVisible && (
         <CollapsibleSection
           id="mfa"
           icon={KeyRound}
