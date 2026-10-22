@@ -6,7 +6,10 @@
  *   au lieu d'envoyer toujours les deux colonnes (échec si l'une n'existe pas).
  * - loadCloudSettings ne renvoie plus une erreur pour un nouvel utilisateur sans ligne.
  * - sanitizeSettings : ne garde que les clés connues et du bon type (import, cloud, local).
- * - customTheme est enregistré (colonne jsonb custom_theme, facultative).
+ * - customTheme est enregistré (colonne jsonb custom_theme, facultative) et validé
+ *   (couleurs hexadécimales, URL d'image https:// ou relative).
+ * - custom_theme n'est réécrit que s'il a changé ; une colonne absente n'est signalée qu'une fois.
+ * - syncPrivateProfile remonte désormais ses erreurs (Supabase renvoie { error }, il ne lance pas).
  * - applySettingsToDom applique tous les réglages et émet "baaro:settings".
  */
 import { supabase } from "../supabaseClient.js";
@@ -48,6 +51,9 @@ export const RTL_LANGS = new Set(["ar", "he", "fa", "ur", "ps", "sd", "ug", "nqo
 
 const LEGACY_KEYS = ["baaro_settings_v22", "baaro_settings_v21", "baaro_settings_v20"];
 
+const HEX_COLOR = /^#[0-9a-f]{3,8}$/i;
+const SAFE_URL = /^(https:\/\/|\/)[^"'()\s]+$/;
+
 function isPlainObject(v) {
   return !!v && typeof v === "object" && !Array.isArray(v);
 }
@@ -56,10 +62,12 @@ function sanitizeCustomTheme(v) {
   if (v === null) return null;
   if (!isPlainObject(v)) return undefined;
   const out = {};
-  if (typeof v.bgColor === "string") out.bgColor = v.bgColor.slice(0, 32);
-  if (typeof v.accent === "string") out.accent = v.accent.slice(0, 32);
-  if (typeof v.fg === "string") out.fg = v.fg.slice(0, 32);
-  if (v.bgImage === null || typeof v.bgImage === "string") out.bgImage = v.bgImage;
+  if (typeof v.bgColor === "string" && HEX_COLOR.test(v.bgColor)) out.bgColor = v.bgColor;
+  if (typeof v.accent === "string" && HEX_COLOR.test(v.accent)) out.accent = v.accent;
+  if (typeof v.fg === "string" && HEX_COLOR.test(v.fg)) out.fg = v.fg;
+  if (v.bgImage === null || (typeof v.bgImage === "string" && SAFE_URL.test(v.bgImage))) {
+    out.bgImage = v.bgImage;
+  }
   return out;
 }
 
@@ -148,7 +156,7 @@ export function applySettingsToDom(settings) {
     root.dataset.baaroLocalCache = flag(s.local_cache);
     root.dataset.baaroPrivacyAi = flag(s.privacy_ai);
 
-    // Thème personnalisé : variables CSS utilisables par l'app.
+    // Thème personnalisé : variables CSS utilisables par l'app (voir index.css).
     const ct = s.theme === "custom" ? s.customTheme : null;
     const setVar = (name, value) => {
       if (value) root.style.setProperty(name, value);
@@ -195,6 +203,10 @@ export function shouldPrefetch() {
 
 // Forme de clé qui fonctionne avec la table : "user_id", "id" ou "both".
 let workingKeyMode = null;
+
+// custom_theme : colonne facultative. On évite de la réécrire inutilement.
+let customThemeColumnMissing = false;
+let lastSavedCustomTheme;
 
 function buildPayload(settings) {
   const payload = { updated_at: new Date().toISOString() };
@@ -272,33 +284,40 @@ export async function saveCloudSettings(userId, settings) {
   workingKeyMode = usedMode;
 
   // Thème personnalisé : colonne jsonb facultative, ne doit jamais faire échouer le reste.
-  if (settings && "customTheme" in settings) {
-    const column = usedMode === "id" ? "id" : "user_id";
-    const { error } = await supabase
-      .from("user_settings")
-      .update({ custom_theme: settings.customTheme ?? null })
-      .eq(column, userId);
+  // Réécrit uniquement si la valeur a changé depuis le dernier envoi réussi.
+  if (settings && "customTheme" in settings && !customThemeColumnMissing) {
+    const json = JSON.stringify(settings.customTheme ?? null);
+    if (json !== lastSavedCustomTheme) {
+      const column = usedMode === "id" ? "id" : "user_id";
+      const { error } = await supabase
+        .from("user_settings")
+        .update({ custom_theme: settings.customTheme ?? null })
+        .eq(column, userId);
 
-    if (error) {
-      console.warn(
-        "[appSettings] custom_theme non enregistré (colonne jsonb custom_theme absente ?) :",
-        error.message
-      );
+      if (error) {
+        if (/custom_theme/i.test(error.message)) customThemeColumnMissing = true;
+        console.warn(
+          "[appSettings] custom_theme non enregistré (colonne jsonb custom_theme absente ?) :",
+          error.message
+        );
+      } else {
+        lastSavedCustomTheme = json;
+      }
     }
   }
 
   return { ok: true };
 }
 
+/** Met à jour profiles.is_private. Lance l'erreur pour que l'appelant puisse réessayer. */
 export async function syncPrivateProfile(userId, isPrivate) {
   if (!userId) return;
-  try {
-    await supabase
-      .from("profiles")
-      .update({
-        is_private: !!isPrivate,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", userId);
-  } catch (_) {}
+  const { error } = await supabase
+    .from("profiles")
+    .update({
+      is_private: !!isPrivate,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", userId);
+  if (error) throw error;
 }
