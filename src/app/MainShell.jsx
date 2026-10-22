@@ -8,9 +8,9 @@ import { GlobalSearchModal } from "../components/GlobalSearchModal.jsx";
 import { ErrorBoundary } from "../components/ErrorBoundary.jsx";
 import { OnboardingModal } from "../features/profile/index.js";
 import { useApplyPendingReferral } from "../hooks/useApplyPendingReferral.js";
+import { useSettings } from "../hooks/useSettings.js";
 import { useToast } from "../components/ToastContext.jsx";
 import { COLORS as THEME_COLORS } from "../theme.js";
-import { applySettingsToDom, loadLocalSettings } from "../lib/appSettings.js";
 import { FEED_REFRESH_EVENT, FEED_PULSE_EVENT, TabPulseStyles } from "../lib/feedTabRefresh.jsx";
 import { tabs } from "./tabs.jsx";
 import { TabFallback } from "./TabFallback.jsx";
@@ -78,12 +78,24 @@ export function MainShell() {
     loadLastTab("feed")
   );
 
-  const [lang, setLang] = useState("fr");
-  const [currentTheme, setCurrentTheme] = useState(() => {
-    try { return localStorage.getItem("baaro_theme") || "midnight"; } catch { return "midnight"; }
-  });
+  // Langue et thème : source unique = réglages (useSettings applique déjà le DOM,
+  // le stockage local et le cloud). Plus d'état local ni de clé "baaro_theme".
+  const { settings, update: updateSettings } = useSettings();
+  const lang = settings.lang;
+  const setLang = (l) => {
+    if (l && l !== settings.lang) void updateSettings({ lang: l });
+  };
+  const currentTheme = settings.theme || "midnight";
+  const setCurrentTheme = (themeId) => {
+    if (themeId && themeId !== settings.theme) void updateSettings({ theme: themeId });
+  };
 
-  useEffect(() => { applySettingsToDom(loadLocalSettings()); }, []);
+  // Couleur de la barre de statut : suit la couleur choisie pour le thème « custom ».
+  const statusBg =
+    currentTheme === "custom"
+      ? settings.customTheme?.bgColor || THEME_BG_MAP.custom
+      : THEME_BG_MAP[currentTheme] || THEME_BG_MAP.midnight;
+
   const [inspectingProfileId, setInspectingProfileId] = useState(null);
   const [profileReadOnly, setProfileReadOnly] = useState(false);
   const [notifDrawerOpen, setNotifDrawerOpen] = useState(false);
@@ -154,9 +166,7 @@ export function MainShell() {
           });
 
           await StatusBar.setBackgroundColor({
-            color:
-              THEME_BG_MAP[currentTheme] ||
-              THEME_BG_MAP.midnight,
+            color: statusBg,
           });
         } catch {
           // StatusBar indisponible
@@ -181,10 +191,13 @@ export function MainShell() {
               return;
             }
 
-            if (
-              activeTab === "videos" ||
-              activeTab === "privacy"
-            ) {
+            // La page « privacy » renvoie vers les réglages (comme son bouton Retour).
+            if (activeTab === "privacy") {
+              setActiveTab("settings");
+              return;
+            }
+
+            if (activeTab === "videos") {
               setActiveTab("feed");
               return;
             }
@@ -197,6 +210,13 @@ export function MainShell() {
             CapApp.exitApp();
           }
         );
+
+        // Démonté pendant l'await : on retire tout de suite l'écouteur
+        // (sinon les écouteurs s'empilent à chaque changement d'onglet).
+        if (cancelled) {
+          backListener.remove();
+          backListener = null;
+        }
       } catch {
         // Web
       }
@@ -213,6 +233,7 @@ export function MainShell() {
   }, [
     activeTab,
     currentTheme,
+    statusBg,
     notifDrawerOpen,
     searchModalOpen,
     inspectingProfileId,
