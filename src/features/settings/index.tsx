@@ -1,20 +1,16 @@
 /// <reference types="vite/client" />
-import {
-  loadCloudSettings,
-  saveCloudSettings,
-  saveLocalSettings,
-  syncPrivateProfile,
-} from "../../lib/appSettings.js";
-// lucide-react : ajouter
-UserX, Download,
-// composants
-import BlockedUsersPanel from "./BlockedUsersPanel.jsx";
-import { applyNativeSettings } from "../../lib/nativeSettings.js";
-import { NotificationPrefsPanel } from "./NotificationPrefsPanel.jsx";
-import NotificationSoundSettings from "./NotificationSoundSettings.jsx";
 // src/features/settings/index.tsx
 // Réglages BAARO — différenciation marchés émergents + profil + compte + recherche
-import { useState, useEffect, useCallback, useMemo } from "react";
+//
+// Version corrigée :
+// - Réglages gérés par useSettings (état + stockage local + DOM + cloud, un seul chemin).
+// - Thème et langue appliqués par des effets (aussi quand ils viennent du cloud).
+// - Import / export / copie du JSON remplacés par : télécharger mes données,
+//   inviter des amis, vider le cache, aide & support.
+// - Section « Utilisateurs bloqués ».
+// - Date de naissance lue via get_my_private_profile (phone / birth_date privés).
+// - Code mort supprimé, réinitialisation complète (cloud + profil privé).
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   User,
   Palette,
@@ -36,19 +32,27 @@ import {
   RotateCcw,
   Pencil,
   Download,
-  Upload,
   KeyRound,
-  Copy,
   Smartphone,
   Trash2,
   Volume2,
   ImagePlus,
   X,
+  Share2,
+  LifeBuoy,
+  Eraser,
+  UserX,
 } from "lucide-react";
 import { COLORS } from "../../theme.js";
 import { setAppLanguage, SUPPORTED_LANGUAGES } from "../../../i18n.js";
 import { supabase } from "../../supabaseClient.js";
 import { uploadExternalMedia } from "../../lib/externalMedia.js";
+import { useSettings } from "../../hooks/useSettings.js";
+import { STORAGE_KEY as LOCAL_KEY } from "../../lib/appSettings.js";
+import { applyNativeSettings } from "../../lib/nativeSettings.js";
+import { NotificationPrefsPanel } from "./NotificationPrefsPanel.jsx";
+import NotificationSoundSettings from "./NotificationSoundSettings.jsx";
+import BlockedUsersPanel from "./BlockedUsersPanel.jsx";
 import { PushSettings } from "../../components/PushSettings.jsx";
 import ProfilePhotosEditor from "../../components/ProfilePhotosEditor.jsx";
 import ProfileContactsLinks from "../../components/ProfileContactsLinks.jsx";
@@ -61,7 +65,6 @@ import {
   isHandleUniqueViolation,
 } from "../../lib/username.js";
 import {
-  STORAGE_KEY,
   APP_VERSION,
   THEMES,
   LANGUAGES,
@@ -73,16 +76,12 @@ import {
 } from "./constants";
 import type { CustomTheme } from "./constants";
 import { STRINGS, localeSettings } from "./strings";
-import {
-  DEFAULT_CUSTOM_THEME,
-  DEFAULT_SETTINGS,
-  loadLocal,
-  uiLang,
-  applyDocumentLang,
-  applyA11y,
-} from "./state";
+import { DEFAULT_CUSTOM_THEME, uiLang } from "./state";
 import type { SettingsState } from "./state";
 import { ToggleRow, ActionRow, CollapsibleSection, inputStyle } from "./ui";
+
+/** Adresse du support (si absente, la ligne « Aide & support » est masquée). */
+const SUPPORT_EMAIL = import.meta.env.VITE_SUPPORT_EMAIL as string | undefined;
 
 type Props = {
   user_id?: string | null;
@@ -121,7 +120,15 @@ export default function SettingsTab({
     phone?: string;
     is_anonymous?: boolean;
   } | null>(null);
-  const [settings, setSettings] = useState<SettingsState>(loadLocal);
+
+  // Source unique des réglages : état + stockage local + DOM + cloud.
+  const {
+    settings: rawSettings,
+    update: updateSettings,
+    reset: resetSettings,
+  } = useSettings();
+  const settings = rawSettings as SettingsState;
+
   const [countryOpen, setCountryOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [message, setMessage] = useState("");
@@ -152,7 +159,6 @@ export default function SettingsTab({
 
   const [mfaLoading, setMfaLoading] = useState(false);
   const [mfaFactorCount, setMfaFactorCount] = useState<number | null>(null);
-  const [fileInputEl, setFileInputEl] = useState<HTMLInputElement | null>(null);
   const [customImageInputEl, setCustomImageInputEl] =
     useState<HTMLInputElement | null>(null);
   const [customUploading, setCustomUploading] = useState(false);
@@ -173,8 +179,9 @@ export default function SettingsTab({
     data: true,
     ai: false,
     translate: false,
-      content: false,
+    content: false,
     privacy: false,
+    blocked: false,
     a11y: false,
     mfa: false,
     sessions: false,
@@ -189,36 +196,59 @@ export default function SettingsTab({
   const lang = uiLang(settings.lang);
   const t = useCallback(
     (key: string) => {
-      const a = localeSettings(settings.lang)?.[key];
+      const a = localeSettings(lang)?.[key];
       if (typeof a === "string") return a;
       const b = STRINGS[lang]?.[key];
       if (typeof b === "string") return b;
       const c = STRINGS.fr[key];
       return typeof c === "string" ? c : key;
     },
-    [lang, settings.lang]
+    [lang]
   );
 
   const toggleSection = (id: string) =>
     setOpenSections((s) => ({ ...s, [id]: !s[id] }));
 
-  useEffect(() => {
-saveLocalSettings(settings);
-applyDocumentLang(settings.lang);
-applyA11y(settings);
+  // ---- Effets : réglages natifs, thème, langue ----
 
-void applyNativeSettings(settings).catch((error) => {
-console.warn("[settings] native settings:", error);
-});
-}, [settings]);
-
+  // Réglages natifs (captures d'écran, biométrie, etc.)
   useEffect(() => {
-    if (currentTheme && currentTheme !== settings.theme) {
-      setSettings((s) => ({ ...s, theme: currentTheme }));
+    void applyNativeSettings(settings).catch((error: unknown) => {
+      console.warn("[settings] native settings:", error);
+    });
+  }, [settings]);
+
+  // Synchronisation thème réglages <-> application, sans boucle.
+  const themeSyncRef = useRef<string | undefined>(currentTheme);
+
+  // Réglages -> application (choix de l'utilisateur ou thème venant du cloud)
+  useEffect(() => {
+    if (!settings.theme) return;
+    if (settings.theme === themeSyncRef.current) return;
+    themeSyncRef.current = settings.theme;
+    onSelectTheme?.(settings.theme);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings.theme]);
+
+  // Application -> réglages (thème changé ailleurs dans l'app)
+  useEffect(() => {
+    if (!currentTheme || currentTheme === themeSyncRef.current) return;
+    themeSyncRef.current = currentTheme;
+    if (currentTheme !== settings.theme) {
+      void updateSettings({ theme: currentTheme });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentTheme]);
 
+  // Langue de l'application
+  useEffect(() => {
+    const base = String(settings.lang || "").split("-")[0];
+    if (SUPPORTED_LANGUAGES.includes(base)) {
+      void Promise.resolve(setAppLanguage(settings.lang)).catch(console.warn);
+    }
+  }, [settings.lang]);
+
+  // ---- Chargement du compte et du profil ----
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -232,27 +262,41 @@ console.warn("[settings] native settings:", error);
           is_anonymous: data.user.is_anonymous === true,
         });
 
+        // phone et birth_date ne sont plus lisibles directement : colonnes
+        // privées, lues uniquement par le propriétaire via get_my_private_profile.
         const { data: profile } = await supabase
           .from("profiles")
-          .select("id, display_name, handle, flag, bio, avatar_url, cover_url, country, registered_country, country_changed_at, country_change_available_at, first_name, last_name, birth_date, location, is_verified, created_at")
+          .select(
+            "id, display_name, handle, flag, bio, avatar_url, cover_url, country, registered_country, country_changed_at, country_change_available_at, first_name, last_name, location, is_verified, created_at"
+          )
           .eq("id", data.user.id)
           .maybeSingle();
+
+        let birthDate: string | null = null;
+        try {
+          const { data: priv } = await supabase.rpc("get_my_private_profile");
+          const privateRow = Array.isArray(priv) ? priv[0] : priv;
+          birthDate = privateRow?.birth_date ?? null;
+        } catch {
+          /* fonction non installée : la date reste vide */
+        }
+
         if (!cancelled && profile) {
-          setUserProfile?.({ ...(userProfile || {}), ...profile });
+          setUserProfile?.({
+            ...(userProfile || {}),
+            ...profile,
+            birth_date: birthDate,
+          });
           setEditName(profile.display_name || "");
           setEditFirstName(profile.first_name || "");
           setEditLastName(profile.last_name || "");
-          setEditBirthDate(profile.birth_date || "");
+          setEditBirthDate(birthDate || "");
           setEditLocation(profile.location || "");
           setEditCountry(profile.country || profile.registered_country || "");
           setEditFlag(profile.flag || "🌍");
           setEditBio(profile.bio || "");
         }
 
-        const cloud = await loadCloudSettings(data.user.id);
-        if (!cancelled && cloud.ok && cloud.data) {
-          setSettings((s) => ({ ...s, ...cloud.data }));
-        }
         try {
           const { data: sess } = await supabase.auth.getSession();
           if (!cancelled && sess?.session) {
@@ -295,30 +339,19 @@ console.warn("[settings] native settings:", error);
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /**
+   * Enregistre un ou plusieurs réglages. useSettings s'occupe du stockage local,
+   * du DOM, du cloud et de profiles.is_private (private_profile).
+   */
   async function save(patch: Partial<SettingsState>) {
-    const next = { ...settings, ...patch };
-    setSettings(next);
-    saveLocalSettings(next);
-    applyA11y(next);
+    const res = await updateSettings(patch as Record<string, unknown>);
 
-    if (patch.theme && onSelectTheme) onSelectTheme(patch.theme);
-    if (
-      patch.lang &&
-      SUPPORTED_LANGUAGES.includes(String(patch.lang).split("-")[0])
-    ) {
-      void Promise.resolve(setAppLanguage(patch.lang)).catch(console.warn);
-    }
-
-    if (!user?.id) return;
-
-    if ("private_profile" in patch) {
-      void syncPrivateProfile(user.id, !!next.private_profile);
-    }
-
-    const res = await saveCloudSettings(user.id, next);
-    if (!res.ok) {
+    if (res && !res.ok && !res.localOnly) {
+      setMessage("❌ " + (res.error || t("profile_error")));
+    } else if (res?.localOnly && res.error) {
       console.warn("[settings] cloud save:", res.error);
     }
   }
@@ -417,7 +450,9 @@ console.warn("[settings] native settings:", error);
         display_name: name,
         first_name: editFirstName.trim(),
         last_name: editLastName.trim(),
-        birth_date: editBirthDate || null,
+        // La date n'est envoyée que si le champ est rempli : une date déjà
+        // enregistrée n'est jamais effacée par accident.
+        ...(editBirthDate ? { birth_date: editBirthDate } : {}),
         location: editLocation.trim(),
         country: editCountry || null,
         handle: finalHandle,
@@ -426,7 +461,7 @@ console.warn("[settings] native settings:", error);
         updated_at: new Date().toISOString(),
       };
 
-      let { error } = await supabase
+      const { error } = await supabase
         .from("profiles")
         .upsert(profilePayload, { onConflict: "id" })
         .select("id")
@@ -458,7 +493,7 @@ console.warn("[settings] native settings:", error);
         display_name: name,
         first_name: editFirstName.trim(),
         last_name: editLastName.trim(),
-        birth_date: editBirthDate || null,
+        birth_date: editBirthDate || userProfile?.birth_date || null,
         location: editLocation.trim(),
         country: editCountry || null,
         flag: derivedFlag,
@@ -572,67 +607,111 @@ console.warn("[settings] native settings:", error);
     }
   };
 
-  const handleResetPrefs = () => {
+  // Remet les valeurs par défaut (langue conservée), synchronisé avec le cloud.
+  const handleResetPrefs = async () => {
     if (!window.confirm(t("reset_confirm"))) return;
-    setSettings({ ...DEFAULT_SETTINGS, lang: settings.lang });
+    const res = await resetSettings();
+    if (res && !res.ok && !res.localOnly) {
+      setMessage("❌ " + (res.error || t("action_error")));
+      return;
+    }
     setMessage(t("reset_done"));
   };
 
-  const buildExportPayload = () => ({
-    app: "BAARO",
-    version: APP_VERSION,
-    exported_at: new Date().toISOString(),
-    settings,
-  });
+  // ---- Actions générales ----
 
-  const handleExportPrefs = () => {
+  const handleInvite = async () => {
+    const url = window.location.origin;
+    const text = t("invite_text");
     try {
-      const blob = new Blob([JSON.stringify(buildExportPayload(), null, 2)], {
+      if (navigator.share) {
+        await navigator.share({ title: "BAARO", text, url });
+        return;
+      }
+      await navigator.clipboard.writeText(`${text} ${url}`);
+      setMessage(t("copy_done"));
+    } catch (err) {
+      // Partage annulé par l'utilisateur : pas une erreur.
+      if ((err as Error)?.name !== "AbortError") setMessage(t("action_error"));
+    }
+  };
+
+  const handleClearCache = async () => {
+    if (!window.confirm(t("clear_cache_confirm"))) return;
+    setAccountBusy(true);
+    try {
+      if ("caches" in window) {
+        const names = await caches.keys();
+        await Promise.all(names.map((n) => caches.delete(n)));
+      }
+      // Uniquement les données de cache : jamais les réglages ni la session.
+      Object.keys(localStorage)
+        .filter((k) => k.startsWith("baaro_cache_"))
+        .forEach((k) => localStorage.removeItem(k));
+      sessionStorage.clear();
+      setMessage(t("clear_cache_done"));
+    } catch {
+      setMessage(t("action_error"));
+    } finally {
+      setAccountBusy(false);
+    }
+  };
+
+  const handleSupport = () => {
+    if (!SUPPORT_EMAIL) return;
+    const subject = encodeURIComponent(`BAARO ${APP_VERSION} — support`);
+    const body = encodeURIComponent(
+      `\n\n---\nVersion : ${APP_VERSION}\nAppareil : ${navigator.userAgent.slice(0, 120)}`
+    );
+    window.location.href = `mailto:${SUPPORT_EMAIL}?subject=${subject}&body=${body}`;
+  };
+
+  const handleDownloadData = async () => {
+    if (!window.confirm(t("download_data_confirm"))) return;
+    setAccountBusy(true);
+    setMessage("");
+    try {
+      const { data, error } = await supabase.rpc("export_my_data");
+      if (error) throw error;
+
+      const fileName = `baaro-mes-donnees-${new Date().toISOString().slice(0, 10)}.json`;
+      const blob = new Blob([JSON.stringify(data, null, 2)], {
         type: "application/json",
       });
+
+      // Mobile : feuille de partage si possible.
+      const file = new File([blob], fileName, { type: "application/json" });
+      if (navigator.canShare?.({ files: [file] })) {
+        try {
+          await navigator.share({ files: [file], title: "BAARO" });
+          setMessage(t("download_data_done"));
+          return;
+        } catch (shareErr) {
+          if ((shareErr as Error)?.name === "AbortError") return;
+          // sinon : téléchargement classique ci-dessous
+        }
+      }
+
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `baaro-settings-${new Date().toISOString().slice(0, 10)}.json`;
+      a.download = fileName;
+      document.body.appendChild(a);
       a.click();
-      URL.revokeObjectURL(url);
-      setMessage(t("export_done"));
-    } catch {
-      setMessage(t("import_error"));
-    }
-  };
-
-  const handleCopyPrefs = async () => {
-    try {
-      await navigator.clipboard.writeText(
-        JSON.stringify(buildExportPayload(), null, 2)
-      );
-      setMessage(t("copy_done"));
-    } catch {
-      setMessage(t("import_error"));
-    }
-  };
-
-  const handleImportFile = async (file: File | null) => {
-    if (!file) return;
-    try {
-      const text = await file.text();
-      const parsed = JSON.parse(text);
-      const incoming = parsed?.settings && typeof parsed.settings === "object"
-        ? parsed.settings
-        : parsed;
-      if (!incoming || typeof incoming !== "object") throw new Error("invalid");
-      const next = { ...DEFAULT_SETTINGS, ...incoming };
-      setSettings(next);
-      setMessage(t("import_done"));
-    } catch {
-      setMessage(t("import_error"));
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setMessage(t("download_data_done"));
+    } catch (err) {
+      console.error(err);
+      setMessage(t("download_data_error"));
+    } finally {
+      setAccountBusy(false);
     }
   };
 
   const clearLocalAuthData = () => {
     try {
-      localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem(LOCAL_KEY);
       localStorage.removeItem("baaro_settings_v22");
       localStorage.removeItem("baaro_settings_v21");
       localStorage.removeItem("baaro_settings_v20");
@@ -687,25 +766,8 @@ console.warn("[settings] native settings:", error);
     setMessage("");
     try {
       const { error: rpcError } = await supabase.rpc("delete_own_account");
-      if (rpcError) { throw rpcError; }
-      if (false) {
-        try {
-          const {
-            data: { session },
-          } = await supabase.auth.getSession();
-          if (session?.access_token) {
-            await fetch("/api/delete-account", {
-              method: "POST",
-              headers: {
-                Authorization: `Bearer ${session.access_token}`,
-                "Content-Type": "application/json",
-              },
-            });
-          }
-        } catch {
-          /* endpoint may not exist yet */
-        }
-      }
+      if (rpcError) throw rpcError;
+
       try {
         await supabase.auth.signOut({ scope: "global" });
       } catch {
@@ -792,6 +854,8 @@ console.warn("[settings] native settings:", error);
         "block_screenshots",
         "biometric"
       ),
+      blocked:
+        !!user && !isAnonymous && match("blocked_users", "blocked_users_desc"),
       a11y: match("a11y", "large_text", "reduce_motion"),
       sessions: match(
         "sessions_section",
@@ -808,7 +872,7 @@ console.warn("[settings] native settings:", error);
         "prefs_title"
       ),
     }),
-    [match, isAnonymous, q]
+    [match, isAnonymous, user]
   );
 
   const anyVisible = Object.values(visible).some(Boolean);
@@ -959,7 +1023,7 @@ console.warn("[settings] native settings:", error);
                 setEditName(userProfile?.display_name || displayName);
                 setEditFirstName(userProfile?.first_name || "");
                 setEditLastName(userProfile?.last_name || "");
-                setEditBirthDate(userProfile?.birth_date || "");
+                setEditBirthDate(userProfile?.birth_date || editBirthDate || "");
                 setEditLocation(userProfile?.location || "");
                 setEditCountry(userProfile?.country || userProfile?.registered_country || "");
                 setEditHandle(
@@ -1284,7 +1348,7 @@ console.warn("[settings] native settings:", error);
           onToggle={() => toggleSection("notifications")}
         >
           <CollapsibleSection id="notif_push" icon={Smartphone} title={t("push_title")} accent={COLORS.teal} open={openSections.notif_push} onToggle={() => toggleSection("notif_push")}>
-            <PushSettings />
+            <PushSettings onChange={(v: boolean) => void save({ notif_push: v })} />
           </CollapsibleSection>
           <CollapsibleSection id="notif_sound" icon={Volume2} title={t("sound_settings")} desc={t("sound_settings_desc")} accent={COLORS.gold} open={openSections.notif_sound} onToggle={() => toggleSection("notif_sound")}>
             <NotificationSoundSettings C={COLORS} />
@@ -1475,8 +1539,6 @@ console.warn("[settings] native settings:", error);
                       {t("beta_badge")}
                     </span>
                   )}
-                  
-                  
                 </button>
               );
             })}
@@ -1746,6 +1808,21 @@ console.warn("[settings] native settings:", error);
         </CollapsibleSection>
       )}
 
+      {/* Utilisateurs bloqués */}
+      {visible.blocked && user?.id && (
+        <CollapsibleSection
+          id="blocked"
+          icon={UserX}
+          title={t("blocked_users")}
+          desc={t("blocked_users_desc")}
+          accent={COLORS.gold}
+          open={openSections.blocked || !!q}
+          onToggle={() => toggleSection("blocked")}
+        >
+          <BlockedUsersPanel user_id={user.id} t={t} />
+        </CollapsibleSection>
+      )}
+
       {/* 2FA status (affichage) */}
       {(visible.privacy || match("mfa_section", "mfa_enabled")) && (
         <CollapsibleSection
@@ -1904,19 +1981,41 @@ console.warn("[settings] native settings:", error);
             onClick={() => setShowPrivacy(true)}
           />
         </div>
-        <div className="px-4 border-t first:border-t-0" style={{ borderColor: COLORS.border }}>
-          <ActionRow icon={Download} label={t("export_prefs")} onClick={handleExportPrefs} />
-        </div>
+        {user && !isAnonymous && (
+          <div className="px-4 border-t first:border-t-0" style={{ borderColor: COLORS.border }}>
+            <ActionRow
+              icon={Download}
+              label={t("download_data")}
+              onClick={handleDownloadData}
+              disabled={accountBusy}
+            />
+          </div>
+        )}
         <div className="px-4 border-t first:border-t-0" style={{ borderColor: COLORS.border }}>
           <ActionRow
-            icon={Upload}
-            label={t("import_prefs")}
-            onClick={() => fileInputEl?.click()}
+            icon={Share2}
+            label={t("invite_friends")}
+            onClick={handleInvite}
+            tone="gold"
           />
         </div>
         <div className="px-4 border-t first:border-t-0" style={{ borderColor: COLORS.border }}>
-          <ActionRow icon={Copy} label={t("copy_prefs")} onClick={handleCopyPrefs} />
+          <ActionRow
+            icon={Eraser}
+            label={t("clear_cache")}
+            onClick={handleClearCache}
+            disabled={accountBusy}
+          />
         </div>
+        {SUPPORT_EMAIL && (
+          <div className="px-4 border-t first:border-t-0" style={{ borderColor: COLORS.border }}>
+            <ActionRow
+              icon={LifeBuoy}
+              label={t("help_support")}
+              onClick={handleSupport}
+            />
+          </div>
+        )}
         <div className="px-4 border-t first:border-t-0" style={{ borderColor: COLORS.border }}>
           <ActionRow icon={RotateCcw} label={t("reset_prefs")} onClick={handleResetPrefs} />
         </div>
@@ -1924,17 +2023,6 @@ console.warn("[settings] native settings:", error);
           <ActionRow icon={LogOut} label={t("logout")} onClick={handleLogout} tone="danger" />
         </div>
       </section>
-      <input
-        ref={setFileInputEl}
-        type="file"
-        accept="application/json,.json"
-        className="hidden"
-        onChange={(e) => {
-          const f = e.target.files?.[0] || null;
-          handleImportFile(f);
-          e.target.value = "";
-        }}
-      />
 
       <p className="text-center text-[10px] py-1" style={{ color: COLORS.muted }}>
         {t("version")} {APP_VERSION}
