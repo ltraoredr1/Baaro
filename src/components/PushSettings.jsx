@@ -1,36 +1,51 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Bell, BellOff } from "lucide-react";
 import { COLORS } from "../theme.js";
 import { useToast } from "./ToastContext.jsx";
 import {
   isPushSupported,
-  getPermissionState,
+  getPermissionStateAsync,
+  isPushOptedOut,
   enablePushNotifications,
   disablePushNotifications,
 } from "../lib/pushNotifications.js";
 
 /**
- * Bloc réglages notifications push — affiché dans la section « Push » de SettingsTab.
- * Le titre de la section est déjà fourni par l'écran Réglages.
+ * Bloc réglages notifications push (section « Push » de SettingsTab).
+ * onChange(true|false) : appelé après activation / désactivation réussie,
+ * pour mettre à jour le réglage `notif_push`.
+ *
+ * Corrections :
+ * - Permission lue de façon asynchrone (Android/iOS renvoyaient toujours "default").
+ * - « Activé » = permission accordée ET pas de désactivation volontaire
+ *   (avant : après « Désactiver », le bouton restait sur « Désactiver »).
  */
-export function PushSettings() {
+export function PushSettings({ onChange }) {
   const { showToast } = useToast();
   const [supported, setSupported] = useState(false);
   const [permission, setPermission] = useState("default");
+  const [enabled, setEnabled] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  const refresh = useCallback(async () => {
+    const perm = await getPermissionStateAsync();
+    setPermission(perm);
+    setEnabled(perm === "granted" && !isPushOptedOut());
+  }, []);
 
   useEffect(() => {
     setSupported(isPushSupported());
-    setPermission(getPermissionState());
-  }, []);
+    void refresh();
+  }, [refresh]);
 
   const handleEnable = async () => {
     setLoading(true);
     const res = await enablePushNotifications();
+    await refresh();
     setLoading(false);
-    setPermission(getPermissionState());
 
     if (res.ok) {
+      onChange?.(true);
       showToast("Notifications activées", "success");
     } else {
       showToast(res.error || "Impossible d'activer", "error");
@@ -40,10 +55,11 @@ export function PushSettings() {
   const handleDisable = async () => {
     setLoading(true);
     const res = await disablePushNotifications();
+    await refresh();
     setLoading(false);
-    setPermission(getPermissionState());
 
     if (res.ok) {
+      onChange?.(false);
       showToast("Notifications désactivées", "info");
     } else {
       showToast(res.error || "Erreur", "error");
@@ -61,8 +77,6 @@ export function PushSettings() {
     );
   }
 
-  const granted = permission === "granted";
-
   return (
     <div
       className="rounded-2xl p-5 border flex flex-col gap-3"
@@ -72,10 +86,10 @@ export function PushSettings() {
         Recevez des alertes pour les messages, lives et récompenses.
       </p>
       <p className="text-[11px] font-mono" style={{ color: COLORS.muted }}>
-        État : {permission}
+        État : {enabled ? "activé" : permission === "granted" ? "désactivé" : permission}
       </p>
 
-      {granted ? (
+      {enabled ? (
         <button
           type="button"
           onClick={handleDisable}
@@ -112,3 +126,5 @@ export function PushSettings() {
     </div>
   );
 }
+
+export default PushSettings;
