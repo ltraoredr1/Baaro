@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       channel:
-        description: 'Où envoyer la mise à jour ?'
+        description: 'Canal cible'
         required: true
         default: 'beta'
         type: choice
@@ -13,12 +13,12 @@ on:
           - production
 
 jobs:
-  upload-to-capgo:
+  upload:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Node 24
+      - name: Setup Node 24 - suit package.json engines
         uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -26,8 +26,11 @@ jobs:
 
       - run: npm ci
       - run: npm run build
-        env:
-          VITE_API_BASE_URL: https://baaro-xi.vercel.app
 
-      - name: Upload vers Capgo - ${{ inputs.channel }}
-        run: npx @capgo/cli@latest bundle upload --channel ${{ inputs.channel }} --apikey ${{ secrets.CAPGO_TOKEN }}
+      - name: Upload - suit tes scripts package.json
+        run: |
+          if [ "${{ inputs.channel }}" = "beta" ]; then
+            npx @capgo/cli@latest bundle upload --channel beta --apikey ${{ secrets.CAPGO_TOKEN }}
+          else
+            npx @capgo/cli@latest bundle upload --channel production --apikey ${{ secrets.CAPGO_TOKEN }}
+          fi
