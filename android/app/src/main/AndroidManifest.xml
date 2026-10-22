@@ -6,6 +6,9 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
+    <!-- Verrouillage biométrique (réglage « biometric ») -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+
     <!-- Notifications (obligatoire sur Android 13+ avec targetSdk 33+) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
