@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { Plus } from "lucide-react";
 import { COLORS } from "../../../theme.js";
 
-const SIZE = 60;
-const MARGIN = 10;
+const SIZE = 44;
+const MARGIN = 8;
 const TOP_LIMIT = 72;
 const BOTTOM_LIMIT = 24;
 const DRAG_THRESHOLD = 6;
@@ -192,7 +192,7 @@ export default function CreateVideoFab({ onClick, hidden = false }) {
         touchAction: "none",
         visibility: pos ? "visible" : "hidden",
         transform: `translate3d(${pos?.x ?? 0}px, ${pos?.y ?? 0}px, 0) scale(${
-          dragging ? 1.12 : 1
+          dragging ? 1.15 : 1
         })`,
         transition: dragging
           ? "none"
@@ -208,20 +208,22 @@ export default function CreateVideoFab({ onClick, hidden = false }) {
       )}
 
       <span
-        className="relative flex h-full w-full items-center justify-center rounded-full border-2 border-white/70 text-black active:scale-95"
+        className="relative flex h-full w-full items-center justify-center rounded-full border border-white/70 text-black active:scale-95"
         style={{
           background: `linear-gradient(135deg, ${COLORS.gold}, #ff8a00)`,
           boxShadow: dragging
-            ? "0 16px 36px rgba(0,0,0,0.55), 0 0 0 6px rgba(255,200,0,0.25)"
-            : "0 8px 22px rgba(0,0,0,0.5), 0 0 18px rgba(255,190,0,0.55)",
+            ? "0 10px 24px rgba(0,0,0,0.55), 0 0 0 4px rgba(255,200,0,0.25)"
+            : "0 5px 14px rgba(0,0,0,0.5), 0 0 10px rgba(255,190,0,0.5)",
         }}
       >
-        <Plus size={30} strokeWidth={3.5} />
+        <Plus size={22} strokeWidth={3.5} />
       </span>
 
-      <span className="pointer-events-none absolute left-1/2 top-full mt-1 -translate-x-1/2 whitespace-nowrap rounded-full bg-black/65 px-2 py-0.5 text-[10px] font-black text-white backdrop-blur-md">
-        {dragging ? "Dépose-moi" : "Créer"}
-      </span>
+      {dragging && (
+        <span className="pointer-events-none absolute left-1/2 top-full mt-1 -translate-x-1/2 whitespace-nowrap rounded-full bg-black/65 px-2 py-0.5 text-[9px] font-black text-white backdrop-blur-md">
+          Dépose-moi
+        </span>
+      )}
     </button>
   );
 }
