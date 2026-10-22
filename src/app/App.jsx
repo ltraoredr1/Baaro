@@ -9,6 +9,8 @@ import { PrivacyPage } from "../components/PrivacyPage.jsx";
 import { LegalPage } from "../components/LegalPage.jsx";
 import { ErrorBoundary } from "../components/ErrorBoundary.jsx";
 import { callSocial } from "../lib/notifyInteraction.js";
+import { useSettings } from "../hooks/useSettings.js";
+import { applyNativeSettings } from "../lib/nativeSettings.js";
 
 function InviteRouteGate() {
   const { code } = useParams();
@@ -71,6 +73,11 @@ function AppShell() {
             if (code) navigate(`/invite/${code}`, { replace: true });
           } catch {}
         });
+        // Démonté pendant l'await : on retire tout de suite l'écouteur.
+        if (cancelled) {
+          l.remove();
+          return;
+        }
         listener = l;
       } catch {
         // Pas sur mobile natif, on ignore
@@ -122,6 +129,17 @@ function AppShell() {
 }
 
 export default function App() {
+  // Réglages natifs (anti-capture, biométrie) appliqués dès le démarrage,
+  // sur toutes les routes, sans attendre l'ouverture de l'onglet Réglages.
+  const { settings } = useSettings();
+
+  useEffect(() => {
+    void applyNativeSettings(settings).catch((e) =>
+      console.warn("[app] native settings:", e)
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings.block_screenshots, settings.biometric]);
+
   return (
     <ErrorBoundary>
       <Routes>
