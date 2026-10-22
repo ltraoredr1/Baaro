@@ -23,6 +23,34 @@ body,
   -webkit-touch-callout: none;
 }
 
+/* =========================================================
+   THÈMES (posés par applySettingsToDom : data-baaro-theme)
+   Le fond est porté par <html> ; body et #root deviennent
+   transparents pour le laisser apparaître.
+   Le thème « light » n'est volontairement pas géré ici : il
+   demande une palette dynamique (voir theme.js).
+   ========================================================= */
+html[data-baaro-theme] body,
+html[data-baaro-theme] #root {
+  background-color: transparent;
+}
+
+html[data-baaro-theme="midnight"] { background-color: #0b1220; }
+html[data-baaro-theme="oled"]     { background-color: #000000; }
+html[data-baaro-theme="emerald"]  { background-color: #061a14; }
+html[data-baaro-theme="sunset"]   { background-color: #2a1215; }
+html[data-baaro-theme="ocean"]    { background-color: #0a1628; }
+html[data-baaro-theme="forest"]   { background-color: #0e1f14; }
+html[data-baaro-theme="desert"]   { background-color: #1f1a14; }
+
+html[data-baaro-theme="custom"] {
+  background-color: var(--baaro-custom-bg, #0b1220);
+  background-image: var(--baaro-custom-image, none);
+  background-size: cover;
+  background-position: center;
+  background-attachment: fixed;
+}
+
 .skip-link {
   position: absolute;
   left: -9999px;
@@ -152,6 +180,7 @@ body,
   animation: float 3s ease-in-out infinite;
 }
 
+/* Protection anti-capture (web) : appliquée par secureScreen.js sur #root */
 .privacy-blur {
   filter: blur(14px) brightness(0.7);
   transition: filter 0.12s ease;
