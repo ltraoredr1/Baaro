@@ -1,4 +1,7 @@
-// Plus de "Wallet" crypto — catégorie "Gains & revenus"
+// Textes du panneau de préférences de notifications.
+// Catégorie « Gains & revenus » (plus de wallet crypto).
+//
+// Corrections : arabe ajouté ; la langue est lue avec ses variantes ("en-US" → "en").
 export const TEXTS = {
   fr: {
     loading: "Chargement des préférences…",
@@ -28,13 +31,29 @@ export const TEXTS = {
       marketing: "Marketing",
     },
   },
+  ar: {
+    loading: "جارٍ تحميل التفضيلات…",
+    saved: "تم الحفظ",
+    savedLocal: "تم الحفظ على هذا الجهاز فقط (الخادم غير متاح)",
+    error: "خطأ",
+    labels: {
+      push_enabled: "الإشعارات الفورية",
+      messages: "الرسائل",
+      social: "التواصل (متابعات، إعجابات)",
+      live: "البث المباشر والنقاشات",
+      earnings: "الأرباح والإيرادات",
+      marketing: "التسويق",
+    },
+  },
 };
 
 export const KEYS = Object.keys(TEXTS.fr.labels);
 
 export function currentTexts() {
   try {
-    const code = (document.documentElement.lang || "fr").split("-")[0];
+    const code = (document.documentElement.lang || "fr")
+      .split(/[-_]/)[0]
+      .toLowerCase();
     return TEXTS[code] || TEXTS.fr;
   } catch {
     return TEXTS.fr;
