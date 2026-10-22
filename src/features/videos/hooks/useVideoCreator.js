@@ -244,6 +244,11 @@ export function useVideoCreator({
     setUploading(true);
     setUploadProgress(10);
 
+    // La durée est lue pendant l'envoi (et non après), pour gagner du temps.
+    const durationPromise = generated
+      ? Promise.resolve(formatTime(generatedSeconds))
+      : readDuration(selectedFile).catch(() => "00:00");
+
     try {
       // <= 500 Mo : R2 direct (/api/media) ; > 500 Mo : worker multipart.
       // La progression réelle occupe la plage 10 -> 65 %.
@@ -255,9 +260,7 @@ export function useVideoCreator({
       const publicUrl = uploaded.publicUrl || uploaded.url;
       setUploadProgress(65);
 
-      const duration = generated
-        ? formatTime(generatedSeconds)
-        : await readDuration(selectedFile);
+      const duration = await durationPromise;
 
       let soundUrl = null;
       if (selectedSound?.audio_url && !bakedAudio) {
