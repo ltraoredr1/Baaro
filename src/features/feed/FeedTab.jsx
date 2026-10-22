@@ -24,6 +24,9 @@ import { supabase } from "@/supabaseClient.js";
 import { handleDbError } from "@/lib/dbErrors.js";
 import { recordFeedEvent } from "@/lib/feedEvents.js";
 import { uploadExternalMedia } from "@/lib/externalMedia.js";
+import { insertStory } from "@/features/stories/api/storiesApi.js";
+import { callSocial } from "@/lib/notifyInteraction.js";
+import { FEED_REFRESH_EVENT } from "@/lib/feedTabRefresh.jsx";
 import { useCursorFeed } from "@/hooks/useCursorFeed.js";
 
 import { PollCard, SocialPostEnhancements, SocialSuggestions } from "./SocialEnhancements.jsx";
@@ -34,8 +37,11 @@ import { TipButton } from "@/components/TipButton.jsx";
 import { AskAiButton } from "@/components/AskAiButton.jsx";
 import { TranslateButton } from "@/components/TranslateButton.jsx";
 import { GuestBanner } from "@/components/GuestBanner.jsx";
+import { FloatingCreateButton } from "@/components/FloatingCreateButton.jsx";
 
-const MAX_MEDIA_BYTES = 50 * 1024 * 1024; // 50 Mo
+const MAX_MEDIA_BYTES = 50 * 1024 * 1024; // 50 Mo par fichier
+const MAX_MEDIA_COUNT = 10; // nombre max de médias par publication
+const STORY_DURATION_MS = 24 * 60 * 60 * 1000; // une story dure 24 h
 
 const REPORT_REASONS = [
   "Spam ou arnaque",
@@ -66,6 +72,27 @@ function formatDate(value) {
   });
 }
 
+/** Déduit le type d'un média (image / video / audio) */
+function detectKind(url, type) {
+  if (type === "video" || type === "audio" || type === "image") return type;
+  if (/\.(mp4|mov)$/i.test(url || "")) return "video";
+  if (/\.(mp3|wav|m4a)$/i.test(url || "")) return "audio";
+  return "image";
+}
+
+/** Liste des médias d'un post (nouveau format media_urls, ou ancien media_url) */
+function getPostMedia(post) {
+  if (Array.isArray(post.media_urls) && post.media_urls.length > 0) {
+    return post.media_urls
+      .filter((m) => m?.url)
+      .map((m) => ({ url: m.url, type: detectKind(m.url, m.type) }));
+  }
+  if (post.media_url) {
+    return [{ url: post.media_url, type: detectKind(post.media_url, post.media_type) }];
+  }
+  return [];
+}
+
 /** Transforme une ligne Supabase en objet post prêt à afficher */
 function formatPost(post) {
   const profile = post.profiles || {};
@@ -78,6 +105,7 @@ function formatPost(post) {
     text: post.text,
     media_url: post.media_url,
     media_type: post.media_type,
+    media_urls: post.media_urls,
     created_at: post.created_at,
     likes: post.likes_count || 0,
     reposts_count: post.reposts_count || 0,
@@ -88,6 +116,71 @@ function formatPost(post) {
     flag: profile.flag || "🌍",
     avatar: profile.avatar_url || "",
   };
+}
+
+/** Affiche un ou plusieurs médias d'un post */
+function MediaGallery({ items }) {
+  if (!items.length) return null;
+
+  const renderItem = (m, i, single) => {
+    if (m.type === "video") {
+      return (
+        <video
+          key={`${m.url}-${i}`}
+          src={m.url}
+          controls
+          playsInline
+          preload="metadata"
+          className={`w-full bg-black ${single ? "max-h-[500px] object-contain" : "h-48 object-cover"}`}
+        />
+      );
+    }
+    if (m.type === "audio") {
+      return (
+        <div
+          key={`${m.url}-${i}`}
+          className="w-full p-4 flex items-center gap-3 bg-slate-900/50 rounded-xl col-span-2"
+        >
+          <div className="p-2 rounded-full bg-teal-500/20 text-teal-400 shrink-0">
+            <Mic size={20} />
+          </div>
+          <audio src={m.url} controls className="flex-1 h-8" />
+        </div>
+      );
+    }
+    return (
+      <img
+        key={`${m.url}-${i}`}
+        src={m.url}
+        alt=""
+        loading="lazy"
+        className={`w-full ${single ? "max-h-[500px] object-contain" : "h-48 object-cover"}`}
+      />
+    );
+  };
+
+  if (items.length === 1) {
+    return (
+      <div className="rounded-xl overflow-hidden border bg-black/40 flex items-center justify-center">
+        {renderItem(items[0], 0, true)}
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-xl overflow-hidden border bg-black/40 grid grid-cols-2 gap-0.5">
+      {items.map((m, i) => (
+        <div
+          key={`${m.url}-${i}`}
+          className={`flex items-center justify-center ${
+            items.length % 2 === 1 && i === 0 ? "col-span-2" : ""
+          }`}
+        >
+          {renderItem(m, i, false)}
+        </div>
+      ))}
+    </div>
+  );
 }
 
 export function FeedTab({
@@ -132,9 +225,9 @@ export function FeedTab({
   const [pollData, setPollData] = useState(null);
   const [mood, setMood] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [mediaFile, setMediaFile] = useState(null);
-  const [mediaPreview, setMediaPreview] = useState(null);
+  const [mediaItems, setMediaItems] = useState([]); // [{ id, file, preview, kind }]
   const [textToolsOpen, setTextToolsOpen] = useState(false);
+  const [alsoStory, setAlsoStory] = useState(false); // publier aussi en story
 
   // Post Vocal
   const [isRecording, setIsRecording] = useState(false);
@@ -163,6 +256,7 @@ export function FeedTab({
   const [translatedMap, setTranslatedMap] = useState({});
 
   const fileInputRef = useRef(null);
+  const mediaItemsRef = useRef([]);
 
   const activeUserId = currentUserId || propUserId || null;
 
@@ -186,23 +280,32 @@ export function FeedTab({
     };
   }, []);
 
-  // Libération des URLs d'aperçu (média et audio)
+  // Libération des URLs d'aperçu des médias à la fermeture du composant
+  useEffect(() => {
+    mediaItemsRef.current = mediaItems;
+  }, [mediaItems]);
+
   useEffect(() => {
     return () => {
-      if (mediaPreview) URL.revokeObjectURL(mediaPreview);
+      mediaItemsRef.current.forEach((m) => URL.revokeObjectURL(m.preview));
+    };
+  }, []);
+
+  // Libération de l'aperçu audio
+  useEffect(() => {
+    return () => {
       if (audioPreviewUrl) URL.revokeObjectURL(audioPreviewUrl);
     };
-  }, [mediaPreview, audioPreviewUrl]);
+  }, [audioPreviewUrl]);
 
   // Nettoyage de l'enregistrement si la modale est fermée
   useEffect(() => {
     if (!isCreateOpen) {
-      if (audioPreviewUrl) URL.revokeObjectURL(audioPreviewUrl);
       setAudioBlob(null);
       setAudioPreviewUrl(null);
       setIsRecording(false);
     }
-  }, [isCreateOpen, audioPreviewUrl]);
+  }, [isCreateOpen]);
 
   // Fermer le menu "..." en touchant ailleurs
   useEffect(() => {
@@ -241,6 +344,16 @@ export function FeedTab({
   // Premier chargement du flux
   useEffect(() => {
     loadPosts();
+  }, [loadPosts]);
+
+  // Double appui sur l'onglet Feed : retour en haut + rechargement
+  useEffect(() => {
+    const onRefresh = () => {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      loadPosts({ silent: true });
+    };
+    window.addEventListener(FEED_REFRESH_EVENT, onRefresh);
+    return () => window.removeEventListener(FEED_REFRESH_EVENT, onRefresh);
   }, [loadPosts]);
 
   // Supprimer une publication
@@ -448,17 +561,48 @@ export function FeedTab({
     }
   };
 
-  const handlePickFile = (e) => {
-    const file = e.target.files?.[0];
+  // --- Sélection de plusieurs médias ---
+  const handlePickFiles = (e) => {
+    const files = Array.from(e.target.files || []);
     e.target.value = "";
-    if (!file) return;
+    if (files.length === 0) return;
 
-    if (file.size > MAX_MEDIA_BYTES) {
-      showToast("Fichier trop lourd (50 Mo maximum)", "error");
+    const slots = MAX_MEDIA_COUNT - mediaItems.length;
+    if (slots <= 0) {
+      showToast(`Maximum ${MAX_MEDIA_COUNT} médias`, "error");
       return;
     }
-    setMediaFile(file);
-    setMediaPreview(URL.createObjectURL(file));
+
+    const tooBig = files.filter((f) => f.size > MAX_MEDIA_BYTES);
+    if (tooBig.length > 0) {
+      showToast("Fichier trop lourd (50 Mo maximum) : ignoré", "error");
+    }
+
+    const accepted = files.filter((f) => f.size <= MAX_MEDIA_BYTES).slice(0, slots);
+    if (accepted.length < files.filter((f) => f.size <= MAX_MEDIA_BYTES).length) {
+      showToast(`Maximum ${MAX_MEDIA_COUNT} médias`, "info");
+    }
+
+    const added = accepted.map((file) => ({
+      id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      file,
+      preview: URL.createObjectURL(file),
+      kind: file.type.startsWith("video") ? "video" : "image",
+    }));
+    setMediaItems((prev) => [...prev, ...added]);
+  };
+
+  const removeMediaItem = (itemId) => {
+    setMediaItems((prev) => {
+      const target = prev.find((m) => m.id === itemId);
+      if (target) URL.revokeObjectURL(target.preview);
+      return prev.filter((m) => m.id !== itemId);
+    });
+  };
+
+  const clearAllMedia = () => {
+    mediaItemsRef.current.forEach((m) => URL.revokeObjectURL(m.preview));
+    setMediaItems([]);
   };
 
   // --- Fonctions Post Vocal ---
@@ -497,21 +641,105 @@ export function FeedTab({
   };
 
   const discardRecording = () => {
-    if (audioPreviewUrl) {
-      URL.revokeObjectURL(audioPreviewUrl);
-    }
     setAudioBlob(null);
     setAudioPreviewUrl(null);
   };
 
+  const resetComposer = () => {
+    setNewText("");
+    setMood("");
+    setPollData(null);
+    clearAllMedia();
+    setAudioBlob(null);
+    setAudioPreviewUrl(null);
+    setTextToolsOpen(false);
+    setAlsoStory(false);
+  };
+
+  const openCreate = () => setIsCreateOpen?.(true);
+
+  // Publier un post (texte + plusieurs médias + vocal + sondage)
+  const publishPost = async () => {
+    const uploads = mediaItems.map((item) =>
+      uploadExternalMedia(item.file, {
+        folder: "posts",
+        user_id: activeUserId,
+        maxBytes: MAX_MEDIA_BYTES,
+      }).then((r) => ({ url: r.url, type: item.kind }))
+    );
+
+    if (audioBlob) {
+      const audioFile = new File([audioBlob], "voice-note.webm", {
+        type: audioBlob.type || "audio/webm",
+      });
+      uploads.push(
+        uploadExternalMedia(audioFile, {
+          folder: "posts",
+          user_id: activeUserId,
+          maxBytes: MAX_MEDIA_BYTES,
+        }).then((r) => ({ url: r.url, type: "audio" }))
+      );
+    }
+
+    const uploaded = await Promise.all(uploads);
+    const first = uploaded[0] || null;
+
+    const payload = {
+      author_id: activeUserId,
+      text: newText + (mood ? ` (Humeur: ${mood})` : ""),
+      media_url: first?.url || null,
+      media_type: first?.type || null,
+      media_urls: uploaded,
+    };
+
+    let { error: postErr } = await supabase.from("posts").insert([payload]);
+
+    // Colonne media_urls pas encore créée : on publie au moins le premier média
+    if (postErr && /media_urls/i.test(postErr.message || "")) {
+      const { media_urls: _ignored, ...legacy } = payload;
+      ({ error: postErr } = await supabase.from("posts").insert([legacy]));
+      if (!postErr && uploaded.length > 1) {
+        showToast("Seul le premier média a été publié (migration SQL manquante)", "info");
+      }
+    }
+
+    if (postErr) throw postErr;
+
+    // Option « Publier aussi en story » : une story par photo/vidéo, via l'API existante des stories
+    if (alsoStory) {
+      const storyMedia = uploaded.filter((m) => m.type === "image" || m.type === "video");
+      try {
+        const now = Date.now();
+        for (const m of storyMedia) {
+          await insertStory({
+            author_id: activeUserId,
+            media_url: m.url,
+            media_type: m.type,
+            caption: newText.trim() || null,
+            publish_at: new Date(now).toISOString(),
+            expires_at: new Date(now + STORY_DURATION_MS).toISOString(),
+          });
+        }
+        if (storyMedia.length > 0) callSocial("story_published").catch(() => {});
+      } catch (storyErr) {
+        handleDbError(storyErr, showToast, "Publication créée, mais la story a échoué");
+      }
+    }
+
+    resetComposer();
+    setIsCreateOpen?.(false);
+    showToast("Publication créée !", "success");
+    loadPosts({ silent: true });
+  };
+
   const handlePublish = async () => {
     const hasText = Boolean(newText.trim());
-    const hasMedia = Boolean(mediaFile);
+    const hasMedia = mediaItems.length > 0;
     const hasAudio = Boolean(audioBlob);
     const hasPoll = Boolean(pollData?.question?.trim());
 
-    if (!hasText && !hasMedia && !hasAudio && !hasPoll) return;
     if (submitting) return;
+    if (!hasText && !hasMedia && !hasAudio && !hasPoll) return;
 
     if (!activeUserId) {
       showToast("Veuillez vous connecter pour publier", "error");
@@ -520,57 +748,7 @@ export function FeedTab({
 
     setSubmitting(true);
     try {
-      let mediaUrl = null;
-      let mediaType = null;
-
-      if (mediaFile) {
-        const uploadResult = await uploadExternalMedia(mediaFile, {
-          folder: "posts",
-          user_id: activeUserId,
-          maxBytes: MAX_MEDIA_BYTES,
-        });
-        mediaUrl = uploadResult.url;
-        mediaType = mediaFile.type.startsWith("video") ? "video" : "image";
-      } else if (audioBlob) {
-        const audioFile = new File([audioBlob], "voice-note.webm", {
-          type: audioBlob.type || "audio/webm",
-        });
-        const uploadResult = await uploadExternalMedia(audioFile, {
-          folder: "posts",
-          user_id: activeUserId,
-          maxBytes: MAX_MEDIA_BYTES,
-        });
-        mediaUrl = uploadResult.url;
-        mediaType = "audio";
-      }
-
-      const { error: postErr } = await supabase
-        .from("posts")
-        .insert([
-          {
-            author_id: activeUserId,
-            text: newText + (mood ? ` (Humeur: ${mood})` : ""),
-            media_url: mediaUrl,
-            media_type: mediaType,
-          },
-        ])
-        .select()
-        .single();
-
-      if (postErr) throw postErr;
-
-      setNewText("");
-      setMood("");
-      setPollData(null);
-      setMediaFile(null);
-      setMediaPreview(null);
-      setAudioBlob(null);
-      setAudioPreviewUrl(null);
-      setTextToolsOpen(false);
-      setIsCreateOpen?.(false);
-
-      showToast("Publication créée !", "success");
-      loadPosts({ silent: true });
+      await publishPost();
     } catch (err) {
       handleDbError(err, showToast, "Échec de la publication");
     } finally {
@@ -586,8 +764,15 @@ export function FeedTab({
     );
   }
 
+  const canPublish = Boolean(newText.trim() || mediaItems.length || audioBlob || pollData?.question?.trim());
+
   return (
     <div className="flex flex-col gap-6 max-w-2xl mx-auto w-full pb-20">
+      {/* Bouton flottant déplaçable */}
+      {activeUserId && !isCreateOpen && (
+        <FloatingCreateButton onCreatePost={openCreate} />
+      )}
+
       {/* Modale de création */}
       {activeUserId && isCreateOpen && (
         <div
@@ -617,42 +802,44 @@ export function FeedTab({
             </div>
 
             <div className="p-4 flex-1 overflow-y-auto flex flex-col gap-3">
-              <div className="flex items-center justify-between gap-2">
-                <button
-                  type="button"
-                  onClick={() => setTextToolsOpen(!textToolsOpen)}
-                  className="px-3 py-1.5 rounded-xl border text-xs font-medium flex items-center gap-1.5 transition-colors"
-                  style={{ borderColor: COLORS.border, color: COLORS.ivory, background: COLORS.surface2 }}
-                >
-                  <span>Mise en forme du texte</span>
-                  {textToolsOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                </button>
+              {(
+                <div className="flex items-center justify-between gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setTextToolsOpen(!textToolsOpen)}
+                    className="px-3 py-1.5 rounded-xl border text-xs font-medium flex items-center gap-1.5 transition-colors"
+                    style={{ borderColor: COLORS.border, color: COLORS.ivory, background: COLORS.surface2 }}
+                  >
+                    <span>Mise en forme du texte</span>
+                    {textToolsOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                  </button>
 
-                <button
-                  type="button"
-                  onClick={() =>
-                    window.dispatchEvent(
-                      new CustomEvent("baaro:ai-draft", {
-                        detail: {
-                          prompt: newText.trim()
-                            ? `Améliore ce brouillon de publication :\n"${newText.trim()}"\n\n`
-                            : "Rédige une publication engageante pour BAARO : ",
-                        },
-                      })
-                    )
-                  }
-                  title="Rédiger avec l'IA"
-                  className="px-3 py-1.5 rounded-xl transition-colors flex items-center gap-1.5 text-xs font-medium shadow-sm shrink-0"
-                  style={{
-                    background: "rgba(20, 184, 166, 0.15)",
-                    color: COLORS.teal,
-                    border: `1px solid ${COLORS.teal}40`,
-                  }}
-                >
-                  <Sparkles size={14} />
-                  <span>IA</span>
-                </button>
-              </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      window.dispatchEvent(
+                        new CustomEvent("baaro:ai-draft", {
+                          detail: {
+                            prompt: newText.trim()
+                              ? `Améliore ce brouillon de publication :\n"${newText.trim()}"\n\n`
+                              : "Rédige une publication engageante pour BAARO : ",
+                          },
+                        })
+                      )
+                    }
+                    title="Rédiger avec l'IA"
+                    className="px-3 py-1.5 rounded-xl transition-colors flex items-center gap-1.5 text-xs font-medium shadow-sm shrink-0"
+                    style={{
+                      background: "rgba(20, 184, 166, 0.15)",
+                      color: COLORS.teal,
+                      border: `1px solid ${COLORS.teal}40`,
+                    }}
+                  >
+                    <Sparkles size={14} />
+                    <span>IA</span>
+                  </button>
+                </div>
+              )}
 
               {textToolsOpen && (
                 <div
@@ -683,26 +870,60 @@ export function FeedTab({
                 }}
               />
 
-              {mediaPreview && (
-                <div
-                  className="relative rounded-xl overflow-hidden max-h-60 border"
-                  style={{ borderColor: COLORS.border }}
-                >
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setMediaFile(null);
-                      setMediaPreview(null);
-                    }}
-                    className="absolute top-2 right-2 z-10 p-1.5 rounded-full bg-black/60 text-white"
-                  >
-                    <X size={14} />
-                  </button>
-                  {mediaFile?.type?.startsWith("video") ? (
-                    <video src={mediaPreview} controls className="w-full h-full object-cover" />
-                  ) : (
-                    <img src={mediaPreview} alt="Aperçu" className="w-full h-full object-cover" />
-                  )}
+              {/* Option : publier aussi en story (photo/vidéo requise) */}
+              <label
+                className="flex items-center gap-2 text-xs select-none"
+                style={{
+                  color: mediaItems.length > 0 ? COLORS.ivory : COLORS.muted,
+                  opacity: mediaItems.length > 0 ? 1 : 0.6,
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={alsoStory && mediaItems.length > 0}
+                  disabled={mediaItems.length === 0 || submitting}
+                  onChange={(e) => setAlsoStory(e.target.checked)}
+                />
+                <span>
+                  Publier aussi en story
+                  {mediaItems.length === 0 ? " (ajoutez une photo ou une vidéo)" : ""}
+                </span>
+              </label>
+
+              {/* Aperçu des médias choisis */}
+              {mediaItems.length > 0 && (
+                <div className="flex flex-col gap-1.5">
+                  <div className="flex items-center justify-between text-[11px]" style={{ color: COLORS.muted }}>
+                    <span>
+                      {mediaItems.length}/{MAX_MEDIA_COUNT} média{mediaItems.length > 1 ? "s" : ""}
+                    </span>
+                    <button type="button" onClick={clearAllMedia} className="underline">
+                      Tout retirer
+                    </button>
+                  </div>
+                  <div className="flex gap-2 overflow-x-auto pb-1">
+                    {mediaItems.map((m) => (
+                      <div
+                        key={m.id}
+                        className="relative w-24 h-24 shrink-0 rounded-xl overflow-hidden border"
+                        style={{ borderColor: COLORS.border }}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => removeMediaItem(m.id)}
+                          className="absolute top-1 right-1 z-10 p-1 rounded-full bg-black/70 text-white"
+                          aria-label="Retirer ce média"
+                        >
+                          <X size={12} />
+                        </button>
+                        {m.kind === "video" ? (
+                          <video src={m.preview} className="w-full h-full object-cover" muted />
+                        ) : (
+                          <img src={m.preview} alt="Aperçu" className="w-full h-full object-cover" />
+                        )}
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
             </div>
@@ -716,8 +937,9 @@ export function FeedTab({
                   ref={fileInputRef}
                   type="file"
                   accept="image/*,video/*"
+                  multiple
                   className="hidden"
-                  onChange={handlePickFile}
+                  onChange={handlePickFiles}
                 />
                 <button
                   type="button"
@@ -726,7 +948,7 @@ export function FeedTab({
                   style={{ color: COLORS.gold }}
                 >
                   <ImageIcon size={16} />
-                  <span>Média</span>
+                  <span>Médias</span>
                 </button>
 
                 {!isRecording && !audioBlob && (
@@ -770,14 +992,12 @@ export function FeedTab({
               <button
                 type="button"
                 onClick={handlePublish}
-                disabled={
-                  submitting ||
-                  (!newText.trim() && !mediaFile && !audioBlob && !pollData?.question?.trim())
-                }
+                disabled={submitting || !canPublish}
                 className="px-4 py-1.5 rounded-xl text-xs font-bold shadow-md flex items-center gap-1.5 disabled:opacity-50 transition-opacity"
                 style={{ background: COLORS.gold, color: "#000" }}
               >
-                {submitting ? "Publication..." : "Publier"} <Send size={13} />
+                {submitting ? "Publication..." : "Publier"}{" "}
+                <Send size={13} />
               </button>
             </div>
           </div>
@@ -941,30 +1161,8 @@ export function FeedTab({
               </p>
             )}
 
-            {/* Rendu Média (Images, Vidéos & Audio) */}
-            {post.media_url && (
-              <div className="rounded-xl overflow-hidden border bg-black/40 flex items-center justify-center">
-                {post.media_type === "video" || /\.(mp4|webm|ogg|mov)$/i.test(post.media_url) ? (
-                  <video
-                    src={post.media_url}
-                    controls
-                    playsInline
-                    preload="metadata"
-                    className="w-full max-h-[500px] object-contain bg-black"
-                  />
-                ) : post.media_type === "audio" ||
-                  /\.(mp3|wav|m4a|webm|ogg)$/i.test(post.media_url) ? (
-                  <div className="w-full p-4 flex items-center gap-3 bg-slate-900/50 rounded-xl">
-                    <div className="p-2 rounded-full bg-teal-500/20 text-teal-400 shrink-0">
-                      <Mic size={20} />
-                    </div>
-                    <audio src={post.media_url} controls className="flex-1 h-8" />
-                  </div>
-                ) : (
-                  <img src={post.media_url} alt="" className="w-full max-h-[500px] object-contain" />
-                )}
-              </div>
-            )}
+            {/* Rendu Médias (une ou plusieurs images / vidéos / audio) */}
+            <MediaGallery items={getPostMedia(post)} />
 
             <PollCard postId={post.id} user_id={activeUserId} />
             <SocialPostEnhancements post={post} user_id={activeUserId} />
