@@ -1,33 +1,68 @@
 /**
  * Protection anti-capture d'écran
- * - Web / PWA : flou quand l'onglet perd le focus
- * - Android natif : à activer plus tard avec @capacitor-community/privacy-screen
- *   (ne pas importer ici, sinon le build Vercel casse)
+ * - Android natif : FLAG_SECURE via @capacitor-community/privacy-screen
+ *   (import dynamique : le plugin n'est jamais chargé sur le web, le build Vercel ne casse pas)
+ * - Web / PWA : flou (classe .privacy-blur de index.css) quand l'onglet perd le focus.
+ *   C'est une dissuasion, pas un vrai blocage.
+ *
+ * enableSecureScreen / disableSecureScreen sont idempotents et laissent
+ * remonter les erreurs natives à l'appelant (voir nativeSettings.js).
  */
+import { Capacitor } from "@capacitor/core";
 
-/** No-op sur le web. Sur Android natif, on brancherá le plugin plus tard. */
+const BLUR_CLASS = "privacy-blur";
+const ROOT_ID = "root";
+
+let detachWeb = null;
+
+/**
+ * Active la protection : FLAG_SECURE sur Android natif,
+ * flou de toute l'application sur le web.
+ */
 export async function enableSecureScreen() {
-  // Réservé à l'app Android (FLAG_SECURE)
+  if (Capacitor.isNativePlatform()) {
+    const { PrivacyScreen } = await import("@capacitor-community/privacy-screen");
+    await PrivacyScreen.enable();
+    return;
+  }
+  if (!detachWeb) detachWeb = attachWebPrivacyBlur(null);
 }
 
-/** No-op sur le web. */
+/** Désactive la protection (natif ou web). */
 export async function disableSecureScreen() {
-  // Réservé à l'app Android
+  if (Capacitor.isNativePlatform()) {
+    const { PrivacyScreen } = await import("@capacitor-community/privacy-screen");
+    await PrivacyScreen.disable();
+    return;
+  }
+  detachWeb?.();
+  detachWeb = null;
 }
 
 /**
  * Protection web : floute un élément quand la page perd le focus.
+ * Sans elementId (ou si l'élément n'existe pas dans la page courante,
+ * par exemple dans les Réglages), c'est toute l'application (#root) qui est floutée.
+ * On ne met jamais le filtre sur <html> : un filter y casserait les éléments
+ * position: fixed (navigation basse).
  * Retourne une fonction de nettoyage.
  */
 export function attachWebPrivacyBlur(elementId = "chat-content") {
-  const getEl = () => document.getElementById(elementId);
+  if (typeof window === "undefined") return () => {};
 
-  const blur = () => getEl()?.classList.add("privacy-blur");
-  const unblur = () => getEl()?.classList.remove("privacy-blur");
+  const getEl = () =>
+    (elementId ? document.getElementById(elementId) : null) ||
+    document.getElementById(ROOT_ID);
+
+  const blur = () => getEl()?.classList.add(BLUR_CLASS);
+  const unblur = () => {
+    document.getElementById(ROOT_ID)?.classList.remove(BLUR_CLASS);
+    if (elementId) document.getElementById(elementId)?.classList.remove(BLUR_CLASS);
+  };
 
   const onVisibility = () => {
     if (document.hidden) blur();
-    else unblur();
+    else if (document.hasFocus()) unblur();
   };
 
   window.addEventListener("blur", blur);
