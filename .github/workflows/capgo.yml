@@ -1,0 +1,33 @@
+name: Baaro - Capgo (Validation manuelle)
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: 'Où envoyer la mise à jour ?'
+        required: true
+        default: 'beta'
+        type: choice
+        options:
+          - beta
+          - production
+
+jobs:
+  upload-to-capgo:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: 'npm'
+
+      - run: npm ci
+      - run: npm run build
+        env:
+          VITE_API_BASE_URL: https://baaro-xi.vercel.app
+
+      - name: Upload vers Capgo - ${{ inputs.channel }}
+        run: npx @capgo/cli@latest bundle upload --channel ${{ inputs.channel }} --apikey ${{ secrets.CAPGO_TOKEN }}
