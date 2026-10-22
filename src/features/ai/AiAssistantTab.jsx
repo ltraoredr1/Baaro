@@ -116,6 +116,14 @@ function makeWelcome(name, isGriot) {
     text: `Salut ${name || "membre"} ! 👋\nJe suis l'Assistant IA de BAARO. Que souhaites-tu créer ou analyser aujourd'hui ?`,
   };
 }
+
+function loadStoredMessages(key, name, isGriot) {
+  
+  return {
+    id: "welcome",
+    role: "assistant",
+    text: `Salut ${name || "membre"} ! 👋\nJe suis l'Assistant IA de BAARO. Que souhaites-tu créer ou analyser aujourd'hui ?`,
+  };
 }
 
 function loadStoredMessages(key, name, isGriot) {
