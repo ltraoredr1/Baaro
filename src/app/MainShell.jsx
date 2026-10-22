@@ -1,4 +1,4 @@
-import { useEffect, useState, Suspense } from "react";
+import { useEffect, useRef, useState, Suspense } from "react";
 import { useApp } from "../contexts/AppContext.jsx";
 import { Header } from "../components/Header.jsx";
 import { Navigation } from "../components/Navigation.jsx";
@@ -11,6 +11,7 @@ import { useApplyPendingReferral } from "../hooks/useApplyPendingReferral.js";
 import { useToast } from "../components/ToastContext.jsx";
 import { COLORS as THEME_COLORS } from "../theme.js";
 import { applySettingsToDom, loadLocalSettings } from "../lib/appSettings.js";
+import { FEED_REFRESH_EVENT, FEED_PULSE_EVENT, TabPulseStyles } from "../lib/feedTabRefresh.jsx";
 import { tabs } from "./tabs.jsx";
 import { TabFallback } from "./TabFallback.jsx";
 import { OfflineBanner } from "../components/OfflineBanner.jsx";
@@ -35,6 +36,8 @@ const THEME_BG_MAP = {
 };
 
 const WELCOME_TOAST_KEY = "baaro:welcome_toast_shown";
+const DOUBLE_TAP_DELAY = 350; // ms
+
 const FALLBACK_COLORS = {
   ivory: "#F5F3EF",
 };
@@ -94,6 +97,26 @@ export function MainShell() {
   const COLORS = {
     ...FALLBACK_COLORS,
     ...(THEME_COLORS || {}),
+  };
+
+  /* =========================================================
+     DOUBLE APPUI SUR L'ONGLET FEED : recharge le fil + animation
+     ========================================================= */
+  const lastFeedTapRef = useRef(0);
+
+  const handleSetActiveTab = (tab) => {
+    if (tab === "feed") {
+      const now = Date.now();
+      if (now - lastFeedTapRef.current < DOUBLE_TAP_DELAY) {
+        lastFeedTapRef.current = 0;
+        window.dispatchEvent(new CustomEvent(FEED_REFRESH_EVENT));
+        window.dispatchEvent(new CustomEvent(FEED_PULSE_EVENT));
+        if (activeTab === "feed") return;
+      } else {
+        lastFeedTapRef.current = now;
+      }
+    }
+    setActiveTab(tab);
   };
 
   /* =========================================================
@@ -334,6 +357,8 @@ export function MainShell() {
         paddingTop: isImmersive && !showUi ? "0px" : "env(safe-area-inset-top)",
       }}
     >
+      <TabPulseStyles />
+
       {incoming && <ChatCallModal mode="incoming" {...incoming} onClose={clearIncoming} />}
       <OfflineBanner />
 
@@ -387,7 +412,7 @@ export function MainShell() {
           <div className="hidden md:block md:col-span-1">
             <Navigation
               activeTab={activeTab}
-              setActiveTab={setActiveTab}
+              setActiveTab={handleSetActiveTab}
             />
           </div>
         )}
@@ -426,7 +451,7 @@ export function MainShell() {
         <div className="md:hidden">
           <Navigation
             activeTab={activeTab}
-            setActiveTab={setActiveTab}
+            setActiveTab={handleSetActiveTab}
           />
         </div>
       )}
