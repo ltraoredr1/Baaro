@@ -118,15 +118,6 @@ function makeWelcome(name, isGriot) {
 }
 
 function loadStoredMessages(key, name, isGriot) {
-  
-  return {
-    id: "welcome",
-    role: "assistant",
-    text: `Salut ${name || "membre"} ! 👋\nJe suis l'Assistant IA de BAARO. Que souhaites-tu créer ou analyser aujourd'hui ?`,
-  };
-}
-
-function loadStoredMessages(key, name, isGriot) {
   try {
     const raw = localStorage.getItem(key);
     if (!raw) return [makeWelcome(name)];
