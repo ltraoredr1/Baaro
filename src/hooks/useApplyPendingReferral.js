@@ -4,8 +4,23 @@ import {
   applyReferralCode,
   getPendingRef,
   clearPendingRef,
-  setPendingRef, // utile si on veut forcer un code
 } from "../lib/referralApi.js";
+
+/**
+ * Helper local pour stocker un code en attente
+ * (évite de dépendre de setPendingRef qui n'existe pas dans referralApi)
+ */
+function setPendingRef(code) {
+  try {
+    if (code) {
+      localStorage.setItem("baaro_pending_ref", String(code).trim().toUpperCase());
+    } else {
+      localStorage.removeItem("baaro_pending_ref");
+    }
+  } catch {
+    // ignore
+  }
+}
 
 /**
  * Hook de parrainage automatique + manuel.
@@ -24,7 +39,7 @@ export function useApplyPendingReferral({ showToast, auto = true } = {}) {
   const isRunningRef = useRef(false);
 
   const [status, setStatus] = useState("idle"); // idle | loading | success | error
-  const [lastResult, setLastResult] = useState(null); // { ok, message, ptsEarned, error }
+  const [lastResult, setLastResult] = useState(null);
 
   const userId = session?.user?.id;
 
@@ -77,7 +92,9 @@ export function useApplyPendingReferral({ showToast, auto = true } = {}) {
           clearPendingRef();
           const result = {
             ok: true,
-            message: res.message || `Parrainage réussi : +${res.ptsEarned || res.bonus || 0} pts`,
+            message:
+              res.message ||
+              `Parrainage réussi : +${res.ptsEarned || res.bonus || 0} pts`,
             ptsEarned: res.ptsEarned || res.bonus || 0,
             code: raw,
           };
@@ -118,7 +135,6 @@ export function useApplyPendingReferral({ showToast, auto = true } = {}) {
         setLastResult(result);
         setStatus("error");
 
-        // On n'affiche un toast que sur les cas vraiment utiles
         if (/propre code|own code/.test(errorMsg)) {
           showToast?.(userMessage, "info");
         }
@@ -177,15 +193,17 @@ export function useApplyPendingReferral({ showToast, auto = true } = {}) {
 
   return {
     // État
-    status,          // "idle" | "loading" | "success" | "error"
-    lastResult,      // dernier résultat détaillé
+    status, // "idle" | "loading" | "success" | "error"
+    lastResult,
     isLoading: status === "loading",
 
     // Actions
-    apply,           // apply(code?) → applique un code ou le pending
-    forceApply,      // forceApply(code) → ignore le cache
-    setPending,      // setPending(code) → stocke un code pour plus tard
+    apply,
+    forceApply,
+    setPending,
     clearPending: clearPendingRef,
     reset,
   };
 }
+
+export default useApplyPendingReferral;
