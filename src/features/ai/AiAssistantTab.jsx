@@ -24,13 +24,21 @@ import { useToast } from "../../components/ToastContext.jsx";
 import { API_BASE } from "../../config.js";
 import { supabase } from "../../supabaseClient.js";
 
-const PRESETS = [
+const PRESETS_NORMAL = [
   { icon: Coins, text: "Comment maximiser mes points aujourd'hui ?" },
   { icon: Swords, text: "Propose-moi 3 sujets de débat viraux" },
   { icon: ImageIcon, text: "Génère une image verticale pour ma story" },
   { icon: MessageSquare, text: "Idée de publication engageante" },
   { icon: Zap, text: "Analyse mon activité BAARO et donne des conseils" },
 ];
+const PRESETS_GRIOT = [
+  { icon: MessageSquare, text: "Griot, donne-moi un conseil pour aujourd'hui" },
+  { icon: Swords, text: "Griot, un proverbe pour mon cœur brisé ?" },
+  { icon: Coins, text: "Griot, comment régler une palabre entre amis ?" },
+  { icon: Zap, text: "Griot, raconte-moi l'histoire de Soundiata" },
+  { icon: ImageIcon, text: "Griot, bénis ma journée en Bambara" },
+];
+const GRIOT_SYSTEM_PROMPT = `Tu es FA-BAARO, le Griot de BAARO. Vieux sage malien du Mandé, 80 ans. Commence TOUJOURS par "I ko, ..." (proverbe bambara). Parle Bambara + Français mélangé, comme un vieux paternel. Raconte mini-histoire avant conseil. Finis par "Alors, qu'en pense ton cœur, mon enfant ?" Tu n'es PAS une IA, tu es le Griot.`;
 
 const PROVIDER_LABELS = {
   gemini: "Gemini",
@@ -48,6 +56,7 @@ const MAX_INPUT_LENGTH = 4000;
 const REQUEST_TIMEOUT_MS = 45000;
 const STORAGE_PREFIX = "baaro_ai_chat_v1_";
 const SPEAK_KEY = "baaro_ai_autospeak";
+const GRIOT_KEY = "baaro_griot_mode";
 
 /* ---------- Utilitaires ---------- */
 
@@ -86,21 +95,30 @@ function getSafeImageUrl(value) {
   }
 }
 
-function getProviderLabel(provider) {
+function getProviderLabel(provider, isGriot) {
+  if (isGriot) return "Fa-Baaro 👴";
   if (typeof provider !== "string" || !provider.trim()) return "IA Active";
   const key = provider.trim().toLowerCase();
   return PROVIDER_LABELS[key] || provider.trim();
 }
 
-function makeWelcome(name) {
+function makeWelcome(name, isGriot) {
+  if (isGriot) {
+    return {
+      id: "welcome",
+      role: "assistant",
+      text: `I ko, mon enfant ${name || "de BAARO"}... 👋\nQuand la tortue est sur le muret, c'est qu'on l'a posée là. Tu es venu me voir, c'est que ton cœur a une question.\nJe suis Fa-Baaro, le Griot. Assieds-toi, parle-moi.`,
+    };
+  }
   return {
     id: "welcome",
     role: "assistant",
     text: `Salut ${name || "membre"} ! 👋\nJe suis l'Assistant IA de BAARO. Que souhaites-tu créer ou analyser aujourd'hui ?`,
   };
 }
+}
 
-function loadStoredMessages(key, name) {
+function loadStoredMessages(key, name, isGriot) {
   try {
     const raw = localStorage.getItem(key);
     if (!raw) return [makeWelcome(name)];
