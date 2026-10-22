@@ -1,282 +1,553 @@
-import { useCallback, useEffect, useState } from "react";
-import { Music, X, Search, Volume2, Play, Pause, AlertCircle } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  Music,
+  X,
+  Search,
+  Play,
+  Pause,
+  AlertCircle,
+  Upload,
+  Heart,
+  Clock,
+  ChevronDown,
+} from "lucide-react";
 import { supabase } from "../supabaseClient.js";
+import { COLORS } from "../theme.js";
 
-const MAX_VOICEOVER_SIZE = 10 * 1024 * 1024; // 10MB
+const MAX_VOICEOVER_SIZE = 10 * 1024 * 1024; // 10 MB
 const GENRES = ["tous", "lo-fi", "pop", "electronic", "chill", "acoustic"];
+const PAGE_SIZE = 30;
+const TABS = [
+  { id: "library", label: "Library", icon: Music },
+  { id: "recent", label: "Récents", icon: Clock },
+  { id: "favorites", label: "Favoris", icon: Heart },
+];
+
+const FAVORITES_KEY = "baaro-audio-favorites";
+const RECENTS_KEY = "baaro-audio-recents";
+
+function loadLocal(key) {
+  try {
+    return JSON.parse(localStorage.getItem(key) || "[]");
+  } catch {
+    return [];
+  }
+}
+
+function saveLocal(key, list) {
+  localStorage.setItem(key, JSON.stringify(list.slice(0, 50)));
+}
+
+/** Filtre client par titre ou artiste */
+function filterByQuery(list, query) {
+  const q = query.trim().toLowerCase();
+  if (!q) return list;
+  return list.filter((track) => {
+    const title = (track.title || "").toLowerCase();
+    const artist = (track.artist || "").toLowerCase();
+    return title.includes(q) || artist.includes(q);
+  });
+}
 
 /**
- * AudioPicker - Sélectionner audio library ou uploader voiceover
+ * AudioPicker – Library + Récents + Favoris + Upload + Pagination + Recherche
  */
 export function AudioPicker({ selectedAudio, onSelectAudio, onRemoveAudio }) {
   const [showLibrary, setShowLibrary] = useState(false);
+  const [tab, setTab] = useState("library");
   const [audioLibrary, setAudioLibrary] = useState([]);
-  const [filteredLibrary, setFilteredLibrary] = useState([]);
   const [selectedGenre, setSelectedGenre] = useState("tous");
   const [searchQuery, setSearchQuery] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const [selectingId, setSelectingId] = useState(null);
   const [error, setError] = useState(null);
   const [previewingId, setPreviewingId] = useState(null);
-  const [previewAudio, setPreviewAudio] = useState(null);
+  const [favorites, setFavorites] = useState(() => loadLocal(FAVORITES_KEY));
+  const [recents, setRecents] = useState(() => loadLocal(RECENTS_KEY));
 
-  // Load audio library
-  useEffect(() => {
-    const loadLibrary = async () => {
-      setIsLoading(true);
+  const previewAudioRef = useRef(null);
+  const fileInputRef = useRef(null);
+  const offsetRef = useRef(0);
+
+  // --- Load library (pagination) ---
+  const loadLibrary = useCallback(
+    async ({ reset = false } = {}) => {
+      if (tab !== "library") return;
+
+      if (reset) {
+        offsetRef.current = 0;
+        setIsLoading(true);
+      } else {
+        setLoadingMore(true);
+      }
       setError(null);
+
       try {
         const { data, error: queryError } = await supabase.rpc("search_audio_library", {
-          p_query: searchQuery || null,
+          p_query: searchQuery.trim() || null,
           p_genre: selectedGenre === "tous" ? null : selectedGenre,
-          p_limit: 50,
+          p_limit: PAGE_SIZE,
+          p_offset: reset ? 0 : offsetRef.current,
         });
 
-        if (queryError) {
-          throw new Error(`Erreur: ${queryError.message}`);
-        }
+        if (queryError) throw new Error(queryError.message);
 
-        setAudioLibrary(data || []);
+        const rows = data || [];
+        setAudioLibrary((prev) => (reset ? rows : [...prev, ...rows]));
+        offsetRef.current += rows.length;
+        setHasMore(rows.length >= PAGE_SIZE);
       } catch (err) {
-        console.error("❌ Erreur chargement library audio:", err);
-        setError(err?.message || "Impossible de charger la library audio");
-        setAudioLibrary([]);
+        console.error("[AudioPicker]", err);
+        setError(err?.message || "Impossible de charger la library");
+        if (reset) setAudioLibrary([]);
       } finally {
         setIsLoading(false);
+        setLoadingMore(false);
+      }
+    },
+    [tab, searchQuery, selectedGenre]
+  );
+
+  useEffect(() => {
+    if (!showLibrary || tab !== "library") return;
+    const t = setTimeout(() => loadLibrary({ reset: true }), 280);
+    return () => clearTimeout(t);
+  }, [showLibrary, tab, searchQuery, selectedGenre, loadLibrary]);
+
+  // --- Preview ---
+  const stopPreview = useCallback(() => {
+    if (previewAudioRef.current) {
+      previewAudioRef.current.pause();
+      previewAudioRef.current = null;
+    }
+    setPreviewingId(null);
+  }, []);
+
+  useEffect(() => () => stopPreview(), [stopPreview]);
+
+  // Escape pour fermer
+  useEffect(() => {
+    if (!showLibrary) return;
+    const onKey = (e) => {
+      if (e.key === "Escape") {
+        stopPreview();
+        setShowLibrary(false);
       }
     };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [showLibrary, stopPreview]);
 
-    const debounceTimer = setTimeout(() => {
-      loadLibrary();
-    }, 300); // Debounce search
-
-    return () => clearTimeout(debounceTimer);
-  }, [searchQuery, selectedGenre]);
-
-  // Filter library
-  useEffect(() => {
-    let filtered = audioLibrary;
-
-    if (searchQuery.trim()) {
-      const query = searchQuery.toLowerCase();
-      filtered = filtered.filter(
-        (track) =>
-          track.title.toLowerCase().includes(query) ||
-          track.artist?.toLowerCase().includes(query)
-      );
-    }
-
-    setFilteredLibrary(filtered);
-  }, [audioLibrary, searchQuery]);
-
-  const handleSelectTrack = async (track) => {
-    try { await supabase.rpc("record_sound_usage", { p_sound_id: String(track.id) }); } catch {}
-    onSelectAudio({
-      id: track.id,
-      title: track.title,
-      artist: track.artist,
-      audio_url: track.audio_url,
-      duration_seconds: track.duration_seconds,
-      preview_url: track.preview_url,
-      license_code: track.license_code,
-      license_name: track.license_name,
-      rights_holder: track.rights_holder,
-      attribution_required: track.attribution_required,
-      commercial_use_allowed: track.commercial_use_allowed,
-      remix_allowed: track.remix_allowed,
-      language: track.language,
-      region: track.region,
+  // --- Favoris ---
+  const toggleFavorite = (track) => {
+    setFavorites((prev) => {
+      const exists = prev.some((t) => t.id === track.id);
+      const next = exists
+        ? prev.filter((t) => t.id !== track.id)
+        : [
+            {
+              id: track.id,
+              title: track.title,
+              artist: track.artist,
+              audio_url: track.audio_url,
+              preview_url: track.preview_url,
+              duration_seconds: track.duration_seconds,
+              license_name: track.license_name,
+              attribution_required: track.attribution_required,
+            },
+            ...prev,
+          ];
+      saveLocal(FAVORITES_KEY, next);
+      return next;
     });
-    setShowLibrary(false);
+  };
+
+  const isFavorite = (id) => favorites.some((t) => t.id === id);
+
+  // --- Sélection ---
+  const handleSelectTrack = async (track) => {
+    setSelectingId(track.id);
+    try {
+      try {
+        await supabase.rpc("record_sound_usage", { p_sound_id: String(track.id) });
+      } catch {}
+
+      // Ajoute aux récents
+      setRecents((prev) => {
+        const next = [
+          {
+            id: track.id,
+            title: track.title,
+            artist: track.artist,
+            audio_url: track.audio_url,
+            preview_url: track.preview_url,
+            duration_seconds: track.duration_seconds,
+            license_name: track.license_name,
+            attribution_required: track.attribution_required,
+          },
+          ...prev.filter((t) => t.id !== track.id),
+        ].slice(0, 30);
+        saveLocal(RECENTS_KEY, next);
+        return next;
+      });
+
+      onSelectAudio({
+        ...track,
+        source: track.source || "library",
+      });
+      stopPreview();
+      setShowLibrary(false);
+    } finally {
+      setSelectingId(null);
+    }
   };
 
   const handlePlayPreview = (track) => {
     if (previewingId === track.id) {
-      // Stop preview
-      if (previewAudio) {
-        previewAudio.pause();
-        setPreviewAudio(null);
-      }
-      setPreviewingId(null);
-    } else {
-      // Play preview
-      if (previewAudio) {
-        previewAudio.pause();
-      }
-
-      const audio = new Audio(track.preview_url);
-      audio.onended = () => {
-        setPreviewingId(null);
-        setPreviewAudio(null);
-      };
-      audio.play().catch((err) => {
-        console.error("❌ Erreur playback preview:", err);
-      });
-
-      setPreviewAudio(audio);
-      setPreviewingId(track.id);
+      stopPreview();
+      return;
     }
+    stopPreview();
+    const audio = new Audio(track.preview_url || track.audio_url);
+    audio.onended = () => {
+      setPreviewingId(null);
+      previewAudioRef.current = null;
+    };
+    audio.play().catch(console.error);
+    previewAudioRef.current = audio;
+    setPreviewingId(track.id);
   };
 
-  // Cleanup
-  useEffect(() => {
-    return () => {
-      if (previewAudio) {
-        previewAudio.pause();
-      }
-    };
-  }, [previewAudio]);
+  // --- Upload voiceover ---
+  const handleUploadVoiceover = (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+
+    if (!file.type.startsWith("audio/")) {
+      setError("Fichier audio uniquement");
+      return;
+    }
+    if (file.size > MAX_VOICEOVER_SIZE) {
+      setError("Fichier trop lourd (max 10 Mo)");
+      return;
+    }
+
+    onSelectAudio({
+      id: `local_${Date.now()}`,
+      title: file.name.replace(/\.[^/.]+$/, ""),
+      artist: "Voiceover",
+      file,
+      source: "upload",
+    });
+    setShowLibrary(false);
+  };
+
+  // Liste selon l’onglet + recherche titre/artiste
+  const currentList = (() => {
+    if (tab === "favorites") return filterByQuery(favorites, searchQuery);
+    if (tab === "recent") return filterByQuery(recents, searchQuery);
+    return filterByQuery(audioLibrary, searchQuery);
+  })();
 
   return (
     <div className="space-y-3">
-      {/* Selected audio display */}
+      {/* Audio sélectionné */}
       {selectedAudio ? (
-        <div className="p-3 bg-orange-50 border border-orange-200 rounded-lg flex items-center justify-between">
-          <div className="flex-1">
-            <p className="font-medium text-gray-900">{selectedAudio.title}</p>
-            <p className="text-sm text-gray-600">{selectedAudio.artist || "Audio sans titre"}</p>
-            {selectedAudio.license_name && (
-              <p className="text-xs text-emerald-700 mt-1">{selectedAudio.license_name}{selectedAudio.attribution_required ? " • attribution requise" : ""}</p>
-            )}
-            <p className="text-xs text-gray-500 mt-1">
-              {selectedAudio.duration_seconds}s
+        <div
+          className="p-3 rounded-xl border flex items-center justify-between gap-3"
+          style={{ background: COLORS.surface2, borderColor: COLORS.border }}
+        >
+          <div className="flex-1 min-w-0">
+            <p className="font-medium text-sm truncate" style={{ color: COLORS.ivory }}>
+              {selectedAudio.title}
             </p>
+            <p className="text-xs truncate" style={{ color: COLORS.muted }}>
+              {selectedAudio.artist || "Audio"}
+              {selectedAudio.duration_seconds ? ` • ${selectedAudio.duration_seconds}s` : ""}
+            </p>
+            {selectedAudio.license_name && (
+              <p className="text-[11px] mt-0.5" style={{ color: COLORS.teal }}>
+                {selectedAudio.license_name}
+                {selectedAudio.attribution_required ? " • attribution requise" : ""}
+              </p>
+            )}
           </div>
           <button
+            type="button"
             onClick={onRemoveAudio}
-            className="p-2 hover:bg-orange-100 rounded-lg transition-colors"
+            className="p-2 rounded-lg hover:bg-white/10 shrink-0"
             aria-label="Retirer l'audio"
           >
-            <X size={18} className="text-orange-600" />
+            <X size={18} style={{ color: COLORS.muted }} />
           </button>
         </div>
       ) : (
         <button
+          type="button"
           onClick={() => setShowLibrary(true)}
-          className="w-full px-4 py-3 border-2 border-dashed border-gray-300 hover:border-orange-400 rounded-lg flex items-center justify-center gap-2 text-gray-600 hover:text-orange-600 transition-colors"
-          aria-label="Ajouter de la musique"
+          className="w-full px-4 py-3 border-2 border-dashed rounded-xl flex items-center justify-center gap-2 text-sm transition-colors"
+          style={{ borderColor: COLORS.border, color: COLORS.muted }}
         >
-          <Music size={20} />
+          <Music size={18} />
           <span>Ajouter de la musique</span>
         </button>
       )}
 
-      {/* Library modal */}
+      {/* Modal */}
       {showLibrary && (
-        <div className="fixed inset-0 z-[200] bg-black/50 flex items-center justify-center p-4">
+        <div
+          className="fixed inset-0 z-[200] bg-black/70 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4"
+          onClick={() => {
+            stopPreview();
+            setShowLibrary(false);
+          }}
+        >
           <div
-            className="bg-white rounded-xl w-full max-w-2xl max-h-[80vh] overflow-y-auto shadow-2xl"
+            className="w-full max-w-2xl max-h-[85vh] rounded-t-2xl sm:rounded-2xl overflow-hidden flex flex-col shadow-2xl"
+            style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}` }}
+            onClick={(e) => e.stopPropagation()}
             role="dialog"
             aria-modal="true"
             aria-labelledby="audio-library-title"
           >
             {/* Header */}
-            <div className="sticky top-0 bg-white border-b p-4 flex items-center justify-between">
-              <h3 id="audio-library-title" className="text-lg font-bold text-gray-900">
+            <div
+              className="flex items-center justify-between p-4 border-b shrink-0"
+              style={{ borderColor: COLORS.border }}
+            >
+              <h3
+                id="audio-library-title"
+                className="font-bold text-sm"
+                style={{ color: COLORS.ivory }}
+              >
                 BAARO Sounds
               </h3>
               <button
-                onClick={() => setShowLibrary(false)}
-                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                type="button"
+                onClick={() => {
+                  stopPreview();
+                  setShowLibrary(false);
+                }}
+                className="p-1.5 rounded-lg hover:bg-white/10"
                 aria-label="Fermer"
               >
-                <X size={24} className="text-gray-600" />
+                <X size={20} style={{ color: COLORS.muted }} />
               </button>
             </div>
 
-            {/* Search */}
-            <div className="sticky top-16 bg-white border-b p-4 space-y-3">
-              {/* Search input */}
+            {/* Tabs */}
+            <div className="flex border-b shrink-0" style={{ borderColor: COLORS.border }}>
+              {TABS.map(({ id, label, icon: Icon }) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => setTab(id)}
+                  className="flex-1 flex items-center justify-center gap-1.5 py-2.5 text-xs font-medium transition-colors"
+                  style={{
+                    color: tab === id ? COLORS.gold : COLORS.muted,
+                    borderBottom:
+                      tab === id ? `2px solid ${COLORS.gold}` : "2px solid transparent",
+                  }}
+                >
+                  <Icon size={14} />
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            {/* Recherche (tous les onglets) + genres/upload (library) */}
+            <div
+              className="p-4 space-y-3 border-b shrink-0"
+              style={{ borderColor: COLORS.border }}
+            >
               <div className="relative">
-                <Search size={20} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <Search
+                  size={16}
+                  className="absolute left-3 top-1/2 -translate-y-1/2"
+                  style={{ color: COLORS.muted }}
+                />
                 <input
                   type="text"
-                  placeholder="Chercher par titre ou artiste..."
+                  placeholder="Rechercher par titre ou artiste..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-10 pr-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500"
-                  aria-label="Rechercher de la musique"
+                  className="w-full pl-9 pr-3 py-2 rounded-xl text-sm outline-none"
+                  style={{
+                    background: COLORS.surface2,
+                    border: `1px solid ${COLORS.border}`,
+                    color: COLORS.ivory,
+                  }}
+                  aria-label="Rechercher par titre ou artiste"
                 />
               </div>
 
-              {/* Genre filter */}
-              <div className="flex gap-2 overflow-x-auto">
-                {GENRES.map((genre) => (
+              {tab === "library" && (
+                <>
+                  <div className="flex gap-2 overflow-x-auto pb-1">
+                    {GENRES.map((genre) => (
+                      <button
+                        key={genre}
+                        type="button"
+                        onClick={() => setSelectedGenre(genre)}
+                        className="px-3 py-1 rounded-full text-xs whitespace-nowrap transition-colors"
+                        style={{
+                          background:
+                            selectedGenre === genre ? COLORS.gold : COLORS.surface2,
+                          color: selectedGenre === genre ? "#000" : COLORS.muted,
+                        }}
+                      >
+                        {genre === "tous" ? "Tous" : genre}
+                      </button>
+                    ))}
+                  </div>
+
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="audio/*"
+                    className="hidden"
+                    onChange={handleUploadVoiceover}
+                  />
                   <button
-                    key={genre}
-                    onClick={() => setSelectedGenre(genre)}
-                    className={`px-3 py-1 rounded-full whitespace-nowrap text-sm transition-colors ${
-                      selectedGenre === genre
-                        ? "bg-orange-500 text-white"
-                        : "bg-gray-100 text-gray-700 hover:bg-gray-200"
-                    }`}
-                    aria-pressed={selectedGenre === genre}
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="w-full flex items-center justify-center gap-2 py-2 rounded-xl text-xs font-medium border transition-colors"
+                    style={{ borderColor: COLORS.border, color: COLORS.teal }}
                   >
-                    {genre === "tous" ? "Tous" : genre}
+                    <Upload size={14} />
+                    Uploader un voiceover
                   </button>
-                ))}
-              </div>
+                </>
+              )}
             </div>
 
-            {/* Error banner */}
+            {/* Erreur */}
             {error && (
-              <div className="m-4 p-3 bg-red-50 border border-red-200 rounded-lg flex gap-2">
-                <AlertCircle size={18} className="text-red-600 flex-shrink-0" />
-                <p className="text-sm text-red-700">{error}</p>
+              <div
+                className="mx-4 mt-3 p-3 rounded-xl flex gap-2 text-sm"
+                style={{ background: "rgba(239,68,68,0.1)", color: "#f87171" }}
+              >
+                <AlertCircle size={16} className="shrink-0 mt-0.5" />
+                {error}
               </div>
             )}
 
-            {/* Content */}
-            <div className="p-4">
+            {/* Liste */}
+            <div className="flex-1 overflow-y-auto p-4">
               {isLoading ? (
-                <div className="flex items-center justify-center py-12">
-                  <div className="w-8 h-8 border-3 border-orange-200 border-t-orange-500 rounded-full animate-spin" />
+                <div className="flex justify-center py-12">
+                  <div
+                    className="w-8 h-8 border-2 border-t-transparent rounded-full animate-spin"
+                    style={{ borderColor: COLORS.gold, borderTopColor: "transparent" }}
+                  />
                 </div>
-              ) : filteredLibrary.length === 0 ? (
-                <div className="text-center py-12">
-                  <Music size={48} className="mx-auto text-gray-300 mb-2" />
-                  <p className="text-gray-500">Aucun son licencié BAARO trouvé</p>
+              ) : currentList.length === 0 ? (
+                <div className="text-center py-12" style={{ color: COLORS.muted }}>
+                  <Music size={40} className="mx-auto mb-2 opacity-40" />
+                  <p className="text-sm">
+                    {tab === "favorites"
+                      ? "Aucun favori pour l’instant"
+                      : tab === "recent"
+                      ? "Aucun son récent"
+                      : "Aucun son trouvé"}
+                  </p>
                 </div>
               ) : (
-                <div className="space-y-2">
-                  {filteredLibrary.map((track) => (
+                <div className="space-y-1">
+                  {currentList.map((track) => (
                     <div
                       key={track.id}
-                      className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-lg transition-colors group"
+                      className="flex items-center gap-2.5 p-2.5 rounded-xl hover:bg-white/5 transition-colors"
                     >
-                      {/* Preview button */}
                       <button
+                        type="button"
                         onClick={() => handlePlayPreview(track)}
-                        className="p-2 bg-orange-100 hover:bg-orange-200 text-orange-600 rounded-full transition-colors flex-shrink-0"
-                        aria-label={previewingId === track.id ? "Arrêter" : "Écouter aperçu"}
+                        className="p-2 rounded-full shrink-0"
+                        style={{
+                          background: "rgba(20,184,166,0.15)",
+                          color: COLORS.teal,
+                        }}
+                        aria-label={
+                          previewingId === track.id ? "Arrêter" : "Écouter aperçu"
+                        }
                       >
                         {previewingId === track.id ? (
-                          <Pause size={16} />
+                          <Pause size={14} />
                         ) : (
-                          <Play size={16} />
+                          <Play size={14} />
                         )}
                       </button>
 
-                      {/* Track info */}
-                      <div className="flex-1">
-                        <p className="font-medium text-gray-900">{track.title}</p>
-                        <p className="text-sm text-gray-600">
-                          {track.artist || "Sans artiste"} • {track.duration_seconds ? `${track.duration_seconds}s` : "durée à préciser"}
+                      <div className="flex-1 min-w-0">
+                        <p
+                          className="text-sm font-medium truncate"
+                          style={{ color: COLORS.ivory }}
+                        >
+                          {track.title}
                         </p>
-                        <p className="text-[11px] text-emerald-700 mt-1">
-                          {track.license_name || "Licence BAARO"}{track.attribution_required ? " • attribution requise" : ""}
+                        <p className="text-xs truncate" style={{ color: COLORS.muted }}>
+                          {track.artist || "Sans artiste"}
+                          {track.duration_seconds
+                            ? ` • ${track.duration_seconds}s`
+                            : ""}
                         </p>
                       </div>
 
-                      {/* Select button */}
                       <button
-                        onClick={() => handleSelectTrack(track)}
-                        className="px-3 py-1 bg-orange-500 hover:bg-orange-600 text-white rounded-lg text-sm transition-colors opacity-0 group-hover:opacity-100"
-                        aria-label={`Sélectionner ${track.title}`}
+                        type="button"
+                        onClick={() => toggleFavorite(track)}
+                        className="p-1.5 rounded-lg shrink-0"
+                        style={{
+                          color: isFavorite(track.id) ? "#f43f5e" : COLORS.muted,
+                        }}
+                        aria-label={
+                          isFavorite(track.id)
+                            ? "Retirer des favoris"
+                            : "Ajouter aux favoris"
+                        }
                       >
-                        Utiliser
+                        <Heart
+                          size={14}
+                          fill={isFavorite(track.id) ? "currentColor" : "none"}
+                        />
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleSelectTrack(track)}
+                        disabled={selectingId === track.id}
+                        className="px-3 py-1.5 rounded-lg text-xs font-semibold shrink-0 disabled:opacity-50"
+                        style={{ background: COLORS.gold, color: "#000" }}
+                      >
+                        {selectingId === track.id ? "..." : "Utiliser"}
                       </button>
                     </div>
                   ))}
+
+                  {/* Pagination */}
+                  {tab === "library" && hasMore && (
+                    <div className="pt-3 text-center">
+                      <button
+                        type="button"
+                        onClick={() => loadLibrary({ reset: false })}
+                        disabled={loadingMore}
+                        className="px-4 py-2 rounded-xl text-xs font-medium border flex items-center gap-1.5 mx-auto transition-colors"
+                        style={{ borderColor: COLORS.border, color: COLORS.ivory }}
+                      >
+                        {loadingMore ? (
+                          "Chargement..."
+                        ) : (
+                          <>
+                            <ChevronDown size={14} />
+                            Afficher plus
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -284,10 +555,11 @@ export function AudioPicker({ selectedAudio, onSelectAudio, onRemoveAudio }) {
         </div>
       )}
 
-      {/* Info text */}
-      <p className="text-xs text-gray-500">
+      <p className="text-[11px]" style={{ color: COLORS.muted }}>
         La musique sera jouée en arrière-plan pendant la lecture du média
       </p>
     </div>
   );
 }
+
+export default AudioPicker;
