@@ -5,6 +5,10 @@ import {
   saveLocalSettings,
   syncPrivateProfile,
 } from "../../lib/appSettings.js";
+// lucide-react : ajouter
+UserX, Download,
+// composants
+import BlockedUsersPanel from "./BlockedUsersPanel.jsx";
 import { applyNativeSettings } from "../../lib/nativeSettings.js";
 import { NotificationPrefsPanel } from "./NotificationPrefsPanel.jsx";
 import NotificationSoundSettings from "./NotificationSoundSettings.jsx";
