@@ -22,7 +22,6 @@ import { COLORS } from "@/theme.js";
 import { useToast } from "@/components/ToastContext.jsx";
 import { supabase } from "@/supabaseClient.js";
 import { handleDbError } from "@/lib/dbErrors.js";
-import { recordFeedEvent } from "@/lib/feedEvents.js";
 import { uploadExternalMedia } from "@/lib/externalMedia.js";
 import { insertStory } from "@/features/stories/api/storiesApi.js";
 import { callSocial } from "@/lib/notifyInteraction.js";
@@ -38,10 +37,17 @@ import { AskAiButton } from "@/components/AskAiButton.jsx";
 import { TranslateButton } from "@/components/TranslateButton.jsx";
 import { GuestBanner } from "@/components/GuestBanner.jsx";
 import { FloatingCreateButton } from "@/components/FloatingCreateButton.jsx";
+// Médias à chargement différé (ajustez le nom du fichier si besoin)
+import { LazyImage, LazyVideo } from "@/components/LazyMedia.jsx";
 
 const MAX_MEDIA_BYTES = 50 * 1024 * 1024; // 50 Mo par fichier
 const MAX_MEDIA_COUNT = 10; // nombre max de médias par publication
 const STORY_DURATION_MS = 24 * 60 * 60 * 1000; // une story dure 24 h
+const MAX_VISIBLE_MEDIA = 4; // vignettes visibles avant « +N »
+
+// Un commentaire vocal est stocké dans la colonne text existante : "[vocal]URL\nlégende"
+const VOICE_PREFIX = "[vocal]";
+const EMPTY_REC = { postId: null, recording: false, blob: null, url: null };
 
 const REPORT_REASONS = [
   "Spam ou arnaque",
@@ -118,65 +124,81 @@ function formatPost(post) {
   };
 }
 
-/** Affiche un ou plusieurs médias d'un post */
+/** Décompose le texte d'un commentaire en { voiceUrl, caption } */
+function parseComment(text) {
+  const raw = typeof text === "string" ? text : "";
+  if (!raw.startsWith(VOICE_PREFIX)) return { voiceUrl: null, caption: raw };
+  const [voiceUrl, ...rest] = raw.slice(VOICE_PREFIX.length).split("\n");
+  return { voiceUrl, caption: rest.join("\n").trim() };
+}
+
+/** Affiche les médias d'un post : images/vidéos en grille condensée (4 max puis « +N »), audios dessous */
 function MediaGallery({ items }) {
+  const [expanded, setExpanded] = useState(false);
   if (!items.length) return null;
 
-  const renderItem = (m, i, single) => {
-    if (m.type === "video") {
-      return (
-        <video
-          key={`${m.url}-${i}`}
-          src={m.url}
-          controls
-          playsInline
-          preload="metadata"
-          className={`w-full bg-black ${single ? "max-h-[500px] object-contain" : "h-48 object-cover"}`}
-        />
-      );
-    }
-    if (m.type === "audio") {
-      return (
+  const visuals = items.filter((m) => m.type !== "audio");
+  const audios = items.filter((m) => m.type === "audio");
+
+  const hidden = expanded ? 0 : Math.max(0, visuals.length - MAX_VISIBLE_MEDIA);
+  const shown = hidden > 0 ? visuals.slice(0, MAX_VISIBLE_MEDIA) : visuals;
+
+  const renderVisual = (m, single) =>
+    m.type === "video" ? (
+      <LazyVideo
+        src={m.url}
+        fit={single ? "contain" : "cover"}
+        className={single ? "w-full bg-black" : "w-full h-48 bg-black"}
+      />
+    ) : (
+      <LazyImage
+        src={m.url}
+        variant={single ? "full" : "feed"}
+        fit={single ? "contain" : "cover"}
+        className={single ? "w-full" : "w-full h-48"}
+      />
+    );
+
+  return (
+    <div className="flex flex-col gap-2">
+      {visuals.length === 1 && (
+        <div className="rounded-xl overflow-hidden border bg-black/40">
+          {renderVisual(visuals[0], true)}
+        </div>
+      )}
+
+      {visuals.length > 1 && (
+        <div className="rounded-xl overflow-hidden border bg-black/40 grid grid-cols-2 gap-0.5">
+          {shown.map((m, i) => (
+            <div
+              key={`${m.url}-${i}`}
+              className={`relative ${shown.length % 2 === 1 && i === 0 ? "col-span-2" : ""}`}
+            >
+              {renderVisual(m, false)}
+              {hidden > 0 && i === shown.length - 1 && (
+                <button
+                  type="button"
+                  onClick={() => setExpanded(true)}
+                  className="absolute inset-0 bg-black/60 text-white text-2xl font-bold flex items-center justify-center"
+                  aria-label={`Voir ${hidden} média${hidden > 1 ? "s" : ""} de plus`}
+                >
+                  +{hidden}
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {audios.map((m, i) => (
         <div
           key={`${m.url}-${i}`}
-          className="w-full p-4 flex items-center gap-3 bg-slate-900/50 rounded-xl col-span-2"
+          className="w-full p-4 flex items-center gap-3 bg-slate-900/50 rounded-xl"
         >
           <div className="p-2 rounded-full bg-teal-500/20 text-teal-400 shrink-0">
             <Mic size={20} />
           </div>
           <audio src={m.url} controls className="flex-1 h-8" />
-        </div>
-      );
-    }
-    return (
-      <img
-        key={`${m.url}-${i}`}
-        src={m.url}
-        alt=""
-        loading="lazy"
-        className={`w-full ${single ? "max-h-[500px] object-contain" : "h-48 object-cover"}`}
-      />
-    );
-  };
-
-  if (items.length === 1) {
-    return (
-      <div className="rounded-xl overflow-hidden border bg-black/40 flex items-center justify-center">
-        {renderItem(items[0], 0, true)}
-      </div>
-    );
-  }
-
-  return (
-    <div className="rounded-xl overflow-hidden border bg-black/40 grid grid-cols-2 gap-0.5">
-      {items.map((m, i) => (
-        <div
-          key={`${m.url}-${i}`}
-          className={`flex items-center justify-center ${
-            items.length % 2 === 1 && i === 0 ? "col-span-2" : ""
-          }`}
-        >
-          {renderItem(m, i, false)}
         </div>
       ))}
     </div>
@@ -195,7 +217,7 @@ export function FeedTab({
 
   const { showToast, showPointsReward } = useToast();
 
-  // Flux paginé (hook partagé) : lignes brutes + formatage
+  // Flux paginé (hook partagé) : lignes brutes, ordre chronologique (created_at / id)
   const {
     posts: rawPosts,
     setPosts,
@@ -210,15 +232,8 @@ export function FeedTab({
 
   const posts = useMemo(() => rawPosts.map(formatPost), [rawPosts]);
 
-  const loadPosts = useCallback(
-    async (opts) => {
-      const rows = await reload(opts);
-      rows?.slice(0, 10).forEach((p) => {
-        if (p?.id) void recordFeedEvent(p.id, "impression");
-      });
-    },
-    [reload]
-  );
+  // Fil purement chronologique : aucun signal de classement envoyé
+  const loadPosts = useCallback((opts) => reload(opts), [reload]);
 
   // Saisie enrichie, sondages & médias
   const [newText, setNewText] = useState("");
@@ -235,6 +250,12 @@ export function FeedTab({
   const [audioPreviewUrl, setAudioPreviewUrl] = useState(null);
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
+
+  // Vocal dans les commentaires
+  const [commentRec, setCommentRec] = useState(EMPTY_REC);
+  const [sendingComment, setSendingComment] = useState(false);
+  const commentRecorderRef = useRef(null);
+  const commentChunksRef = useRef([]);
 
   // Session & modales
   const [currentUserId, setCurrentUserId] = useState(propUserId);
@@ -297,6 +318,13 @@ export function FeedTab({
       if (audioPreviewUrl) URL.revokeObjectURL(audioPreviewUrl);
     };
   }, [audioPreviewUrl]);
+
+  // Libération de l'aperçu audio d'un commentaire
+  useEffect(() => {
+    return () => {
+      if (commentRec.url) URL.revokeObjectURL(commentRec.url);
+    };
+  }, [commentRec.url]);
 
   // Nettoyage de l'enregistrement si la modale est fermée
   useEffect(() => {
@@ -502,14 +530,69 @@ export function FeedTab({
     if (next) loadComments(postId);
   };
 
+  // --- Vocal dans les commentaires ---
+  const startCommentRecording = async (postId) => {
+    if (commentRec.recording) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const rec = new MediaRecorder(stream);
+      commentChunksRef.current = [];
+
+      rec.ondataavailable = (e) => {
+        if (e.data.size > 0) commentChunksRef.current.push(e.data);
+      };
+
+      rec.onstop = () => {
+        const blob = new Blob(commentChunksRef.current, { type: rec.mimeType || "audio/webm" });
+        setCommentRec({ postId, recording: false, blob, url: URL.createObjectURL(blob) });
+        stream.getTracks().forEach((t) => t.stop());
+      };
+
+      commentRecorderRef.current = rec;
+      rec.start();
+      setCommentRec({ postId, recording: true, blob: null, url: null });
+    } catch (err) {
+      showToast("Impossible d'accéder au microphone. Vérifiez les permissions.", "error");
+    }
+  };
+
+  const stopCommentRecording = () => {
+    if (commentRecorderRef.current?.state === "recording") {
+      commentRecorderRef.current.stop();
+    }
+  };
+
+  const discardCommentRecording = () => {
+    setCommentRec(EMPTY_REC);
+  };
+
   const handleAddComment = async (postId) => {
-    const text = (newCommentText[postId] || "").trim();
-    if (!text) return;
+    const typed = (newCommentText[postId] || "").trim();
+    const audio = commentRec.postId === postId ? commentRec.blob : null;
+    if (!typed && !audio) return;
     if (!activeUserId) {
       showToast("Vous devez être connecté", "error");
       return;
     }
+    if (sendingComment) return;
+
+    setSendingComment(true);
     try {
+      let text = typed;
+
+      if (audio) {
+        const ext = (audio.type || "").includes("mp4") ? "m4a" : "webm";
+        const file = new File([audio], `comment-voice.${ext}`, {
+          type: audio.type || "audio/webm",
+        });
+        const up = await uploadExternalMedia(file, {
+          folder: "comments",
+          user_id: activeUserId,
+          maxBytes: MAX_MEDIA_BYTES,
+        });
+        text = `${VOICE_PREFIX}${up.url}${typed ? `\n${typed}` : ""}`;
+      }
+
       const { data: created, error } = await supabase
         .from("comments")
         .insert({ post_id: postId, author_id: activeUserId, text })
@@ -530,9 +613,12 @@ export function FeedTab({
         )
       );
       setNewCommentText((prev) => ({ ...prev, [postId]: "" }));
+      if (audio) discardCommentRecording();
       showPointsReward?.(1, "Commentaire ajouté");
     } catch (error) {
       handleDbError(error, showToast, "Impossible de commenter");
+    } finally {
+      setSendingComment(false);
     }
   };
 
@@ -802,44 +888,42 @@ export function FeedTab({
             </div>
 
             <div className="p-4 flex-1 overflow-y-auto flex flex-col gap-3">
-              {(
-                <div className="flex items-center justify-between gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setTextToolsOpen(!textToolsOpen)}
-                    className="px-3 py-1.5 rounded-xl border text-xs font-medium flex items-center gap-1.5 transition-colors"
-                    style={{ borderColor: COLORS.border, color: COLORS.ivory, background: COLORS.surface2 }}
-                  >
-                    <span>Mise en forme du texte</span>
-                    {textToolsOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                  </button>
+              <div className="flex items-center justify-between gap-2">
+                <button
+                  type="button"
+                  onClick={() => setTextToolsOpen(!textToolsOpen)}
+                  className="px-3 py-1.5 rounded-xl border text-xs font-medium flex items-center gap-1.5 transition-colors"
+                  style={{ borderColor: COLORS.border, color: COLORS.ivory, background: COLORS.surface2 }}
+                >
+                  <span>Mise en forme du texte</span>
+                  {textToolsOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                </button>
 
-                  <button
-                    type="button"
-                    onClick={() =>
-                      window.dispatchEvent(
-                        new CustomEvent("baaro:ai-draft", {
-                          detail: {
-                            prompt: newText.trim()
-                              ? `Améliore ce brouillon de publication :\n"${newText.trim()}"\n\n`
-                              : "Rédige une publication engageante pour BAARO : ",
-                          },
-                        })
-                      )
-                    }
-                    title="Rédiger avec l'IA"
-                    className="px-3 py-1.5 rounded-xl transition-colors flex items-center gap-1.5 text-xs font-medium shadow-sm shrink-0"
-                    style={{
-                      background: "rgba(20, 184, 166, 0.15)",
-                      color: COLORS.teal,
-                      border: `1px solid ${COLORS.teal}40`,
-                    }}
-                  >
-                    <Sparkles size={14} />
-                    <span>IA</span>
-                  </button>
-                </div>
-              )}
+                <button
+                  type="button"
+                  onClick={() =>
+                    window.dispatchEvent(
+                      new CustomEvent("baaro:ai-draft", {
+                        detail: {
+                          prompt: newText.trim()
+                            ? `Améliore ce brouillon de publication :\n"${newText.trim()}"\n\n`
+                            : "Rédige une publication engageante pour BAARO : ",
+                        },
+                      })
+                    )
+                  }
+                  title="Rédiger avec l'IA"
+                  className="px-3 py-1.5 rounded-xl transition-colors flex items-center gap-1.5 text-xs font-medium shadow-sm shrink-0"
+                  style={{
+                    background: "rgba(20, 184, 166, 0.15)",
+                    color: COLORS.teal,
+                    border: `1px solid ${COLORS.teal}40`,
+                  }}
+                >
+                  <Sparkles size={14} />
+                  <span>IA</span>
+                </button>
+              </div>
 
               {textToolsOpen && (
                 <div
@@ -1010,7 +1094,7 @@ export function FeedTab({
 
       {activeUserId && <SocialSuggestions user_id={activeUserId} onOpenProfile={onOpenProfile} />}
 
-      {/* Liste des publications */}
+      {/* Liste des publications (ordre chronologique) */}
       <div className="flex flex-col gap-4">
         {posts.map((post) => (
           <article
@@ -1161,7 +1245,7 @@ export function FeedTab({
               </p>
             )}
 
-            {/* Rendu Médias (une ou plusieurs images / vidéos / audio) */}
+            {/* Rendu Médias : grille condensée (LazyImage / LazyVideo) */}
             <MediaGallery items={getPostMedia(post)} />
 
             <PollCard postId={post.id} user_id={activeUserId} />
@@ -1248,31 +1332,42 @@ export function FeedTab({
             {/* Section Commentaires */}
             {commentOpen[post.id] && (
               <div className="pt-3 border-t space-y-2" style={{ borderColor: COLORS.border }}>
-                {(commentsMap[post.id] || []).map((c) => (
-                  <div
-                    key={c.id}
-                    className="text-xs flex items-start justify-between gap-2"
-                    style={{ color: COLORS.muted }}
-                  >
-                    <div>
-                      <span className="font-bold" style={{ color: COLORS.ivory }}>
-                        {c.author}
-                      </span>{" "}
-                      : {c.text}
+                {(commentsMap[post.id] || []).map((c) => {
+                  const { voiceUrl, caption } = parseComment(c.text);
+                  return (
+                    <div
+                      key={c.id}
+                      className="text-xs flex items-start justify-between gap-2"
+                      style={{ color: COLORS.muted }}
+                    >
+                      <div className="min-w-0">
+                        <span className="font-bold" style={{ color: COLORS.ivory }}>
+                          {c.author}
+                        </span>
+                        {caption ? <> : {caption}</> : null}
+                        {voiceUrl && (
+                          <audio
+                            src={voiceUrl}
+                            controls
+                            preload="none"
+                            className="mt-1 h-8 w-full max-w-[240px]"
+                          />
+                        )}
+                      </div>
+                      {c.author_id === activeUserId && (
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteComment(post.id, c.id)}
+                          className="shrink-0 p-1 text-red-400 hover:text-red-300"
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      )}
                     </div>
-                    {c.author_id === activeUserId && (
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteComment(post.id, c.id)}
-                        className="shrink-0 p-1 text-red-400 hover:text-red-300"
-                      >
-                        <Trash2 size={12} />
-                      </button>
-                    )}
-                  </div>
-                ))}
+                  );
+                })}
                 {activeUserId && (
-                  <div className="flex gap-2 pt-1">
+                  <div className="flex items-center gap-2 pt-1">
                     <input
                       value={newCommentText[post.id] || ""}
                       onChange={(e) =>
@@ -1287,10 +1382,45 @@ export function FeedTab({
                         color: COLORS.ivory,
                       }}
                     />
+
+                    {commentRec.recording && commentRec.postId === post.id ? (
+                      <button
+                        type="button"
+                        onClick={stopCommentRecording}
+                        className="p-1.5 rounded-lg bg-red-500/20 text-red-400 animate-pulse"
+                        aria-label="Arrêter l'enregistrement"
+                      >
+                        <Square size={13} fill="currentColor" />
+                      </button>
+                    ) : commentRec.blob && commentRec.postId === post.id ? (
+                      <>
+                        <audio src={commentRec.url} controls className="h-8 max-w-[110px]" />
+                        <button
+                          type="button"
+                          onClick={discardCommentRecording}
+                          className="p-1.5 text-red-400"
+                          aria-label="Supprimer le vocal"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => startCommentRecording(post.id)}
+                        className="p-1.5 rounded-lg"
+                        style={{ color: COLORS.teal }}
+                        aria-label="Enregistrer un vocal"
+                      >
+                        <Mic size={13} />
+                      </button>
+                    )}
+
                     <button
                       type="button"
                       onClick={() => handleAddComment(post.id)}
-                      className="p-1.5 rounded-lg"
+                      disabled={sendingComment}
+                      className="p-1.5 rounded-lg disabled:opacity-50"
                       style={{ background: COLORS.gold, color: "#000" }}
                     >
                       <Send size={13} />
