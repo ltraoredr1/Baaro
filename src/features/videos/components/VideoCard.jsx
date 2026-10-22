@@ -379,7 +379,7 @@ export default function VideoCard({
       )}
 
       {video.is_repost && (
-        <div className="absolute top-24 left-4 z-20 px-3 py-1.5 rounded-full bg-black/55 backdrop-blur-md border border-yellow-400/30 text-yellow-300 text-[10px] font-black flex items-center gap-1.5">
+        <div className="absolute top-28 left-4 z-20 px-3 py-1.5 rounded-full bg-black/55 backdrop-blur-md border border-yellow-400/30 text-yellow-300 text-[10px] font-black flex items-center gap-1.5">
           <Repeat2 size={12} />
           REPOST
         </div>
