@@ -6,6 +6,16 @@
     "androidScheme": "https"
   },
   "plugins": {
+    "CapacitorUpdater": {
+      "autoUpdate": "atBackground",
+      "appReadyTimeout": 10000,
+      "responseTimeout": 20,
+      "autoDeleteFailed": true,
+      "autoDeletePrevious": true,
+      "resetWhenUpdate": true,
+      "defaultChannel": "production",
+      "periodCheckDelay": 600
+    },
     "SplashScreen": {
       "launchShowDuration": 1500,
       "launchAutoHide": true,
