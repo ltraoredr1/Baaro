@@ -79,6 +79,35 @@ export function MainShell() {
     loadLastTab("feed")
   );
 
+  // Les notifications push ouvrent la racine avec ?open_debate=<UUID>.
+  // L'événement couvre aussi les clics depuis le drawer sans rechargement.
+  useEffect(() => {
+    const queueDebate = (roomId) => {
+      if (!roomId) return;
+      try {
+        sessionStorage.setItem("baaro:open_debate", String(roomId));
+      } catch {}
+      setActiveTab("debates");
+    };
+
+    const onOpenDebate = (event) => {
+      queueDebate(event.detail?.roomId || event.detail?.room_id);
+    };
+
+    window.addEventListener("baaro:open-debate", onOpenDebate);
+
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const roomId = params.get("open_debate");
+      if (roomId) {
+        queueDebate(roomId);
+        window.history.replaceState({}, document.title, window.location.pathname);
+      }
+    } catch {}
+
+    return () => window.removeEventListener("baaro:open-debate", onOpenDebate);
+  }, []);
+
   // Langue et thème : source unique = réglages (useSettings applique déjà le DOM,
   // le stockage local et le cloud). Plus d'état local ni de clé "baaro_theme".
   const { settings, update: updateSettings } = useSettings();
