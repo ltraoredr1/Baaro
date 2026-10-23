@@ -7,7 +7,7 @@
  *   autres comptes, les changements de compte et la rotation FCM étaient perdus).
  * - Listener "registration" permanent : un nouveau jeton FCM est toujours
  *   sauvegardé (avant : supprimé après le premier jeton).
- * - Canal Android "baaro_notifications" créé (même id que le serveur).
+ * - Canal Android "baaro_notifications" créé (même id que le serveur) + son.
  * - Web : vérifie que l'abonnement existant correspond à la clé VAPID actuelle,
  *   sinon se réabonne. Enregistre le service worker s'il est absent.
  * - Désactivation volontaire respectée (pas de réactivation automatique).
@@ -26,6 +26,8 @@ const NATIVE_REGISTRATION_TIMEOUT_MS = 20000;
 const SW_READY_TIMEOUT_MS = 10000;
 const SERVICE_WORKER_URL = "/sw.js";
 const ANDROID_CHANNEL_ID = "baaro_notifications";
+/** Nom du fichier dans android/app/src/main/res/raw/ (sans extension) */
+const ANDROID_CHANNEL_SOUND = "baaro_pulse";
 const SYNC_MIN_INTERVAL_MS = 10 * 60 * 1000;
 const OPT_OUT_KEY = "baaro_push_disabled";
 
@@ -431,6 +433,9 @@ async function ensureAndroidChannel(PushNotifications) {
       importance: 5,
       visibility: 1,
       vibration: true,
+      // Fichier : android/app/src/main/res/raw/baaro_pulse.wav (ou .mp3)
+      // → nom SANS extension
+      sound: ANDROID_CHANNEL_SOUND,
     });
   } catch (error) {
     console.warn("[push] Création du canal Android :", error?.message || error);
