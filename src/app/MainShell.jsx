@@ -22,6 +22,7 @@ import { useCryptoKeys } from "../features/messaging/hooks/useCryptoKeys.js";
 import { useIncomingCalls } from "../features/messaging/hooks/useIncomingCalls.js";
 import { ChatCallModal } from "../features/messaging/components/ChatCallModal.jsx";
 import FloatingAiAssistant from "../components/FloatingAiAssistant.jsx";
+import { GuideHost, ONBOARDING_CLOSED_EVENT } from "../features/guide/index.js";
 
 const THEME_BG_MAP = {
   midnight: "#0B1220",
@@ -385,7 +386,11 @@ export function MainShell() {
 
       <OnboardingModal
         forceOpen={forceOnboarding}
-        onClose={() => setForceOnboarding(false)}
+        onClose={() => {
+          setForceOnboarding(false);
+          // Le guide (visite ou IA, au choix) se propose juste après l'introduction.
+          window.dispatchEvent(new CustomEvent(ONBOARDING_CLOSED_EVENT));
+        }}
       />
 
       {/* =====================================================
@@ -516,6 +521,14 @@ export function MainShell() {
         }}
         onSelectTab={(tid) => setActiveTab(tid)}
         onSelectShop={() => setActiveTab("shop")}
+      />
+
+      <GuideHost
+        activeTab={activeTab}
+        onNavigate={setActiveTab}
+        isAnonymous={isAnonymous}
+        displayName={userProfile?.display_name}
+        suppressed={forceOnboarding || (isImmersive && !showUi)}
       />
 
       {!isAnonymous && (
