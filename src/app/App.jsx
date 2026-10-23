@@ -11,6 +11,7 @@ import { ErrorBoundary } from "../components/ErrorBoundary.jsx";
 import { callSocial } from "../lib/notifyInteraction.js";
 import { useSettings } from "../hooks/useSettings.js";
 import { applyNativeSettings } from "../lib/nativeSettings.js";
+import { unlockAudio } from "../lib/callRingtone.js";
 
 function InviteRouteGate() {
   const { code } = useParams();
@@ -31,8 +32,15 @@ function InviteRouteGate() {
   );
 }
 
-function PrivacyRoute() { const navigate = useNavigate(); return <PrivacyPage onBack={() => navigate(-1)} />; }
-function LegalRoute({ type }) { const navigate = useNavigate(); return <LegalPage type={type} onBack={() => navigate(-1)} />; }
+function PrivacyRoute() {
+  const navigate = useNavigate();
+  return <PrivacyPage onBack={() => navigate(-1)} />;
+}
+
+function LegalRoute({ type }) {
+  const navigate = useNavigate();
+  return <LegalPage type={type} onBack={() => navigate(-1)} />;
+}
 
 function AppShell() {
   const { user, isGuest, loading } = useApp();
@@ -56,26 +64,32 @@ function AppShell() {
     let cancelled = false;
     const setup = async () => {
       try {
-        const { App: CapApp } = await import('@capacitor/app');
+        const { App: CapApp } = await import("@capacitor/app");
         if (cancelled) return;
-        const l = await CapApp.addListener('appUrlOpen', (event) => {
+        const l = await CapApp.addListener("appUrlOpen", (event) => {
           try {
             const url = new URL(event.url);
             let code = null;
-            if (url.pathname.startsWith('/invite/')) {
-              code = url.pathname.split('/').pop();
-            } else if (url.host === 'invite') {
+            if (url.pathname.startsWith("/invite/")) {
+              code = url.pathname.split("/").pop();
+            } else if (url.host === "invite") {
               code = url.pathname.slice(1);
             }
             if (code) navigate(`/invite/${code}`, { replace: true });
           } catch {}
         });
-        if (cancelled) { l.remove(); return; }
+        if (cancelled) {
+          l.remove();
+          return;
+        }
         listener = l;
       } catch {}
     };
     setup();
-    return () => { cancelled = true; listener?.remove(); };
+    return () => {
+      cancelled = true;
+      listener?.remove();
+    };
   }, [navigate]);
 
   // 3. Stories programmées
@@ -93,6 +107,24 @@ function AppShell() {
       document.removeEventListener("visibilitychange", sweep);
     };
   }, [user?.id, user?.is_anonymous, loading]);
+
+  // 4. Débloquer Web Audio au premier geste (sonneries / sons in-app)
+  useEffect(() => {
+    const unlock = () => {
+      unlockAudio();
+      window.removeEventListener("pointerdown", unlock, true);
+      window.removeEventListener("keydown", unlock, true);
+      window.removeEventListener("touchstart", unlock, true);
+    };
+    window.addEventListener("pointerdown", unlock, true);
+    window.addEventListener("keydown", unlock, true);
+    window.addEventListener("touchstart", unlock, true);
+    return () => {
+      window.removeEventListener("pointerdown", unlock, true);
+      window.removeEventListener("keydown", unlock, true);
+      window.removeEventListener("touchstart", unlock, true);
+    };
+  }, []);
 
   if (loading) return <LoadingScreen />;
 
@@ -119,26 +151,21 @@ export default function App() {
     );
   }, [settings.block_screenshots, settings.biometric]);
 
-  // ✅ CAPGO LIVE UPDATE - C'est ça que j'ajoute
+  // Capgo Live Update
   useEffect(() => {
     const initCapgo = async () => {
       try {
-        // On importe seulement sur natif, pas sur web
-        const { CapacitorUpdater } = await import('@capgo/capacitor-updater');
-        const { Capacitor } = await import('@capacitor/core');
-        
+        const { CapacitorUpdater } = await import("@capgo/capacitor-updater");
+        const { Capacitor } = await import("@capacitor/core");
+
         if (!Capacitor.isNativePlatform()) return;
 
-        // Dit à Capgo que l'app est prête, pas de bug
         await CapacitorUpdater.notifyAppReady();
-        
         console.log("[Capgo] App ready, listening for updates...");
 
-        // Écoute les mises à jour
-        CapacitorUpdater.addListener('updateAvailable', async () => {
+        CapacitorUpdater.addListener("updateAvailable", async () => {
           console.log("[Capgo] Update available, downloading...");
         });
-
       } catch (e) {
         console.log("[Capgo] Not on native:", e.message);
       }
