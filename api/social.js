@@ -451,6 +451,129 @@ async function notifyStoryAudience(admin, authorId, storyId) {
   return { notified: true, count: userIds.length };
 }
 
+async function handleDebateStarted(admin, user, body) {
+  const roomId = String(body.room_id || body.roomId || "").trim();
+  if (!isUuid(roomId)) {
+    return { status: 400, body: { ok: false, error: "room_id UUID requis" } };
+  }
+
+  const { data: room, error: roomError } = await admin
+    .from("debate_rooms")
+    .select("id, host_id, invite_code, title, topic, mode, status")
+    .eq("id", roomId)
+    .maybeSingle();
+
+  if (roomError) throw roomError;
+  if (!room) {
+    return { status: 404, body: { ok: false, error: "Débat introuvable" } };
+  }
+  if (room.host_id !== user.id) {
+    return { status: 403, body: { ok: false, error: "Action réservée à l'hôte" } };
+  }
+  if (room.status !== "active") {
+    return { status: 409, body: { ok: false, error: "Ce débat n'est pas actif" } };
+  }
+
+  const type = room.mode === "text" ? "new_debate" : "new_live";
+  const { data: existing } = await admin
+    .from("notifications")
+    .select("notification_id")
+    .eq("type", type)
+    .eq("actor_id", user.id)
+    .eq("source_id", room.id)
+    .limit(1);
+
+  if (existing?.length) {
+    return { status: 200, body: { ok: true, notified: false, reason: "duplicate" } };
+  }
+
+  const [followersResult, friendsOutResult, friendsInResult] = await Promise.all([
+    admin
+      .from("follows")
+      .select("follower_id")
+      .eq("followed_id", user.id)
+      .eq("status", "accepted")
+      .limit(5000),
+    admin
+      .from("follows")
+      .select("followed_id")
+      .eq("follower_id", user.id)
+      .eq("is_friend", true)
+      .eq("status", "accepted")
+      .limit(5000),
+    admin
+      .from("follows")
+      .select("follower_id")
+      .eq("followed_id", user.id)
+      .eq("is_friend", true)
+      .eq("status", "accepted")
+      .limit(5000),
+  ]);
+
+  if (followersResult.error) throw followersResult.error;
+  if (friendsOutResult.error) throw friendsOutResult.error;
+  if (friendsInResult.error) throw friendsInResult.error;
+
+  const audience = [
+    ...(followersResult.data || []).map((row) => row.follower_id),
+    ...(friendsOutResult.data || []).map((row) => row.followed_id),
+    ...(friendsInResult.data || []).map((row) => row.follower_id),
+  ];
+  const userIds = [...new Set(audience)].filter((id) => id && id !== user.id);
+  if (!userIds.length) {
+    return { status: 200, body: { ok: true, notified: false, reason: "no_audience" } };
+  }
+
+  const { data: actor } = await admin
+    .from("profiles")
+    .select("display_name, handle")
+    .eq("id", user.id)
+    .maybeSingle();
+  const actorName =
+    clip(actor?.display_name, 40) ||
+    (actor?.handle ? `@${String(actor.handle).replace(/^@/, "")}` : "Quelqu'un");
+  const title = clip(room.title, 100) || "Nouveau débat";
+  const isLive = room.mode !== "text";
+  const message = isLive
+    ? `${actorName} a démarré un live : ${title}`
+    : `${actorName} a démarré un débat : ${title}`;
+  const url = `/?open_debate=${encodeURIComponent(room.id)}`;
+
+  for (let i = 0; i < userIds.length; i += 500) {
+    const chunk = userIds.slice(i, i + 500);
+    const { error: insertError } = await admin.from("notifications").insert(
+      chunk.map((recipientId) => ({
+        user_id: recipientId,
+        actor_id: user.id,
+        type,
+        source_id: room.id,
+        message,
+        preview: clip(room.topic, 120) || null,
+      }))
+    );
+    if (insertError) throw insertError;
+
+    await sendPushToUsers(admin, {
+      userIds: chunk,
+      title: isLive ? "Live en cours" : "Nouveau débat",
+      body: message,
+      url,
+      category: "live",
+      tag: `debate-${room.id}`,
+      sound: "baaro_pulse.mp3",
+      data: {
+        type,
+        room_id: room.id,
+        invite_code: room.invite_code || null,
+        actor_id: user.id,
+        sound: "baaro_pulse.mp3",
+      },
+    }).catch((err) => console.warn("[social] debate push", err?.message || err));
+  }
+
+  return { status: 200, body: { ok: true, notified: true, count: userIds.length } };
+}
+
 async function handleStoryPublished(admin, user, body) {
   let query = admin.from("stories").select("id, author_id").eq("author_id", user.id);
   query = body.story_id
@@ -730,6 +853,11 @@ export default async function handler(req, res) {
 
     if (action === "story_published") {
       const result = await handleStoryPublished(admin, user, body);
+      return res.status(result.status).json(result.body);
+    }
+
+    if (action === "debate_started" || action === "live_started") {
+      const result = await handleDebateStarted(admin, user, body);
       return res.status(result.status).json(result.body);
     }
 
