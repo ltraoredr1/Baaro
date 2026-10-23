@@ -629,10 +629,16 @@ export function useDebateLive(room, user_id, isHost) {
           throw new Error(data.error || "Impossible d'obtenir le token Daily");
         }
 
-        var domain = import.meta.env.VITE_DAILY_DOMAIN || "baaro";
+        // Ne jamais inventer un domaine Daily : si l'API ne renvoie pas d'URL,
+        // l'environnement est mal configuré et il vaut mieux afficher une
+        // erreur claire plutôt que de joindre silencieusement baaro.daily.co.
+        var domain = String(import.meta.env.VITE_DAILY_DOMAIN || "")
+          .trim()
+          .replace(/^https?:\/\//i, "")
+          .replace(/\.daily\.co\/?$/i, "");
         var roomUrl =
           data.url ||
-          (data.roomName
+          (data.roomName && domain
             ? "https://" + domain + ".daily.co/" + data.roomName
             : null);
         if (!roomUrl) throw new Error("URL Daily manquante");
