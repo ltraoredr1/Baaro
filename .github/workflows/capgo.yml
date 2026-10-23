@@ -24,11 +24,19 @@ jobs:
 
       - run: npm ci
 
-      - name: Auto version - FIX DEFINITIF
+      - name: Auto version
         id: version
+        env:
+          # Numéro (#) du dernier run déjà publié dans l'onglet Actions.
+          # Le run suivant donne 0.1.0, puis 0.1.1, 0.1.2, etc.
+          RUN_OFFSET: 43
         run: |
-          BASE=$(node -p "require('./package.json').version.split('-')[0]")
-          NEW="$BASE-${{ github.run_number }}"
+          MAJMIN=$(node -p "require('./package.json').version.split('.').slice(0,2).join('.')")
+          PATCH=$(( ${{ github.run_number }} - RUN_OFFSET - 1 ))
+          if [ "$PATCH" -lt 0 ]; then
+            echo "RUN_OFFSET trop grand : baisse-le." && exit 1
+          fi
+          NEW="$MAJMIN.$PATCH"
           npm version $NEW --no-git-tag-version --allow-same-version
           echo "version=$NEW" >> $GITHUB_OUTPUT
 
