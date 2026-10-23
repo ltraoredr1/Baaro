@@ -8,6 +8,8 @@
 
 const DEFAULT_ICON = "/icons/icon-192.png";
 const DEFAULT_BADGE = "/icons/icon-192.png";
+/** Son par défaut (fichier dans public/sounds/) */
+const DEFAULT_SOUND = "/sounds/baaro_pulse.mp3";
 
 function getSafeSameOriginUrl(value) {
   if (typeof value !== "string" || !value.trim()) return "/";
@@ -17,7 +19,7 @@ function getSafeSameOriginUrl(value) {
 
     if (url.origin !== self.location.origin) return "/";
 
-    return `${url.pathname}${url.search}${url.hash}`;
+    return `\( {url.pathname} \){url.search}${url.hash}`;
   } catch {
     return "/";
   }
@@ -35,6 +37,30 @@ function readPushPayload(event) {
       return {};
     }
   }
+}
+
+/**
+ * Résout le chemin du son.
+ * - payload.sound / data.sound : chemin absolu ou nom de fichier
+ * - silent: true → pas de son
+ * - sinon DEFAULT_SOUND
+ */
+function resolveSound(payload, data) {
+  if (payload.silent === true || data.silent === true) return undefined;
+
+  const raw =
+    (typeof payload.sound === "string" && payload.sound.trim()) ||
+    (typeof data.sound === "string" && data.sound.trim()) ||
+    "";
+
+  if (!raw) return DEFAULT_SOUND;
+  if (raw === "default" || raw === "true") return DEFAULT_SOUND;
+  if (raw === "none" || raw === "false" || raw === "silent") return undefined;
+
+  // Chemin déjà absolu
+  if (raw.startsWith("/")) return raw;
+  // Nom seul → dossier sounds
+  return `/sounds/${raw.replace(/^sounds\//, "")}`;
 }
 
 self.addEventListener("push", (event) => {
@@ -55,6 +81,8 @@ self.addEventListener("push", (event) => {
         ? data.body.slice(0, 500)
         : "Vous avez une nouvelle notification.";
 
+  const sound = resolveSound(payload, data);
+
   const options = {
     body,
     icon: payload.icon || DEFAULT_ICON,
@@ -69,7 +97,13 @@ self.addEventListener("push", (event) => {
     // Une notification qui remplace une autre avec le même tag doit
     // quand même alerter l'utilisateur.
     renotify: true,
+    silent: !sound,
   };
+
+  // Support navigateur : sound (chemin) — ignoré si non supporté
+  if (sound) {
+    options.sound = sound;
+  }
 
   event.waitUntil(self.registration.showNotification(title, options));
 });
