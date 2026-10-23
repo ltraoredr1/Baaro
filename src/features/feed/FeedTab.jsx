@@ -148,51 +148,69 @@ function MediaGallery({ items }) {
       <LazyVideo
         src={m.url}
         fit={single ? "contain" : "cover"}
-        className={single ? "w-full bg-black" : "w-full h-48 bg-black"}
+        className={
+          single
+            ? "w-full max-h-[70vh] bg-black"
+            : "absolute inset-0 w-full h-full bg-black"
+        }
       />
     ) : (
       <LazyImage
         src={m.url}
         variant={single ? "full" : "feed"}
         fit={single ? "contain" : "cover"}
-        className={single ? "w-full" : "w-full h-48"}
+        className={
+          single
+            ? "w-full max-h-[70vh]"
+            : "absolute inset-0 w-full h-full"
+        }
       />
     );
 
   return (
     <div className="flex flex-col gap-2">
+      {/* 1 seul média → affichage large sans crop forcé */}
       {visuals.length === 1 && (
         <div className="rounded-xl overflow-hidden border bg-black/40">
           {renderVisual(visuals[0], true)}
         </div>
       )}
 
+      {/* Plusieurs médias → grille 2 colonnes avec cases carrées */}
       {visuals.length > 1 && (
         <div className="rounded-xl overflow-hidden border bg-black/40 grid grid-cols-2 gap-0.5">
-          {shown.map((m, i) => (
-            <div
-              key={`${m.url}-${i}`}
-              className={`relative ${shown.length % 2 === 1 && i === 0 ? "col-span-2" : ""}`}
-            >
-              {renderVisual(m, false)}
-              {hidden > 0 && i === shown.length - 1 && (
-                <button
-                  type="button"
-                  onClick={() => setExpanded(true)}
-                  className="absolute inset-0 bg-black/60 text-white text-2xl font-bold flex items-center justify-center"
-                  aria-label={`Voir ${hidden} média${hidden > 1 ? "s" : ""} de plus`}
-                >
-                  +{hidden}
-                </button>
-              )}
-            </div>
-          ))}
+          {shown.map((m, i) => {
+            const isFirstOdd = shown.length % 2 === 1 && i === 0;
+            return (
+              <div
+                key={`\( {m.url}- \){i}`}
+                className={`relative overflow-hidden bg-black ${
+                  isFirstOdd ? "col-span-2 aspect-[2/1]" : "aspect-square"
+                }`}
+              >
+                {renderVisual(m, false)}
+
+                {/* Overlay +N uniquement sur la dernière vignette visible */}
+                {hidden > 0 && i === shown.length - 1 && (
+                  <button
+                    type="button"
+                    onClick={() => setExpanded(true)}
+                    className="absolute inset-0 bg-black/60 text-white text-2xl font-bold flex items-center justify-center z-10"
+                    aria-label={`Voir \( {hidden} média \){hidden > 1 ? "s" : ""} de plus`}
+                  >
+                    +{hidden}
+                  </button>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
 
+      {/* Audios en bas */}
       {audios.map((m, i) => (
         <div
-          key={`${m.url}-${i}`}
+          key={`\( {m.url}- \){i}`}
           className="w-full p-4 flex items-center gap-3 bg-slate-900/50 rounded-xl"
         >
           <div className="p-2 rounded-full bg-teal-500/20 text-teal-400 shrink-0">
@@ -590,7 +608,7 @@ export function FeedTab({
           user_id: activeUserId,
           maxBytes: MAX_MEDIA_BYTES,
         });
-        text = `${VOICE_PREFIX}${up.url}${typed ? `\n${typed}` : ""}`;
+        text = `\( {VOICE_PREFIX} \){up.url}\( {typed ? `\n \){typed}` : ""}`;
       }
 
       const { data: created, error } = await supabase
@@ -670,7 +688,7 @@ export function FeedTab({
     }
 
     const added = accepted.map((file) => ({
-      id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      id: `\( {Date.now()}_ \){Math.random().toString(36).slice(2, 8)}`,
       file,
       preview: URL.createObjectURL(file),
       kind: file.type.startsWith("video") ? "video" : "image",
