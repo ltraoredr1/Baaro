@@ -10,21 +10,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
       - uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '21'
 
-      - uses: actions/setup-node@v4
+      - uses: android-actions/setup-android@v3
         with:
-          node-version: 24
-          cache: npm
+          packages: platform-tools platforms;android-36 build-tools;36.0.0
+
+      - uses: gradle/actions/setup-gradle@v4
 
       - run: npm ci
 
       - name: Build Web (une seule fois)
         run: npm run build
         env:
+          VITE_APP_ENV: production
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
           VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
@@ -38,16 +45,16 @@ jobs:
           npx cap sync android
           chmod +x android/gradlew
           cd android
-          ./gradlew assembleDebug --stacktrace
+          ./gradlew assembleDebug --no-daemon
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: Baaro-apk-debug
           path: android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 14
 
       - name: Upload to Capgo BETA
-        run: |
-          npx @capgo/cli@latest bundle upload --channel beta --apikey ${{ secrets.CAPGO_TOKEN }} --auto-set
+        run: npx @capgo/cli@latest bundle upload --channel beta --apikey ${{ secrets.CAPGO_TOKEN }}
         env:
           CI: true
