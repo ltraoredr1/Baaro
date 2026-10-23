@@ -19,7 +19,6 @@ import {
   ChevronRight,
 } from "lucide-react";
 
-// Imports via l'alias absolu (@/ -> src/)
 import { COLORS } from "@/theme.js";
 import { useToast } from "@/components/ToastContext.jsx";
 import { supabase } from "@/supabaseClient.js";
@@ -39,10 +38,9 @@ import { AskAiButton } from "@/components/AskAiButton.jsx";
 import { TranslateButton } from "@/components/TranslateButton.jsx";
 import { GuestBanner } from "@/components/GuestBanner.jsx";
 import { FloatingCreateButton } from "@/components/FloatingCreateButton.jsx";
-// Médias à chargement différé
 import { LazyImage, LazyVideo } from "@/components/LazyMedia.jsx";
 
-const MAX_MEDIA_BYTES = 50 * 1024 * 1024; // 50 Mo par fichier
+const MAX_MEDIA_BYTES = 50 * 1024 * 1024;
 const MAX_MEDIA_COUNT = 10;
 const STORY_DURATION_MS = 24 * 60 * 60 * 1000;
 const MAX_VISIBLE_MEDIA = 4;
@@ -58,7 +56,6 @@ const REPORT_REASONS = [
   "Autre",
 ];
 
-/** Formate la date de publication relative ou lisible */
 function formatDate(value) {
   if (!value) return "";
   const date = new Date(value);
@@ -79,7 +76,6 @@ function formatDate(value) {
   });
 }
 
-/** Déduit le type d'un média (image / video / audio) */
 function detectKind(url, type) {
   if (type === "video" || type === "audio" || type === "image") return type;
   if (/\.(mp4|mov)$/i.test(url || "")) return "video";
@@ -87,7 +83,6 @@ function detectKind(url, type) {
   return "image";
 }
 
-/** Liste des médias d'un post */
 function getPostMedia(post) {
   if (Array.isArray(post.media_urls) && post.media_urls.length > 0) {
     return post.media_urls
@@ -100,7 +95,6 @@ function getPostMedia(post) {
   return [];
 }
 
-/** Transforme une ligne Supabase en objet post prêt à afficher */
 function formatPost(post) {
   const profile = post.profiles || {};
   const rawHandle = profile.handle || "membre";
@@ -125,7 +119,6 @@ function formatPost(post) {
   };
 }
 
-/** Décompose le texte d'un commentaire en { voiceUrl, caption } */
 function parseComment(text) {
   const raw = typeof text === "string" ? text : "";
   if (!raw.startsWith(VOICE_PREFIX)) return { voiceUrl: null, caption: raw };
@@ -133,7 +126,7 @@ function parseComment(text) {
   return { voiceUrl, caption: rest.join("\n").trim() };
 }
 
-/** Viewer plein écran (un à un) avec swipe + flèches */
+/** Viewer plein écran un-à-un (swipe + flèches) */
 function MediaViewer({ items, startIndex = 0, onClose }) {
   const [index, setIndex] = useState(startIndex);
   const touchStartX = useRef(null);
@@ -147,7 +140,6 @@ function MediaViewer({ items, startIndex = 0, onClose }) {
     setIndex((i) => (i < items.length - 1 ? i + 1 : 0));
   }, [items.length]);
 
-  // Clavier
   useEffect(() => {
     const onKey = (e) => {
       if (e.key === "Escape") onClose();
@@ -158,7 +150,6 @@ function MediaViewer({ items, startIndex = 0, onClose }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose, goPrev, goNext]);
 
-  // Empêcher le scroll du body
   useEffect(() => {
     document.body.style.overflow = "hidden";
     return () => {
@@ -183,11 +174,7 @@ function MediaViewer({ items, startIndex = 0, onClose }) {
   if (!current) return null;
 
   return (
-    <div
-      className="fixed inset-0 z-[100] bg-black/95 flex flex-col"
-      onClick={onClose}
-    >
-      {/* Header */}
+    <div className="fixed inset-0 z-[100] bg-black/95 flex flex-col" onClick={onClose}>
       <div className="flex items-center justify-between p-3 shrink-0" onClick={(e) => e.stopPropagation()}>
         <span className="text-white/80 text-sm font-medium">
           {index + 1} / {items.length}
@@ -202,7 +189,6 @@ function MediaViewer({ items, startIndex = 0, onClose }) {
         </button>
       </div>
 
-      {/* Zone média + swipe */}
       <div
         className="flex-1 relative flex items-center justify-center min-h-0"
         onClick={(e) => e.stopPropagation()}
@@ -228,7 +214,6 @@ function MediaViewer({ items, startIndex = 0, onClose }) {
           />
         )}
 
-        {/* Flèches (desktop + mobile) */}
         {items.length > 1 && (
           <>
             <button
@@ -251,7 +236,6 @@ function MediaViewer({ items, startIndex = 0, onClose }) {
         )}
       </div>
 
-      {/* Mini-indicateurs */}
       {items.length > 1 && (
         <div className="flex justify-center gap-1.5 py-3 shrink-0" onClick={(e) => e.stopPropagation()}>
           {items.map((_, i) => (
@@ -271,10 +255,10 @@ function MediaViewer({ items, startIndex = 0, onClose }) {
   );
 }
 
-/** Affiche les médias d'un post : grille + viewer un-à-un */
+/** Galerie + ouverture du viewer un-à-un */
 function MediaGallery({ items }) {
   const [expanded, setExpanded] = useState(false);
-  const [viewerIndex, setViewerIndex] = useState(null); // null = fermé
+  const [viewerIndex, setViewerIndex] = useState(null);
 
   if (!items.length) return null;
 
@@ -287,27 +271,24 @@ function MediaGallery({ items }) {
   const openViewer = (idx) => setViewerIndex(idx);
 
   const renderVisual = (m, single, idx) => {
-    const commonProps = {
-      onClick: () => openViewer(idx),
-      className: single
-        ? "w-full max-h-[70vh] cursor-pointer"
-        : "absolute inset-0 w-full h-full cursor-pointer",
-    };
+    const cls = single
+      ? "w-full max-h-[70vh] cursor-pointer"
+      : "absolute inset-0 w-full h-full cursor-pointer";
 
     return m.type === "video" ? (
       <LazyVideo
         src={m.url}
         fit={single ? "contain" : "cover"}
-        className={`${commonProps.className} bg-black`}
-        onClick={commonProps.onClick}
+        className={`${cls} bg-black`}
+        onClick={() => openViewer(idx)}
       />
     ) : (
       <LazyImage
         src={m.url}
         variant={single ? "full" : "feed"}
         fit={single ? "contain" : "cover"}
-        className={commonProps.className}
-        onClick={commonProps.onClick}
+        className={cls}
+        onClick={() => openViewer(idx)}
       />
     );
   };
@@ -315,14 +296,12 @@ function MediaGallery({ items }) {
   return (
     <>
       <div className="flex flex-col gap-2">
-        {/* 1 seul média */}
         {visuals.length === 1 && (
           <div className="rounded-xl overflow-hidden border bg-black/40">
             {renderVisual(visuals[0], true, 0)}
           </div>
         )}
 
-        {/* Plusieurs médias → grille */}
         {visuals.length > 1 && (
           <div className="rounded-xl overflow-hidden border bg-black/40 grid grid-cols-2 gap-0.5">
             {shown.map((m, i) => {
@@ -336,7 +315,6 @@ function MediaGallery({ items }) {
                 >
                   {renderVisual(m, false, i)}
 
-                  {/* Overlay +N */}
                   {hidden > 0 && i === shown.length - 1 && (
                     <button
                       type="button"
@@ -356,7 +334,6 @@ function MediaGallery({ items }) {
           </div>
         )}
 
-        {/* Audios */}
         {audios.map((m, i) => (
           <div
             key={`\( {m.url}- \){i}`}
@@ -370,7 +347,6 @@ function MediaGallery({ items }) {
         ))}
       </div>
 
-      {/* Viewer plein écran un-à-un */}
       {viewerIndex !== null && (
         <MediaViewer
           items={visuals}
@@ -391,7 +367,6 @@ export function FeedTab({
   setIsCreateOpen,
 }) {
   const propUserId = id || user_id || null;
-
   const { showToast, showPointsReward } = useToast();
 
   const {
@@ -454,7 +429,9 @@ export function FeedTab({
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (mounted && session?.user?.id) setCurrentUserId(session.user.id);
     });
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
       if (mounted) setCurrentUserId(session?.user?.id || null);
     });
     return () => {
@@ -517,7 +494,9 @@ export function FeedTab({
         setRepostedPosts(Object.fromEntries(reposts.map((r) => [r.post_id, true])));
       }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [activeUserId, postIdsKey]);
 
   useEffect(() => {
@@ -599,7 +578,9 @@ export function FeedTab({
     setRepostedPosts((prev) => ({ ...prev, [postId]: !wasReposted }));
     setPosts((prev) =>
       prev.map((p) =>
-        p.id === postId ? { ...p, reposts_count: Math.max(0, (p.reposts_count || 0) + delta) } : p
+        p.id === postId
+          ? { ...p, reposts_count: Math.max(0, (p.reposts_count || 0) + delta) }
+          : p
       )
     );
 
@@ -617,6 +598,7 @@ export function FeedTab({
           .from("post_reposts")
           .insert({ post_id: postId, user_id: activeUserId });
         if (error) throw error;
+
         if (post.author_id && post.author_id !== activeUserId) {
           await supabase.from("notifications").insert({
             user_id: post.author_id,
@@ -626,6 +608,7 @@ export function FeedTab({
             message: "a républié votre publication.",
           });
         }
+
         onRewardPoints?.("repost_post", "Publication républiée", postId);
         showPointsReward?.(3, "Publication républiée !");
         showToast("Publication républiée avec succès", "success");
@@ -634,7 +617,9 @@ export function FeedTab({
       setRepostedPosts((prev) => ({ ...prev, [postId]: wasReposted }));
       setPosts((prev) =>
         prev.map((p) =>
-          p.id === postId ? { ...p, reposts_count: Math.max(0, (p.reposts_count || 0) - delta) } : p
+          p.id === postId
+            ? { ...p, reposts_count: Math.max(0, (p.reposts_count || 0) - delta) }
+            : p
         )
       );
       handleDbError(error, showToast, "Impossible de traiter la républication");
@@ -680,8 +665,15 @@ export function FeedTab({
         if (e.data.size > 0) commentChunksRef.current.push(e.data);
       };
       rec.onstop = () => {
-        const blob = new Blob(commentChunksRef.current, { type: rec.mimeType || "audio/webm" });
-        setCommentRec({ postId, recording: false, blob, url: URL.createObjectURL(blob) });
+        const blob = new Blob(commentChunksRef.current, {
+          type: rec.mimeType || "audio/webm",
+        });
+        setCommentRec({
+          postId,
+          recording: false,
+          blob,
+          url: URL.createObjectURL(blob),
+        });
         stream.getTracks().forEach((t) => t.stop());
       };
       commentRecorderRef.current = rec;
@@ -715,6 +707,7 @@ export function FeedTab({
     setSendingComment(true);
     try {
       let text = typed;
+
       if (audio) {
         const ext = (audio.type || "").includes("mp4") ? "m4a" : "webm";
         const file = new File([audio], `comment-voice.${ext}`, {
@@ -725,24 +718,32 @@ export function FeedTab({
           user_id: activeUserId,
           maxBytes: MAX_MEDIA_BYTES,
         });
+        // LIGNE CORRIGÉE (template literal valide)
         text = `\( {VOICE_PREFIX} \){up.url}\( {typed ? `\n \){typed}` : ""}`;
       }
+
       const { data: created, error } = await supabase
         .from("comments")
         .insert({ post_id: postId, author_id: activeUserId, text })
         .select("id")
         .single();
       if (error) throw error;
+
       const newComment = {
         id: created?.id || `c_${Date.now()}`,
         author: "Vous",
         text,
         author_id: activeUserId,
       };
-      setCommentsMap((prev) => ({ ...prev, [postId]: [...(prev[postId] || []), newComment] }));
+      setCommentsMap((prev) => ({
+        ...prev,
+        [postId]: [...(prev[postId] || []), newComment],
+      }));
       setPosts((prev) =>
         prev.map((p) =>
-          p.id === postId ? { ...p, comments_count: (p.comments_count || 0) + 1 } : p
+          p.id === postId
+            ? { ...p, comments_count: (p.comments_count || 0) + 1 }
+            : p
         )
       );
       setNewCommentText((prev) => ({ ...prev, [postId]: "" }));
@@ -771,7 +772,9 @@ export function FeedTab({
       }));
       setPosts((prev) =>
         prev.map((p) =>
-          p.id === postId ? { ...p, comments_count: Math.max(0, (p.comments_count || 1) - 1) } : p
+          p.id === postId
+            ? { ...p, comments_count: Math.max(0, (p.comments_count || 1) - 1) }
+            : p
         )
       );
       showToast("Commentaire supprimé", "success");
@@ -784,19 +787,26 @@ export function FeedTab({
     const files = Array.from(e.target.files || []);
     e.target.value = "";
     if (files.length === 0) return;
+
     const slots = MAX_MEDIA_COUNT - mediaItems.length;
     if (slots <= 0) {
       showToast(`Maximum ${MAX_MEDIA_COUNT} médias`, "error");
       return;
     }
+
     const tooBig = files.filter((f) => f.size > MAX_MEDIA_BYTES);
     if (tooBig.length > 0) {
       showToast("Fichier trop lourd (50 Mo maximum) : ignoré", "error");
     }
-    const accepted = files.filter((f) => f.size <= MAX_MEDIA_BYTES).slice(0, slots);
+
+    const accepted = files
+      .filter((f) => f.size <= MAX_MEDIA_BYTES)
+      .slice(0, slots);
+
     if (accepted.length < files.filter((f) => f.size <= MAX_MEDIA_BYTES).length) {
       showToast(`Maximum ${MAX_MEDIA_COUNT} médias`, "info");
     }
+
     const added = accepted.map((file) => ({
       id: `\( {Date.now()}_ \){Math.random().toString(36).slice(2, 8)}`,
       file,
@@ -874,6 +884,7 @@ export function FeedTab({
         maxBytes: MAX_MEDIA_BYTES,
       }).then((r) => ({ url: r.url, type: item.kind }))
     );
+
     if (audioBlob) {
       const audioFile = new File([audioBlob], "voice-note.webm", {
         type: audioBlob.type || "audio/webm",
@@ -886,8 +897,10 @@ export function FeedTab({
         }).then((r) => ({ url: r.url, type: "audio" }))
       );
     }
+
     const uploaded = await Promise.all(uploads);
     const first = uploaded[0] || null;
+
     const payload = {
       author_id: activeUserId,
       text: newText + (mood ? ` (Humeur: ${mood})` : ""),
@@ -895,7 +908,9 @@ export function FeedTab({
       media_type: first?.type || null,
       media_urls: uploaded,
     };
+
     let { error: postErr } = await supabase.from("posts").insert([payload]);
+
     if (postErr && /media_urls/i.test(postErr.message || "")) {
       const { media_urls: _ignored, ...legacy } = payload;
       ({ error: postErr } = await supabase.from("posts").insert([legacy]));
@@ -903,9 +918,13 @@ export function FeedTab({
         showToast("Seul le premier média a été publié (migration SQL manquante)", "info");
       }
     }
+
     if (postErr) throw postErr;
+
     if (alsoStory) {
-      const storyMedia = uploaded.filter((m) => m.type === "image" || m.type === "video");
+      const storyMedia = uploaded.filter(
+        (m) => m.type === "image" || m.type === "video"
+      );
       try {
         const now = Date.now();
         for (const m of storyMedia) {
@@ -923,6 +942,7 @@ export function FeedTab({
         handleDbError(storyErr, showToast, "Publication créée, mais la story a échoué");
       }
     }
+
     resetComposer();
     setIsCreateOpen?.(false);
     showToast("Publication créée !", "success");
@@ -934,12 +954,15 @@ export function FeedTab({
     const hasMedia = mediaItems.length > 0;
     const hasAudio = Boolean(audioBlob);
     const hasPoll = Boolean(pollData?.question?.trim());
+
     if (submitting) return;
     if (!hasText && !hasMedia && !hasAudio && !hasPoll) return;
+
     if (!activeUserId) {
       showToast("Veuillez vous connecter pour publier", "error");
       return;
     }
+
     setSubmitting(true);
     try {
       await publishPost();
@@ -958,7 +981,9 @@ export function FeedTab({
     );
   }
 
-  const canPublish = Boolean(newText.trim() || mediaItems.length || audioBlob || pollData?.question?.trim());
+  const canPublish = Boolean(
+    newText.trim() || mediaItems.length || audioBlob || pollData?.question?.trim()
+  );
 
   return (
     <div className="flex flex-col gap-6 max-w-2xl mx-auto w-full pb-20">
@@ -999,11 +1024,16 @@ export function FeedTab({
                   type="button"
                   onClick={() => setTextToolsOpen(!textToolsOpen)}
                   className="px-3 py-1.5 rounded-xl border text-xs font-medium flex items-center gap-1.5 transition-colors"
-                  style={{ borderColor: COLORS.border, color: COLORS.ivory, background: COLORS.surface2 }}
+                  style={{
+                    borderColor: COLORS.border,
+                    color: COLORS.ivory,
+                    background: COLORS.surface2,
+                  }}
                 >
                   <span>Mise en forme du texte</span>
                   {textToolsOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                 </button>
+
                 <button
                   type="button"
                   onClick={() =>
@@ -1080,9 +1110,13 @@ export function FeedTab({
 
               {mediaItems.length > 0 && (
                 <div className="flex flex-col gap-1.5">
-                  <div className="flex items-center justify-between text-[11px]" style={{ color: COLORS.muted }}>
+                  <div
+                    className="flex items-center justify-between text-[11px]"
+                    style={{ color: COLORS.muted }}
+                  >
                     <span>
-                      {mediaItems.length}/{MAX_MEDIA_COUNT} média{mediaItems.length > 1 ? "s" : ""}
+                      {mediaItems.length}/{MAX_MEDIA_COUNT} média
+                      {mediaItems.length > 1 ? "s" : ""}
                     </span>
                     <button type="button" onClick={clearAllMedia} className="underline">
                       Tout retirer
@@ -1104,9 +1138,17 @@ export function FeedTab({
                           <X size={12} />
                         </button>
                         {m.kind === "video" ? (
-                          <video src={m.preview} className="w-full h-full object-cover" muted />
+                          <video
+                            src={m.preview}
+                            className="w-full h-full object-cover"
+                            muted
+                          />
                         ) : (
-                          <img src={m.preview} alt="Aperçu" className="w-full h-full object-cover" />
+                          <img
+                            src={m.preview}
+                            alt="Aperçu"
+                            className="w-full h-full object-cover"
+                          />
                         )}
                       </div>
                     ))}
@@ -1163,7 +1205,11 @@ export function FeedTab({
 
                 {audioBlob && (
                   <>
-                    <audio src={audioPreviewUrl} controls className="h-8 max-w-[150px] rounded" />
+                    <audio
+                      src={audioPreviewUrl}
+                      controls
+                      className="h-8 max-w-[150px] rounded"
+                    />
                     <button
                       type="button"
                       onClick={discardRecording}
@@ -1191,10 +1237,14 @@ export function FeedTab({
       )}
 
       <GuestBanner
-        onUpgrade={() => showToast("Crée un compte pour débloquer toutes les fonctionnalités", "info")}
+        onUpgrade={() =>
+          showToast("Crée un compte pour débloquer toutes les fonctionnalités", "info")
+        }
       />
 
-      {activeUserId && <SocialSuggestions user_id={activeUserId} onOpenProfile={onOpenProfile} />}
+      {activeUserId && (
+        <SocialSuggestions user_id={activeUserId} onOpenProfile={onOpenProfile} />
+      )}
 
       <div className="flex flex-col gap-4">
         {posts.map((post) => (
@@ -1210,40 +1260,65 @@ export function FeedTab({
                   type="button"
                   onClick={() => onOpenProfile?.(post.author_id)}
                   className="w-10 h-10 rounded-full overflow-hidden border flex items-center justify-center font-bold text-sm shrink-0"
-                  style={{ borderColor: COLORS.borderGold, background: COLORS.surface }}
+                  style={{
+                    borderColor: COLORS.borderGold,
+                    background: COLORS.surface,
+                  }}
                 >
                   {post.avatar ? (
-                    <img src={post.avatar} alt="" className="w-full h-full object-cover" />
+                    <img
+                      src={post.avatar}
+                      alt=""
+                      className="w-full h-full object-cover"
+                    />
                   ) : (
-                    <span style={{ color: COLORS.gold }}>{post.display_name?.charAt(0) || "?"}</span>
+                    <span style={{ color: COLORS.gold }}>
+                      {post.display_name?.charAt(0) || "?"}
+                    </span>
                   )}
                 </button>
                 <div>
                   <div className="flex items-center gap-2">
-                    <p className="font-bold text-sm flex items-center gap-1" style={{ color: COLORS.ivory }}>
+                    <p
+                      className="font-bold text-sm flex items-center gap-1"
+                      style={{ color: COLORS.ivory }}
+                    >
                       {post.display_name} {post.flag}
                     </p>
-                    <span className="text-xs" style={{ color: COLORS.muted }}>·</span>
-                    <span className="text-xs font-normal" style={{ color: COLORS.muted }}>
+                    <span className="text-xs" style={{ color: COLORS.muted }}>
+                      ·
+                    </span>
+                    <span
+                      className="text-xs font-normal"
+                      style={{ color: COLORS.muted }}
+                    >
                       {formatDate(post.created_at)}
                     </span>
                   </div>
-                  <p className="text-xs" style={{ color: COLORS.muted }}>{post.handle}</p>
+                  <p className="text-xs" style={{ color: COLORS.muted }}>
+                    {post.handle}
+                  </p>
                 </div>
               </div>
 
               <div className="relative" data-post-menu>
                 <button
                   type="button"
-                  onClick={() => setMenuOpenId(menuOpenId === post.id ? null : post.id)}
+                  onClick={() =>
+                    setMenuOpenId(menuOpenId === post.id ? null : post.id)
+                  }
                   className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-colors"
                 >
                   <MoreHorizontal size={18} />
                 </button>
+
                 {menuOpenId === post.id && (
                   <div
                     className="absolute right-0 top-full mt-1 w-44 rounded-xl border shadow-xl z-20 overflow-hidden py-1"
-                    style={{ background: COLORS.surface2, borderColor: COLORS.border }}
+                    style={{
+                      background: COLORS.surface2,
+                      borderColor: COLORS.border,
+                    }}
                   >
                     {post.author_id === activeUserId ? (
                       <>
@@ -1293,7 +1368,11 @@ export function FeedTab({
                   value={editText}
                   onChange={(e) => setEditText(e.target.value)}
                   className="w-full p-3 rounded-xl border text-sm outline-none resize-none"
-                  style={{ background: COLORS.surface, borderColor: COLORS.border, color: COLORS.ivory }}
+                  style={{
+                    background: COLORS.surface,
+                    borderColor: COLORS.border,
+                    color: COLORS.ivory,
+                  }}
                   rows={3}
                 />
                 <div className="flex justify-end gap-2">
@@ -1317,16 +1396,24 @@ export function FeedTab({
                 </div>
               </div>
             ) : (
-              <div className="text-base leading-relaxed whitespace-pre-wrap" style={{ color: COLORS.ivory }}>
-                {translatedMap[post.id] ? translatedMap[post.id] : <RichTextRenderer content={post.text} />}
+              <div
+                className="text-base leading-relaxed whitespace-pre-wrap"
+                style={{ color: COLORS.ivory }}
+              >
+                {translatedMap[post.id] ? (
+                  translatedMap[post.id]
+                ) : (
+                  <RichTextRenderer content={post.text} />
+                )}
               </div>
             )}
 
             {translatedMap[post.id] && (
-              <p className="text-[10px]" style={{ color: COLORS.muted }}>Traduit par BAARO</p>
+              <p className="text-[10px]" style={{ color: COLORS.muted }}>
+                Traduit par BAARO
+              </p>
             )}
 
-            {/* Galerie + viewer un-à-un */}
             <MediaGallery items={getPostMedia(post)} />
 
             <PollCard postId={post.id} user_id={activeUserId} />
@@ -1336,21 +1423,29 @@ export function FeedTab({
               className="flex items-center justify-between gap-2 pt-2 border-t flex-wrap"
               style={{ borderColor: COLORS.border }}
             >
-              <div className="flex items-center gap-3 text-[11px] font-medium flex-wrap" style={{ color: COLORS.muted }}>
+              <div
+                className="flex items-center gap-3 text-[11px] font-medium flex-wrap"
+                style={{ color: COLORS.muted }}
+              >
                 <button
                   type="button"
                   onClick={() => handleRepost(post)}
                   className="flex items-center gap-1 transition active:scale-95"
-                  style={{ color: repostedPosts[post.id] ? "#10B981" : COLORS.muted }}
+                  style={{
+                    color: repostedPosts[post.id] ? "#10B981" : COLORS.muted,
+                  }}
                 >
                   <Repeat2 size={15} />
                   {Number(post.reposts_count || 0)}
                 </button>
+
                 {post.author_id === activeUserId && (
                   <div className="flex items-center gap-1.5 ml-1">
                     <button
                       type="button"
-                      onClick={() => setEngagement({ type: "postLikes", id: post.id })}
+                      onClick={() =>
+                        setEngagement({ type: "postLikes", id: post.id })
+                      }
                       className="text-[10px] underline hover:text-white"
                     >
                       👍 J'aime
@@ -1358,7 +1453,9 @@ export function FeedTab({
                     <span>·</span>
                     <button
                       type="button"
-                      onClick={() => setEngagement({ type: "postReposts", id: post.id })}
+                      onClick={() =>
+                        setEngagement({ type: "postReposts", id: post.id })
+                      }
                       className="text-[10px] underline hover:text-white"
                     >
                       Reposts
@@ -1366,7 +1463,9 @@ export function FeedTab({
                     <span>·</span>
                     <button
                       type="button"
-                      onClick={() => setEngagement({ type: "postViews", id: post.id })}
+                      onClick={() =>
+                        setEngagement({ type: "postViews", id: post.id })
+                      }
                       className="text-[10px] underline hover:text-white flex items-center gap-0.5"
                     >
                       <Eye size={11} /> {post.views_count || 0}
@@ -1385,33 +1484,64 @@ export function FeedTab({
                   <MessageCircle size={15} />
                   {post.comments_count || 0}
                 </button>
+
                 <TranslateButton
                   text={typeof post.text === "string" ? post.text : ""}
                   isTranslated={!!translatedMap[post.id]}
                   preferredLang="fr"
                   onTranslated={(translated) =>
-                    setTranslatedMap((prev) => ({ ...prev, [post.id]: translated }))
+                    setTranslatedMap((prev) => ({
+                      ...prev,
+                      [post.id]: translated,
+                    }))
                   }
-                  onClear={() => setTranslatedMap((prev) => ({ ...prev, [post.id]: null }))}
+                  onClear={() =>
+                    setTranslatedMap((prev) => ({ ...prev, [post.id]: null }))
+                  }
                 />
-                <AskAiButton text={typeof post.text === "string" ? post.text : ""} />
+
+                <AskAiButton
+                  text={typeof post.text === "string" ? post.text : ""}
+                />
+
                 {post.author_id !== activeUserId && (
-                  <TipButton recipientId={post.author_id} postId={post.id} compact />
+                  <TipButton
+                    recipientId={post.author_id}
+                    postId={post.id}
+                    compact
+                  />
                 )}
               </div>
             </div>
 
             {commentOpen[post.id] && (
-              <div className="pt-3 border-t space-y-2" style={{ borderColor: COLORS.border }}>
+              <div
+                className="pt-3 border-t space-y-2"
+                style={{ borderColor: COLORS.border }}
+              >
                 {(commentsMap[post.id] || []).map((c) => {
                   const { voiceUrl, caption } = parseComment(c.text);
                   return (
-                    <div key={c.id} className="text-xs flex items-start justify-between gap-2" style={{ color: COLORS.muted }}>
+                    <div
+                      key={c.id}
+                      className="text-xs flex items-start justify-between gap-2"
+                      style={{ color: COLORS.muted }}
+                    >
                       <div className="min-w-0">
-                        <span className="font-bold" style={{ color: COLORS.ivory }}>{c.author}</span>
+                        <span
+                          className="font-bold"
+                          style={{ color: COLORS.ivory }}
+                        >
+                          {c.author}
+                        </span>
                         {caption ? <> : {caption}</> : null}
                         {voiceUrl && (
-                          <audio src={voiceUrl} controls preload="none" className="mt-1 h-8 w-full max-w-[240px]" />
+                          <audio
+                            src={voiceUrl}
+                            controls
+                            preload="none"
+                            className="mt-1 h-8 w-full max-w-[240px]"
+                          />
                         )}
                       </div>
                       {c.author_id === activeUserId && (
@@ -1426,14 +1556,20 @@ export function FeedTab({
                     </div>
                   );
                 })}
+
                 {activeUserId && (
                   <div className="flex items-center gap-2 pt-1">
                     <input
                       value={newCommentText[post.id] || ""}
                       onChange={(e) =>
-                        setNewCommentText((prev) => ({ ...prev, [post.id]: e.target.value }))
+                        setNewCommentText((prev) => ({
+                          ...prev,
+                          [post.id]: e.target.value,
+                        }))
                       }
-                      onKeyDown={(e) => e.key === "Enter" && handleAddComment(post.id)}
+                      onKeyDown={(e) =>
+                        e.key === "Enter" && handleAddComment(post.id)
+                      }
                       placeholder="Ajouter un commentaire..."
                       className="flex-1 min-w-0 px-3 py-1.5 rounded-lg border text-xs outline-none"
                       style={{
@@ -1442,6 +1578,7 @@ export function FeedTab({
                         color: COLORS.ivory,
                       }}
                     />
+
                     {commentRec.recording && commentRec.postId === post.id ? (
                       <button
                         type="button"
@@ -1453,7 +1590,11 @@ export function FeedTab({
                       </button>
                     ) : commentRec.blob && commentRec.postId === post.id ? (
                       <>
-                        <audio src={commentRec.url} controls className="h-8 max-w-[110px]" />
+                        <audio
+                          src={commentRec.url}
+                          controls
+                          className="h-8 max-w-[110px]"
+                        />
                         <button
                           type="button"
                           onClick={discardCommentRecording}
@@ -1474,6 +1615,7 @@ export function FeedTab({
                         <Mic size={13} />
                       </button>
                     )}
+
                     <button
                       type="button"
                       onClick={() => handleAddComment(post.id)}
@@ -1519,7 +1661,11 @@ export function FeedTab({
             </p>
             <div className="flex flex-col gap-2">
               {REPORT_REASONS.map((reason) => (
-                <label key={reason} className="flex items-center gap-2 text-xs cursor-pointer" style={{ color: COLORS.ivory }}>
+                <label
+                  key={reason}
+                  className="flex items-center gap-2 text-xs cursor-pointer"
+                  style={{ color: COLORS.ivory }}
+                >
                   <input
                     type="radio"
                     name="reportReason"
@@ -1531,7 +1677,10 @@ export function FeedTab({
                 </label>
               ))}
             </div>
-            <div className="flex justify-end gap-2 pt-2 border-t" style={{ borderColor: COLORS.border }}>
+            <div
+              className="flex justify-end gap-2 pt-2 border-t"
+              style={{ borderColor: COLORS.border }}
+            >
               <button
                 type="button"
                 onClick={() => setReportPost(null)}
