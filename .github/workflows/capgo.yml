@@ -1,4 +1,4 @@
-name: Baaro - Build APK + Capgo BETA
+name: Baaro - Build & Deploy BETA
 
 on:
   push:
@@ -9,26 +9,34 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
-
       - uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '21'
-
       - uses: android-actions/setup-android@v3
         with:
           packages: platform-tools platforms;android-36 build-tools;36.0.0
-
       - uses: gradle/actions/setup-gradle@v4
 
-      - run: npm ci
+      - name: Install deps
+        run: npm ci
 
-      - name: Build Web (une seule fois)
+      - name: DEFINITIVE FIX - Auto version
+        id: version
+        run: |
+          # On garde 0.1.0 et on ajoute le numéro de build: 0.1.0-401, 0.1.0-402...
+          # C'est unique pour Capgo et tu gardes ton semver
+          BASE=$(node -p "require('./package.json').version.split('-')[0]")
+          NEW="$BASE-${{ github.run_number }}"
+          npm version $NEW --no-git-tag-version --allow-same-version > /dev/null
+          echo "version=$NEW" >> $GITHUB_OUTPUT
+          echo "-> New version: $NEW"
+
+      - name: Build Web
         run: npm run build
         env:
           VITE_APP_ENV: production
@@ -44,17 +52,14 @@ jobs:
         run: |
           npx cap sync android
           chmod +x android/gradlew
-          cd android
-          ./gradlew assembleDebug --no-daemon
+          cd android && ./gradlew assembleDebug --no-daemon
 
-      - name: Upload APK
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Baaro-apk-debug
+          name: Baaro-${{ steps.version.outputs.version }}
           path: android/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 14
 
-      - name: Upload to Capgo BETA
-        run: npx @capgo/cli@latest bundle upload --channel beta --apikey ${{ secrets.CAPGO_TOKEN }}
-        env:
-          CI: true
+      - name: Upload to Capgo BETA & set as active
+        run: npx @capgo/cli@latest bundle upload --channel beta --apikey ${{ secrets.CAPGO_TOKEN }} --bundle ${{ steps.version.outputs.version }}
