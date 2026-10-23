@@ -204,6 +204,30 @@ export default function DebatesTab({
   const [filter, setFilter] = useState("all");
   const refetchTimer = useRef(null);
 
+  useEffect(() => {
+    const openRoom = (roomId) => {
+      if (roomId) setActiveDebateCode(String(roomId).trim());
+    };
+
+    const onOpenDebate = (event) => {
+      try {
+        sessionStorage.removeItem("baaro:open_debate");
+      } catch {}
+      openRoom(event.detail?.roomId || event.detail?.room_id);
+    };
+
+    window.addEventListener("baaro:open-debate", onOpenDebate);
+    try {
+      const pending = sessionStorage.getItem("baaro:open_debate");
+      if (pending) {
+        sessionStorage.removeItem("baaro:open_debate");
+        openRoom(pending);
+      }
+    } catch {}
+
+    return () => window.removeEventListener("baaro:open-debate", onOpenDebate);
+  }, []);
+
   // Fusionne mes salles (hook) sans écraser la liste
   useEffect(() => {
     if (!myRooms?.length) return;
