@@ -48,7 +48,10 @@ import {
   Eraser,
   UserX,
   Info,
+  RefreshCw,
 } from "lucide-react";
+import { Capacitor } from "@capacitor/core";
+import { CapacitorUpdater } from "@capgo/capacitor-updater";
 import { COLORS } from "../../theme.js";
 import { setAppLanguage, SUPPORTED_LANGUAGES } from "../../../i18n.js";
 import { supabase } from "../../supabaseClient.js";
@@ -174,6 +177,7 @@ export default function SettingsTab({
     userAgent?: string;
   } | null>(null);
   const [accountBusy, setAccountBusy] = useState(false);
+  const [updateBusy, setUpdateBusy] = useState(false);
 
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
     profile: true,
@@ -673,6 +677,54 @@ export default function SettingsTab({
       setMessage(t("action_error"));
     } finally {
       setAccountBusy(false);
+    }
+  };
+
+  // Recherche une mise à jour Capgo, la télécharge puis propose de redémarrer.
+  const handleCheckUpdate = async () => {
+    if (updateBusy) return;
+    if (!Capacitor.isNativePlatform()) {
+      setMessage(t("update_web"));
+      return;
+    }
+    setUpdateBusy(true);
+    setMessage("");
+    try {
+      const latest = await CapacitorUpdater.getLatest();
+      const current = await CapacitorUpdater.current();
+
+      if (latest.major) {
+        setMessage(t("update_store"));
+        return;
+      }
+      if (
+        latest.error ||
+        !latest.url ||
+        !latest.version ||
+        latest.version === current.bundle.version
+      ) {
+        setMessage(t("update_none"));
+        return;
+      }
+
+      const bundle = await CapacitorUpdater.download({
+        url: latest.url,
+        version: latest.version,
+        sessionKey: latest.sessionKey,
+        checksum: (latest as { checksum?: string }).checksum,
+      });
+
+      if (window.confirm(t("update_apply_confirm"))) {
+        await CapacitorUpdater.set({ id: bundle.id }); // recharge l'application
+      } else {
+        await CapacitorUpdater.next({ id: bundle.id });
+        setMessage(t("update_later"));
+      }
+    } catch (err) {
+      console.warn("[settings] update:", err);
+      setMessage(t("update_error"));
+    } finally {
+      setUpdateBusy(false);
     }
   };
 
@@ -2024,6 +2076,13 @@ export default function SettingsTab({
             <span style={{ color: COLORS.muted }}>{t("version")}</span>
             <span className="font-semibold">{APP_VERSION}</span>
           </div>
+          <ActionRow
+            icon={RefreshCw}
+            label={updateBusy ? t("update_checking") : t("update_check")}
+            onClick={handleCheckUpdate}
+            disabled={updateBusy}
+            tone="gold"
+          />
           <ActionRow
             icon={FileText}
             label={t("privacy_policy")}
