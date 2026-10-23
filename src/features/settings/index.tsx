@@ -47,6 +47,7 @@ import {
   LifeBuoy,
   Eraser,
   UserX,
+  Info,
 } from "lucide-react";
 import { COLORS } from "../../theme.js";
 import { setAppLanguage, SUPPORTED_LANGUAGES } from "../../../i18n.js";
@@ -196,6 +197,7 @@ export default function SettingsTab({
     notif_sound: false,
     notif_prefs: false,
     performance: false,
+    about: false,
   });
 
   const lang = uiLang(settings.lang);
@@ -881,6 +883,7 @@ export default function SettingsTab({
         "session_device"
       ),
       danger: match("delete_account", "delete_account_desc"),
+      about: match("about_section", "about_desc", "about_tagline", "about_description"),
       notifications: match(
         "notifications_section",
         "notifications_desc",
@@ -1979,6 +1982,66 @@ export default function SettingsTab({
             disabled={accountBusy}
             tone="danger"
           />
+        </CollapsibleSection>
+      )}
+
+      {/* À propos */}
+      {visible.about && (
+        <CollapsibleSection
+          id="about"
+          icon={Info}
+          title={t("about_section")}
+          desc={t("about_desc")}
+          accent={COLORS.teal}
+          open={openSections.about || !!q}
+          onToggle={() => toggleSection("about")}
+        >
+          <div className="flex items-center gap-3">
+            <div
+              className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl border text-lg font-bold"
+              style={{
+                background: COLORS.surface2,
+                borderColor: COLORS.borderTeal,
+                color: COLORS.teal,
+              }}
+            >
+              B
+            </div>
+            <div className="min-w-0">
+              <p className="font-bold leading-tight">BAARO</p>
+              <p className="text-xs" style={{ color: COLORS.muted }}>
+                {t("about_tagline")}
+              </p>
+            </div>
+          </div>
+          <p className="text-xs leading-relaxed" style={{ color: COLORS.muted }}>
+            {t("about_description")}
+          </p>
+          <div
+            className="flex items-center justify-between rounded-xl border px-3 py-2.5 text-sm"
+            style={{ background: COLORS.surface2, borderColor: COLORS.border }}
+          >
+            <span style={{ color: COLORS.muted }}>{t("version")}</span>
+            <span className="font-semibold">{APP_VERSION}</span>
+          </div>
+          <ActionRow
+            icon={FileText}
+            label={t("privacy_policy")}
+            onClick={() => setShowPrivacy(true)}
+          />
+          {SUPPORT_EMAIL && (
+            <ActionRow
+              icon={LifeBuoy}
+              label={t("contact_us")}
+              onClick={handleSupport}
+            />
+          )}
+          <p
+            className="text-center text-[10px] pt-1"
+            style={{ color: COLORS.muted }}
+          >
+            © {new Date().getFullYear()} BAARO. {t("about_rights")}
+          </p>
         </CollapsibleSection>
       )}
 
