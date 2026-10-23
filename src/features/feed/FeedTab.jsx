@@ -308,7 +308,7 @@ function MediaGallery({ items }) {
               const isFirstOdd = shown.length % 2 === 1 && i === 0;
               return (
                 <div
-                  key={`\( {m.url}- \){i}`}
+                  key={`${m.url}-${i}`}
                   className={`relative overflow-hidden bg-black ${
                     isFirstOdd ? "col-span-2 aspect-[2/1]" : "aspect-square"
                   }`}
@@ -323,7 +323,7 @@ function MediaGallery({ items }) {
                         setExpanded(true);
                       }}
                       className="absolute inset-0 bg-black/60 text-white text-2xl font-bold flex items-center justify-center z-10"
-                      aria-label={`Voir \( {hidden} média \){hidden > 1 ? "s" : ""} de plus`}
+                      aria-label={`Voir ${hidden} média${hidden > 1 ? "s" : ""} de plus`}
                     >
                       +{hidden}
                     </button>
@@ -336,7 +336,7 @@ function MediaGallery({ items }) {
 
         {audios.map((m, i) => (
           <div
-            key={`\( {m.url}- \){i}`}
+            key={`${m.url}-${i}`}
             className="w-full p-4 flex items-center gap-3 bg-slate-900/50 rounded-xl"
           >
             <div className="p-2 rounded-full bg-teal-500/20 text-teal-400 shrink-0">
@@ -718,8 +718,7 @@ export function FeedTab({
           user_id: activeUserId,
           maxBytes: MAX_MEDIA_BYTES,
         });
-        // LIGNE CORRIGÉE (template literal valide)
-        text = `\( {VOICE_PREFIX} \){up.url}\( {typed ? `\n \){typed}` : ""}`;
+        text = `${VOICE_PREFIX}${up.url}${typed ? `\n${typed}` : ""}`;
       }
 
       const { data: created, error } = await supabase
@@ -808,7 +807,7 @@ export function FeedTab({
     }
 
     const added = accepted.map((file) => ({
-      id: `\( {Date.now()}_ \){Math.random().toString(36).slice(2, 8)}`,
+      id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
       file,
       preview: URL.createObjectURL(file),
       kind: file.type.startsWith("video") ? "video" : "image",
