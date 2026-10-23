@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef } from "react";
 import {
   X,
   Trash2,
@@ -402,8 +402,14 @@ function MediaGallery({ items }) {
   );
 }
 
-/** Texte d'une publication : affiché en entier, lisible, mis en valeur si court */
-function PostText({ text, translated, hasMedia }) {
+const COLLAPSED_HEIGHT = 150; // ≈ 6 lignes
+
+/** Texte d'une publication : « Voir plus » si long, mis en valeur si court, #/@ cliquables */
+function PostText({ text, translated, hasMedia, onHashtagClick, onMentionClick }) {
+  const [expanded, setExpanded] = useState(false);
+  const [overflowing, setOverflowing] = useState(false);
+  const boxRef = useRef(null);
+
   const plain = typeof text === "string" ? text.trim() : "";
   const isStatement =
     !hasMedia &&
@@ -412,20 +418,71 @@ function PostText({ text, translated, hasMedia }) {
     plain.length <= 140 &&
     !plain.includes("\n");
 
+  const textClass = isStatement
+    ? "text-xl font-semibold leading-snug tracking-tight"
+    : "text-[15px] leading-[1.65]";
+
+  useLayoutEffect(() => {
+    const el = boxRef.current;
+    if (!el || expanded) return undefined;
+
+    const measure = () => setOverflowing(el.scrollHeight > el.clientHeight + 1);
+    measure();
+
+    if (typeof ResizeObserver === "undefined") return undefined;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [text, translated, expanded]);
+
+  const collapsed = !expanded && overflowing;
+
   return (
     <div
-      className={[
-        "break-words [overflow-wrap:anywhere] text-pretty whitespace-pre-wrap",
-        isStatement
-          ? "border-l-2 pl-3 text-xl font-semibold leading-snug tracking-tight"
-          : "text-[15px] leading-[1.65]",
-      ].join(" ")}
-      style={{
-        color: COLORS.ivory,
-        ...(isStatement ? { borderColor: COLORS.gold } : null),
-      }}
+      className={`text-pretty ${isStatement ? "border-l-2 pl-3" : ""}`}
+      style={isStatement ? { borderColor: COLORS.gold } : undefined}
     >
-      {translated ? translated : <RichTextRenderer content={text} />}
+      <div
+        ref={boxRef}
+        className="overflow-hidden"
+        style={{
+          maxHeight: expanded ? "none" : COLLAPSED_HEIGHT,
+          ...(collapsed
+            ? {
+                WebkitMaskImage:
+                  "linear-gradient(to bottom, #000 70%, transparent 100%)",
+                maskImage: "linear-gradient(to bottom, #000 70%, transparent 100%)",
+              }
+            : null),
+        }}
+      >
+        {translated ? (
+          <p
+            className={`whitespace-pre-wrap break-words [overflow-wrap:anywhere] ${textClass}`}
+            style={{ color: COLORS.ivory }}
+          >
+            {translated}
+          </p>
+        ) : (
+          <RichTextRenderer
+            content={text}
+            className={textClass}
+            onHashtagClick={onHashtagClick}
+            onMentionClick={onMentionClick}
+          />
+        )}
+      </div>
+
+      {(overflowing || expanded) && (
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="mt-1.5 text-xs font-semibold active:opacity-70"
+          style={{ color: COLORS.gold }}
+        >
+          {expanded ? "Voir moins" : "Voir plus"}
+        </button>
+      )}
     </div>
   );
 }
@@ -530,13 +587,57 @@ export function FeedTab({
     };
   }, [activeUserId, feedTab]);
 
+  const [tagFilter, setTagFilter] = useState(null);
+
   const visiblePosts = useMemo(() => {
-    if (feedTab !== "following") return posts;
-    if (!followingIds) return [];
-    return posts.filter(
-      (p) => p.author_id === activeUserId || followingIds.has(p.author_id)
-    );
-  }, [feedTab, posts, followingIds, activeUserId]);
+    let list = posts;
+
+    if (feedTab === "following") {
+      if (!followingIds) return [];
+      list = list.filter(
+        (p) => p.author_id === activeUserId || followingIds.has(p.author_id)
+      );
+    }
+
+    if (tagFilter) {
+      const re = new RegExp(
+        `(^|[^\\p{L}\\p{N}_])#${tagFilter}(?![\\p{L}\\p{N}_])`,
+        "iu"
+      );
+      list = list.filter((p) => typeof p.text === "string" && re.test(p.text));
+    }
+
+    return list;
+  }, [feedTab, posts, followingIds, activeUserId, tagFilter]);
+
+  const handleHashtagClick = useCallback((tag) => {
+    if (!/^[\p{L}_][\p{L}\p{N}_]*$/u.test(tag || "")) return;
+    autoLoadsRef.current = 0;
+    setTagFilter(tag);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }, []);
+
+  const handleMentionClick = useCallback(
+    async (name) => {
+      const clean = String(name || "").replace(/^@/, "");
+      if (!clean) return;
+      try {
+        const lower = clean.toLowerCase();
+        const variants = [...new Set([clean, `@${clean}`, lower, `@${lower}`])];
+        const { data, error } = await supabase
+          .from("profiles")
+          .select("id")
+          .in("handle", variants)
+          .limit(1);
+        if (error) throw error;
+        if (data?.[0]?.id) onOpenProfile?.(data[0].id);
+        else showToast(`Profil @${clean} introuvable`, "info");
+      } catch (err) {
+        handleDbError(err, showToast, "Impossible d'ouvrir ce profil");
+      }
+    },
+    [onOpenProfile, showToast]
+  );
 
   const visibleKey = visiblePosts.map((p) => p.id).join(",");
 
@@ -702,8 +803,9 @@ export function FeedTab({
       (entries) => {
         if (!entries[0].isIntersecting || loadingMore) return;
 
-        if (feedTab === "following" && visiblePosts.length < 5) {
-          if (autoLoadsRef.current >= 5) return;
+        const filtered = feedTab === "following" || Boolean(tagFilter);
+        if (filtered && visiblePosts.length < 5) {
+          if (autoLoadsRef.current >= 10) return;
           autoLoadsRef.current += 1;
         } else {
           autoLoadsRef.current = 0;
@@ -715,7 +817,7 @@ export function FeedTab({
 
     io.observe(el);
     return () => io.disconnect();
-  }, [hasMore, loading, loadingMore, loadMore, feedTab, visiblePosts.length]);
+  }, [hasMore, loading, loadingMore, loadMore, feedTab, tagFilter, visiblePosts.length]);
 
   const handleDeletePost = async (postId) => {
     if (!window.confirm("Voulez-vous vraiment supprimer cette publication ?")) return;
@@ -1515,6 +1617,30 @@ export function FeedTab({
         ))}
       </div>
 
+      {tagFilter && (
+        <div
+          className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl border text-xs"
+          style={{ borderColor: COLORS.borderTeal, background: COLORS.surface }}
+        >
+          <span style={{ color: COLORS.ivory }}>
+            Publications avec{" "}
+            <strong style={{ color: COLORS.teal }}>#{tagFilter}</strong>
+          </span>
+          <button
+            type="button"
+            onClick={() => {
+              autoLoadsRef.current = 0;
+              setTagFilter(null);
+            }}
+            className="p-1 rounded-lg hover:bg-white/10"
+            style={{ color: COLORS.muted }}
+            aria-label="Retirer le filtre"
+          >
+            <X size={14} />
+          </button>
+        </div>
+      )}
+
       <div className="flex flex-col gap-4">
         {visiblePosts.map((post) => (
           <article
@@ -1670,6 +1796,8 @@ export function FeedTab({
                 text={post.text}
                 translated={translatedMap[post.id]}
                 hasMedia={getPostMedia(post).length > 0}
+                onHashtagClick={handleHashtagClick}
+                onMentionClick={handleMentionClick}
               />
             )}
 
@@ -1897,12 +2025,13 @@ export function FeedTab({
           </article>
         ))}
 
-        {feedTab === "following" &&
-          followingIds &&
-          visiblePosts.length === 0 &&
-          !hasMore && (
+        {visiblePosts.length === 0 &&
+          !hasMore &&
+          (tagFilter || (feedTab === "following" && followingIds)) && (
             <p className="text-center text-xs py-10" style={{ color: COLORS.muted }}>
-              Aucune publication de vos abonnements pour l'instant.
+              {tagFilter
+                ? `Aucune publication avec #${tagFilter} pour l'instant.`
+                : "Aucune publication de vos abonnements pour l'instant."}
             </p>
           )}
       </div>
