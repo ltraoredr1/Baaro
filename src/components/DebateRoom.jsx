@@ -336,6 +336,16 @@ export function DebateRoom({ inviteCode, onBack }) {
     };
   }, [live.joined, live.callRef]);
 
+  // Si l'hôte termine la salle depuis un autre appareil, l'événement
+  // Supabase met à jour room.status mais la connexion Daily reste ouverte.
+  // Quitter explicitement évite de garder le micro/la caméra actifs derrière
+  // l'interface et permet de réafficher correctement le bouton de connexion.
+  useEffect(() => {
+    if (isEnded && live.joined) {
+      live.leaveLive().catch(() => {});
+    }
+  }, [isEnded, live.joined, live.leaveLive]);
+
   const handleSendMessage = async (e) => {
     e.preventDefault();
     if (!newMessage.trim() || !room || !user_id) return;
@@ -429,15 +439,34 @@ export function DebateRoom({ inviteCode, onBack }) {
     if (!room || !isHost || reopening) return;
     setReopening(true);
     setReopenError(null);
-    const { error: upErr } = await supabase
-      .from("debate_rooms")
-      .update({ status: "active" })
-      .eq("id", room.id)
-      .eq("host_id", user_id);
-    if (upErr) {
-      setReopenError(upErr.message || "Impossible de relancer la salle");
-    } else {
+    try {
+      // handleBack marque l'hôte comme parti. Réactiver la salle sans
+      // réactiver sa participation rend ensuite le live incohérent :
+      // compteur faux et accès refusé pour certaines policies RLS.
+      const { error: participantError } = await supabase
+        .from("debate_participants")
+        .upsert(
+          {
+            room_id: room.id,
+            user_id,
+            role: "host",
+            left_at: null,
+          },
+          { onConflict: "room_id,user_id" }
+        );
+
+      if (participantError) throw participantError;
+
+      const { error: roomError } = await supabase
+        .from("debate_rooms")
+        .update({ status: "active" })
+        .eq("id", room.id)
+        .eq("host_id", user_id);
+
+      if (roomError) throw roomError;
       setRoom((prev) => (prev ? { ...prev, status: "active" } : prev));
+    } catch (err) {
+      setReopenError(err.message || "Impossible de relancer la salle");
     }
     setReopening(false);
   };
