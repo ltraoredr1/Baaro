@@ -89,8 +89,6 @@ function savePrefs(prefs) {
 
 // -----------------------------------------------------------------------------
 // État partagé : toutes les instances du hook voient les mêmes réglages.
-// (Avant : chaque composant avait sa propre copie, donc changer le son ou
-// couper le son dans les Réglages n'avait aucun effet là où il est joué.)
 // -----------------------------------------------------------------------------
 
 let sharedPrefs = loadPrefs();
@@ -163,29 +161,37 @@ function getAudio(path) {
   return audio;
 }
 
-function playSoundFile(soundId, volumePercent) {
-  const meta = BAARO_SOUNDS[soundId] || BAARO_SOUNDS[DEFAULT_SOUND_ID];
+function playSoundFile(soundIdOrPath, volumePercent) {
+  if (!sharedPrefs.enabled || sharedPrefs.muted) return;
+
+  // Détermine s'il s'agit d'une clé (ex: "baaro_pulse") ou d'un chemin (ex: "/sounds/baaro_pulse.mp3")
+  let targetPath = soundIdOrPath;
+
+  if (BAARO_SOUNDS[soundIdOrPath]) {
+    targetPath = BAARO_SOUNDS[soundIdOrPath].path;
+  } else if (!targetPath || typeof targetPath !== "string") {
+    const soundKey = sharedPrefs.soundId || DEFAULT_SOUND_ID;
+    targetPath = BAARO_SOUNDS[soundKey]?.path || BAARO_SOUNDS[DEFAULT_SOUND_ID].path;
+  }
 
   try {
-    const audio = getAudio(meta.path);
+    const audio = getAudio(targetPath);
 
-    audio.volume = Math.max(0, Math.min(1, (volumePercent || 70) / 100));
+    audio.volume = Math.max(0, Math.min(1, (volumePercent ?? sharedPrefs.volume ?? 70) / 100));
     audio.currentTime = 0;
 
     const promise = audio.play();
 
     if (promise && typeof promise.catch === "function") {
-      promise.catch(() => playBeep(volumePercent));
+      promise.catch(() => playBeep(volumePercent ?? sharedPrefs.volume));
     }
   } catch {
-    playBeep(volumePercent);
+    playBeep(volumePercent ?? sharedPrefs.volume);
   }
 }
 
 /**
- * Les navigateurs bloquent l'audio tant que l'utilisateur n'a pas touché la
- * page. Au premier geste, on "amorce" le son choisi (muet) pour que les
- * notifications suivantes puissent être jouées automatiquement.
+ * Amorçage audio au premier geste utilisateur.
  */
 let audioPrimed = false;
 
@@ -236,6 +242,20 @@ function primeAudioOnFirstGesture() {
 primeAudioOnFirstGesture();
 
 // -----------------------------------------------------------------------------
+// Écoute des messages venant du Service Worker pour les Push Notifications
+// -----------------------------------------------------------------------------
+
+if (typeof window !== "undefined" && "serviceWorker" in navigator) {
+  navigator.serviceWorker.addEventListener("message", (event) => {
+    if (event.data && event.data.type === "PLAY_SOUND") {
+      // Joue le son reçu ou le son configuré par défaut dans les préférences
+      const soundToPlay = event.data.sound || sharedPrefs.soundId;
+      playSoundFile(soundToPlay, sharedPrefs.volume);
+    }
+  });
+}
+
+// -----------------------------------------------------------------------------
 // Hook
 // -----------------------------------------------------------------------------
 
@@ -246,7 +266,6 @@ export function useNotificationSound() {
   useEffect(() => {
     subscribers.add(setPrefs);
 
-    // Rattrape un changement survenu entre le rendu et l'abonnement.
     setPrefs(sharedPrefs);
     setLoading(false);
 
