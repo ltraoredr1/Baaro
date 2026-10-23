@@ -1,5 +1,12 @@
-
 import { COLORS } from "../theme.js";
+
+// Marqueurs internes (caractères privés Unicode) : ils ne contiennent ni « _ » ni « * »,
+// donc les règles gras/italique ne peuvent jamais les casser.
+const TOKEN_OPEN = "\uE000";
+const TOKEN_CLOSE = "\uE001";
+
+// Rendu synchrone : activé par toHtml() quand des gestionnaires de clic sont fournis.
+let INTERACTIVE = false;
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -35,20 +42,19 @@ function safeUrl(value) {
 
 function formatInline(value) {
   const tokens = [];
-  const prefix = "BAARO_SAFE_TOKEN_";
 
   const protect = (html) => {
-    const token = `${prefix}${tokens.length}_END`;
+    const token = `${TOKEN_OPEN}${tokens.length}${TOKEN_CLOSE}`;
     tokens.push(html);
     return token;
   };
 
-  let text = String(value ?? "");
+  let text = String(value ?? "").replace(/[\uE000\uE001]/g, "");
 
   // Protéger le code en ligne avant toute autre transformation.
   text = text.replace(/`([^`\n]+)`/g, (_, code) =>
     protect(
-      `<code class="rounded px-1 py-0.5 text-xs font-mono whitespace-pre-wrap" style="background:rgba(255,255,255,.08);color:#D9AE52">${escapeHtml(code)}</code>`
+      `<code class="rounded px-1 py-0.5 text-[0.85em] font-mono whitespace-pre-wrap" style="background:rgba(255,255,255,.08);color:#D9AE52">${escapeHtml(code)}</code>`
     )
   );
 
@@ -60,7 +66,7 @@ function formatInline(value) {
       if (!url) return escapeHtml(match);
 
       return protect(
-        `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer nofollow" class="underline font-semibold break-words" style="color:#2DBFA6">${escapeHtml(label)}</a>`
+        `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer nofollow" class="underline underline-offset-2 font-semibold break-words" style="color:#2DBFA6">${escapeHtml(label)}</a>`
       );
     }
   );
@@ -79,10 +85,39 @@ function formatInline(value) {
 
     return (
       protect(
-        `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer nofollow" class="underline font-semibold break-words" style="color:#2DBFA6">${escapeHtml(candidate)}</a>`
+        `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer nofollow" class="underline underline-offset-2 font-semibold break-words" style="color:#2DBFA6">${escapeHtml(candidate)}</a>`
       ) + suffix
     );
   });
+
+  // #hashtags (commencent par une lettre) et @mentions, protégés des règles suivantes.
+  text = text.replace(
+    /(^|[\s(])#([\p{L}_][\p{L}\p{N}_]{1,49})/gu,
+    (_, lead, tag) =>
+      lead +
+      protect(
+        INTERACTIVE
+          ? `<span role="button" tabindex="0" data-hashtag="${tag}" class="font-semibold cursor-pointer hover:underline" style="color:#2DBFA6">#${tag}</span>`
+          : `<span class="font-semibold" style="color:#2DBFA6">#${tag}</span>`
+      )
+  );
+
+  text = text.replace(
+    /(^|[\s(])@([\p{L}\p{N}_.]{2,30})/gu,
+    (_, lead, name) => {
+      const clean = name.replace(/\.+$/, "");
+      const rest = name.slice(clean.length);
+      return (
+        lead +
+        protect(
+          INTERACTIVE
+            ? `<span role="button" tabindex="0" data-mention="${clean}" class="font-semibold cursor-pointer hover:underline" style="color:#D9AE52">@${clean}</span>`
+            : `<span class="font-semibold" style="color:#D9AE52">@${clean}</span>`
+        ) +
+        rest
+      );
+    }
+  );
 
   // Gras, italique, barré et souligné.
   text = text.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
@@ -94,7 +129,7 @@ function formatInline(value) {
 
   // Restaurer les fragments HTML produits par le renderer lui-même.
   tokens.forEach((html, index) => {
-    text = text.split(`${prefix}${index}_END`).join(html);
+    text = text.split(`${TOKEN_OPEN}${index}${TOKEN_CLOSE}`).join(html);
   });
 
   return text;
@@ -143,7 +178,8 @@ function renderTable(lines) {
   return `<div class="my-3 max-w-full overflow-x-auto rounded-lg border border-white/10"><table class="w-full border-collapse text-left text-xs sm:text-sm"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
-function toHtml(content) {
+function toHtml(content, interactive = false) {
+  INTERACTIVE = interactive;
   const lines = String(content ?? "").replace(/\r\n?/g, "\n").split("\n");
   const output = [];
 
@@ -162,7 +198,7 @@ function toHtml(content) {
     if (!paragraph.length) return;
 
     output.push(
-      `<p class="mb-2 whitespace-pre-wrap leading-relaxed break-words">${paragraph
+      `<p class="mb-3 whitespace-pre-wrap break-words">${paragraph
         .map((line) => formatInline(line))
         .join("<br />")}</p>`
     );
@@ -237,13 +273,13 @@ function toHtml(content) {
       const level = heading[1].length;
       const sizeClass =
         level <= 2
-          ? "text-base font-bold"
+          ? "text-lg font-bold"
           : level === 3
-            ? "text-sm font-bold"
+            ? "text-base font-bold"
             : "text-sm font-semibold";
 
       output.push(
-        `<h${level} class="mb-2 mt-3 ${sizeClass} leading-snug">${formatInline(heading[2])}</h${level}>`
+        `<h${level} class="mb-2 mt-4 first:mt-0 ${sizeClass} leading-snug tracking-tight">${formatInline(heading[2])}</h${level}>`
       );
       continue;
     }
@@ -252,7 +288,7 @@ function toHtml(content) {
     if (/^\s{0,3}(---+|___+|\*\s*\*\s*\*+)\s*$/.test(line)) {
       flushParagraph();
       closeList();
-      output.push('<hr class="my-3 border-white/15" />');
+      output.push('<hr class="my-4 border-white/15" />');
       continue;
     }
 
@@ -264,7 +300,7 @@ function toHtml(content) {
       closeList();
 
       output.push(
-        `<blockquote class="my-2 rounded-r border-l-2 py-1 pl-3 italic" style="border-color:#D9AE52;background:rgba(217,174,82,.06)">${formatInline(quote[1])}</blockquote>`
+        `<blockquote class="my-3 rounded-r border-l-2 py-1.5 pl-3 italic" style="border-color:#D9AE52;background:rgba(217,174,82,.06)">${formatInline(quote[1])}</blockquote>`
       );
       continue;
     }
@@ -283,8 +319,8 @@ function toHtml(content) {
 
         output.push(
           type === "ul"
-            ? '<ul class="mb-2 list-disc list-inside space-y-1">'
-            : '<ol class="mb-2 list-decimal list-inside space-y-1">'
+            ? '<ul class="mb-3 list-disc pl-5 space-y-1.5">'
+            : '<ol class="mb-3 list-decimal pl-5 space-y-1.5">'
         );
 
         listType = type;
@@ -294,7 +330,7 @@ function toHtml(content) {
         const checked = task[1].toLowerCase() === "x";
 
         output.push(
-          `<li class="list-none"><span aria-label="${checked ? "Terminé" : "À faire"}" class="mr-2">${checked ? "☑" : "☐"}</span>${formatInline(task[2])}</li>`
+          `<li class="list-none -ml-5"><span aria-label="${checked ? "Terminé" : "À faire"}" class="mr-2">${checked ? "☑" : "☐"}</span>${formatInline(task[2])}</li>`
         );
       } else {
         output.push(
@@ -322,14 +358,46 @@ function toHtml(content) {
   return output.join("");
 }
 
-export function RichTextRenderer({ content, className = "" }) {
+/**
+ * className remplace la taille / l'interligne par défaut (text-sm leading-relaxed).
+ * Le dernier bloc n'a pas de marge basse pour un affichage net dans les cartes.
+ */
+export function RichTextRenderer({
+  content,
+  className = "text-sm leading-relaxed",
+  onHashtagClick,
+  onMentionClick,
+}) {
   if (content == null || content === "") return null;
+
+  const interactive =
+    typeof onHashtagClick === "function" || typeof onMentionClick === "function";
+
+  const trigger = (event) => {
+    const el = event.target?.closest?.("[data-hashtag],[data-mention]");
+    if (!el) return false;
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (el.dataset.hashtag) onHashtagClick?.(el.dataset.hashtag);
+    else if (el.dataset.mention) onMentionClick?.(el.dataset.mention);
+    return true;
+  };
 
   return (
     <div
-      className={`rich-text min-w-0 max-w-full text-sm leading-relaxed [overflow-wrap:anywhere] ${className}`}
+      className={`rich-text min-w-0 max-w-full [overflow-wrap:anywhere] [&>*:last-child]:mb-0 ${className}`}
       style={{ color: COLORS.ivory }}
-      dangerouslySetInnerHTML={{ __html: toHtml(content) }}
+      onClick={interactive ? trigger : undefined}
+      onKeyDown={
+        interactive
+          ? (event) => {
+              if (event.key === "Enter" || event.key === " ") trigger(event);
+            }
+          : undefined
+      }
+      dangerouslySetInnerHTML={{ __html: toHtml(content, interactive) }}
     />
   );
 }
