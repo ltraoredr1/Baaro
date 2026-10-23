@@ -135,7 +135,7 @@ async function loadTokens(admin, userIds) {
 
   for (const row of data || []) {
     if (!map.has(row.user_id)) {
-      map.get(row.user_id, []);
+      map.set(row.user_id, []);
     }
 
     map.get(row.user_id).push(row);
@@ -458,10 +458,13 @@ async function sendFcm(token, payload) {
             data,
             android: {
               priority:
-                payload.category === "message" ? "HIGH" : "NORMAL",
+                payload.category === "message" || payload.category === "live"
+                  ? "HIGH"
+                  : "NORMAL",
               notification: {
                 tag: payload.tag || undefined,
                 channel_id: ANDROID_CHANNEL_ID,
+                sound: "baaro_pulse",
               },
             },
             apns: {
@@ -470,7 +473,7 @@ async function sendFcm(token, payload) {
               },
               payload: {
                 aps: {
-                  sound: "default",
+                  sound: "baaro_pulse.wav",
                 },
               },
             },
