@@ -6,6 +6,10 @@ let loopTimer = null;
 const pendingTimers = new Set();
 const oscillators = new Set();
 
+/** Volume plus audible (0.12 était trop bas) */
+const VOLUME_INCOMING = 0.4;
+const VOLUME_OUTGOING = 0.25;
+
 function getCtx() {
   if (typeof window === "undefined") return null;
 
@@ -19,14 +23,25 @@ function getCtx() {
       audioContext = new AudioContextClass();
     }
 
-    if (audioContext.state === "suspended") {
-      audioContext.resume().catch(() => {});
-    }
-
     return audioContext;
   } catch (error) {
     console.warn("[callRingtone] Audio indisponible :", error);
     return null;
+  }
+}
+
+/** Débloque le contexte (autoplay policy). À appeler aussi au premier geste UI. */
+export async function unlockAudio() {
+  const ctx = getCtx();
+  if (!ctx) return false;
+
+  try {
+    if (ctx.state === "suspended") {
+      await ctx.resume();
+    }
+    return ctx.state === "running";
+  } catch {
+    return false;
   }
 }
 
@@ -48,7 +63,7 @@ function stopOscillators() {
     try {
       oscillator.stop();
     } catch {
-      // L'oscillateur peut déjà être arrêté.
+      // Déjà arrêté.
     }
 
     try {
@@ -61,29 +76,27 @@ function stopOscillators() {
   oscillators.clear();
 }
 
-function playTone(frequencies, duration = 0.18, volume = 0.12) {
+function playTone(frequencies, duration = 0.18, volume = VOLUME_INCOMING) {
   if (!active) return;
 
   const ctx = getCtx();
   if (!ctx || ctx.state === "closed") return;
 
+  // Tentative de reprise si encore suspendu
+  if (ctx.state === "suspended") {
+    ctx.resume().catch(() => {});
+  }
+
   try {
     const now = ctx.currentTime;
     const master = ctx.createGain();
 
+    const vol = Math.max(0.0001, Math.min(volume, 1));
+
     master.gain.setValueAtTime(0.0001, now);
-    master.gain.exponentialRampToValueAtTime(
-      Math.max(0.0001, Math.min(volume, 1)),
-      now + 0.02
-    );
-    master.gain.setValueAtTime(
-      Math.max(0.0001, Math.min(volume, 1)),
-      now + Math.max(0.03, duration - 0.03)
-    );
-    master.gain.exponentialRampToValueAtTime(
-      0.0001,
-      now + duration
-    );
+    master.gain.exponentialRampToValueAtTime(vol, now + 0.02);
+    master.gain.setValueAtTime(vol, now + Math.max(0.03, duration - 0.03));
+    master.gain.exponentialRampToValueAtTime(0.0001, now + duration);
 
     master.connect(ctx.destination);
 
@@ -141,10 +154,10 @@ function scheduleTimer(callback, delay) {
 function playDoubleRing() {
   if (!active) return;
 
-  playTone([440, 480], 0.22, 0.12);
+  playTone([440, 480], 0.22, VOLUME_INCOMING);
 
   scheduleTimer(() => {
-    playTone([440, 480], 0.22, 0.12);
+    playTone([440, 480], 0.22, VOLUME_INCOMING);
   }, 380);
 }
 
@@ -155,7 +168,7 @@ function vibrate(pattern) {
   try {
     navigator.vibrate(pattern);
   } catch {
-    // Vibration non prise en charge ou refusée.
+    // Non supporté.
   }
 }
 
@@ -165,6 +178,9 @@ function startLoop(mode) {
   active = true;
   currentMode = mode;
 
+  // Débloquer le contexte dès le démarrage
+  unlockAudio().catch(() => {});
+
   const play = () => {
     if (!active || currentMode !== mode) return;
 
@@ -172,10 +188,10 @@ function startLoop(mode) {
       playDoubleRing();
       vibrate([250, 120, 250]);
     } else {
-      playTone([440], 1.5, 0.08);
+      playTone([440], 1.5, VOLUME_OUTGOING);
     }
 
-    const delay = mode === "incoming" ? 3000 : 3000;
+    const delay = 3000;
 
     loopTimer = setTimeout(() => {
       loopTimer = null;
@@ -204,12 +220,14 @@ export function stopRingtone() {
   clearPendingTimers();
   stopOscillators();
 
-  if (typeof navigator !== "undefined" &&
-      typeof navigator.vibrate === "function") {
+  if (
+    typeof navigator !== "undefined" &&
+    typeof navigator.vibrate === "function"
+  ) {
     try {
       navigator.vibrate(0);
     } catch {
-      // Vibration non disponible.
+      // Non disponible.
     }
   }
 }
