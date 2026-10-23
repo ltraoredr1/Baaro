@@ -34,6 +34,9 @@ const VAPID_SUBJECT =
 const ANDROID_CHANNEL_ID =
   process.env.FCM_ANDROID_CHANNEL_ID || "baaro_notifications";
 
+/** Son par défaut BAARO */
+const DEFAULT_PUSH_SOUND = "/sounds/baaro_pulse.mp3";
+
 let vapidReady = false;
 let vapidChecked = false;
 
@@ -132,7 +135,7 @@ async function loadTokens(admin, userIds) {
 
   for (const row of data || []) {
     if (!map.has(row.user_id)) {
-      map.set(row.user_id, []);
+      map.get(row.user_id, []);
     }
 
     map.get(row.user_id).push(row);
@@ -148,8 +151,6 @@ function safeNotificationUrl(value) {
     return "/";
   }
 
-  // Refuse les URL externes, les chemins protocol-relative
-  // et les séparateurs ambigus.
   if (
     value.startsWith("//") ||
     value.includes("\\") ||
@@ -179,8 +180,14 @@ function normalizeCategory(category) {
 function buildPayload(opts = {}) {
   const extraData =
     opts.data && typeof opts.data === "object" && !Array.isArray(opts.data)
-      ? opts.data
+      ? { ...opts.data }
       : {};
+
+  // Résolution propre du son BAARO
+  const sound =
+    (typeof opts.sound === "string" && opts.sound.trim()) ||
+    (typeof extraData.sound === "string" && extraData.sound.trim()) ||
+    DEFAULT_PUSH_SOUND;
 
   return {
     title: String(opts.title || "").trim().slice(0, 80),
@@ -193,7 +200,11 @@ function buildPayload(opts = {}) {
         : "baaro-notification",
     icon: "/icons/icon-192.png",
     badge: "/icons/icon-192.png",
-    data: extraData,
+    sound,
+    data: {
+      ...extraData,
+      sound,
+    },
   };
 }
 
@@ -248,9 +259,6 @@ async function sendWebPush(subscriptionJson, payload) {
   } catch (error) {
     const status = error?.statusCode || error?.status;
 
-    // 404/410 : abonnement expiré ou supprimé.
-    // 401/403 : abonnement créé avec une autre clé VAPID, inutilisable
-    // avec la clé actuelle. Le client se réabonne à sa prochaine ouverture.
     if (
       status === 404 ||
       status === 410 ||
@@ -394,7 +402,6 @@ function toStringMap(value) {
   for (const [key, item] of Object.entries(value || {})) {
     if (item === undefined || item === null) continue;
 
-    // Les clés et valeurs FCM data doivent être des chaînes.
     result[String(key)] =
       typeof item === "string" ? item : JSON.stringify(item);
   }
@@ -428,6 +435,7 @@ async function sendFcm(token, payload) {
       url: payload.url || "/",
       category: payload.category || "",
       tag: payload.tag || "",
+      sound: payload.sound || DEFAULT_PUSH_SOUND,
     });
 
     const response = await fetch(
@@ -453,9 +461,6 @@ async function sendFcm(token, payload) {
                 payload.category === "message" ? "HIGH" : "NORMAL",
               notification: {
                 tag: payload.tag || undefined,
-
-                // Ce canal est créé par l'application Android
-                // (pushNotifications.js, createChannel).
                 channel_id: ANDROID_CHANNEL_ID,
               },
             },
@@ -483,7 +488,6 @@ async function sendFcm(token, payload) {
     const message =
       result?.error?.message || response.statusText;
 
-    // Le code précis de l'erreur FCM est dans error.details[].errorCode.
     const errorCode = Array.isArray(result?.error?.details)
       ? result.error.details.find((detail) => detail?.errorCode)
           ?.errorCode
