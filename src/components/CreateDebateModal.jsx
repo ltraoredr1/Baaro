@@ -13,6 +13,7 @@ import {
 import { COLORS } from "../theme.js";
 import { supabase } from "../supabaseClient.js";
 import { API_BASE } from "../config.js";
+import { callSocial } from "../lib/notifyInteraction.js";
 
 // Couleurs avec valeurs de secours : évite un bouton invisible si une clé manque dans theme.js
 const C = {
@@ -248,6 +249,14 @@ export function CreateDebateModal(props) {
       setTopic("");
       setMode("hybrid");
       setLoading(false);
+
+      // Le serveur détermine lui-même les amis et abonnés destinataires,
+      // puis crée la notification interne et envoie le push avec sonnerie.
+      // Une panne push ne doit jamais annuler la création de la salle.
+      callSocial("debate_started", { room_id: room.id }).catch(function (notifyErr) {
+        console.warn("Notification débat/live non envoyée:", notifyErr?.message || notifyErr);
+      });
+
       if (onSuccess) onSuccess(room);
       return;
     } catch (err) {
