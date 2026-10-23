@@ -83,6 +83,7 @@ export function Navigation({ activeTab, setActiveTab }) {
           return (
             <button
               key={item.id}
+              data-guide-tab={item.id}
               onClick={() => goTo(item.id)}
               className={`flex items-center gap-3 px-3.5 py-2.5 rounded-2xl transition-all duration-300 group ${
                 isActive ? "shadow-md scale-[1.02]" : "hover:bg-white/5"
@@ -126,6 +127,7 @@ export function Navigation({ activeTab, setActiveTab }) {
         />
 
         <button
+          data-guide-tab="more"
           onClick={() => setMoreOpen(true)}
           className="flex items-center gap-3 px-3.5 py-2.5 rounded-2xl hover:bg-white/5 transition-all duration-300 text-white/70 hover:text-white cursor-pointer"
         >
@@ -156,6 +158,7 @@ export function Navigation({ activeTab, setActiveTab }) {
             return (
               <button
                 key={item.id}
+                data-guide-tab={item.id}
                 onClick={() => goTo(item.id)}
                 className={`flex flex-col items-center gap-1 px-2 py-1.5 rounded-xl transition-all duration-300 ${
                   isActive ? "scale-105" : "hover:opacity-100 opacity-70"
@@ -178,6 +181,7 @@ export function Navigation({ activeTab, setActiveTab }) {
 
           <button
             type="button"
+            data-guide-tab="more"
             onClick={(e) => {
               e.stopPropagation();
               setMoreOpen(true);
