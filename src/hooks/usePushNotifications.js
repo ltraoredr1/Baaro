@@ -5,7 +5,7 @@ import {
 } from "../lib/pushNotifications.js";
 
 /**
- * BAARO — Activation des notifications push.
+ * BAARO — Activation des notifications push et gestion des sons.
  *
  * - Si la permission est déjà accordée : rien à faire ici. La synchronisation
  *   silencieuse du jeton est assurée par src/lib/pushNotifications.js
@@ -14,9 +14,8 @@ import {
  *   par appareil, quelques secondes après l'ouverture de l'app.
  * - Si l'utilisateur a refusé ou désactivé les notifications : on ne
  *   redemande jamais automatiquement (il peut les réactiver dans les Réglages).
- *
- * Avant : enablePushNotifications() était rappelé à chaque connexion, ce qui
- * redemandait la permission en boucle et annulait toute désactivation.
+ * - Écoute des messages du Service Worker pour jouer le son de notification
+ *   lorsque l'application est ouverte ou en arrière-plan.
  */
 
 const PROMPTED_KEY = "baaro_push_prompted";
@@ -38,9 +37,41 @@ function markPrompted() {
   }
 }
 
-export function usePushNotifications(user_id) {
+export function usePushNotifications(id) {
+  // 1. Écouteur pour jouer le son lorsque le Service Worker envoie le message PLAY_SOUND
   useEffect(() => {
-    if (!user_id) return undefined;
+    if (!("serviceWorker" in navigator)) return;
+
+    const handleServiceWorkerMessage = (event) => {
+      if (event.data && event.data.type === "PLAY_SOUND") {
+        const soundUrl = event.data.sound || "/sounds/baaro_pulse.mp3";
+        const audio = new Audio(soundUrl);
+
+        audio.play().catch((err) => {
+          console.warn(
+            "[push] Lecture du son bloquée (nécessite une interaction utilisateur préalable) :",
+            err
+          );
+        });
+      }
+    };
+
+    navigator.serviceWorker.addEventListener(
+      "message",
+      handleServiceWorkerMessage
+    );
+
+    return () => {
+      navigator.serviceWorker.removeEventListener(
+        "message",
+        handleServiceWorkerMessage
+      );
+    };
+  }, []);
+
+  // 2. Gestion de la demande de permission Push
+  useEffect(() => {
+    if (!id) return undefined;
 
     let cancelled = false;
 
@@ -76,7 +107,7 @@ export function usePushNotifications(user_id) {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [user_id]);
+  }, [id]);
 
   return undefined;
 }
