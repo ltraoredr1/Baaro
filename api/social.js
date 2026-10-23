@@ -74,7 +74,6 @@ function sanitizeComment(value) {
 
 async function loadContent(admin, contentType, id) {
   const table = contentType === "post" ? "posts" : "videos";
-  // Colonnes réelles : posts(author_id, text) ; videos(author_id, title, description).
   const columns =
     contentType === "post" ? "author_id, text" : "author_id, title, description";
   const { data, error } = await admin
@@ -107,22 +106,20 @@ async function interactionHappened(
       .eq("follower_id", actorId)
       .eq("followed_id", recipientId)
       .maybeSingle();
-    // Ligne inverse : celle de l'autre personne vers l'acteur. Pour une demande
-    // d'ami, si elle suivait déjà l'acteur, sendFriendRequest met à jour CETTE
-    // ligne (is_friend + pending) au lieu d'en créer une nouvelle.
+
     const { data: received } = await admin
       .from("follows")
       .select("status, is_friend")
       .eq("follower_id", recipientId)
       .eq("followed_id", actorId)
       .maybeSingle();
+
     if (interactionType === "friend_request") {
       return (
         (sent?.is_friend === true && sent?.status === "pending") ||
         (received?.is_friend === true && received?.status === "pending")
       );
     }
-    // friend_accepted : l'acceptation met à jour la ligne de la personne qui avait demandé
     return (
       (received?.is_friend === true && received?.status === "accepted") ||
       (sent?.is_friend === true && sent?.status === "accepted")
@@ -140,7 +137,6 @@ async function interactionHappened(
       .maybeSingle();
     return !!data;
   }
-  // commentaire / partage / repost : tables variables selon l'appli
   return true;
 }
 
@@ -170,7 +166,6 @@ async function insertNotificationAndPush(admin, {
     message: `${actorName} ${rule.verb}`,
   };
 
-  // `preview` est facultatif : si la colonne n'existe pas encore, on réessaie sans.
   let insert = await admin
     .from("notifications")
     .insert({ ...row, preview: preview || null });
@@ -186,7 +181,7 @@ async function insertNotificationAndPush(admin, {
         ? `/?post=${encodeURIComponent(targetId)}`
         : "/";
 
-  // Le push ne doit jamais faire échouer la notification enregistrée
+  // Envoi du Push avec instruction explicite du son BAARO
   await sendPushToUsers(admin, {
     userIds: [recipientId],
     title: actorName,
@@ -194,7 +189,13 @@ async function insertNotificationAndPush(admin, {
     url,
     category: "social",
     tag: `social-${rule.type}-${sourceId}`,
-    data: { type: rule.type, source_id: sourceId, actor_id: actorId },
+    sound: "baaro_pulse.mp3",
+    data: { 
+      type: rule.type, 
+      source_id: sourceId, 
+      actor_id: actorId, 
+      sound: "baaro_pulse.mp3" 
+    },
   }).catch((err) => console.warn("[social] push", err?.message || err));
 }
 
@@ -218,7 +219,6 @@ async function handleNotifyInteraction(admin, user, body) {
   let sourceId = targetId;
 
   if (contentType === "user") {
-    // targetId = la personne concernée ; la « source » est l'auteur de l'action
     recipientId = targetId;
     sourceId = user.id;
   } else {
@@ -230,7 +230,6 @@ async function handleNotifyInteraction(admin, user, body) {
     preview = content.preview;
   }
 
-  // Jamais de notification à soi-même
   if (recipientId === user.id) {
     return {
       status: 200,
@@ -252,9 +251,6 @@ async function handleNotifyInteraction(admin, user, body) {
     };
   }
 
-  // Pas de doublon pour like / demande d'ami (les commentaires et partages peuvent se répéter).
-  // Pour les demandes d'ami, seule une notification très récente compte comme doublon,
-  // afin qu'une nouvelle demande, plus tard, soit bien notifiée.
   if (interactionType !== "comment" && interactionType !== "share") {
     let dupQuery = admin
       .from("notifications")
@@ -291,10 +287,6 @@ async function handleNotifyInteraction(admin, user, body) {
   return { status: 200, body: { ok: true, notified: true } };
 }
 
-/**
- * action "comment" — utilisé par src/supabaseClient.js addComment().
- * Insère le commentaire côté serveur (identité = JWT) puis notifie l'auteur.
- */
 async function handleComment(admin, user, body) {
   const text = sanitizeComment(body.text);
   if (!text) {
@@ -311,14 +303,13 @@ async function handleComment(admin, user, body) {
     };
   }
 
-  // ========== CORRIGÉ : table comments + colonne text ==========
   if (isUuid(postId)) {
     const { data, error } = await admin
-      .from("comments")                    // ← était "post_comments"
+      .from("comments")
       .insert({
         post_id: postId,
         author_id: user.id,
-        text: text,                        // ← était "content"
+        text: text,
       })
       .select("id")
       .single();
@@ -350,7 +341,6 @@ async function handleComment(admin, user, body) {
     return { status: 200, body: { ok: true, comment_id: data?.id } };
   }
 
-  // Vidéo : inchangé (table video_comments + colonne content)
   if (isUuid(videoId)) {
     const { data, error } = await admin
       .from("video_comments")
@@ -395,14 +385,6 @@ async function handleComment(admin, user, body) {
   };
 }
 
-// ========== Stories : notification aux abonnés et amis ==========
-
-/**
- * Notifie (liste + push) les abonnés et amis de l'auteur pour UNE story.
- * Idempotent : si une notification "new_story" existe déjà pour cette story, ne fait rien.
- * Destinataires : lignes follows acceptées vers l'auteur (l'acceptation d'une demande
- * d'ami crée la ligne réciproque, donc les amis y sont déjà inclus).
- */
 async function notifyStoryAudience(admin, authorId, storyId) {
   const { data: done } = await admin
     .from("notifications")
@@ -448,7 +430,7 @@ async function notifyStoryAudience(admin, authorId, storyId) {
     );
     if (insertError) throw insertError;
 
-    // Le push ne doit jamais faire échouer la notification enregistrée
+    // Envoi du Push story avec instruction explicite du son BAARO
     await sendPushToUsers(admin, {
       userIds: chunk,
       title: name,
@@ -456,14 +438,19 @@ async function notifyStoryAudience(admin, authorId, storyId) {
       url: "/",
       category: "social",
       tag: `story-${storyId}`,
-      data: { type: "new_story", source_id: storyId, actor_id: authorId },
+      sound: "baaro_pulse.mp3",
+      data: { 
+        type: "new_story", 
+        source_id: storyId, 
+        actor_id: authorId, 
+        sound: "baaro_pulse.mp3" 
+      },
     }).catch((err) => console.warn("[social] story push", err?.message || err));
   }
 
   return { notified: true, count: userIds.length };
 }
 
-// action "story_published" : l'auteur vient de publier (pas programmée).
 async function handleStoryPublished(admin, user, body) {
   let query = admin.from("stories").select("id, author_id").eq("author_id", user.id);
   query = body.story_id
@@ -481,14 +468,9 @@ async function handleStoryPublished(admin, user, body) {
   return { status: 200, body: { ok: true, ...result } };
 }
 
-// action "publish_due" : stories programmées dont l'heure est passée.
-// Déclenchée par l'appli de n'importe quel utilisateur connecté (pas de cron) ;
-// sans danger : elle ne notifie que des stories déjà échues, une seule fois chacune.
-// ⚠️ Colonne de date de publication supposée : publish_at (adapter si différente).
 let lastDueSweep = 0;
 async function handleDueStories(admin) {
   const now = Date.now();
-  // Évite de refaire le balayage si une autre requête vient de le faire
   if (now - lastDueSweep < 20_000) {
     return { status: 200, body: { ok: true, skipped: true } };
   }
@@ -503,7 +485,6 @@ async function handleDueStories(admin) {
 
   let notified = 0;
   for (const story of due || []) {
-    // Story immédiate (publish_at ≈ created_at) : déjà gérée par "story_published"
     const scheduledLater =
       new Date(story.publish_at).getTime() - new Date(story.created_at).getTime() > 60_000;
     if (!scheduledLater) continue;
@@ -519,7 +500,6 @@ async function handleDueStories(admin) {
   return { status: 200, body: { ok: true, checked: (due || []).length, notified } };
 }
 
-// ========== Préférences de notification ==========
 const DEFAULT_PREFERENCES = {
   push_enabled: true,
   messages: true,
@@ -530,7 +510,6 @@ const DEFAULT_PREFERENCES = {
 };
 const PREFERENCE_KEYS = Object.keys(DEFAULT_PREFERENCES);
 
-// Ancienne colonne "wallet" → "earnings"
 function normalizePreferences(row) {
   const source = row ? { ...row } : {};
   if (source.wallet !== undefined && source.earnings === undefined) {
@@ -603,7 +582,6 @@ async function handleSavePreferences(admin, user, body) {
   };
 }
 
-// ========== Jetons push ==========
 const PUSH_PLATFORMS = new Set(["web", "android", "ios"]);
 const MAX_PUSH_TOKEN_LEN = 4096;
 
@@ -613,8 +591,6 @@ function cleanPushToken(value) {
   return token.length <= MAX_PUSH_TOKEN_LEN ? token : "";
 }
 
-// Client Supabase au nom de l'utilisateur (JWT du client) : auth.uid() est alors
-// renseigné pour les fonctions SQL qui le vérifient (ex. upsert_push_token).
 function getUserClient(req) {
   const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
   const anonKey =
@@ -662,8 +638,6 @@ async function handleSavePushToken(req, user, body) {
   return { status: 200, body: { ok: true } };
 }
 
-// Suppression : tous les jetons de la plateforme, ou un seul (token),
-// ou tous sauf un (except_token, nettoyage des anciens jetons web).
 async function handleDeletePushToken(admin, user, body) {
   const platform = String(body.platform || "").toLowerCase();
   if (!PUSH_PLATFORMS.has(platform)) {
