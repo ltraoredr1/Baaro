@@ -87,6 +87,12 @@ function messageForNotification(notification, profile) {
     case "mention":
       return `${label} vous a mentionné`;
 
+    case "new_live":
+      return `${label} a démarré un live`;
+
+    case "new_debate":
+      return `${label} a démarré un débat`;
+
     default:
       return notification.message || "Nouvelle notification";
   }
@@ -335,6 +341,25 @@ export function NotificationDrawer({ user_id, isOpen, onClose }) {
     });
   };
 
+  const openNotification = async (notification) => {
+    if (!notification) return;
+    if (!notification.read) {
+      await markAsRead(notification.notification_id);
+    }
+
+    if (
+      (notification.type === "new_live" || notification.type === "new_debate") &&
+      notification.source_id
+    ) {
+      window.dispatchEvent(
+        new CustomEvent("baaro:open-debate", {
+          detail: { roomId: notification.source_id },
+        }),
+      );
+      onClose?.();
+    }
+  };
+
   if (!isOpen) return null;
 
   return (
@@ -484,10 +509,7 @@ export function NotificationDrawer({ user_id, isOpen, onClose }) {
 
                     <button
                       type="button"
-                      onClick={() =>
-                        !notification.read &&
-                        markAsRead(notification.notification_id)
-                      }
+                      onClick={() => openNotification(notification)}
                       className="min-w-0 flex-1 text-left"
                     >
                       <div
