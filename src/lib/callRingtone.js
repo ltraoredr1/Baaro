@@ -1,3 +1,7 @@
+/**
+ * BAARO — Generateur de tonalités pour appels audio/vidéo (Web Audio API).
+ */
+
 let audioContext = null;
 let active = false;
 let currentMode = null;
@@ -6,9 +10,9 @@ let loopTimer = null;
 const pendingTimers = new Set();
 const oscillators = new Set();
 
-/** Volume plus audible (0.12 était trop bas) */
-const VOLUME_INCOMING = 0.4;
-const VOLUME_OUTGOING = 0.25;
+/** Volumes par défaut pour les tonalités d'appel */
+let volumeIncoming = 0.4;
+let volumeOutgoing = 0.25;
 
 function getCtx() {
   if (typeof window === "undefined") return null;
@@ -25,12 +29,15 @@ function getCtx() {
 
     return audioContext;
   } catch (error) {
-    console.warn("[callRingtone] Audio indisponible :", error);
+    console.warn("[callRingtone] AudioContext indisponible :", error);
     return null;
   }
 }
 
-/** Débloque le contexte (autoplay policy). À appeler aussi au premier geste UI. */
+/**
+ * Débloque le contexte audio (politique Autoplay des navigateurs).
+ * À appeler idéalement au premier clic / touch de l'utilisateur.
+ */
 export async function unlockAudio() {
   const ctx = getCtx();
   if (!ctx) return false;
@@ -43,6 +50,14 @@ export async function unlockAudio() {
   } catch {
     return false;
   }
+}
+
+/**
+ * Ajuste les volumes des tonalités d'appel.
+ */
+export function setRingtoneVolume(incoming = 0.4, outgoing = 0.25) {
+  volumeIncoming = Math.max(0, Math.min(1, incoming));
+  volumeOutgoing = Math.max(0, Math.min(1, outgoing));
 }
 
 function clearPendingTimers() {
@@ -76,13 +91,13 @@ function stopOscillators() {
   oscillators.clear();
 }
 
-function playTone(frequencies, duration = 0.18, volume = VOLUME_INCOMING) {
+function playTone(frequencies, duration = 0.18, volume = volumeIncoming) {
   if (!active) return;
 
   const ctx = getCtx();
   if (!ctx || ctx.state === "closed") return;
 
-  // Tentative de reprise si encore suspendu
+  // Tentative de reprise si le contexte est suspendu
   if (ctx.state === "suspended") {
     ctx.resume().catch(() => {});
   }
@@ -154,10 +169,10 @@ function scheduleTimer(callback, delay) {
 function playDoubleRing() {
   if (!active) return;
 
-  playTone([440, 480], 0.22, VOLUME_INCOMING);
+  playTone([440, 480], 0.22, volumeIncoming);
 
   scheduleTimer(() => {
-    playTone([440, 480], 0.22, VOLUME_INCOMING);
+    playTone([440, 480], 0.22, volumeIncoming);
   }, 380);
 }
 
@@ -168,7 +183,7 @@ function vibrate(pattern) {
   try {
     navigator.vibrate(pattern);
   } catch {
-    // Non supporté.
+    // Non supporté ou bloqué par le navigateur.
   }
 }
 
@@ -178,7 +193,7 @@ function startLoop(mode) {
   active = true;
   currentMode = mode;
 
-  // Débloquer le contexte dès le démarrage
+  // Débloquer l'audio au démarrage du ringtone
   unlockAudio().catch(() => {});
 
   const play = () => {
@@ -186,9 +201,9 @@ function startLoop(mode) {
 
     if (mode === "incoming") {
       playDoubleRing();
-      vibrate([250, 120, 250]);
+      vibrate([250, 120, 250, 120, 250]);
     } else {
-      playTone([440], 1.5, VOLUME_OUTGOING);
+      playTone([440], 1.5, volumeOutgoing);
     }
 
     const delay = 3000;
@@ -205,14 +220,17 @@ function startLoop(mode) {
   play();
 }
 
+/** Démarrer la sonnerie pour un appel entrant */
 export function startIncomingRingtone() {
   startLoop("incoming");
 }
 
+/** Démarrer le signal sonore pour un appel sortant */
 export function startOutgoingRingback() {
   startLoop("outgoing");
 }
 
+/** Arrêter la sonnerie et les vibrations d'appel */
 export function stopRingtone() {
   active = false;
   currentMode = null;
@@ -232,6 +250,7 @@ export function stopRingtone() {
   }
 }
 
+/** Vérifier si une sonnerie est actuellement en cours */
 export function isRingtonePlaying() {
   return active;
 }
