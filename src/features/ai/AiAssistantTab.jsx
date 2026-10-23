@@ -23,6 +23,7 @@ import { COLORS } from "../../theme.js";
 import { useToast } from "../../components/ToastContext.jsx";
 import { API_BASE } from "../../config.js";
 import { supabase } from "../../supabaseClient.js";
+import { GRIOT_VOICES } from "./griotPrompt.js";
 
 const PRESETS_NORMAL = [
   { icon: Coins, text: "Comment maximiser mes points aujourd'hui ?" },
@@ -38,7 +39,14 @@ const PRESETS_GRIOT = [
   { icon: Zap, text: "Griot, raconte-moi l'histoire de Soundiata" },
   { icon: ImageIcon, text: "Griot, bénis ma journée en Bambara" },
 ];
-const GRIOT_SYSTEM_PROMPT = `Tu es FA-BAARO, le Griot de BAARO. Vieux sage malien du Mandé, 80 ans. Commence TOUJOURS par "I ko, ..." (proverbe bambara). Parle Bambara + Français mélangé, comme un vieux paternel. Raconte mini-histoire avant conseil. Finis par "Alors, qu'en pense ton cœur, mon enfant ?" Tu n'es PAS une IA, tu es le Griot.`;
+
+// Les 4 voix du Griot (les prompts sont dans griotPrompt.js)
+const GRIOT_VOICE_LABELS = {
+  normal: "Sage",
+  conseil: "Conseil",
+  palabre: "Palabre",
+  histoire: "Histoire",
+};
 
 const PROVIDER_LABELS = {
   gemini: "Gemini",
@@ -57,6 +65,7 @@ const REQUEST_TIMEOUT_MS = 45000;
 const STORAGE_PREFIX = "baaro_ai_chat_v1_";
 const SPEAK_KEY = "baaro_ai_autospeak";
 const GRIOT_KEY = "baaro_griot_mode";
+const GRIOT_VOICE_KEY = "baaro_griot_voice";
 
 /* ---------- Utilitaires ---------- */
 
@@ -120,10 +129,10 @@ function makeWelcome(name, isGriot) {
 function loadStoredMessages(key, name, isGriot) {
   try {
     const raw = localStorage.getItem(key);
-    if (!raw) return [makeWelcome(name)];
+    if (!raw) return [makeWelcome(name, isGriot)];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed) || parsed.length === 0) {
-      return [makeWelcome(name)];
+      return [makeWelcome(name, isGriot)];
     }
     const valid = parsed.filter(
       (m) =>
@@ -133,10 +142,29 @@ function loadStoredMessages(key, name, isGriot) {
         typeof m.text === "string" &&
         !m.isError
     );
-    if (valid.length === 0) return [makeWelcome(name)];
-    return valid[0].id === "welcome" ? valid : [makeWelcome(name), ...valid];
+    if (valid.length === 0) return [makeWelcome(name, isGriot)];
+    return valid[0].id === "welcome"
+      ? valid
+      : [makeWelcome(name, isGriot), ...valid];
   } catch {
-    return [makeWelcome(name)];
+    return [makeWelcome(name, isGriot)];
+  }
+}
+
+function readGriotMode() {
+  try {
+    return localStorage.getItem(GRIOT_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function readGriotVoice() {
+  try {
+    const stored = localStorage.getItem(GRIOT_VOICE_KEY);
+    return stored && GRIOT_VOICES[stored] ? stored : "normal";
+  } catch {
+    return "normal";
   }
 }
 
@@ -204,14 +232,20 @@ export function AiAssistantTab({
   const { showToast, showPointsReward } = useToast();
 
   const displayName = userProfile?.display_name;
-  const storageKey = useMemo(
+
+  // Mode Griot : conversation séparée de l'assistant normal
+  const [isGriot, setIsGriot] = useState(readGriotMode);
+  const [griotVoice, setGriotVoice] = useState(readGriotVoice);
+
+  const baseKey = useMemo(
     () =>
       `${STORAGE_PREFIX}${userProfile?.id || userProfile?.user_id || "anon"}`,
     [userProfile?.id, userProfile?.user_id]
   );
+  const storageKey = isGriot ? `${baseKey}_griot` : baseKey;
 
   const [messages, setMessages] = useState(() =>
-    loadStoredMessages(storageKey, displayName)
+    loadStoredMessages(storageKey, displayName, isGriot)
   );
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -233,6 +267,8 @@ export function AiAssistantTab({
   const requestIdRef = useRef(0);
   const speakingIdRef = useRef(null);
   const mountedRef = useRef(false);
+
+  const presets = isGriot ? PRESETS_GRIOT : PRESETS_NORMAL;
 
   /* ----- Voix ----- */
 
@@ -384,8 +420,9 @@ export function AiAssistantTab({
 
       const utterance = new window.SpeechSynthesisUtterance(cleaned);
       utterance.lang = "fr-FR";
-      utterance.rate = 1;
-      utterance.pitch = 1;
+      // Le Griot parle plus lentement et plus grave
+      utterance.rate = isGriot ? 0.92 : 1;
+      utterance.pitch = isGriot ? 0.85 : 1;
 
       try {
         const voices = synth.getVoices() || [];
@@ -421,7 +458,7 @@ export function AiAssistantTab({
         }
       }
     },
-    [showToast, stopSpeech]
+    [showToast, stopSpeech, isGriot]
   );
 
   const toggleAutoSpeak = useCallback(() => {
@@ -527,13 +564,64 @@ export function AiAssistantTab({
     stopSpeech();
     stopListening();
     setInput("");
-    setMessages([makeWelcome(displayName)]);
+    setMessages([makeWelcome(displayName, isGriot)]);
     try {
       localStorage.removeItem(storageKey);
     } catch {
       // Ignoré.
     }
-  }, [stopGeneration, stopSpeech, stopListening, displayName, storageKey]);
+  }, [
+    stopGeneration,
+    stopSpeech,
+    stopListening,
+    displayName,
+    isGriot,
+    storageKey,
+  ]);
+
+  /* ----- Mode Griot ----- */
+
+  const toggleGriot = useCallback(() => {
+    stopGeneration();
+    stopSpeech();
+    stopListening();
+    setInput("");
+
+    const next = !isGriot;
+    try {
+      localStorage.setItem(GRIOT_KEY, next ? "1" : "0");
+    } catch {
+      // Ignoré.
+    }
+
+    // Les deux états changent dans le même rendu : la conversation de
+    // l'autre mode est rechargée sans écraser celle qu'on quitte.
+    setIsGriot(next);
+    setMessages(
+      loadStoredMessages(
+        next ? `${baseKey}_griot` : baseKey,
+        displayName,
+        next
+      )
+    );
+  }, [
+    isGriot,
+    baseKey,
+    displayName,
+    stopGeneration,
+    stopSpeech,
+    stopListening,
+  ]);
+
+  const changeGriotVoice = useCallback((voice) => {
+    if (!GRIOT_VOICES[voice]) return;
+    setGriotVoice(voice);
+    try {
+      localStorage.setItem(GRIOT_VOICE_KEY, voice);
+    } catch {
+      // Ignoré.
+    }
+  }, []);
 
   /* ----- Envoi ----- */
 
@@ -606,10 +694,13 @@ export function AiAssistantTab({
           },
           body: JSON.stringify({
             messages: history,
+            // Mode Griot : le serveur (api/live.js) choisit lui-même le prompt
+            mode: isGriot ? "griot" : "chat",
             context: {
               display_name: displayName,
               language: "fr",
               app: "BAARO",
+              griot_voice: isGriot ? griotVoice : undefined,
             },
           }),
           signal: controller.signal,
@@ -657,7 +748,10 @@ export function AiAssistantTab({
           showPointsReward(2, "Échange avec l'IA");
         }
       } catch (error) {
-        if (!timedOut && (error?.name === "AbortError" || controller.signal.aborted)) {
+        if (
+          !timedOut &&
+          (error?.name === "AbortError" || controller.signal.aborted)
+        ) {
           return;
         }
 
@@ -692,6 +786,8 @@ export function AiAssistantTab({
       loading,
       messages,
       displayName,
+      isGriot,
+      griotVoice,
       autoSpeak,
       showPointsReward,
       speakText,
@@ -727,22 +823,40 @@ export function AiAssistantTab({
           className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
           style={{ background: COLORS.gold, color: "#000" }}
         >
-          <Bot size={20} />
+          {isGriot ? <span className="text-xl">👴</span> : <Bot size={20} />}
         </div>
 
         <div className="min-w-0 flex-1">
           <h2 className="font-bold text-sm text-white truncate">
-            Assistant IA BAARO
+            {isGriot ? "Fa-Baaro, le Griot" : "Assistant IA BAARO"}
           </h2>
-          <p className="text-xs text-white/50 truncate">Multi-IA intelligent</p>
+          <p className="text-xs text-white/50 truncate">
+            {isGriot ? "Gardien de la parole du Mandé" : "Multi-IA intelligent"}
+          </p>
         </div>
 
         <span
           className="text-[10px] font-mono px-2 py-1 rounded-full border whitespace-nowrap shrink-0"
           style={{ borderColor: COLORS.borderTeal, color: COLORS.teal }}
         >
-          {getProviderLabel(provider)}
+          {getProviderLabel(provider, isGriot)}
         </span>
+
+        <button
+          type="button"
+          onClick={toggleGriot}
+          className="px-2.5 py-2 rounded-lg border shrink-0 text-xs font-semibold transition-all active:scale-95"
+          style={{
+            background: isGriot ? `${COLORS.gold}25` : COLORS.surface2,
+            borderColor: isGriot ? COLORS.borderGold : COLORS.border,
+            color: isGriot ? COLORS.gold : COLORS.muted,
+          }}
+          aria-pressed={isGriot}
+          aria-label={isGriot ? "Quitter le mode Griot" : "Activer le mode Griot"}
+          title="Mode Griot"
+        >
+          👴 Griot
+        </button>
 
         <button
           type="button"
@@ -780,9 +894,34 @@ export function AiAssistantTab({
         )}
       </div>
 
+      {/* Voix du Griot */}
+      {isGriot && (
+        <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none">
+          {Object.entries(GRIOT_VOICE_LABELS).map(([key, label]) => {
+            const active = griotVoice === key;
+            return (
+              <button
+                key={key}
+                type="button"
+                onClick={() => changeGriotVoice(key)}
+                aria-pressed={active}
+                className="px-3 py-1.5 rounded-xl border text-xs font-semibold whitespace-nowrap shrink-0 transition-all active:scale-95"
+                style={{
+                  background: active ? `${COLORS.gold}25` : COLORS.surface,
+                  borderColor: active ? COLORS.borderGold : COLORS.border,
+                  color: active ? COLORS.gold : COLORS.muted,
+                }}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       {/* Suggestions */}
       <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none">
-        {PRESETS.map((preset) => {
+        {presets.map((preset) => {
           const PresetIcon = preset.icon;
           return (
             <button
@@ -838,7 +977,15 @@ export function AiAssistantTab({
                     color: "#000",
                   }}
                 >
-                  {isAssistant ? <Bot size={15} /> : <User size={15} />}
+                  {isAssistant ? (
+                    isGriot && !message.isError ? (
+                      <span className="text-sm">👴</span>
+                    ) : (
+                      <Bot size={15} />
+                    )
+                  ) : (
+                    <User size={15} />
+                  )}
                 </div>
 
                 <div className="max-w-[85%] min-w-0 flex flex-col gap-1.5">
@@ -985,7 +1132,9 @@ export function AiAssistantTab({
               role="status"
             >
               <Sparkles size={14} className="animate-spin" />
-              L&apos;Assistant BAARO réfléchit...
+              {isGriot
+                ? "Fa-Baaro réfléchit..."
+                : "L'Assistant BAARO réfléchit..."}
             </div>
           )}
 
@@ -1028,7 +1177,13 @@ export function AiAssistantTab({
             }
             onKeyDown={handleKeyDown}
             maxLength={MAX_INPUT_LENGTH}
-            placeholder={isListening ? "Écoute en cours..." : "Écris ton message…"}
+            placeholder={
+              isListening
+                ? "Écoute en cours..."
+                : isGriot
+                  ? "Parle au Griot…"
+                  : "Écris ton message…"
+            }
             disabled={loading}
             className="flex-1 min-w-0 px-3.5 py-2.5 rounded-xl border text-sm outline-none resize-none disabled:opacity-60"
             style={{
