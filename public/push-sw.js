@@ -19,7 +19,7 @@ function getSafeSameOriginUrl(value) {
 
     if (url.origin !== self.location.origin) return "/";
 
-    return `\( {url.pathname} \){url.search}${url.hash}`;
+    return `${url.pathname}${url.search}${url.hash}`;
   } catch {
     return "/";
   }
@@ -64,48 +64,65 @@ function resolveSound(payload, data) {
 }
 
 self.addEventListener("push", (event) => {
-  const payload = readPushPayload(event);
+  event.waitUntil(
+    (async () => {
+      const payload = readPushPayload(event);
 
-  const data =
-    payload.data && typeof payload.data === "object" ? payload.data : {};
+      const data =
+        payload.data && typeof payload.data === "object" ? payload.data : {};
 
-  const title =
-    typeof payload.title === "string" && payload.title.trim()
-      ? payload.title.trim().slice(0, 120)
-      : "BAARO";
+      const title =
+        typeof payload.title === "string" && payload.title.trim()
+          ? payload.title.trim().slice(0, 120)
+          : "BAARO";
 
-  const body =
-    typeof payload.body === "string"
-      ? payload.body.slice(0, 500)
-      : typeof data.body === "string"
-        ? data.body.slice(0, 500)
-        : "Vous avez une nouvelle notification.";
+      const body =
+        typeof payload.body === "string"
+          ? payload.body.slice(0, 500)
+          : typeof data.body === "string"
+            ? data.body.slice(0, 500)
+            : "Vous avez une nouvelle notification.";
 
-  const sound = resolveSound(payload, data);
+      const sound = resolveSound(payload, data);
 
-  const options = {
-    body,
-    icon: payload.icon || DEFAULT_ICON,
-    badge: payload.badge || DEFAULT_BADGE,
-    data: {
-      url: getSafeSameOriginUrl(payload.url || data.url || data.path),
-    },
-    tag:
-      typeof payload.tag === "string" && payload.tag
-        ? payload.tag.slice(0, 100)
-        : "baaro-notification",
-    // Une notification qui remplace une autre avec le même tag doit
-    // quand même alerter l'utilisateur.
-    renotify: true,
-    silent: !sound,
-  };
+      const options = {
+        body,
+        icon: payload.icon || DEFAULT_ICON,
+        badge: payload.badge || DEFAULT_BADGE,
+        data: {
+          url: getSafeSameOriginUrl(payload.url || data.url || data.path),
+        },
+        tag:
+          typeof payload.tag === "string" && payload.tag
+            ? payload.tag.slice(0, 100)
+            : "baaro-notification",
+        renotify: true,
+        silent: !sound,
+      };
 
-  // Support navigateur : sound (chemin) — ignoré si non supporté
-  if (sound) {
-    options.sound = sound;
-  }
+      if (sound) {
+        options.sound = sound;
+      }
 
-  event.waitUntil(self.registration.showNotification(title, options));
+      // 1. Envoyer l'ordre de jouer le son aux fenêtres ouvertes de BAARO
+      if (sound) {
+        const windowClients = await self.clients.matchAll({
+          type: "window",
+          includeUncontrolled: true,
+        });
+
+        for (const client of windowClients) {
+          client.postMessage({
+            type: "PLAY_SOUND",
+            sound,
+          });
+        }
+      }
+
+      // 2. Afficher la notification visuelle
+      await self.registration.showNotification(title, options);
+    })()
+  );
 });
 
 self.addEventListener("notificationclick", (event) => {
