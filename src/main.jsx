@@ -56,6 +56,15 @@ initPerf();
 const setupNative = async () => {
   if (!Capacitor.isNativePlatform()) return;
 
+  // Capgo - Notifier que l'app est prête EN PREMIER (évite le rollback :
+  // Capgo annule la mise à jour si ce n'est pas appelé dans les 10 s).
+  try {
+    await CapacitorUpdater.notifyAppReady();
+    console.log("[Capgo] App ready notified");
+  } catch (e) {
+    console.log("[Capgo] Updater not ready", e);
+  }
+
   // StatusBar
   try {
     await StatusBar.setOverlaysWebView({ overlay: false });
@@ -65,17 +74,13 @@ const setupNative = async () => {
     console.log("StatusBar not available", e);
   }
 
-  // Capgo - Notifier que l'app est prête (évite le rollback)
+  // Optionnel: écouter les updates
   try {
-    await CapacitorUpdater.notifyAppReady();
-    console.log("[Capgo] App ready notified");
-    
-    // Optionnel: écouter les updates
     CapacitorUpdater.addListener("updateAvailable", (res) => {
       console.log("[Capgo] Update available", res);
     });
   } catch (e) {
-    console.log("[Capgo] Updater not ready", e);
+    console.log("[Capgo] listener error", e);
   }
 };
 
