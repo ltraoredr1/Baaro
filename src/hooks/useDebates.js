@@ -278,7 +278,7 @@ export function useDebates(user_id) {
   }, [loadRooms, user_id]);
 
   const createRoom = useCallback(
-    async ({ title, topic, mode, maxParticipants, aiEnabled }) => {
+    async ({ title, topic, mode, format, maxParticipants, aiEnabled }) => {
       if (!user_id) return { ok: false, reason: "Non authentifié" };
       let room = null;
       try {
@@ -290,6 +290,7 @@ export function useDebates(user_id) {
               title: (title || "Débat").slice(0, 120),
               topic: (topic || "").slice(0, 300),
               mode: mode || "text",
+              format: format || "standard",
               max_participants: Math.min(Math.max(maxParticipants || 8, 2), 100),
               ai_enabled: !!aiEnabled,
               host_id: user_id,
@@ -391,9 +392,392 @@ export function useDebates(user_id) {
 }
 
 export function useRoomChat(roomId, user_id) {
-  // ... (chat code inchangé)
+  const [messages, setMessages] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [aiThinking, setAiThinking] = useState(false);
+  const [inputText, setInputText] = useState("");
+  const messagesRef = useRef([]);
+  const instanceId = useRef(uid());
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  useEffect(() => {
+    if (!roomId) return;
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      try {
+        const { data } = await supabase
+          .from("debate_messages")
+          .select("*")
+          .eq("room_id", roomId)
+          .order("created_at", { ascending: true })
+          .limit(300);
+        if (!cancelled) setMessages(data || []);
+      } catch (err) {
+        console.error(err);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    const ch = supabase
+      .channel("debate-messages:" + roomId + ":" + instanceId.current)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "debate_messages",
+          filter: "room_id=eq." + roomId,
+        },
+        (p) =>
+          setMessages((prev) => {
+            if (prev.some((m) => m.id === p.new.id)) return prev;
+            const cleaned = prev.filter(
+              (m) =>
+                !(
+                  String(m.id).startsWith("tmp_") &&
+                  m.sender_id === p.new.sender_id &&
+                  m.text === p.new.text
+                )
+            );
+            return [...cleaned, p.new];
+          })
+      )
+      .subscribe();
+    return () => {
+      cancelled = true;
+      supabase.removeChannel(ch);
+    };
+  }, [roomId]);
+
+  const sendText = useCallback(
+    async (text) => {
+      const content = (text ?? inputText).trim().slice(0, 1000);
+      if (!content || !roomId || !user_id || !canSend()) return;
+      setInputText("");
+      const tmpId = "tmp_" + Date.now();
+      setMessages((p) => [
+        ...p,
+        {
+          id: tmpId,
+          room_id: roomId,
+          sender_id: user_id,
+          sender_type: "user",
+          text: content,
+          created_at: new Date().toISOString(),
+        },
+      ]);
+      const { data, error } = await supabase
+        .from("debate_messages")
+        .insert({
+          room_id: roomId,
+          sender_id: user_id,
+          sender_type: "user",
+          text: content,
+        })
+        .select()
+        .single();
+      if (error) {
+        setMessages((p) => p.filter((m) => m.id !== tmpId));
+        return;
+      }
+      setMessages((p) => {
+        const without = p.filter((m) => m.id !== tmpId);
+        return without.some((m) => m.id === data.id)
+          ? without
+          : [...without, data];
+      });
+    },
+    [roomId, user_id, inputText]
+  );
+
+  const askAI = useCallback(
+    async (topic) => {
+      if (!roomId || aiThinking) return;
+      setAiThinking(true);
+      try {
+        const recent = messagesRef.current
+          .slice(-16)
+          .map(function (m) {
+            var who =
+              m.sender_type === "ai"
+                ? "IA"
+                : m.sender_id === user_id
+                  ? "Moi"
+                  : "Autre";
+            return who + ": " + m.text;
+          })
+          .join("\n");
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        const res = await fetch(apiUrl("/api/chat"), {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: "Bearer " + (session?.access_token || ""),
+          },
+          body: JSON.stringify({
+            system: "IA neutre BAARO débat " + (topic || "") + ". 4-8 phrases max.",
+            messages: [{ role: "user", content: recent || "Débat commence." }],
+            max_tokens: 600,
+          }),
+        });
+        const data = await res.json().catch(function () {
+          return {};
+        });
+        if (!res.ok) return;
+        var reply =
+          data.reply ||
+          (data.content &&
+            data.content.find &&
+            data.content.find(function (b) {
+              return b.type === "text";
+            })?.text);
+        if (!reply) return;
+        await supabase.from("debate_messages").insert({
+          room_id: roomId,
+          sender_type: "ai",
+          text: reply,
+        });
+      } catch (err) {
+        console.error("askAI", err);
+      } finally {
+        setAiThinking(false);
+      }
+    },
+    [roomId, user_id, aiThinking]
+  );
+
+  return {
+    messages,
+    loading,
+    sendText,
+    askAI,
+    aiThinking,
+    inputText,
+    setInputText,
+  };
 }
 
 export function useDebateLive(room, user_id, isHost) {
-  // ... (live code inchangé)
+  const callRef = useRef(null);
+  const containerRef = useRef(null);
+  const joiningRef = useRef(false);
+  const aliveRef = useRef(true);
+  const camFailedRef = useRef(false);
+  const [camOn, setCamOn] = useState(room?.mode !== "audio");
+  const [micOn, setMicOn] = useState(true);
+  const [joined, setJoined] = useState(false);
+  const [error, setError] = useState(null);
+  const [notice, setNotice] = useState(null);
+  const [audioOnly, setAudioOnly] = useState(false);
+  const [joining, setJoining] = useState(false);
+
+  const joinLive = useCallback(
+    async function () {
+      if (!room?.id || !user_id) return;
+      if (joiningRef.current) return;
+      joiningRef.current = true;
+      camFailedRef.current = false;
+      setJoining(true);
+      setError(null);
+      setNotice(null);
+      setAudioOnly(false);
+      try {
+        var wantVideo = room.mode !== "audio";
+        var devices = await checkDevices(wantVideo);
+        var plan = buildJoinPlan(wantVideo, devices);
+        var videoOff = plan.videoOff;
+        var audioOff = plan.audioOff;
+        var message = plan.message;
+
+        await new Promise(function (r) {
+          setTimeout(r, 400);
+        });
+
+        var sessionRes = await supabase.auth.getSession();
+        var session = sessionRes.data?.session;
+        var meta = (session && session.user && session.user.user_metadata) || {};
+        var displayName =
+          String(meta.full_name || meta.name || meta.username || "")
+            .trim()
+            .slice(0, 40) || (isHost ? "Hôte" : "Participant");
+
+        var res = await fetch(apiUrl("/api/live"), {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: "Bearer " + (session?.access_token || ""),
+          },
+          body: JSON.stringify({
+            action: "token",
+            liveId: room.invite_code || room.id,
+            roomName: room.daily_room_name || room.invite_code,
+            userName: displayName,
+            isOwner: !!isHost,
+          }),
+        });
+
+        var data = await res.json().catch(function () {
+          return {};
+        });
+        if (!res.ok || !data.token) {
+          throw new Error(data.error || "Impossible d'obtenir le token Daily");
+        }
+
+        var domain = import.meta.env.VITE_DAILY_DOMAIN || "baaro";
+        var roomUrl =
+          data.url ||
+          (data.roomName
+            ? "https://" + domain + ".daily.co/" + data.roomName
+            : null);
+        if (!roomUrl) throw new Error("URL Daily manquante");
+
+        if (!aliveRef.current) return;
+        if (!containerRef.current) throw new Error("Zone vidéo indisponible");
+
+        callRef.current = null;
+        await destroyExistingCall();
+
+        var call = DailyIframe.createFrame(containerRef.current, {
+          iframeStyle: { width: "100%", height: "100%", border: "0" },
+          showLeaveButton: false,
+          startVideoOff: videoOff,
+          startAudioOff: audioOff,
+        });
+        callRef.current = call;
+
+        call.on("camera-error", function (ev) {
+          if (callRef.current !== call) return;
+          camFailedRef.current = true;
+          setNotice(describeDailyCameraError(ev));
+          setAudioOnly(true);
+          setCamOn(false);
+          try {
+            call.setLocalVideo(false);
+          } catch (_) {}
+        });
+        call.on("started-camera", function () {
+          if (callRef.current !== call) return;
+          camFailedRef.current = false;
+          setAudioOnly(false);
+          setCamOn(true);
+          setNotice(null);
+        });
+        call.on("left-meeting", function () {
+          setJoined(false);
+        });
+        call.on("error", function (ev) {
+          if (callRef.current !== call) return;
+          setError(
+            (ev && typeof ev.errorMsg === "string" && ev.errorMsg) ||
+              "Connexion au live perdue."
+          );
+          setJoined(false);
+        });
+
+        await withTimeout(
+          call.join({ url: roomUrl, token: data.token }),
+          15000,
+          "Connexion Daily trop longue."
+        );
+
+        if (!aliveRef.current) {
+          await destroyExistingCall();
+          callRef.current = null;
+          return;
+        }
+
+        var effectiveVideoOff = videoOff || camFailedRef.current;
+
+        try {
+          await call.setLocalAudio(!audioOff);
+        } catch (_) {}
+        if (effectiveVideoOff) {
+          try {
+            await call.setLocalVideo(false);
+          } catch (_) {}
+        }
+
+        setMicOn(!audioOff);
+        setCamOn(!effectiveVideoOff);
+        setAudioOnly(wantVideo && effectiveVideoOff);
+        if (message) setNotice(message);
+        setJoined(true);
+      } catch (e) {
+        await destroyExistingCall();
+        callRef.current = null;
+        if (aliveRef.current) {
+          setError(e.message || "Erreur join live");
+          setJoined(false);
+        }
+      } finally {
+        joiningRef.current = false;
+        if (aliveRef.current) setJoining(false);
+      }
+    },
+    [room, user_id, isHost]
+  );
+
+  const toggleCam = useCallback(function () {
+    var call = callRef.current;
+    if (!call) return;
+    try {
+      var next = !call.localVideo();
+      call.setLocalVideo(next);
+      setCamOn(next);
+    } catch (_) {}
+  }, []);
+
+  const toggleMic = useCallback(function () {
+    var call = callRef.current;
+    if (!call) return;
+    try {
+      var next = !call.localAudio();
+      call.setLocalAudio(next);
+      setMicOn(next);
+    } catch (_) {}
+  }, []);
+
+  const leaveLive = useCallback(async function () {
+    try {
+      await destroyExistingCall();
+    } finally {
+      callRef.current = null;
+      if (aliveRef.current) {
+        setJoined(false);
+        setNotice(null);
+        setAudioOnly(false);
+      }
+    }
+  }, []);
+
+  useEffect(function () {
+    aliveRef.current = true;
+    return function () {
+      aliveRef.current = false;
+      callRef.current = null;
+      destroyExistingCall();
+    };
+  }, []);
+
+  return {
+    joinLive,
+    leaveLive,
+    toggleCam,
+    toggleMic,
+    camOn,
+    micOn,
+    joined,
+    joining,
+    error,
+    notice,
+    audioOnly,
+    callRef,
+    containerRef,
+  };
 }
