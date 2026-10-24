@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { createPortal } from "react-dom";
 import {
   X,
   Trash2,
@@ -129,7 +130,7 @@ function parseComment(text) {
   return { voiceUrl, caption: rest.join("\n").trim() };
 }
 
-/** Viewer plein écran un-à-un (swipe + flèches) */
+/** Viewer plein écran un-à-un (swipe + flèches), rendu dans document.body */
 function MediaViewer({ items, startIndex = 0, onClose }) {
   const [index, setIndex] = useState(startIndex);
   const touchStartX = useRef(null);
@@ -176,7 +177,7 @@ function MediaViewer({ items, startIndex = 0, onClose }) {
 
   if (!current) return null;
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-[100] bg-black/95 flex flex-col" onClick={onClose}>
       <div className="flex items-center justify-between p-3 shrink-0" onClick={(e) => e.stopPropagation()}>
         <span className="text-white/80 text-sm font-medium">
@@ -254,7 +255,8 @@ function MediaViewer({ items, startIndex = 0, onClose }) {
           ))}
         </div>
       )}
-    </div>
+    </div>,
+    document.body
   );
 }
 
@@ -953,7 +955,9 @@ export function FeedTab({
     }
   };
 
-  if (loading) {
+  // On n'affiche le chargement que s'il n'y a encore aucun post :
+  // sinon chaque rechargement du fil ferme la fenêtre de création.
+  if (loading && posts.length === 0) {
     return (
       <div className="text-center py-12 text-xs font-medium tracking-widest uppercase opacity-70">
         Chargement du fil d'actualité...
@@ -971,250 +975,254 @@ export function FeedTab({
         <FloatingCreateButton onCreatePost={openCreate} />
       )}
 
-      {activeUserId && isCreateOpen && (
-        <div
-          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200"
-          onClick={() => setIsCreateOpen?.(false)}
-        >
+      {activeUserId &&
+        isCreateOpen &&
+        createPortal(
           <div
-            className="w-full max-w-lg rounded-t-3xl sm:rounded-2xl border shadow-2xl flex flex-col max-h-[70vh] sm:max-h-[85vh] mb-20 sm:mb-0 overflow-hidden"
-            style={{ borderColor: COLORS.borderGold, background: COLORS.surface }}
-            onClick={(e) => e.stopPropagation()}
+            className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200"
+            onClick={() => setIsCreateOpen?.(false)}
           >
             <div
-              className="flex items-center justify-between border-b p-4 text-xs font-semibold shrink-0"
-              style={{ borderColor: COLORS.border, color: COLORS.gold }}
+              className="w-full max-w-md rounded-t-3xl sm:rounded-2xl border shadow-2xl flex flex-col max-h-[55vh] sm:max-h-[70vh] mb-16 sm:mb-0 overflow-hidden"
+              style={{ borderColor: COLORS.borderGold, background: COLORS.surface }}
+              onClick={(e) => e.stopPropagation()}
             >
-              <div className="flex items-center gap-2">
-                <Sparkles size={14} />
-                <span>Créer une publication à fort impact</span>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsCreateOpen?.(false)}
-                className="p-1 rounded-full text-slate-400 hover:text-white hover:bg-white/10 transition-colors"
+              <div
+                className="flex items-center justify-between border-b p-3 text-xs font-semibold shrink-0"
+                style={{ borderColor: COLORS.border, color: COLORS.gold }}
               >
-                <X size={16} />
-              </button>
-            </div>
-
-            <div className="p-4 flex-1 overflow-y-auto flex flex-col gap-3">
-              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Sparkles size={14} />
+                  <span>Créer une publication à fort impact</span>
+                </div>
                 <button
                   type="button"
-                  onClick={() => setTextToolsOpen(!textToolsOpen)}
-                  className="px-3 py-1.5 rounded-xl border text-xs font-medium flex items-center gap-1.5 transition-colors"
+                  onClick={() => setIsCreateOpen?.(false)}
+                  className="p-1 rounded-full text-slate-400 hover:text-white hover:bg-white/10 transition-colors"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+
+              <div className="p-3 flex-1 overflow-y-auto flex flex-col gap-2">
+                <div className="flex items-center justify-between gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setTextToolsOpen(!textToolsOpen)}
+                    className="px-3 py-1.5 rounded-xl border text-xs font-medium flex items-center gap-1.5 transition-colors"
+                    style={{
+                      borderColor: COLORS.border,
+                      color: COLORS.ivory,
+                      background: COLORS.surface2,
+                    }}
+                  >
+                    <span>Mise en forme du texte</span>
+                    {textToolsOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      window.dispatchEvent(
+                        new CustomEvent("baaro:ai-draft", {
+                          detail: {
+                            prompt: newText.trim()
+                              ? `Améliore ce brouillon de publication :\n"${newText.trim()}"\n\n`
+                              : "Rédige une publication engageante pour BAARO : ",
+                          },
+                        })
+                      )
+                    }
+                    title="Rédiger avec l'IA"
+                    className="px-3 py-1.5 rounded-xl transition-colors flex items-center gap-1.5 text-xs font-medium shadow-sm shrink-0"
+                    style={{
+                      background: "rgba(20, 184, 166, 0.15)",
+                      color: COLORS.teal,
+                      border: `1px solid ${COLORS.teal}40`,
+                    }}
+                  >
+                    <Sparkles size={14} />
+                    <span>IA</span>
+                  </button>
+                </div>
+
+                {textToolsOpen && (
+                  <div
+                    className="p-3 rounded-xl border flex flex-col gap-2 animate-in fade-in duration-150"
+                    style={{ background: COLORS.surface2, borderColor: COLORS.border }}
+                  >
+                    <RichTextComposer
+                      value={newText}
+                      onChange={setNewText}
+                      pollData={pollData}
+                      onPollChange={setPollData}
+                      rows={1}
+                      collapsibleTools={false}
+                    />
+                  </div>
+                )}
+
+                <textarea
+                  value={newText}
+                  onChange={(e) => setNewText(e.target.value)}
+                  disabled={submitting}
+                  placeholder="Partagez une perspective, une analyse ou une innovation avec le monde..."
+                  rows={3}
+                  className="w-full p-2.5 rounded-xl border text-sm outline-none resize-none"
                   style={{
+                    background: COLORS.surface2,
                     borderColor: COLORS.border,
                     color: COLORS.ivory,
-                    background: COLORS.surface2,
                   }}
-                >
-                  <span>Mise en forme du texte</span>
-                  {textToolsOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                </button>
+                />
 
-                <button
-                  type="button"
-                  onClick={() =>
-                    window.dispatchEvent(
-                      new CustomEvent("baaro:ai-draft", {
-                        detail: {
-                          prompt: newText.trim()
-                            ? `Améliore ce brouillon de publication :\n"${newText.trim()}"\n\n`
-                            : "Rédige une publication engageante pour BAARO : ",
-                        },
-                      })
-                    )
-                  }
-                  title="Rédiger avec l'IA"
-                  className="px-3 py-1.5 rounded-xl transition-colors flex items-center gap-1.5 text-xs font-medium shadow-sm shrink-0"
+                <label
+                  className="flex items-center gap-2 text-xs select-none"
                   style={{
-                    background: "rgba(20, 184, 166, 0.15)",
-                    color: COLORS.teal,
-                    border: `1px solid ${COLORS.teal}40`,
+                    color: mediaItems.length > 0 ? COLORS.ivory : COLORS.muted,
+                    opacity: mediaItems.length > 0 ? 1 : 0.6,
                   }}
                 >
-                  <Sparkles size={14} />
-                  <span>IA</span>
-                </button>
+                  <input
+                    type="checkbox"
+                    checked={alsoStory && mediaItems.length > 0}
+                    disabled={mediaItems.length === 0 || submitting}
+                    onChange={(e) => setAlsoStory(e.target.checked)}
+                  />
+                  <span>
+                    Publier aussi en story
+                    {mediaItems.length === 0 ? " (ajoutez une photo ou une vidéo)" : ""}
+                  </span>
+                </label>
+
+                {mediaItems.length > 0 && (
+                  <div className="flex flex-col gap-1.5">
+                    <div
+                      className="flex items-center justify-between text-[11px]"
+                      style={{ color: COLORS.muted }}
+                    >
+                      <span>
+                        {mediaItems.length}/{MAX_MEDIA_COUNT} média
+                        {mediaItems.length > 1 ? "s" : ""}
+                      </span>
+                      <button type="button" onClick={clearAllMedia} className="underline">
+                        Tout retirer
+                      </button>
+                    </div>
+                    <div className="flex gap-2 overflow-x-auto pb-1">
+                      {mediaItems.map((m) => (
+                        <div
+                          key={m.id}
+                          className="relative w-16 h-16 shrink-0 rounded-xl overflow-hidden border"
+                          style={{ borderColor: COLORS.border }}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => removeMediaItem(m.id)}
+                            className="absolute top-1 right-1 z-10 p-1 rounded-full bg-black/70 text-white"
+                            aria-label="Retirer ce média"
+                          >
+                            <X size={12} />
+                          </button>
+                          {m.kind === "video" ? (
+                            <video
+                              src={m.preview}
+                              className="w-full h-full object-cover"
+                              muted
+                            />
+                          ) : (
+                            <img
+                              src={m.preview}
+                              alt="Aperçu"
+                              className="w-full h-full object-cover"
+                            />
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
 
-              {textToolsOpen && (
-                <div
-                  className="p-3 rounded-xl border flex flex-col gap-2 animate-in fade-in duration-150"
-                  style={{ background: COLORS.surface2, borderColor: COLORS.border }}
-                >
-                  <RichTextComposer
-                    value={newText}
-                    onChange={setNewText}
-                    pollData={pollData}
-                    onPollChange={setPollData}
-                    rows={1}
-                  />
-                </div>
-              )}
-
-              <textarea
-                value={newText}
-                onChange={(e) => setNewText(e.target.value)}
-                disabled={submitting}
-                placeholder="Partagez une perspective, une analyse ou une innovation avec le monde..."
-                rows={5}
-                className="w-full p-3 rounded-xl border text-sm outline-none resize-none"
-                style={{
-                  background: COLORS.surface2,
-                  borderColor: COLORS.border,
-                  color: COLORS.ivory,
-                }}
-              />
-
-              <label
-                className="flex items-center gap-2 text-xs select-none"
-                style={{
-                  color: mediaItems.length > 0 ? COLORS.ivory : COLORS.muted,
-                  opacity: mediaItems.length > 0 ? 1 : 0.6,
-                }}
+              <div
+                className="flex items-center justify-between border-t p-2 flex-wrap gap-1.5 shrink-0 bg-inherit"
+                style={{ borderColor: COLORS.border }}
               >
-                <input
-                  type="checkbox"
-                  checked={alsoStory && mediaItems.length > 0}
-                  disabled={mediaItems.length === 0 || submitting}
-                  onChange={(e) => setAlsoStory(e.target.checked)}
-                />
-                <span>
-                  Publier aussi en story
-                  {mediaItems.length === 0 ? " (ajoutez une photo ou une vidéo)" : ""}
-                </span>
-              </label>
-
-              {mediaItems.length > 0 && (
-                <div className="flex flex-col gap-1.5">
-                  <div
-                    className="flex items-center justify-between text-[11px]"
-                    style={{ color: COLORS.muted }}
-                  >
-                    <span>
-                      {mediaItems.length}/{MAX_MEDIA_COUNT} média
-                      {mediaItems.length > 1 ? "s" : ""}
-                    </span>
-                    <button type="button" onClick={clearAllMedia} className="underline">
-                      Tout retirer
-                    </button>
-                  </div>
-                  <div className="flex gap-2 overflow-x-auto pb-1">
-                    {mediaItems.map((m) => (
-                      <div
-                        key={m.id}
-                        className="relative w-24 h-24 shrink-0 rounded-xl overflow-hidden border"
-                        style={{ borderColor: COLORS.border }}
-                      >
-                        <button
-                          type="button"
-                          onClick={() => removeMediaItem(m.id)}
-                          className="absolute top-1 right-1 z-10 p-1 rounded-full bg-black/70 text-white"
-                          aria-label="Retirer ce média"
-                        >
-                          <X size={12} />
-                        </button>
-                        {m.kind === "video" ? (
-                          <video
-                            src={m.preview}
-                            className="w-full h-full object-cover"
-                            muted
-                          />
-                        ) : (
-                          <img
-                            src={m.preview}
-                            alt="Aperçu"
-                            className="w-full h-full object-cover"
-                          />
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div
-              className="flex items-center justify-between border-t p-3 flex-wrap gap-2 shrink-0 bg-inherit"
-              style={{ borderColor: COLORS.border }}
-            >
-              <div className="flex items-center gap-2 flex-wrap">
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/*,video/*"
-                  multiple
-                  className="hidden"
-                  onChange={handlePickFiles}
-                />
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  className="p-1.5 rounded-lg hover:bg-white/10 flex items-center gap-1.5 text-xs font-medium transition-colors"
-                  style={{ color: COLORS.gold }}
-                >
-                  <ImageIcon size={16} />
-                  <span>Médias</span>
-                </button>
-
-                {!isRecording && !audioBlob && (
+                <div className="flex items-center gap-2 flex-wrap">
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*,video/*"
+                    multiple
+                    className="hidden"
+                    onChange={handlePickFiles}
+                  />
                   <button
                     type="button"
-                    onClick={startRecording}
+                    onClick={() => fileInputRef.current?.click()}
                     className="p-1.5 rounded-lg hover:bg-white/10 flex items-center gap-1.5 text-xs font-medium transition-colors"
-                    style={{ color: COLORS.teal }}
+                    style={{ color: COLORS.gold }}
                   >
-                    <Mic size={16} />
-                    <span>Vocal</span>
+                    <ImageIcon size={16} />
+                    <span>Médias</span>
                   </button>
-                )}
 
-                {isRecording && (
-                  <button
-                    type="button"
-                    onClick={stopRecording}
-                    className="p-1.5 rounded-lg bg-red-500/20 text-red-400 flex items-center gap-1.5 text-xs font-medium animate-pulse transition-colors"
-                  >
-                    <Square size={16} fill="currentColor" />
-                    <span>Arrêter</span>
-                  </button>
-                )}
-
-                {audioBlob && (
-                  <>
-                    <audio
-                      src={audioPreviewUrl}
-                      controls
-                      className="h-8 max-w-[150px] rounded"
-                    />
+                  {!isRecording && !audioBlob && (
                     <button
                       type="button"
-                      onClick={discardRecording}
-                      className="p-1.5 rounded-lg hover:bg-red-500/20 text-red-400 transition-colors"
-                      title="Supprimer l'enregistrement"
+                      onClick={startRecording}
+                      className="p-1.5 rounded-lg hover:bg-white/10 flex items-center gap-1.5 text-xs font-medium transition-colors"
+                      style={{ color: COLORS.teal }}
                     >
-                      <Trash2 size={16} />
+                      <Mic size={16} />
+                      <span>Vocal</span>
                     </button>
-                  </>
-                )}
-              </div>
+                  )}
 
-              <button
-                type="button"
-                onClick={handlePublish}
-                disabled={submitting || !canPublish}
-                className="px-4 py-1.5 rounded-xl text-xs font-bold shadow-md flex items-center gap-1.5 disabled:opacity-50 transition-opacity"
-                style={{ background: COLORS.gold, color: "#000" }}
-              >
-                {submitting ? "Publication..." : "Publier"} <Send size={13} />
-              </button>
+                  {isRecording && (
+                    <button
+                      type="button"
+                      onClick={stopRecording}
+                      className="p-1.5 rounded-lg bg-red-500/20 text-red-400 flex items-center gap-1.5 text-xs font-medium animate-pulse transition-colors"
+                    >
+                      <Square size={16} fill="currentColor" />
+                      <span>Arrêter</span>
+                    </button>
+                  )}
+
+                  {audioBlob && (
+                    <>
+                      <audio
+                        src={audioPreviewUrl}
+                        controls
+                        className="h-8 max-w-[150px] rounded"
+                      />
+                      <button
+                        type="button"
+                        onClick={discardRecording}
+                        className="p-1.5 rounded-lg hover:bg-red-500/20 text-red-400 transition-colors"
+                        title="Supprimer l'enregistrement"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </>
+                  )}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handlePublish}
+                  disabled={submitting || !canPublish}
+                  className="px-4 py-1.5 rounded-xl text-xs font-bold shadow-md flex items-center gap-1.5 disabled:opacity-50 transition-opacity"
+                  style={{ background: COLORS.gold, color: "#000" }}
+                >
+                  {submitting ? "Publication..." : "Publier"} <Send size={13} />
+                </button>
+              </div>
             </div>
-          </div>
-        </div>
-      )}
+          </div>,
+          document.body
+        )}
 
       <GuestBanner
         onUpgrade={() =>
@@ -1627,59 +1635,61 @@ export function FeedTab({
         </div>
       )}
 
-      {reportPost && (
-        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
-          <div
-            className="w-full max-w-md rounded-2xl p-5 border flex flex-col gap-4"
-            style={{ background: COLORS.surface, borderColor: COLORS.border }}
-          >
-            <h3 className="font-bold text-sm" style={{ color: COLORS.ivory }}>
-              Signaler cette publication
-            </h3>
-            <p className="text-xs" style={{ color: COLORS.muted }}>
-              Choisissez le motif du signalement :
-            </p>
-            <div className="flex flex-col gap-2">
-              {REPORT_REASONS.map((reason) => (
-                <label
-                  key={reason}
-                  className="flex items-center gap-2 text-xs cursor-pointer"
-                  style={{ color: COLORS.ivory }}
-                >
-                  <input
-                    type="radio"
-                    name="reportReason"
-                    value={reason}
-                    checked={reportReason === reason}
-                    onChange={(e) => setReportReason(e.target.value)}
-                  />
-                  <span>{reason}</span>
-                </label>
-              ))}
-            </div>
+      {reportPost &&
+        createPortal(
+          <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
             <div
-              className="flex justify-end gap-2 pt-2 border-t"
-              style={{ borderColor: COLORS.border }}
+              className="w-full max-w-md rounded-2xl p-5 border flex flex-col gap-4"
+              style={{ background: COLORS.surface, borderColor: COLORS.border }}
             >
-              <button
-                type="button"
-                onClick={() => setReportPost(null)}
-                className="px-3 py-1.5 rounded-lg text-xs"
-                style={{ color: COLORS.muted }}
+              <h3 className="font-bold text-sm" style={{ color: COLORS.ivory }}>
+                Signaler cette publication
+              </h3>
+              <p className="text-xs" style={{ color: COLORS.muted }}>
+                Choisissez le motif du signalement :
+              </p>
+              <div className="flex flex-col gap-2">
+                {REPORT_REASONS.map((reason) => (
+                  <label
+                    key={reason}
+                    className="flex items-center gap-2 text-xs cursor-pointer"
+                    style={{ color: COLORS.ivory }}
+                  >
+                    <input
+                      type="radio"
+                      name="reportReason"
+                      value={reason}
+                      checked={reportReason === reason}
+                      onChange={(e) => setReportReason(e.target.value)}
+                    />
+                    <span>{reason}</span>
+                  </label>
+                ))}
+              </div>
+              <div
+                className="flex justify-end gap-2 pt-2 border-t"
+                style={{ borderColor: COLORS.border }}
               >
-                Annuler
-              </button>
-              <button
-                type="button"
-                onClick={handleSendReport}
-                className="px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-500 text-black"
-              >
-                Envoyer le signalement
-              </button>
+                <button
+                  type="button"
+                  onClick={() => setReportPost(null)}
+                  className="px-3 py-1.5 rounded-lg text-xs"
+                  style={{ color: COLORS.muted }}
+                >
+                  Annuler
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSendReport}
+                  className="px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-500 text-black"
+                >
+                  Envoyer le signalement
+                </button>
+              </div>
             </div>
-          </div>
-        </div>
-      )}
+          </div>,
+          document.body
+        )}
 
       {engagement && (
         <EngagementList
