@@ -17,10 +17,14 @@ import { TabFallback } from "./TabFallback.jsx";
 import { OfflineBanner } from "../components/OfflineBanner.jsx";
 import { FutureModulePanel } from "../components/FutureModulePanel.jsx";
 import { saveLastTab, loadLastTab } from "../lib/perf.js";
+import { supabase } from "../supabaseClient.js";
 // Chemin corrigé vers useCryptoKeys.js
 import { useCryptoKeys } from "../features/messaging/hooks/useCryptoKeys.js";
 import { useIncomingCalls } from "../features/messaging/hooks/useIncomingCalls.js";
+import { useIncomingCallFromPush } from "../features/messaging/hooks/useIncomingCallFromPush.js";
 import { ChatCallModal } from "../features/messaging/components/ChatCallModal.jsx";
+import { messageService } from "../features/messaging/lib/messageService.js";
+import { useNotificationSound } from "../hooks/useNotificationSound.js";
 import FloatingAiAssistant from "../components/FloatingAiAssistant.jsx";
 import { GuideHost, ONBOARDING_CLOSED_EVENT } from "../features/guide/index.js";
 import AnimatedTab from "../components/ui/AnimatedTab.jsx";
@@ -72,7 +76,62 @@ export function MainShell() {
   const { showToast } = useToast();
   const id = user?.id;
   useCryptoKeys(isAnonymous ? null : id);
-  const { incoming, clear: clearIncoming } = useIncomingCalls(isAnonymous ? null : id);
+  const { incoming: realtimeIncoming, clear: clearRealtimeIncoming } = useIncomingCalls(isAnonymous ? null : id);
+  const { incoming: pushIncoming, clear: clearPushIncoming } = useIncomingCallFromPush(isAnonymous ? null : id);
+  const incoming = pushIncoming || realtimeIncoming;
+  const clearIncoming = () => {
+    clearPushIncoming();
+    clearRealtimeIncoming();
+  };
+  const { playNotification } = useNotificationSound();
+  const [unreadMessages, setUnreadMessages] = useState(0);
+  const [unreadNotifications, setUnreadNotifications] = useState(0);
+
+  // Compteurs persistants : ils ne dépendent plus de l’ouverture du drawer ou de l’onglet Chat.
+  useEffect(() => {
+    if (!id || isAnonymous) {
+      setUnreadMessages(0);
+      setUnreadNotifications(0);
+      return undefined;
+    }
+    let alive = true;
+    const refreshCounters = async () => {
+      const [conversations, notificationRows] = await Promise.all([
+        messageService.getConversations(id).catch(() => []),
+        supabase.from("notifications").select("notification_id").eq("user_id", id).eq("read", false).limit(100),
+      ]);
+      if (!alive) return;
+      setUnreadMessages((conversations || []).filter((c) => c.unread).length);
+      setUnreadNotifications(notificationRows.data?.length || 0);
+    };
+    refreshCounters();
+    const channel = supabase
+      .channel(`global-baaro-events:${id}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "messages", filter: `recipient_id=eq.${id}` }, () => {
+        playNotification("baaro_pulse");
+        refreshCounters();
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "notifications", filter: `user_id=eq.${id}` }, () => refreshCounters())
+      .subscribe();
+    return () => {
+      alive = false;
+      supabase.removeChannel(channel);
+    };
+  }, [id, isAnonymous, playNotification]);
+
+  // Les push ouverts depuis Android/Web amènent directement au bon module.
+  useEffect(() => {
+    const onOpenMessage = () => setActiveTab("messages");
+    window.addEventListener("baaro:open-message", onOpenMessage);
+    try {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("open_message")) {
+        setActiveTab("messages");
+        window.history.replaceState({}, document.title, window.location.pathname);
+      }
+    } catch {}
+    return () => window.removeEventListener("baaro:open-message", onOpenMessage);
+  }, []);
 
   useApplyPendingReferral({ showToast });
 
@@ -427,12 +486,13 @@ export function MainShell() {
           HEADER (BOUTON CRÉER INTELLIGENT SELON L'ONGLET)
           ===================================================== */}
       {(!isImmersive || showUi) && (
-        <Header
+          <Header
           lang={lang}
           setLang={setLang}
           userProfile={userProfile}
           onOpenProfile={() => setInspectingProfileId(id)}
-          onOpenNotifications={() => setNotifDrawerOpen(true)}
+            onOpenNotifications={() => setNotifDrawerOpen(true)}
+            notificationCount={unreadNotifications}
           onOpenSearch={() => setSearchModalOpen(true)}
           isCreateOpen={activeTab === "feed" ? isFeedCreateOpen : false}
           onToggleCreate={() => {
@@ -469,6 +529,7 @@ export function MainShell() {
             <Navigation
               activeTab={activeTab}
               setActiveTab={handleSetActiveTab}
+              unreadMessages={unreadMessages}
             />
           </div>
         )}
@@ -510,6 +571,7 @@ export function MainShell() {
           <Navigation
             activeTab={activeTab}
             setActiveTab={handleSetActiveTab}
+            unreadMessages={unreadMessages}
           />
         </div>
       )}
