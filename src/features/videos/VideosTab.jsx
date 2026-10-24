@@ -7,6 +7,7 @@ import {
   FeedLoading,
 } from "./components/FeedStatus.jsx";
 import CreateVideoFab from "./components/CreateVideoFab.jsx";
+import FeedHeader from "./components/FeedHeader.jsx";
 import HandsFreeControls from "./components/HandsFreeControls.jsx";
 import UploadModal from "./components/UploadModal.jsx";
 import VideoCard, { isImageVideo } from "./components/VideoCard.jsx";
@@ -14,6 +15,7 @@ import VideoCard, { isImageVideo } from "./components/VideoCard.jsx";
 import { useCamera } from "./hooks/useCamera.js";
 import { useFeedPlayback } from "./hooks/useFeedPlayback.js";
 import { usePlaybackSettings, SPEEDS } from "./hooks/usePlaybackSettings.js";
+import { usePrefersReducedMotion } from "../../hooks/usePrefersReducedMotion.js";
 import { useVideoCompression } from "./hooks/useVideoCompression.js";
 import { useSoundPicker } from "./hooks/useSoundPicker.js";
 import { useSounds } from "./hooks/useSounds.js";
@@ -27,7 +29,7 @@ import VideoNextGenStudio from "./VideoNextGenStudio.jsx";
 import { useToast } from "../../components/ToastContext.jsx";
 import { EngagementList } from "../../components/EngagementList.jsx";
 
-import { Gauge, Leaf, Sparkles, Volume2, VolumeX } from "lucide-react";
+import { Gauge, Leaf } from "lucide-react";
 
 const IMAGE_DURATION_MS = 6000;
 
@@ -38,13 +40,6 @@ const RENDER_WINDOW = 2;
 
 const SAVER_NEXT = { auto: "on", on: "off", off: "auto" };
 const SAVER_LABEL = { auto: "Auto", on: "Activé", off: "Désactivé" };
-
-const prefersReducedMotion = () =>
-  typeof window !== "undefined" &&
-  !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-
-const scrollBehavior = () =>
-  prefersReducedMotion() ? "auto" : "smooth";
 
 const isTypingTarget = (target) => {
   if (!target) return false;
@@ -60,6 +55,7 @@ const isTypingTarget = (target) => {
 };
 
 export function VideosTab({ onRewardPoints, onExit }) {
+  const reducedMotion = usePrefersReducedMotion();
   const feed = useVideoFeed();
 
   const {
@@ -336,7 +332,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
     if (!target) return false;
 
     slideRefs.current[String(target.id)]?.scrollIntoView({
-      behavior: scrollBehavior(),
+      behavior: reducedMotion ? "auto" : "smooth",
       block: "start",
     });
 
@@ -747,18 +743,15 @@ export function VideosTab({ onRewardPoints, onExit }) {
         />
       </div>
 
-      {/* Studio, vitesse, économie de données et son */}
-      <div className="absolute right-4 top-4 z-[70] flex items-center gap-2">
-        <button
-          type="button"
-          onClick={() => setStudioOpen(true)}
-          className="flex h-9 items-center gap-1.5 rounded-full border border-white/20 bg-black/40 px-3 text-xs font-bold text-white shadow-lg backdrop-blur-xl transition-all hover:bg-black/60 active:scale-95"
-          title="Studio NextGen"
-        >
-          <Sparkles size={14} className="text-yellow-400" />
-          <span>Studio</span>
-        </button>
-
+      <FeedHeader
+        onExit={onExit}
+        muted={playback.muted}
+        onToggleMute={playback.toggleMute}
+        onOpenUpload={openUpload}
+        onOpenStudio={() => setStudioOpen(true)}
+        showModeSwitcher={false}
+        extraActions={(
+          <>
         <button
           type="button"
           onClick={cycleSpeed}
@@ -784,24 +777,9 @@ export function VideosTab({ onRewardPoints, onExit }) {
           <Leaf size={16} />
         </button>
 
-        <button
-          type="button"
-          onClick={playback.toggleMute}
-          className="flex h-9 w-9 items-center justify-center rounded-full border border-white/20 bg-black/40 text-white shadow-lg backdrop-blur-xl transition-all hover:bg-black/60 active:scale-95"
-          aria-label={
-            playback.muted ? "Activer le son" : "Couper le son"
-          }
-          title={
-            playback.muted ? "Activer le son" : "Couper le son"
-          }
-        >
-          {playback.muted ? (
-            <VolumeX size={17} />
-          ) : (
-            <Volume2 size={17} />
-          )}
-        </button>
-      </div>
+          </>
+        )}
+      />
 
       {/* Flux vertical plein écran */}
       <div
