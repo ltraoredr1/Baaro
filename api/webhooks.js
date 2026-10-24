@@ -1,5 +1,13 @@
 import { createClient } from '@supabase/supabase-js';
-import { constructStripeEvent, mapStripeError, applyCors } from './_shared.js';
+import crypto from 'node:crypto';
+import {
+  constructStripeEvent,
+  mapStripeError,
+  applyCors,
+  rateLimitAsync,
+  logError,
+  logWarn,
+} from './_shared.js';
 
 const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -14,6 +22,9 @@ const PAYPAL_API_BASE =
   process.env.PAYPAL_ENV === 'live'
     ? 'https://api-m.paypal.com'
     : 'https://api-m.sandbox.paypal.com';
+
+const MAX_WEBHOOK_BYTES = 512 * 1024;
+const WEBHOOK_PROCESSING_TIMEOUT_MS = 10 * 60 * 1000;
 
 // Doit rester identique à api/payments.js (même taux, mêmes devises, même arrondi).
 const XOF_PER_EUR = 655.957;
@@ -31,14 +42,97 @@ export const config = {
 
 async function readRawBody(req) {
   const chunks = [];
+  let total = 0;
   for await (const chunk of req) chunks.push(chunk);
-  return Buffer.concat(chunks);
+  for (const chunk of chunks) total += Buffer.byteLength(chunk);
+  if (total > MAX_WEBHOOK_BYTES) {
+    const error = new Error('Payload webhook trop volumineux.');
+    error.status = 413;
+    throw error;
+  }
+  return Buffer.concat(chunks, total);
+}
+
+function hashBody(rawBody) {
+  return crypto.createHash('sha256').update(rawBody || Buffer.alloc(0)).digest('hex');
+}
+
+async function claimWebhookEvent(supabase, { provider, eventId, rawBody }) {
+  const cleanProvider = String(provider || '').trim().toLowerCase();
+  const cleanEventId = String(eventId || '').trim().slice(0, 255);
+  if (!cleanProvider || !cleanEventId) throw new Error('WEBHOOK_EVENT_ID_MANQUANT');
+
+  const now = new Date().toISOString();
+  const row = {
+    provider: cleanProvider,
+    event_id: cleanEventId,
+    payload_hash: hashBody(rawBody),
+    status: 'processing',
+    started_at: now,
+    updated_at: now,
+  };
+
+  const { error } = await supabase.from('payment_webhook_events').insert(row);
+  if (!error) return { claimed: true, duplicate: false };
+  if (error.code !== '23505') throw error;
+
+  const { data: existing, error: readError } = await supabase
+    .from('payment_webhook_events')
+    .select('status, payload_hash, started_at')
+    .eq('provider', cleanProvider)
+    .eq('event_id', cleanEventId)
+    .maybeSingle();
+  if (readError) throw readError;
+  if (existing?.payload_hash && existing.payload_hash !== row.payload_hash) {
+    throw new Error('WEBHOOK_EVENT_PAYLOAD_CHANGED');
+  }
+  if (existing?.status === 'completed') return { claimed: false, duplicate: true };
+
+  const startedAt = new Date(existing?.started_at || 0).getTime();
+  if (existing?.status === 'processing' && Date.now() - startedAt < WEBHOOK_PROCESSING_TIMEOUT_MS) {
+    return { claimed: false, duplicate: true, processing: true };
+  }
+
+  const { error: takeoverError } = await supabase
+    .from('payment_webhook_events')
+    .update({ status: 'processing', started_at: now, updated_at: now })
+    .eq('provider', cleanProvider)
+    .eq('event_id', cleanEventId);
+  if (takeoverError) throw takeoverError;
+  return { claimed: true, duplicate: false, retry: true };
+}
+
+async function completeWebhookEvent(supabase, provider, eventId) {
+  const { error } = await supabase
+    .from('payment_webhook_events')
+    .update({ status: 'completed', completed_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+    .eq('provider', provider)
+    .eq('event_id', eventId);
+  if (error) throw error;
+}
+
+async function failWebhookEvent(supabase, provider, eventId, error) {
+  await supabase.from('payment_webhook_events').update({
+    status: 'failed',
+    error_code: String(error?.code || error?.message || 'WEBHOOK_FAILED').slice(0, 200),
+    updated_at: new Date().toISOString(),
+  }).eq('provider', provider).eq('event_id', eventId);
 }
 
 export default async function handler(req, res) {
   if (applyCors(req, res)) return;
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Methode non autorisee' });
+  }
+
+  const limit = await rateLimitAsync(req, {
+    key: 'payment-webhook',
+    max: 120,
+    windowMs: 60_000,
+  });
+  if (!limit.ok) {
+    Object.entries(limit.headers || {}).forEach(([key, value]) => res.setHeader(key, value));
+    return res.status(limit.status).json(limit.body);
   }
 
   const stripeSig = req.headers['stripe-signature'];
@@ -64,11 +158,11 @@ export default async function handler(req, res) {
     // 4. Gestion du webhook CinetPay (par défaut)
     return await handleCinetPayWebhook(req, res);
   } catch (error) {
-    console.error('Erreur Webhook:', error);
+    if (error?.status) return res.status(error.status).json({ error: error.message });
+    logError('payment-webhook', error);
     return res.status(500).json({
       code: '01',
       message: 'Erreur serveur',
-      error: error.message,
     });
   }
 }
@@ -102,8 +196,6 @@ async function handleInfiniReachWebhook(req, res, authHeader) {
       body = {};
     }
   }
-
-  console.log('Webhook InfiniReach reçu:', body);
 
   const { phone, sender } = body;
   const targetPhone = phone || sender;
@@ -169,7 +261,14 @@ async function handleStripeWebhook(req, res, signature) {
     switch (event.type) {
       case 'checkout.session.completed': {
         const session = event.data.object;
+        const claim = await claimWebhookEvent(supabase, {
+          provider: 'stripe',
+          eventId: event.id,
+          rawBody,
+        });
+        if (claim.duplicate) return res.status(claim.processing ? 409 : 200).json({ received: true, duplicate: true, processing: Boolean(claim.processing) });
         if (session.payment_status !== 'paid' && session.payment_status !== 'no_payment_required') {
+          await completeWebhookEvent(supabase, 'stripe', event.id);
           return res.status(200).json({ received: true, skipped: 'not_paid' });
         }
 
@@ -189,11 +288,19 @@ async function handleStripeWebhook(req, res, signature) {
           currency: (session.currency || 'xof').toUpperCase(),
         });
 
+        await completeWebhookEvent(supabase, 'stripe', event.id);
+
         return res.status(200).json({ received: true, kind, paymentRef });
       }
 
       case 'checkout.session.expired': {
         const session = event.data.object;
+        const claim = await claimWebhookEvent(supabase, {
+          provider: 'stripe',
+          eventId: event.id,
+          rawBody,
+        });
+        if (claim.duplicate) return res.status(claim.processing ? 409 : 200).json({ received: true, duplicate: true, processing: Boolean(claim.processing) });
         const paymentRef = session.client_reference_id || session.metadata?.payment_ref;
         const checkoutIntentId = session.metadata?.checkout_intent_id;
         if (checkoutIntentId) {
@@ -209,16 +316,24 @@ async function handleStripeWebhook(req, res, signature) {
               .eq('payment_status', 'pending');
           }
         }
+        await completeWebhookEvent(supabase, 'stripe', event.id);
         return res.status(200).json({ received: true, expired: true });
       }
 
       case 'payment_intent.payment_failed': {
         const pi = event.data.object;
+        const claim = await claimWebhookEvent(supabase, {
+          provider: 'stripe',
+          eventId: event.id,
+          rawBody,
+        });
+        if (claim.duplicate) return res.status(claim.processing ? 409 : 200).json({ received: true, duplicate: true, processing: Boolean(claim.processing) });
         const checkoutIntentId = pi.metadata?.checkout_intent_id;
         if (checkoutIntentId) {
           await supabase.from('monetization_checkout_intents').update({ status: 'failed', updated_at: new Date().toISOString() }).eq('id', checkoutIntentId).in('status', ['pending','processing']);
         }
-        console.warn('[webhook] Stripe payment_failed', pi.id, pi.last_payment_error?.message);
+        logWarn('payment-webhook', 'Stripe payment failed', { provider: 'stripe', eventId: event.id });
+        await completeWebhookEvent(supabase, 'stripe', event.id);
         return res.status(200).json({ received: true, failed: true });
       }
 
@@ -272,6 +387,14 @@ async function paypalRequest(method, path, { body, headers } = {}) {
 // Vérifie que l'événement vient bien de PayPal (signature validée par PayPal lui-même).
 async function verifyPayPalSignature(req, event) {
   const h = req.headers;
+  const required = [
+    'paypal-auth-algo',
+    'paypal-cert-url',
+    'paypal-transmission-id',
+    'paypal-transmission-sig',
+    'paypal-transmission-time',
+  ];
+  if (required.some((name) => !String(h[name] || '').trim())) return false;
   const { ok, data } = await paypalRequest('POST', '/v1/notifications/verify-webhook-signature', {
     body: {
       auth_algo: h['paypal-auth-algo'],
@@ -334,6 +457,14 @@ async function handlePayPalWebhook(req, res) {
   const supabase = admin();
   const resource = event.resource || {};
 
+  const eventId = String(event.id || req.headers['paypal-transmission-id'] || '').trim();
+  const claim = await claimWebhookEvent(supabase, {
+    provider: 'paypal',
+    eventId,
+    rawBody: raw,
+  });
+  if (claim.duplicate) return res.status(claim.processing ? 409 : 200).json({ received: true, duplicate: true, processing: Boolean(claim.processing) });
+
   switch (event.event_type) {
     // Le client a approuvé le paiement chez PayPal : on capture côté serveur.
     // Le règlement BAARO se fait uniquement sur PAYMENT.CAPTURE.COMPLETED.
@@ -343,15 +474,22 @@ async function handlePayPalWebhook(req, res) {
       const capture = await paypalRequest('POST', `/v2/checkout/orders/${orderId}/capture`, {
         headers: { 'PayPal-Request-Id': `capture_${orderId}` },
       });
-      if (capture.ok) return res.status(200).json({ received: true, captured: true });
+      if (capture.ok) {
+        await completeWebhookEvent(supabase, 'paypal', eventId);
+        return res.status(200).json({ received: true, captured: true });
+      }
       const issue = capture.data?.details?.[0]?.issue || capture.data?.name;
-      if (issue === 'ORDER_ALREADY_CAPTURED') return res.status(200).json({ received: true, captured: true });
+      if (issue === 'ORDER_ALREADY_CAPTURED') {
+        await completeWebhookEvent(supabase, 'paypal', eventId);
+        return res.status(200).json({ received: true, captured: true });
+      }
       if (capture.status === 422) {
         // Refus de capture (ex. instrument refusé) : le client peut souvent réessayer
         // chez PayPal avec un autre moyen de paiement. On ne marque donc rien en échec ici
         // (sinon un paiement réussi ensuite ne pourrait plus être réglé). Seul
         // PAYMENT.CAPTURE.DENIED marque un échec définitif.
         console.warn('[webhook] PayPal capture refused', orderId, issue);
+        await completeWebhookEvent(supabase, 'paypal', eventId);
         return res.status(200).json({ received: true, refused: true, issue });
       }
       console.error('[webhook] PayPal capture error', orderId, capture.status, issue);
@@ -391,16 +529,19 @@ async function handlePayPalWebhook(req, res) {
         cpmTransId: resource.id,
       });
 
+      await completeWebhookEvent(supabase, 'paypal', eventId);
       return res.status(200).json({ received: true, kind, paymentRef });
     }
 
     case 'PAYMENT.CAPTURE.DENIED':
     case 'PAYMENT.CAPTURE.DECLINED': {
       await markPaymentFailed(supabase, resource.custom_id);
+      await completeWebhookEvent(supabase, 'paypal', eventId);
       return res.status(200).json({ received: true, failed: true });
     }
 
     default:
+      await completeWebhookEvent(supabase, 'paypal', eventId);
       return res.status(200).json({ received: true, ignored: event.event_type });
   }
 }
@@ -409,6 +550,10 @@ async function handlePayPalWebhook(req, res) {
 // Gestionnaire CinetPay
 // ---------------------------------------------------------
 async function handleCinetPayWebhook(req, res) {
+  if (!CINETPAY_API_KEY || !CINETPAY_SITE_ID) {
+    return res.status(503).json({ code: 'CINETPAY_NOT_CONFIGURED', message: 'CinetPay non configuré.' });
+  }
+
   let body = req.body;
   if (Buffer.isBuffer(body) || typeof body === 'string') {
     try {
@@ -426,20 +571,9 @@ async function handleCinetPayWebhook(req, res) {
     }
   }
 
-  console.log('Webhook CinetPay recu:', body);
-
   const { cpm_trans_id, cpm_status } = body;
-
-  if (cpm_status && cpm_status !== 'ACCEPTED') {
-    const rawCustom = body.cpm_custom;
-    try {
-      const parsed = typeof rawCustom === 'string' ? JSON.parse(rawCustom) : rawCustom;
-      if (parsed?.checkoutIntentId) {
-        const supabase = admin();
-        await supabase.from('monetization_checkout_intents').update({ status: 'failed', updated_at: new Date().toISOString() }).eq('id', parsed.checkoutIntentId).in('status', ['pending','processing']);
-      }
-    } catch {}
-    return res.status(200).json({ code: '00', message: 'Webhook recu, statut ignore' });
+  if (!String(cpm_trans_id || '').trim()) {
+    return res.status(400).json({ code: 'TRANSACTION_ID_MANQUANT', message: 'Identifiant de transaction manquant.' });
   }
 
   const verifyResponse = await fetch('https://api-check.cinetpay.com/v2/', {
@@ -452,14 +586,49 @@ async function handleCinetPayWebhook(req, res) {
     }),
   });
 
-  const verifyData = await verifyResponse.json();
+  const verifyData = await verifyResponse.json().catch(() => ({}));
+  const verifiedSiteId = String(verifyData.data?.cpm_site_id || '').trim();
+  if (verifiedSiteId && verifiedSiteId !== String(CINETPAY_SITE_ID).trim()) {
+    return res.status(400).json({ code: 'SITE_ID_INVALIDE', message: 'Site CinetPay invalide.' });
+  }
 
   if (verifyData.code !== '00' || verifyData.data?.status !== 'ACCEPTED') {
-    console.error('Verification CinetPay echouee:', verifyData);
+    logWarn('payment-webhook', 'CinetPay verification rejected', {
+      provider: 'cinetpay',
+      transactionId: String(cpm_trans_id).slice(0, 120),
+      providerCode: verifyData.code || 'unknown',
+    });
+    if (cpm_status && cpm_status !== 'ACCEPTED') {
+      const verifiedCustom = verifyData.data?.cpm_custom;
+      try {
+        const parsed = typeof verifiedCustom === 'string' ? JSON.parse(verifiedCustom) : verifiedCustom;
+        if (parsed?.checkoutIntentId) {
+          const failedSupabase = admin();
+          await failedSupabase.from('monetization_checkout_intents').update({
+            status: 'failed',
+            updated_at: new Date().toISOString(),
+          }).eq('id', parsed.checkoutIntentId).in('status', ['pending', 'processing']);
+        }
+      } catch (error) {
+        logWarn('payment-webhook', 'CinetPay failed status could not be recorded', {
+          provider: 'cinetpay',
+          transactionId: String(cpm_trans_id).slice(0, 120),
+          reason: String(error?.message || 'unknown').slice(0, 120),
+        });
+      }
+      return res.status(200).json({ code: '00', message: 'Webhook reçu, statut non accepté' });
+    }
     return res.status(400).json({ code: '01', message: 'Verification echouee' });
   }
 
   const supabase = admin();
+  const claim = await claimWebhookEvent(supabase, {
+    provider: 'cinetpay',
+    eventId: cpm_trans_id,
+    rawBody: Buffer.from(JSON.stringify(verifyData.data || body)),
+  });
+  if (claim.duplicate) return res.status(claim.processing ? 409 : 200).json({ code: '00', message: 'Webhook déjà traité', duplicate: true, processing: Boolean(claim.processing) });
+
   const amountPaid = majorToMinor(parseFloat(verifyData.data.cpm_amount), 'XOF');
   const rawCustom = verifyData.data.cpm_custom;
 
@@ -487,6 +656,8 @@ async function handleCinetPayWebhook(req, res) {
     currency: 'XOF',
     cpmTransId: cpm_trans_id,
   });
+
+  await completeWebhookEvent(supabase, 'cinetpay', cpm_trans_id);
 
   return res.status(200).json({ code: '00', message: 'Webhook traite', kind, paymentRef });
 }
