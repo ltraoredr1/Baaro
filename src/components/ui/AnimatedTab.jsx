@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
+import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion.js';
 
 export default function AnimatedTab({ children, tabKey }) {
   const [displayChildren, setDisplayChildren] = useState(children);
   const [displayKey, setDisplayKey] = useState(tabKey);
   const [phase, setPhase] = useState('in'); // in | out
+  const reducedMotion = usePrefersReducedMotion();
 
   useEffect(() => {
     if (tabKey !== displayKey) {
@@ -23,7 +25,7 @@ export default function AnimatedTab({ children, tabKey }) {
 
   return (
     <div
-      className={`transition-all duration-200 ease-out will-change-transform ${
+      className={`${reducedMotion ? '' : 'transition-all duration-200 ease-out will-change-transform'} ${
         phase === 'out'
           ? 'opacity-0 translate-y-2 scale-[0.99]'
           : 'opacity-100 translate-y-0 scale-100'
