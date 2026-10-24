@@ -51,7 +51,7 @@ const MORE_ITEMS = [
   { id: "settings", label: "Réglages", icon: Settings },
 ];
 
-export function Navigation({ activeTab, setActiveTab }) {
+export function Navigation({ activeTab, setActiveTab, unreadMessages = 0 }) {
   const C = { ...FALLBACK, ...(THEME_COLORS || {}) };
   const { t } = useTranslation();
   const [moreOpen, setMoreOpen] = useState(false);
@@ -106,7 +106,7 @@ export function Navigation({ activeTab, setActiveTab }) {
                 {t(`nav.${item.id}`, item.label)}
               </span>
 
-              {item.badge && (
+              {(item.badge || (item.id === "messages" && unreadMessages > 0)) && (
                 <span
                   className="ml-auto text-[9px] px-2 py-0.5 rounded-full font-mono font-bold shadow-sm"
                   style={{
@@ -114,7 +114,7 @@ export function Navigation({ activeTab, setActiveTab }) {
                     color: C.bg,
                   }}
                 >
-                  {item.badge}
+                  {item.id === "messages" ? (unreadMessages > 99 ? "99+" : unreadMessages) : item.badge}
                 </span>
               )}
             </button>
@@ -167,10 +167,15 @@ export function Navigation({ activeTab, setActiveTab }) {
                   color: isActive ? C.gold : C.muted,
                 }}
               >
-                <div className={`p-1 rounded-xl transition-all ${isActive ? "bg-amber-400/15 shadow-inner" : ""}`}>
+                <div className={`relative p-1 rounded-xl transition-all ${isActive ? "bg-amber-400/15 shadow-inner" : ""}`}>
                   <span className={pulsing ? "baaro-tab-pulse" : "inline-flex"}>
                     <Icon size={19} />
                   </span>
+                  {item.id === "messages" && unreadMessages > 0 && (
+                    <span className="absolute -top-1 -right-1 min-w-4 h-4 px-1 rounded-full text-[8px] font-bold flex items-center justify-center" style={{ background: C.gold, color: C.bg }}>
+                      {unreadMessages > 99 ? "99+" : unreadMessages}
+                    </span>
+                  )}
                 </div>
                 <span className="text-[9px] sm:text-[10px] font-semibold tracking-tight">
                   {t(`nav.${item.id}`, item.label)}

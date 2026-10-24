@@ -61,6 +61,7 @@ export function Header({
   userProfile,
   onOpenProfile,
   onOpenNotifications,
+  notificationCount = 0,
   onOpenSearch,
   isCreateOpen = false,
   onToggleCreate,
@@ -346,10 +347,14 @@ export function Header({
             }}
           >
             <Bell size={14} />
-            <span
-              className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full"
-              style={{ background: C.gold }}
-            />
+            {notificationCount > 0 && (
+              <span
+                className="absolute -top-1 -right-1 min-w-4 h-4 px-1 rounded-full text-[9px] font-bold flex items-center justify-center"
+                style={{ background: C.gold, color: C.bg }}
+              >
+                {notificationCount > 99 ? "99+" : notificationCount}
+              </span>
+            )}
           </button>
 
           {/* Profil */}

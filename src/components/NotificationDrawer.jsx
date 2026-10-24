@@ -93,6 +93,12 @@ function messageForNotification(notification, profile) {
     case "new_debate":
       return `${label} a démarré un débat`;
 
+    case "message":
+      return notification.message || `${label} vous a envoyé un message`;
+
+    case "incoming_call":
+      return notification.message || `${label} vous appelle`;
+
     default:
       return notification.message || "Nouvelle notification";
   }
@@ -356,6 +362,20 @@ export function NotificationDrawer({ user_id, isOpen, onClose }) {
           detail: { roomId: notification.source_id },
         }),
       );
+      onClose?.();
+    }
+
+    if (notification.type === "message") {
+      window.dispatchEvent(new CustomEvent("baaro:open-message", {
+        detail: { conversationId: notification.conversation_id || null },
+      }));
+      onClose?.();
+    }
+
+    if (notification.type === "incoming_call" && notification.source_id) {
+      window.dispatchEvent(new CustomEvent("baaro:open-call", {
+        detail: { callId: notification.source_id },
+      }));
       onClose?.();
     }
   };
