@@ -197,6 +197,7 @@ export default function CommunityTab({ onOpenProfile }) {
   const [inviteCode, setInviteCode] = useState("");
   const [peek, setPeek] = useState(null);
   const [peekLoading, setPeekLoading] = useState(false);
+  const [pendingGroupId, setPendingGroupId] = useState(null);
 
   /* ── Refs ── */
   const messagesEndRef = useRef(null);
@@ -205,7 +206,7 @@ export default function CommunityTab({ onOpenProfile }) {
   /* ── Messages du canal (avec pagination) ── */
   const {
     messages = [], sendMessage, loading: msgLoading,
-    loadOlder, hasMore, loadingOlder,
+    loadOlder, hasMore, loadingOlder, error: msgError,
   } = useChannelMessages(selectedChannel?.id) || {};
 
   /* ── Sync groupes → sélection ── */
@@ -227,7 +228,9 @@ export default function CommunityTab({ onOpenProfile }) {
 
   /* ── Auto-scroll vers le bas ── */
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    // Le chargement des anciens messages ajoute des lignes en tête : il ne
+    // faut pas déplacer l'utilisateur en bas de la conversation.
+    if (!loadingOlder) messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages.length]);
 
   /* ── Pagination infinie (scroll vers le haut) ── */
@@ -250,6 +253,8 @@ export default function CommunityTab({ onOpenProfile }) {
       const params = new URLSearchParams(window.location.search);
       const inv = params.get("invite");
       if (inv) { setInviteCode(inv); setActiveTab("discover"); setMobileView("discover"); }
+      const groupId = params.get("group");
+      if (groupId) setPendingGroupId(groupId);
     } catch {}
   }, []);
 
@@ -283,6 +288,15 @@ export default function CommunityTab({ onOpenProfile }) {
     setShowInvites(false);
     setShowModeration(false);
   };
+
+  useEffect(() => {
+    if (!pendingGroupId || !groups.length) return;
+    const group = groups.find((item) => item.id === pendingGroupId);
+    if (!group) return;
+    handleSelectGroup(group);
+    setActiveTab("groups");
+    setPendingGroupId(null);
+  }, [groups, pendingGroupId]);
 
   const handleSelectChannel = (channel) => { setSelectedChannel(channel); setMobileView("chat"); };
 
@@ -651,6 +665,11 @@ export default function CommunityTab({ onOpenProfile }) {
                       {msgLoading && messages.length === 0 && (
                         <div className="flex justify-center py-8">
                           <Loader2 className="animate-spin" size={20} style={{ color: C.muted }} />
+                        </div>
+                      )}
+                      {msgError && (
+                        <div className="p-3 rounded-xl text-xs text-center" style={{ background: "rgba(239,68,68,0.12)", color: "#f87171" }}>
+                          {msgError}
                         </div>
                       )}
                       {messages.length === 0 && !msgLoading && (
