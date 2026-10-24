@@ -201,6 +201,8 @@ export function StoriesTab({ id, onOpenProfile, onOpenProduct }) {
         userId={id}
         counts={data.counts}
         onOpen={viewer.open}
+        onCreate={id ? toggleComposer : undefined}
+        composerOpen={composer.isOpen}
       />
 
       <FutureModulePanel
