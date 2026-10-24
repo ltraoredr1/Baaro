@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { getFuturePreferences, setFuturePreference } from "../../lib/features.js";
 import { supabase } from "../../supabaseClient.js";
 import { ShieldAlert, Languages, WifiOff, Store, Activity, KeyRound, Download, ChevronRight, Video, Database } from "lucide-react";
 
@@ -19,17 +20,18 @@ export function FutureCorePanel({ user_id }) {
   const [notice, setNotice] = useState("");
   useEffect(() => {
     if (!user_id) return;
-    supabase.from("user_settings").select("enabled_modules").eq("user_id", user_id).maybeSingle()
-      .then(({ data }) => setPrefs(data?.enabled_modules || {}));
+    getFuturePreferences(user_id).then(setPrefs).catch(() => setPrefs({}));
   }, [user_id]);
   async function toggle(moduleKey) {
     if (!user_id || busy) return;
     setBusy(moduleKey);
     const nextPrefs = { ...prefs, [moduleKey]: !(prefs[moduleKey] ?? true) };
-    const { error } = await supabase.from("user_settings").upsert(
-      { user_id, enabled_modules: nextPrefs, updated_at: new Date().toISOString() }, { onConflict: "user_id" }
-    );
-    if (!error) setPrefs(nextPrefs); else setNotice("Impossible d'enregistrer cette préférence pour le moment.");
+    try {
+      await setFuturePreference(user_id, moduleKey, nextPrefs[moduleKey]);
+      setPrefs(nextPrefs);
+    } catch {
+      setNotice("Impossible d'enregistrer cette préférence pour le moment.");
+    }
     setBusy(null);
   }
   async function exportData() {
