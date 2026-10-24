@@ -3,4 +3,5 @@
  * Source de vérité : components/MessagesTab.jsx
  * (chargé via features/messaging/index.js dans tabs.jsx)
  */
-export { MessagesTab, default } from "../../components/MessagesTab.jsx";
+export { MessagesTab } from "../messaging/components/MessagesTab.jsx";
+export { MessagesTab as default } from "../messaging/components/MessagesTab.jsx";
