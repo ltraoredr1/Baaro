@@ -2,10 +2,13 @@
  * src/features/messaging/lib/messageService.js
  * Isolation Supabase queries - pas de logique UI
  *
- * Correctif principal : l'ancienne requête `participants:conversation_participants!inner(...)` combinée à
- * `.eq("conversation_participants.user_id", userId)` ne renvoyait QUE la ligne de l'utilisateur connecté dans
- * `participants`. L'interface ne trouvait donc jamais l'interlocuteur (nom « Membre », otherUserId vide),
- * ce qui empêchait d'écrire ou d'appeler depuis la liste. L'interlocuteur est maintenant résolu à part.
+ * Schéma réel de la base (vérifié) :
+ *  - conversations : id, user1_id, user2_id, created_at   (PAS de updated_at)
+ *  - messages      : id, conversation_id, sender_id, recipient_id, text, type, read_at, ...
+ *  - la table conversation_participants n'existe pas : elle n'est plus utilisée ici.
+ *
+ * Cause de « Impossible de charger les conversations » : l'ancienne requête triait
+ * par conversations.updated_at, une colonne absente, ce qui faisait échouer toute la liste.
  */
 import { supabase } from "../../../supabaseClient.js";
 
@@ -28,40 +31,24 @@ export const messageService = {
    * Conversations de l'utilisateur, avec :
    *  - participants : [{ user_id, profiles }] contenant l'INTERLOCUTEUR (format attendu par MessagesTab)
    *  - last_message : dernier message (objet ou null)
-   *  - unread : true si le dernier message vient de l'autre et est postérieur à ma dernière lecture
+   *  - unread : true si le dernier message vient de l'autre et n'a pas de read_at
    */
   async getConversations(userId) {
     if (!userId) return [];
 
-    // 1) mes participations (donne aussi ma dernière lecture)
-    const { data: mineRows, error: mineErr } = await supabase
-      .from("conversation_participants")
-      .select("conversation_id, last_read_at")
-      .eq("user_id", userId);
-    if (mineErr) console.warn("[messageService] participations:", mineErr.message);
-    const mine = mineRows || [];
-    const lastReadByConv = new Map(mine.map((r) => [r.conversation_id, r.last_read_at]));
-
-    // 2) conversations : via user1/user2 (créées par openConversation) OU via une participation
-    let filter = `user1_id.eq.${userId},user2_id.eq.${userId}`;
-    const ids = mine.map((r) => r.conversation_id).slice(0, CONVERSATION_LIMIT);
-    if (ids.length) filter += `,id.in.(${ids.join(",")})`;
-
-    // Ne pas utiliser ici une relation imbriquée nommée `conversations_last_message_id_fkey` :
-    // elle n’existe pas dans toutes les installations historiques de BAARO et vidait toute la liste.
+    // 1) conversations où je suis user1 ou user2 (tri sur created_at, qui existe)
     const { data: convs, error } = await supabase
       .from("conversations")
       .select("*")
-      .or(filter)
-      .order("updated_at", { ascending: false })
+      .or(`user1_id.eq.${userId},user2_id.eq.${userId}`)
+      .order("created_at", { ascending: false })
       .limit(CONVERSATION_LIMIT);
     if (error) throw error;
 
     const list = convs || [];
     if (!list.length) return [];
 
-    // Résout le dernier message séparément : compatible avec les anciennes bases
-    // où la FK last_message_id n’est pas déclarée ou porte un autre nom.
+    // 2) derniers messages, résolus séparément
     const lastMessageByConversation = new Map();
     const { data: recentMessages, error: recentErr } = await supabase
       .from("messages")
@@ -76,20 +63,10 @@ export const messageService = {
       }
     }
 
-    // 3) tous les participants de ces conversations (repli si user1/user2 sont vides)
-    const { data: partRows, error: partErr } = await supabase
-      .from("conversation_participants")
-      .select("conversation_id, user_id")
-      .in("conversation_id", list.map((c) => c.id));
-    if (partErr) console.warn("[messageService] participants:", partErr.message);
-    const parts = partRows || [];
-
     const otherIdOf = (c) =>
-      [c.user1_id, c.user2_id].filter(Boolean).find((u) => u !== userId) ||
-      parts.find((p) => p.conversation_id === c.id && p.user_id !== userId)?.user_id ||
-      null;
+      [c.user1_id, c.user2_id].filter(Boolean).find((u) => u !== userId) || null;
 
-    // 4) profils des interlocuteurs en une seule requête
+    // 3) profils des interlocuteurs en une seule requête
     const otherIds = [...new Set(list.map(otherIdOf).filter(Boolean))];
     const profileById = new Map();
     if (otherIds.length) {
@@ -101,16 +78,10 @@ export const messageService = {
       (profs || []).forEach((p) => profileById.set(p.id, p));
     }
 
-    return list.map((c) => {
+    const result = list.map((c) => {
       const otherId = otherIdOf(c);
       const lm = lastMessageByConversation.get(c.id) || one(c.last_message);
-      const hasRow = lastReadByConv.has(c.id);
-      const lastRead = lastReadByConv.get(c.id);
-      const unread =
-        !!lm &&
-        lm.sender_id !== userId &&
-        hasRow &&
-        (!lastRead || new Date(lm.created_at) > new Date(lastRead));
+      const unread = !!lm && lm.sender_id !== userId && !lm.read_at && !lm.deleted_at;
       return {
         ...c,
         last_message: lm,
@@ -118,28 +89,22 @@ export const messageService = {
         unread,
       };
     });
+
+    // Tri : conversation avec le message le plus récent en premier
+    const stamp = (c) => new Date(c.last_message?.created_at || c.created_at || 0).getTime();
+    return result.sort((a, b) => stamp(b) - stamp(a));
   },
 
-  /** Marque la conversation comme lue (met à jour ma ligne, ou la crée si elle n'existe pas) */
+  /** Marque comme lus les messages reçus de la conversation (colonne messages.read_at) */
   async markAsRead(conversationId, userId) {
     if (!conversationId || !userId) return;
-    const now = new Date().toISOString();
-    const { data, error } = await supabase
-      .from("conversation_participants")
-      .update({ last_read_at: now })
+    const { error } = await supabase
+      .from("messages")
+      .update({ read_at: new Date().toISOString() })
       .eq("conversation_id", conversationId)
-      .eq("user_id", userId)
-      .select("user_id");
-    if (error) {
-      console.warn("[messageService] markAsRead:", error.message);
-      return;
-    }
-    if (!data || data.length === 0) {
-      const { error: insErr } = await supabase
-        .from("conversation_participants")
-        .insert({ conversation_id: conversationId, user_id: userId, last_read_at: now });
-      if (insErr) console.warn("[messageService] markAsRead (création):", insErr.message);
-    }
+      .eq("recipient_id", userId)
+      .is("read_at", null);
+    if (error) console.warn("[messageService] markAsRead:", error.message);
   },
 
   /** Déclenche la notification serveur après insertion réussie du message. */
