@@ -26,6 +26,7 @@ import { COLORS } from "../../theme.js";
 import { useToast } from "../../components/ToastContext.jsx";
 import { API_BASE } from "../../config.js";
 import { supabase } from "../../supabaseClient.js";
+import { useSettings } from "../../hooks/useSettings.js";
 
 const PRESETS_NORMAL = [
   { icon: Coins, text: "Comment maximiser mes points aujourd'hui ?" },
@@ -294,6 +295,7 @@ export function AiAssistantTab({
   prefill,
 }) {
   const { showToast, showPointsReward } = useToast();
+  const { settings } = useSettings();
 
   const displayName = useMemo(
     () => resolveAssistantName(userProfile),
@@ -336,7 +338,11 @@ export function AiAssistantTab({
   const speakingIdRef = useRef(null);
   const mountedRef = useRef(false);
 
-  const presets = isGriot ? PRESETS_GRIOT : PRESETS_NORMAL;
+  const presets = settings.ai_suggest
+    ? isGriot
+      ? PRESETS_GRIOT
+      : PRESETS_NORMAL
+    : [];
 
   /* ----- Voix ----- */
 
@@ -825,7 +831,9 @@ export function AiAssistantTab({
             mode: isGriot ? "griot" : "chat",
             context: {
               display_name: displayName,
-              language: "fr",
+              language: settings.lang || "fr",
+              ai_region: settings.ai_region || "auto",
+              privacy_ai: settings.privacy_ai !== false,
               app: "BAARO",
               griot_voice: isGriot ? griotVoice : undefined,
             },
@@ -921,6 +929,9 @@ export function AiAssistantTab({
       speakText,
       stopSpeech,
       stopListening,
+      settings.lang,
+      settings.ai_region,
+      settings.privacy_ai,
     ]
   );
 
