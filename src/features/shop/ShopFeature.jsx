@@ -165,8 +165,8 @@ export function ShopProductManager({ shopId, shopCurrency, user_id }) {
 
       <ConfirmDialog open={Boolean(pendingDeleteId)} title="Supprimer ce produit ?" message="Cette action est définitive." confirmLabel="Supprimer" cancelLabel="Annuler" onConfirm={confirmDelete} onCancel={() => setPendingDeleteId(null)} />
       {showForm && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-end sm:items-center justify-center z-50 p-0 sm:p-4" onClick={closeForm}>
-          <div className="w-full sm:max-w-lg max-h-[90vh] overflow-y-auto rounded-t-3xl sm:rounded-2xl border shadow-2xl p-4 sm:p-6" style={{ background: COLORS.surface, borderColor: COLORS.borderGold }} onClick={(e) => e.stopPropagation()}>
+        <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center overflow-y-auto overscroll-contain bg-black/70 p-3 sm:p-4" role="dialog" aria-modal="true" aria-label={editingProduct ? "Modifier le produit" : "Ajouter un produit"} onClick={closeForm}>
+          <div className="my-auto w-full sm:max-w-lg max-h-[calc(100dvh-1.5rem)] sm:max-h-[90vh] overflow-y-auto overscroll-contain rounded-2xl border shadow-2xl p-4 sm:p-6" style={{ background: COLORS.surface, borderColor: COLORS.border }} onClick={(e) => e.stopPropagation()}>
             <ProductForm shopId={shopId} shopCurrency={shopCurrency} user_id={user_id} product={editingProduct} onSaved={handleSaved} onCancel={closeForm} />
           </div>
         </div>
