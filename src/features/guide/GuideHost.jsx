@@ -159,7 +159,7 @@ export default function GuideHost({
         <button
           type="button"
           onClick={() => open()}
-          className="fixed z-[1000] left-3 bottom-[88px] md:bottom-6 w-10 h-10 rounded-full flex items-center justify-center shadow-xl border active:scale-95 transition-transform"
+          className="fixed z-[1000] left-[5.5rem] top-[calc(env(safe-area-inset-top)+1.5rem)] w-10 h-10 rounded-full flex items-center justify-center shadow-xl border active:scale-95 transition-transform"
           style={{
             background: COLORS.surface,
             borderColor: COLORS.borderGold,
