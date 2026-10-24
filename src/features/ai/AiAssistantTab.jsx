@@ -23,7 +23,7 @@ import { COLORS } from "../../theme.js";
 import { useToast } from "../../components/ToastContext.jsx";
 import { API_BASE } from "../../config.js";
 import { supabase } from "../../supabaseClient.js";
-import { GRIOT_VOICES } from "./griotPrompt.js";
+import { GRIOT_VOICES } from "../../lib/griotPrompt.js";
 
 const PRESETS_NORMAL = [
   { icon: Coins, text: "Comment maximiser mes points aujourd'hui ?" },
