@@ -13,7 +13,7 @@ import {
   rejectNearbyConnection,
   checkNearbyPermissions,
   requestNearbyPermissions,
-} from "../lib/nearby.js";
+} from "../nearby.js";
 
 function getErrorMessage(error) {
   if (error instanceof Error) return error.message;
