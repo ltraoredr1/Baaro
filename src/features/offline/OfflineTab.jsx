@@ -11,6 +11,7 @@ import {
 import { COLORS } from "../../theme.js";
 import { useToast } from "../../components/ToastContext.jsx";
 import { useNearbyChat } from "../../hooks/useNearbyChat.js";
+import { useNotificationSound } from "../../hooks/useNotificationSound.js";
 import { getCachedUsers } from "../../data/users.js";
 import {
   flushOfflineActions,
@@ -20,6 +21,7 @@ import { flushOfflineEvents } from "../../lib/feedEvents.js";
 
 export function OfflineTab() {
   const { showToast } = useToast();
+  const { playNotification } = useNotificationSound();
   const [displayName, setDisplayName] = useState("Moi");
   const [p2pInput, setP2pInput] = useState("");
   const [queueSize, setQueueSize] = useState(0);
@@ -37,6 +39,12 @@ export function OfflineTab() {
     stop,
     sendMessage,
   } = useNearbyChat(displayName);
+
+  useEffect(() => {
+    if (!messages.length) return;
+    const last = messages[messages.length - 1];
+    if (!last?.isMe) playNotification("baaro_pulse");
+  }, [messages.length, playNotification]);
 
   useEffect(() => {
     if (error) showToast(error, "error");
