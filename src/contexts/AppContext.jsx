@@ -5,7 +5,7 @@ import {
   useEffect,
   useState,
 } from "react";
-import { supabase } from "../supabaseClient.js";
+import { supabase } from "../services/supabase.js";
 import { API_BASE } from "../config.js";
 import { getDeviceId } from "../device.js";
 
