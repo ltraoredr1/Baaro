@@ -7,8 +7,35 @@ import { X, Upload, Loader2, Plus, Trash2, Package } from "lucide-react";
 
 const CATEGORIES = ["Électronique", "Mode & Vêtements", "Maison & Décoration", "Alimentation", "Beauté & Santé", "Sports & Loisirs", "Autre"];
 
-export default function ProductForm({ shopId, shopCurrency = "XOF", user_id, product = null, onSaved, onCancel }) {
+export const CURRENCIES = [
+  { code: "XOF", label: "Franc CFA (UEMOA) — XOF" },
+  { code: "XAF", label: "Franc CFA (CEMAC) — XAF" },
+  { code: "GNF", label: "Franc guinéen — GNF" },
+  { code: "MAD", label: "Dirham marocain — MAD" },
+  { code: "DZD", label: "Dinar algérien — DZD" },
+  { code: "TND", label: "Dinar tunisien — TND" },
+  { code: "NGN", label: "Naira — NGN" },
+  { code: "GHS", label: "Cedi — GHS" },
+  { code: "EUR", label: "Euro — EUR" },
+  { code: "USD", label: "Dollar US — USD" },
+  { code: "GBP", label: "Livre sterling — GBP" },
+  { code: "CAD", label: "Dollar canadien — CAD" },
+  { code: "CHF", label: "Franc suisse — CHF" },
+  { code: "EGP", label: "Livre égyptienne — EGP" },
+  { code: "KES", label: "Shilling kényan — KES" },
+  { code: "ZAR", label: "Rand — ZAR" },
+  { code: "CDF", label: "Franc congolais — CDF" },
+  { code: "MRU", label: "Ouguiya — MRU" },
+  { code: "RWF", label: "Franc rwandais — RWF" },
+];
+
+// Devises sans centimes
+const ZERO_DECIMAL = ["XOF", "XAF", "GNF", "RWF", "CDF"];
+
+export default function ProductForm({ shopId, shopCurrency, user_id, product = null, onSaved, onCancel }) {
   const { showToast } = useToast();
+  // Priorité : devise du produit > devise de la boutique (choisie à l'inscription) > XOF
+  const [currency, setCurrency] = useState(product?.currency || shopCurrency || "XOF");
   const [name, setName] = useState(product?.name || "");
   const [description, setDescription] = useState(product?.description || "");
   const [price, setPrice] = useState(product?.price?.toString() || "");
@@ -75,7 +102,7 @@ export default function ProductForm({ shopId, shopCurrency = "XOF", user_id, pro
     try {
       const payload = {
         shop_id: shopId, name: name.trim(), description: description.trim() || null, price: p,
-        compare_at_price: cap, currency: shopCurrency, type, category: category || null, tags,
+        compare_at_price: cap, currency, type, category: category || null, tags,
         stock: stk, low_stock_threshold: lst, sku: sku.trim() || null, images,
         image_url: images[0] || null, is_available: stk === null || stk > 0,
       };
@@ -126,14 +153,21 @@ export default function ProductForm({ shopId, shopCurrency = "XOF", user_id, pro
       <input type="text" placeholder="Nom du produit / service *" value={name} onChange={(e) => setName(e.target.value)} className="rounded-xl border px-3 py-2.5 text-sm font-bold" style={inputStyle} required />
       <textarea placeholder="Description détaillée (optionnel)" value={description} onChange={(e) => setDescription(e.target.value)} rows={3} className="rounded-xl border px-3 py-2 text-sm resize-none" style={inputStyle} />
 
+      <div>
+        <label className="text-[10px] font-bold uppercase mb-1 block" style={{ color: COLORS.muted }}>Devise</label>
+        <select value={currency} onChange={(e) => setCurrency(e.target.value)} className="w-full rounded-xl border px-3 py-2.5 text-sm" style={inputStyle}>
+          {CURRENCIES.map((c) => <option key={c.code} value={c.code}>{c.label}</option>)}
+        </select>
+      </div>
+
       <div className="grid grid-cols-2 gap-2">
         <div>
-          <label className="text-[10px] font-bold uppercase mb-1 block" style={{ color: COLORS.muted }}>Prix *</label>
-          <input type="number" step="0.01" min="0" placeholder="0.00" value={price} onChange={(e) => setPrice(e.target.value)} className="w-full rounded-xl border px-3 py-2.5 text-sm" style={inputStyle} required />
+          <label className="text-[10px] font-bold uppercase mb-1 block" style={{ color: COLORS.muted }}>Prix ({currency}) *</label>
+          <input type="number" step={ZERO_DECIMAL.includes(currency) ? "1" : "0.01"} min="0" placeholder={ZERO_DECIMAL.includes(currency) ? "0" : "0.00"} value={price} onChange={(e) => setPrice(e.target.value)} className="w-full rounded-xl border px-3 py-2.5 text-sm" style={inputStyle} required />
         </div>
         <div>
-          <label className="text-[10px] font-bold uppercase mb-1 block" style={{ color: COLORS.muted }}>Ancien prix (promo)</label>
-          <input type="number" step="0.01" min="0" placeholder="Optionnel" value={compareAtPrice} onChange={(e) => setCompareAtPrice(e.target.value)} className="w-full rounded-xl border px-3 py-2.5 text-sm" style={inputStyle} />
+          <label className="text-[10px] font-bold uppercase mb-1 block" style={{ color: COLORS.muted }}>Ancien prix ({currency})</label>
+          <input type="number" step={ZERO_DECIMAL.includes(currency) ? "1" : "0.01"} min="0" placeholder="Optionnel" value={compareAtPrice} onChange={(e) => setCompareAtPrice(e.target.value)} className="w-full rounded-xl border px-3 py-2.5 text-sm" style={inputStyle} />
         </div>
       </div>
       {compareAtPrice && Number(compareAtPrice) > Number(price || 0) && (
