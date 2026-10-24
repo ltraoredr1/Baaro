@@ -3,6 +3,7 @@ import {
   enablePushNotifications,
   getPermissionStateAsync,
 } from "../lib/pushNotifications.js";
+import { getSetting } from "../lib/appSettings.js";
 
 /**
  * BAARO — Activation des notifications push et gestion des sons.
@@ -78,6 +79,8 @@ export function usePushNotifications(id) {
     const timer = setTimeout(async () => {
       try {
         if (cancelled || wasPrompted()) return;
+
+        if (getSetting("notif_push") === false) return;
 
         const permission = await getPermissionStateAsync();
 
