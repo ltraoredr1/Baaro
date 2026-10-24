@@ -124,7 +124,7 @@ function VoicePlayer({ src, duration, isMe }) {
       <div className="flex-1">
         <div
           onClick={seek}
-          className={`h-1.5 rounded-full cursor-pointer ${isMe ? "bg-white/25" : "bg-black/15 dark:bg-white/15"}`}
+          className={`h-1.5 rounded-full cursor-pointer ${isMe ? "bg-white/25" : "bg-white/15"}`}
         >
           <div
             className={`h-full rounded-full ${isMe ? "bg-white" : "bg-[#D9AE52]"}`}
@@ -213,13 +213,13 @@ export function MessageBubble({
           className={`rounded-2xl px-3 py-2 text-sm ${
             isMe
               ? "bg-blue-600 text-white rounded-br-sm"
-              : "bg-zinc-100 dark:bg-zinc-800 rounded-bl-sm"
+              : "bg-[#1A2438] text-[#F5F3EF] rounded-bl-sm"
           } ${isExpired || isDeleted ? "opacity-50 italic" : ""}`}
         >
           {message.reply_to_id && !isDeleted && (
             <div
               className={`mb-1.5 pl-2 pr-2 py-1 border-l-2 rounded-sm text-xs not-italic ${
-                isMe ? "border-white/60 bg-white/10" : "border-[#D9AE52] bg-black/5 dark:bg-white/5"
+                isMe ? "border-white/60 bg-white/10" : "border-[#D9AE52] bg-white/5"
               }`}
             >
               {reply ? (
