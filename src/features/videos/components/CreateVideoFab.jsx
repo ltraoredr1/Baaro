@@ -34,8 +34,9 @@ function save(value) {
   }
 }
 
-// Bouton flottant « Créer une vidéo » : déplaçable au doigt, se colle au bord le plus proche
-// et mémorise sa position.
+// Bouton flottant « Créer une vidéo » : un appui ouvre le formulaire de création
+// (l'utilisateur choisit ensuite : caméra, galerie, etc.).
+// Déplaçable au doigt, se colle au bord le plus proche, position mémorisée.
 export default function CreateVideoFab({ onClick, hidden = false }) {
   const btnRef = useRef(null);
   const dragRef = useRef({
@@ -65,7 +66,6 @@ export default function CreateVideoFab({ onClick, hidden = false }) {
   const clampY = (y, b) =>
     Math.min(b.h - SIZE - BOTTOM_LIMIT, Math.max(TOP_LIMIT, y));
 
-  // Position initiale, et recalcul quand l'écran change de taille.
   useEffect(() => {
     if (hidden) return undefined;
 
@@ -142,13 +142,9 @@ export default function CreateVideoFab({ onClick, hidden = false }) {
       // déjà relâché
     }
 
-    if (!drag.moved) {
-      // Simple appui : ouvrir la création.
-      onClick?.();
-      return;
-    }
+    // Simple appui : géré par onClick (ouvre le formulaire de création).
+    if (!drag.moved) return;
 
-    // Fin du déplacement : on se colle au bord le plus proche et on mémorise.
     setDragging(false);
 
     const b = getBounds();
@@ -162,6 +158,16 @@ export default function CreateVideoFab({ onClick, hidden = false }) {
     });
 
     save({ side, yRatio: y / b.h });
+  };
+
+  const handleClick = (e) => {
+    e.stopPropagation();
+    // Après un glissement, on n'ouvre rien.
+    if (dragRef.current.moved) {
+      dragRef.current.moved = false;
+      return;
+    }
+    onClick?.();
   };
 
   const handleKeyDown = (e) => {
@@ -184,7 +190,7 @@ export default function CreateVideoFab({ onClick, hidden = false }) {
       onPointerUp={handlePointerEnd}
       onPointerCancel={handlePointerEnd}
       onKeyDown={handleKeyDown}
-      onClick={(e) => e.stopPropagation()}
+      onClick={handleClick}
       className="absolute left-0 top-0 z-[65] select-none outline-none"
       style={{
         width: SIZE,
@@ -199,7 +205,6 @@ export default function CreateVideoFab({ onClick, hidden = false }) {
           : "transform 280ms cubic-bezier(0.2, 0.9, 0.3, 1.2)",
       }}
     >
-      {/* Halo qui pulse pour attirer l'œil (coupé pendant le glisser) */}
       {!dragging && (
         <span
           className="absolute inset-0 rounded-full animate-ping opacity-40"
