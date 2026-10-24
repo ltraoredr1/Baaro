@@ -5,7 +5,7 @@ import { generateAIImage } from "../../../lib/geminiAI.js";
 import {
   looksLikeVideo,
   uploadLargeVideo,
-} from "../../../lib/largeVideoUpload.js";
+} from "../../../services/mediaService.js";
 import { supabase } from "../../../supabaseClient.js";
 import { MAX_PHOTOS } from "../constants.js";
 import { formatTime } from "../utils/format.js";
