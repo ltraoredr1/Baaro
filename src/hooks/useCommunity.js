@@ -408,6 +408,7 @@ export function useChannelMessages(channelId) {
   const [loading, setLoading] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [hasMore, setHasMore] = useState(false);
+  const [error, setError] = useState(null);
 
   const ensureProfiles = useCallback(async (list) => {
     const missing = [
@@ -442,6 +443,7 @@ export function useChannelMessages(channelId) {
   useEffect(() => {
     setRows([]);
     setHasMore(false);
+    setError(null);
 
     if (!channelId) {
       setLoading(false);
@@ -496,6 +498,8 @@ export function useChannelMessages(channelId) {
         setHasMore(list.length === PAGE_SIZE);
         setRows((prev) => mergeMessages(prev, list));
         ensureProfiles(list);
+      } else {
+        setError(error.message || "Impossible de charger les messages.");
       }
       setLoading(false);
     })();
@@ -523,6 +527,8 @@ export function useChannelMessages(channelId) {
       setHasMore(list.length === PAGE_SIZE);
       setRows((prev) => mergeMessages(prev, list));
       ensureProfiles(list);
+    } else {
+      setError(error.message || "Impossible de charger les anciens messages.");
     }
     setLoadingOlder(false);
   }, [channelId, hasMore, loadingOlder, rows, ensureProfiles]);
@@ -587,6 +593,7 @@ export function useChannelMessages(channelId) {
     messages,
     loading,
     loadingOlder,
+    error,
     hasMore,
     loadOlder,
     sendMessage,
