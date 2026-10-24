@@ -70,7 +70,19 @@ export async function applyNativeSettings(s) {
   biometricEnabled = !!s?.biometric;
   const block = !!s?.block_screenshots;
 
-  // Natif : FLAG_SECURE. Web / PWA : flou à la perte de focus.
+  // Le blocage des captures est une fonction native. Le Web/PWA ne doit pas
+  // flouter tout l'écran par défaut lorsque la fenêtre perd brièvement le focus.
+  if (!Capacitor.isNativePlatform()) {
+    if (lastBlock !== false) {
+      lastBlock = false;
+      try { await disableSecureScreen(); } catch (e) {
+        console.warn("[web] secure-screen", e);
+      }
+    }
+    return;
+  }
+
+  // Android/iOS : FLAG_SECURE.
   if (block !== lastBlock) {
     lastBlock = block;
     try {
@@ -81,9 +93,6 @@ export async function applyNativeSettings(s) {
       console.warn("[native] secure-screen", e);
     }
   }
-
-  // La biométrie n'existe que sur l'application native.
-  if (!Capacitor.isNativePlatform()) return;
 
   await ensureBiometricListener();
 

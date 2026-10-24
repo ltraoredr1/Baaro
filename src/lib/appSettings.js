@@ -32,7 +32,9 @@ export const DEFAULT_SETTINGS = {
   prefer_debates: true,
   prefer_local: true,
   private_profile: false,
-  block_screenshots: true,
+  // La protection anti-capture doit être activée volontairement par l'utilisateur.
+  // Elle ne doit jamais flouter l'écran par défaut, surtout sur Web/PWA.
+  block_screenshots: false,
   biometric: false,
   large_text: false,
   reduce_motion: false,
