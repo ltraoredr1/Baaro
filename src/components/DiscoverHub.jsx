@@ -3,6 +3,7 @@ import { Compass, Play, Pause, ExternalLink, Users } from "lucide-react";
 import { supabase } from "../supabaseClient.js";
 import { COLORS } from "../theme.js";
 import FollowButton from "../features/friends/FollowButton.jsx";
+import { getProfilesByIds } from "../lib/queries.js";
 
 export function DiscoverHub({ user_id, onOpenPost }) {
   const [videos, setVideos] = useState([]);
@@ -43,10 +44,7 @@ export function DiscoverHub({ user_id, onOpenPost }) {
       ];
 
       if (authorIds.length > 0) {
-        const { data: profiles, error: profilesError } = await supabase
-          .from("profiles")
-          .select("id, display_name, handle, avatar_url")
-          .in("id", authorIds);
+        const { data: profiles, error: profilesError } = await getProfilesByIds(authorIds);
 
         if (profilesError) {
           console.warn("DiscoverHub - profils vidéo :", profilesError.message);

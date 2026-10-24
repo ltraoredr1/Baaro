@@ -28,7 +28,7 @@ import {
 import { FriendsTab } from "../features/friends/index.js";
 import ContactsTab from "../features/contacts/ContactsTab.jsx";
 import { COLORS as THEME_COLORS } from "../theme.js";
-import ChannelItem from "./community/ChannelItem.jsx";
+import ChannelItem from "./communityChannelItem.jsx";
 import GroupModerationPanel from "./community/GroupModerationPanel.jsx";
 import VoiceChannelUI from "./community/VoiceChannelUI.jsx";
 
