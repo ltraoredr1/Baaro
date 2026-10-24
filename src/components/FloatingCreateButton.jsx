@@ -4,9 +4,9 @@ import { COLORS } from "@/theme.js";
 
 const STORAGE_KEY = "baaro:fab-pos";
 const SIZE = 56;
-const MARGIN = 12;
+const MARGIN = 16;
 const TOP_LIMIT = 90; // sous l'en-tête
-const BOTTOM_LIMIT = 150; // au-dessus de la barre d'onglets
+const BOTTOM_LIMIT = 178; // espace net au-dessus de la barre d'onglets et du contenu
 const DRAG_THRESHOLD = 6;
 
 function readSavedPos() {
@@ -98,12 +98,13 @@ export function FloatingCreateButton({ onCreatePost }) {
 
   return (
     <div
-      className="fixed z-40"
+      className="fixed z-[60]"
       style={{
         left,
         top,
         width: SIZE,
         height: SIZE,
+        marginBottom: "env(safe-area-inset-bottom, 0px)",
         transition: drag ? "none" : "left 0.28s cubic-bezier(.3,1.4,.5,1), top 0.2s ease",
       }}
     >
@@ -113,7 +114,7 @@ export function FloatingCreateButton({ onCreatePost }) {
           70%  { box-shadow: 0 6px 18px rgba(0,0,0,.45), 0 0 0 14px rgba(212,175,55,0); }
           100% { box-shadow: 0 6px 18px rgba(0,0,0,.45), 0 0 0 0 rgba(212,175,55,0); }
         }
-        .baaro-fab-idle { animation: baaro-fab-ring 3.6s ease-out infinite; }
+        .baaro-fab-idle { animation: none; }
         @media (prefers-reduced-motion: reduce) {
           .baaro-fab-idle { animation: none; }
         }
@@ -134,8 +135,8 @@ export function FloatingCreateButton({ onCreatePost }) {
           touchAction: "none",
           background: `linear-gradient(135deg, ${COLORS.gold}, ${COLORS.teal})`,
           color: "#000",
-          boxShadow: "0 6px 18px rgba(0,0,0,.45)",
-          transform: drag ? "scale(1.12)" : "none",
+          boxShadow: "0 8px 24px rgba(0,0,0,.42)",
+          transform: drag ? "scale(1.06)" : "none",
           transition: "transform 0.2s ease",
           cursor: drag ? "grabbing" : "grab",
         }}
