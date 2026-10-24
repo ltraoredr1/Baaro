@@ -11,6 +11,8 @@ export default function FeedHeader({
   onOpenStudio,
   mode,
   setMode,
+  showModeSwitcher = true,
+  extraActions = null,
 }) {
   const [logoFailed, setLogoFailed] = useState(false);
 
@@ -61,6 +63,8 @@ export default function FeedHeader({
             </button>
           )}
 
+          {extraActions}
+
           <button
             onClick={onToggleMute}
             className="h-9 w-9 rounded-2xl bg-white/10 border border-white/15 backdrop-blur-xl flex items-center justify-center transition-all hover:scale-105 shadow-lg text-white"
@@ -82,7 +86,7 @@ export default function FeedHeader({
       </div>
 
       {/* LIGNE INFÉRIEURE : SÉLECTEUR DE FILTRE (Pour toi / Tendances) */}
-      <div className="mt-2.5 flex justify-center pointer-events-auto">
+      {showModeSwitcher && <div className="mt-2.5 flex justify-center pointer-events-auto">
         <div className="p-1 rounded-full bg-black/60 backdrop-blur-2xl border border-white/15 flex gap-1 shadow-2xl">
           <button
             onClick={() => setMode("forYou")}
@@ -105,7 +109,7 @@ export default function FeedHeader({
             Tendances
           </button>
         </div>
-      </div>
+      </div>}
     </header>
   );
 }
