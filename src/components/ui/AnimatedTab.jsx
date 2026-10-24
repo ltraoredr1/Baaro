@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion.js';
 
+// IMPORTANT : pas de transform / will-change / filter ici.
+// Ils cassent les éléments "fixed" (bouton flottant, modales) placés à l'intérieur.
 export default function AnimatedTab({ children, tabKey }) {
   const [displayChildren, setDisplayChildren] = useState(children);
   const [displayKey, setDisplayKey] = useState(tabKey);
@@ -13,7 +15,6 @@ export default function AnimatedTab({ children, tabKey }) {
       const t = setTimeout(() => {
         setDisplayKey(tabKey);
         setDisplayChildren(children);
-        // Force reflow pour que le 'in' se rejoue
         requestAnimationFrame(() => setPhase('in'));
       }, 150);
       return () => clearTimeout(t);
@@ -25,10 +26,8 @@ export default function AnimatedTab({ children, tabKey }) {
 
   return (
     <div
-      className={`${reducedMotion ? '' : 'transition-all duration-200 ease-out will-change-transform'} ${
-        phase === 'out'
-          ? 'opacity-0 translate-y-2 scale-[0.99]'
-          : 'opacity-100 translate-y-0 scale-100'
+      className={`${reducedMotion ? '' : 'transition-opacity duration-200 ease-out'} ${
+        phase === 'out' ? 'opacity-0' : 'opacity-100'
       } h-full w-full`}
     >
       {displayChildren}
