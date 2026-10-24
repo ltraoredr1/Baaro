@@ -5,7 +5,7 @@
  * existe donc. L'ancien commentaire visait "chatcalls.js" (minuscule), qui
  * échoue sur Linux/Vercel (système de fichiers sensible à la casse).
  */
-export { MessagesTab } from "./components/MessagesTab.jsx";
+export { MessagesTab } from "../friends/MessagesTab.jsx";
 export { ChatInput } from "./components/ChatInput.jsx";
 export { MessageBubble } from "./components/MessageBubble.jsx";
 export { ChatCallModal } from "./components/ChatCallModal.jsx";
