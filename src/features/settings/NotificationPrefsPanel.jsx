@@ -48,6 +48,10 @@ export function NotificationPrefsPanel() {
         const loaded = { ...DEFAULT_NOTIFICATION_PREFERENCES, ...res.data };
         prefsRef.current = loaded;
         setPrefs(loaded);
+        if (res.local && res.error) {
+          setMsgWarn(true);
+          setMsg(res.error || tx.error);
+        }
       } else if (!res.ok) {
         setMsgWarn(true);
         setMsg(res.error || tx.error);

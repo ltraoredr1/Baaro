@@ -63,6 +63,7 @@ import { NotificationPrefsPanel } from "./NotificationPrefsPanel.jsx";
 import NotificationSoundSettings from "./NotificationSoundSettings.jsx";
 import BlockedUsersPanel from "./BlockedUsersPanel.jsx";
 import { PushSettings } from "../../components/PushSettings.jsx";
+import { saveNotificationPreferences } from "../../lib/notificationPreferences.js";
 import ProfilePhotosEditor from "../../components/ProfilePhotosEditor.jsx";
 import ProfileContactsLinks from "../../components/ProfileContactsLinks.jsx";
 import {
@@ -1425,7 +1426,14 @@ export default function SettingsTab({
           onToggle={() => toggleSection("notifications")}
         >
           <CollapsibleSection id="notif_push" icon={Smartphone} title={t("push_title")} accent={COLORS.teal} open={openSections.notif_push} onToggle={() => toggleSection("notif_push")}>
-            <PushSettings onChange={(v: boolean) => void save({ notif_push: v })} />
+            <PushSettings
+              onChange={(v: boolean) => {
+                void Promise.all([
+                  save({ notif_push: v }),
+                  saveNotificationPreferences({ push_enabled: v }),
+                ]);
+              }}
+            />
           </CollapsibleSection>
           <CollapsibleSection id="notif_sound" icon={Volume2} title={t("sound_settings")} desc={t("sound_settings_desc")} accent={COLORS.gold} open={openSections.notif_sound} onToggle={() => toggleSection("notif_sound")}>
             <NotificationSoundSettings C={COLORS} />
