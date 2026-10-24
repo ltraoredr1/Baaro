@@ -44,6 +44,13 @@ function mergeMessages(list, incoming) {
       next.push(msg);
     } else {
       const merged = { ...next[i], ...msg };
+      // Ne jamais remplacer un texte déjà affiché par un échec de déchiffrement
+      // (ex. l'écho temps réel de MON propre message) : cause de bulles vides/blanches
+      const prevOk = next[i].plaintext && !next[i].decryptFailed;
+      if (prevOk && (msg.decryptFailed || !msg.plaintext) && !msg.deleted_at) {
+        merged.plaintext = next[i].plaintext;
+        merged.decryptFailed = false;
+      }
       // Un message venant du serveur n'est ni en attente ni en échec
       if (!("pending" in msg)) merged.pending = false;
       if (!("failed" in msg)) merged.failed = false;
@@ -82,15 +89,20 @@ export function useMessaging(conversation_id, current_user_id, recipient_id) {
   conversationRef.current = conversation_id;
 
   // Reset si on change de conversation
+  // (recipient_id NE doit PAS être ici : s'il change après le chargement, la liste serait vidée
+  //  sans que le chargement ne soit relancé → il fallait sortir puis rentrer)
   useEffect(() => {
-    recipientKeyCache.current = null;
     clearTimeout(typingTimerRef.current);
     setMessages([]);
     setLoading(true);
     setLoadError(null);
     setHasMore(false);
     setOtherTyping(false);
-  }, [conversation_id, recipient_id]);
+  }, [conversation_id]);
+
+  useEffect(() => {
+    recipientKeyCache.current = null;
+  }, [recipient_id]);
 
   useEffect(() => () => clearTimeout(typingTimerRef.current), []);
 
@@ -182,9 +194,31 @@ export function useMessaging(conversation_id, current_user_id, recipient_id) {
       setLoading(false);
     };
 
+    // Rattrapage : récupère tout message plus récent que le dernier connu (temps réel manqué)
+    const sync = async () => {
+      if (cancelled || (typeof document !== "undefined" && document.hidden)) return;
+      const real = messagesRef.current.filter((m) => !isTmp(m.id) && m.created_at);
+      const newest = real[real.length - 1];
+      let q = supabase
+        .from("messages")
+        .select("*")
+        .eq("conversation_id", conversation_id)
+        .order("created_at", { ascending: false })
+        .limit(50);
+      if (newest) q = q.gt("created_at", newest.created_at);
+      const { data, error } = await q;
+      if (error || cancelled || !data?.length) return;
+      const dec = await Promise.all(data.slice().reverse().map(decryptOne));
+      if (cancelled) return;
+      setMessages((prev) => mergeMessages(prev, dec.filter((m) => !m.expired)));
+    };
+
+    // Nom de canal unique : évite de réutiliser un canal encore en cours de fermeture
+    const channelName = `e2e-room:${conversation_id}:${Date.now()}`;
+
     // On s'abonne AVANT de charger : un message reçu pendant le chargement n'est plus perdu
     const channel = supabase
-      .channel(`e2e-room:${conversation_id}`)
+      .channel(channelName)
       .on(
         "postgres_changes",
         {
@@ -225,13 +259,29 @@ export function useMessaging(conversation_id, current_user_id, recipient_id) {
         typingTimerRef.current = setTimeout(() => setOtherTyping(false), TYPING_TTL_MS);
       })
       .subscribe((status) => {
-        if (status === "SUBSCRIBED") channelReadyRef.current = true;
+        if (status === "SUBSCRIBED") {
+          channelReadyRef.current = true;
+          sync(); // récupère ce qui a pu arriver avant/pendant l'abonnement
+        } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+          channelReadyRef.current = false;
+        }
       });
 
     channelRef.current = channel;
     load();
 
+    // Filet de sécurité si le temps réel ne livre pas (table hors publication, RLS, coupure réseau…)
+    const poll = setInterval(sync, 4000);
+    const onWake = () => sync();
+    document.addEventListener("visibilitychange", onWake);
+    window.addEventListener("focus", onWake);
+    window.addEventListener("online", onWake);
+
     return () => {
+      clearInterval(poll);
+      document.removeEventListener("visibilitychange", onWake);
+      window.removeEventListener("focus", onWake);
+      window.removeEventListener("online", onWake);
       cancelled = true;
       channelReadyRef.current = false;
       channelRef.current = null;
