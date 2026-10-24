@@ -47,9 +47,11 @@ export const messageService = {
     const ids = mine.map((r) => r.conversation_id).slice(0, CONVERSATION_LIMIT);
     if (ids.length) filter += `,id.in.(${ids.join(",")})`;
 
+    // Ne pas utiliser ici une relation imbriquée nommée `conversations_last_message_id_fkey` :
+    // elle n’existe pas dans toutes les installations historiques de BAARO et vidait toute la liste.
     const { data: convs, error } = await supabase
       .from("conversations")
-      .select("*, last_message:messages!conversations_last_message_id_fkey(*)")
+      .select("*")
       .or(filter)
       .order("updated_at", { ascending: false })
       .limit(CONVERSATION_LIMIT);
@@ -57,6 +59,22 @@ export const messageService = {
 
     const list = convs || [];
     if (!list.length) return [];
+
+    // Résout le dernier message séparément : compatible avec les anciennes bases
+    // où la FK last_message_id n’est pas déclarée ou porte un autre nom.
+    const lastMessageByConversation = new Map();
+    const { data: recentMessages, error: recentErr } = await supabase
+      .from("messages")
+      .select("*")
+      .in("conversation_id", list.map((c) => c.id))
+      .order("created_at", { ascending: false })
+      .limit(CONVERSATION_LIMIT * 3);
+    if (recentErr) console.warn("[messageService] derniers messages:", recentErr.message);
+    for (const msg of recentMessages || []) {
+      if (!lastMessageByConversation.has(msg.conversation_id)) {
+        lastMessageByConversation.set(msg.conversation_id, msg);
+      }
+    }
 
     // 3) tous les participants de ces conversations (repli si user1/user2 sont vides)
     const { data: partRows, error: partErr } = await supabase
@@ -85,7 +103,7 @@ export const messageService = {
 
     return list.map((c) => {
       const otherId = otherIdOf(c);
-      const lm = one(c.last_message);
+      const lm = lastMessageByConversation.get(c.id) || one(c.last_message);
       const hasRow = lastReadByConv.has(c.id);
       const lastRead = lastReadByConv.get(c.id);
       const unread =
@@ -122,6 +140,26 @@ export const messageService = {
         .insert({ conversation_id: conversationId, user_id: userId, last_read_at: now });
       if (insErr) console.warn("[messageService] markAsRead (création):", insErr.message);
     }
+  },
+
+  /** Déclenche la notification serveur après insertion réussie du message. */
+  async notifyNewMessage(messageId) {
+    if (!messageId) return { ok: false };
+    const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData?.session?.access_token;
+    if (!token) return { ok: false, error: "Session absente" };
+    const base =
+      (typeof import.meta !== "undefined" && import.meta.env?.VITE_API_BASE_URL) ||
+      (typeof window !== "undefined" && window.location?.origin) ||
+      "";
+    const response = await fetch(`${base.replace(/\/$/, "")}/api/social`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ action: "message_sent", message_id: messageId }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || "Notification du message impossible");
+    return payload;
   },
 };
 
