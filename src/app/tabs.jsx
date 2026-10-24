@@ -43,7 +43,7 @@ export const tabs = {
   innovation: lazyRetry(() => import("../features/innovation/index.js").then(m => ({ default: m.InnovationHub })), "innovation"),
   shop: lazyRetry(() => import("../features/shop/index.js").then(m => ({ default: m.ShopTab })), "shop"),
   economy: lazyRetry(() => import("../features/economy/index.js").then(m => ({ default: m.EconomyTab })), "economy"),
-  companies: lazyRetry(() => import("../components/EnterprisesTab.jsx").then(m => ({ default: m.default })), "companies"),
+  companies: lazyRetry(() => import("../components/CompaniesTab.jsx").then(m => ({ default: m.default })), "companies"),
   stories: lazyRetry(() => import("../features/stories/StoriesTab.jsx").then(m => ({ default: m.StoriesTab })), "stories"),
   community: lazyRetry(() => import("../components/CommunityTab.jsx").then(m => ({ default: m.default })), "community"),
   discover: lazyRetry(() => import("../components/DiscoverHub.jsx").then(m => ({ default: m.DiscoverHub })), "discover"),

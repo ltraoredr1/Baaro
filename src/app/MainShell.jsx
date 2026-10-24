@@ -23,6 +23,7 @@ import { useIncomingCalls } from "../features/messaging/hooks/useIncomingCalls.j
 import { ChatCallModal } from "../features/messaging/components/ChatCallModal.jsx";
 import FloatingAiAssistant from "../components/FloatingAiAssistant.jsx";
 import { GuideHost, ONBOARDING_CLOSED_EVENT } from "../features/guide/index.js";
+import AnimatedTab from "../components/ui/AnimatedTab.jsx";
 
 const THEME_BG_MAP = {
   midnight: "#0B1220",
@@ -481,10 +482,12 @@ export function MainShell() {
             <Suspense fallback={<TabFallback />}>
               {Tab ? (
                 <>
-                  <Tab
-                    key={activeTab}
-                    {...(tabProps[activeTab] || {})}
-                  />
+                  <AnimatedTab tabKey={activeTab}>
+                    <Tab
+                      key={activeTab}
+                      {...(tabProps[activeTab] || {})}
+                    />
+                  </AnimatedTab>
                   {(!isImmersive || showUi) && (
                     <FutureModulePanel moduleId={activeTab} onNavigate={(moduleId, action) => {
                       if (/IA|intelligent|montage|traduction|mémoire/i.test(action)) setActiveTab("assistant");

@@ -12,6 +12,7 @@ import { callSocial } from "../lib/notifyInteraction.js";
 import { useSettings } from "../hooks/useSettings.js";
 import { applyNativeSettings } from "../lib/nativeSettings.js";
 import { unlockAudio } from "../lib/callRingtone.js";
+import AdminSchemaGuard from "../pages/AdminSchemaGuard.jsx";
 
 function InviteRouteGate() {
   const { code } = useParams();
@@ -40,6 +41,17 @@ function PrivacyRoute() {
 function LegalRoute({ type }) {
   const navigate = useNavigate();
   return <LegalPage type={type} onBack={() => navigate(-1)} />;
+}
+
+function AdminSchemaRoute() {
+  return (
+    <AdminSchemaGuard>
+      <div className="min-h-screen bg-black p-6 text-white">
+        <h1 className="text-xl font-bold">Administration du schéma</h1>
+        <p className="mt-2 text-sm text-white/60">Accès administrateur vérifié.</p>
+      </div>
+    </AdminSchemaGuard>
+  );
 }
 
 function AppShell() {
@@ -184,6 +196,7 @@ export default function App() {
         <Route path="/creator-terms" element={<LegalRoute type="creator" />} />
         <Route path="/merchant-terms" element={<LegalRoute type="merchant" />} />
         <Route path="/cookies" element={<LegalRoute type="cookies" />} />
+        <Route path="/admin/schema" element={<AdminSchemaRoute />} />
         <Route path="/*" element={<AppShell />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
