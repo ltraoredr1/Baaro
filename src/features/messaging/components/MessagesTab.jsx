@@ -423,7 +423,14 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
         replyToId,
       });
       if (!result?.ok) notify(result?.error || "Impossible d'envoyer le message");
-      else fetchConversations(true);
+      else {
+        if (result.data?.id && !result.data?.duplicate) {
+          messageService.notifyNewMessage(result.data.id).catch((error) =>
+            console.warn("[MessagesTab] notification message:", error?.message || error)
+          );
+        }
+        fetchConversations(true);
+      }
     } catch (e) {
       notify(e?.message || "Impossible d'envoyer le message");
     }
@@ -449,6 +456,11 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
       replyToId,
     });
     if (!res?.ok) throw new Error(res?.error || "Échec de l’envoi");
+    if (res.data?.id && !res.data?.duplicate) {
+      messageService.notifyNewMessage(res.data.id).catch((error) =>
+        console.warn("[MessagesTab] notification média:", error?.message || error)
+      );
+    }
   };
 
   const handleSendMedia = async (file) => {
