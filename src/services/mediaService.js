@@ -1,3 +1,3 @@
 // Redirige vers l'implementation unique (authentification Supabase, retries, progression).
 // L'ancienne version envoyait un secret depuis le client et n'avait pas d'Authorization.
-export { uploadLargeVideo } from "../lib/largeVideoUpload.js";
+export { looksLikeVideo, uploadLargeVideo } from "../lib/largeVideoUpload.js";
