@@ -10,6 +10,7 @@ import { LegalPage } from "../components/LegalPage.jsx";
 import { ErrorBoundary } from "../components/ErrorBoundary.jsx";
 import { callSocial } from "../lib/notifyInteraction.js";
 import { useSettings } from "../hooks/useSettings.js";
+import { usePushNotifications } from "../hooks/usePushNotifications.js";
 import { applyNativeSettings } from "../lib/nativeSettings.js";
 import { unlockAudio } from "../lib/callRingtone.js";
 import AdminSchemaGuard from "../pages/AdminSchemaGuard.jsx";
@@ -57,6 +58,10 @@ function AdminSchemaRoute() {
 function AppShell() {
   const { user, isGuest, loading } = useApp();
   const navigate = useNavigate();
+
+  // Activation/synchronisation push pour tout le cycle de vie de l'application.
+  // Les invités restent exclus afin de ne pas enregistrer de jeton anonyme.
+  usePushNotifications(user?.id && !isGuest ? user.id : null);
 
   // 1. Invite en attente après login
   useEffect(() => {
