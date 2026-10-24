@@ -184,7 +184,7 @@ export default function ProductForm({ shopId, shopCurrency = "XOF", user_id, pro
           {tags.map((t) => (
             <span key={t} className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-bold" style={{ background: `${COLORS.teal}22`, color: COLORS.teal }}>
               {t}
-              <button type="button" onClick={() => setTags(tags.filter((x) => x !== t))}><X size={10} /></button>
+              <button type="button" onClick={() => setTags(tags.filter((x) => x !== t))} aria-label={`Supprimer le tag ${t}`}><X size={10} /></button>
             </span>
           ))}
         </div>
