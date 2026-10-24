@@ -171,5 +171,16 @@ export function useIncomingCallFromPush(userId) {
     };
   }, [userId, loadCall]);
 
+  // Clic depuis le centre de notifications alors que l’application est déjà ouverte.
+  useEffect(() => {
+    if (!userId) return;
+    const onOpenCall = (event) => {
+      const callId = event.detail?.callId;
+      if (callId) loadCall({ call_id: callId, action: "accept", call_type: "voice" });
+    };
+    window.addEventListener("baaro:open-call", onOpenCall);
+    return () => window.removeEventListener("baaro:open-call", onOpenCall);
+  }, [userId, loadCall]);
+
   return { incoming, clear, setIncoming };
 }
