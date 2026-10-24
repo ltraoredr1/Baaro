@@ -1,4 +1,4 @@
-import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   X,
   Trash2,
@@ -28,6 +28,7 @@ import { insertStory } from "@/features/stories/api/storiesApi.js";
 import { callSocial } from "@/lib/notifyInteraction.js";
 import { FEED_REFRESH_EVENT } from "@/lib/feedTabRefresh.jsx";
 import { useCursorFeed } from "@/hooks/useCursorFeed.js";
+import { usePageRefresh } from "@/hooks/usePageRefresh.js";
 
 import { PollCard, SocialPostEnhancements, SocialSuggestions } from "./SocialEnhancements.jsx";
 import RichTextComposer from "@/components/RichTextComposer.jsx";
@@ -38,19 +39,17 @@ import { AskAiButton } from "@/components/AskAiButton.jsx";
 import { TranslateButton } from "@/components/TranslateButton.jsx";
 import { GuestBanner } from "@/components/GuestBanner.jsx";
 import { FloatingCreateButton } from "@/components/FloatingCreateButton.jsx";
+import { reportContent } from "@/lib/reportContent.js";
+import { toggleRepost } from "@/lib/socialActions.js";
 import { LazyImage, LazyVideo } from "@/components/LazyMedia.jsx";
 
 const MAX_MEDIA_BYTES = 50 * 1024 * 1024;
 const MAX_MEDIA_COUNT = 10;
 const STORY_DURATION_MS = 24 * 60 * 60 * 1000;
+const MAX_VISIBLE_MEDIA = 4;
 
 const VOICE_PREFIX = "[vocal]";
 const EMPTY_REC = { postId: null, recording: false, blob: null, url: null };
-
-const FEED_TABS = [
-  ["foryou", "Pour toi"],
-  ["following", "Abonnés"],
-];
 
 const REPORT_REASONS = [
   "Spam ou arnaque",
@@ -128,56 +127,6 @@ function parseComment(text) {
   if (!raw.startsWith(VOICE_PREFIX)) return { voiceUrl: null, caption: raw };
   const [voiceUrl, ...rest] = raw.slice(VOICE_PREFIX.length).split("\n");
   return { voiceUrl, caption: rest.join("\n").trim() };
-}
-
-/** Notification d'interaction (commentaire, etc.) via /api/social */
-async function notifyPost(post, userId, interactionType) {
-  if (!post?.id || !post?.author_id || !userId || post.author_id === userId) return;
-  try {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-    if (!session?.access_token) return;
-
-    await fetch("/api/social", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${session.access_token}`,
-      },
-      body: JSON.stringify({
-        action: "notify_interaction",
-        content_type: "post",
-        interaction_type: interactionType,
-        target_id: post.id,
-        recipient_id: post.author_id,
-      }),
-    });
-  } catch (err) {
-    console.warn("[post-notification]", err);
-  }
-}
-
-/** Crée le sondage (tables polls + poll_options) rattaché à un post */
-async function createPollForPost(postId, question, options) {
-  const { data: poll, error: pollErr } = await supabase
-    .from("polls")
-    .insert({ post_id: postId, question })
-    .select("id")
-    .single();
-  if (pollErr) throw pollErr;
-
-  const rows = options.map((text, i) => ({
-    poll_id: poll.id,
-    option_text: text,
-    position: i,
-  }));
-
-  const { error: optErr } = await supabase.from("poll_options").insert(rows);
-  if (optErr) {
-    await supabase.from("polls").delete().eq("id", poll.id);
-    throw optErr;
-  }
 }
 
 /** Viewer plein écran un-à-un (swipe + flèches) */
@@ -309,15 +258,18 @@ function MediaViewer({ items, startIndex = 0, onClose }) {
   );
 }
 
-/** Galerie (carrousel à swipe pour plusieurs médias) + viewer plein écran */
+/** Galerie + ouverture du viewer un-à-un */
 function MediaGallery({ items }) {
+  const [expanded, setExpanded] = useState(false);
   const [viewerIndex, setViewerIndex] = useState(null);
-  const [slide, setSlide] = useState(0);
 
   if (!items.length) return null;
 
   const visuals = items.filter((m) => m.type !== "audio");
   const audios = items.filter((m) => m.type === "audio");
+
+  const hidden = expanded ? 0 : Math.max(0, visuals.length - MAX_VISIBLE_MEDIA);
+  const shown = hidden > 0 ? visuals.slice(0, MAX_VISIBLE_MEDIA) : visuals;
 
   const openViewer = (idx) => setViewerIndex(idx);
 
@@ -354,27 +306,34 @@ function MediaGallery({ items }) {
         )}
 
         {visuals.length > 1 && (
-          <div className="relative rounded-xl overflow-hidden border bg-black/40">
-            <div
-              className="flex overflow-x-auto snap-x snap-mandatory [scrollbar-width:none]"
-              onScroll={(e) =>
-                setSlide(
-                  Math.round(e.currentTarget.scrollLeft / e.currentTarget.clientWidth)
-                )
-              }
-            >
-              {visuals.map((m, i) => (
+          <div className="rounded-xl overflow-hidden border bg-black/40 grid grid-cols-2 gap-0.5">
+            {shown.map((m, i) => {
+              const isFirstOdd = shown.length % 2 === 1 && i === 0;
+              return (
                 <div
                   key={`${m.url}-${i}`}
-                  className="relative snap-center shrink-0 w-full aspect-[4/5] max-h-[70vh] bg-black"
+                  className={`relative overflow-hidden bg-black ${
+                    isFirstOdd ? "col-span-2 aspect-[2/1]" : "aspect-square"
+                  }`}
                 >
                   {renderVisual(m, false, i)}
+
+                  {hidden > 0 && i === shown.length - 1 && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setExpanded(true);
+                      }}
+                      className="absolute inset-0 bg-black/60 text-white text-2xl font-bold flex items-center justify-center z-10"
+                      aria-label={`Voir ${hidden} média${hidden > 1 ? "s" : ""} de plus`}
+                    >
+                      +{hidden}
+                    </button>
+                  )}
                 </div>
-              ))}
-            </div>
-            <span className="absolute top-2 right-2 px-2 py-0.5 rounded-full bg-black/60 text-white text-[11px]">
-              {Math.min(slide + 1, visuals.length)}/{visuals.length}
-            </span>
+              );
+            })}
           </div>
         )}
 
@@ -399,91 +358,6 @@ function MediaGallery({ items }) {
         />
       )}
     </>
-  );
-}
-
-const COLLAPSED_HEIGHT = 150; // ≈ 6 lignes
-
-/** Texte d'une publication : « Voir plus » si long, mis en valeur si court, #/@ cliquables */
-function PostText({ text, translated, hasMedia, onHashtagClick, onMentionClick }) {
-  const [expanded, setExpanded] = useState(false);
-  const [overflowing, setOverflowing] = useState(false);
-  const boxRef = useRef(null);
-
-  const plain = typeof text === "string" ? text.trim() : "";
-  const isStatement =
-    !hasMedia &&
-    !translated &&
-    plain.length > 0 &&
-    plain.length <= 140 &&
-    !plain.includes("\n");
-
-  const textClass = isStatement
-    ? "text-xl font-semibold leading-snug tracking-tight"
-    : "text-[15px] leading-[1.65]";
-
-  useLayoutEffect(() => {
-    const el = boxRef.current;
-    if (!el || expanded) return undefined;
-
-    const measure = () => setOverflowing(el.scrollHeight > el.clientHeight + 1);
-    measure();
-
-    if (typeof ResizeObserver === "undefined") return undefined;
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [text, translated, expanded]);
-
-  const collapsed = !expanded && overflowing;
-
-  return (
-    <div
-      className={`text-pretty ${isStatement ? "border-l-2 pl-3" : ""}`}
-      style={isStatement ? { borderColor: COLORS.gold } : undefined}
-    >
-      <div
-        ref={boxRef}
-        className="overflow-hidden"
-        style={{
-          maxHeight: expanded ? "none" : COLLAPSED_HEIGHT,
-          ...(collapsed
-            ? {
-                WebkitMaskImage:
-                  "linear-gradient(to bottom, #000 70%, transparent 100%)",
-                maskImage: "linear-gradient(to bottom, #000 70%, transparent 100%)",
-              }
-            : null),
-        }}
-      >
-        {translated ? (
-          <p
-            className={`whitespace-pre-wrap break-words [overflow-wrap:anywhere] ${textClass}`}
-            style={{ color: COLORS.ivory }}
-          >
-            {translated}
-          </p>
-        ) : (
-          <RichTextRenderer
-            content={text}
-            className={textClass}
-            onHashtagClick={onHashtagClick}
-            onMentionClick={onMentionClick}
-          />
-        )}
-      </div>
-
-      {(overflowing || expanded) && (
-        <button
-          type="button"
-          onClick={() => setExpanded((v) => !v)}
-          className="mt-1.5 text-xs font-semibold active:opacity-70"
-          style={{ color: COLORS.gold }}
-        >
-          {expanded ? "Voir moins" : "Voir plus"}
-        </button>
-      )}
-    </div>
   );
 }
 
@@ -512,6 +386,7 @@ export function FeedTab({
 
   const posts = useMemo(() => rawPosts.map(formatPost), [rawPosts]);
   const loadPosts = useCallback((opts) => reload(opts), [reload]);
+  usePageRefresh(() => loadPosts({ reset: true }), { active: true, minIntervalMs: 8000 });
 
   const [newText, setNewText] = useState("");
   const [pollData, setPollData] = useState(null);
@@ -548,98 +423,10 @@ export function FeedTab({
   const [newCommentText, setNewCommentText] = useState({});
   const [translatedMap, setTranslatedMap] = useState({});
 
-  const [viewCounts, setViewCounts] = useState({});
-
   const fileInputRef = useRef(null);
   const mediaItemsRef = useRef([]);
-  const seenRef = useRef(new Set());
-  const sentinelRef = useRef(null);
-  const autoLoadsRef = useRef(0);
 
   const activeUserId = currentUserId || propUserId || null;
-
-  /* ---------- Onglets « Pour toi / Abonnés » ---------- */
-  const [feedTab, setFeedTab] = useState("foryou");
-  const [followingIds, setFollowingIds] = useState(null);
-
-  useEffect(() => {
-    if (!activeUserId) {
-      setFollowingIds(new Set());
-      return;
-    }
-    let cancelled = false;
-    supabase
-      .from("follows")
-      .select("followed_id,status")
-      .eq("follower_id", activeUserId)
-      .then(({ data, error }) => {
-        if (cancelled || error) return;
-        setFollowingIds(
-          new Set(
-            (data || [])
-              .filter((r) => !r.status || r.status === "accepted")
-              .map((r) => r.followed_id)
-          )
-        );
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [activeUserId, feedTab]);
-
-  const [tagFilter, setTagFilter] = useState(null);
-
-  const visiblePosts = useMemo(() => {
-    let list = posts;
-
-    if (feedTab === "following") {
-      if (!followingIds) return [];
-      list = list.filter(
-        (p) => p.author_id === activeUserId || followingIds.has(p.author_id)
-      );
-    }
-
-    if (tagFilter) {
-      const re = new RegExp(
-        `(^|[^\\p{L}\\p{N}_])#${tagFilter}(?![\\p{L}\\p{N}_])`,
-        "iu"
-      );
-      list = list.filter((p) => typeof p.text === "string" && re.test(p.text));
-    }
-
-    return list;
-  }, [feedTab, posts, followingIds, activeUserId, tagFilter]);
-
-  const handleHashtagClick = useCallback((tag) => {
-    if (!/^[\p{L}_][\p{L}\p{N}_]*$/u.test(tag || "")) return;
-    autoLoadsRef.current = 0;
-    setTagFilter(tag);
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  }, []);
-
-  const handleMentionClick = useCallback(
-    async (name) => {
-      const clean = String(name || "").replace(/^@/, "");
-      if (!clean) return;
-      try {
-        const lower = clean.toLowerCase();
-        const variants = [...new Set([clean, `@${clean}`, lower, `@${lower}`])];
-        const { data, error } = await supabase
-          .from("profiles")
-          .select("id")
-          .in("handle", variants)
-          .limit(1);
-        if (error) throw error;
-        if (data?.[0]?.id) onOpenProfile?.(data[0].id);
-        else showToast(`Profil @${clean} introuvable`, "info");
-      } catch (err) {
-        handleDbError(err, showToast, "Impossible d'ouvrir ce profil");
-      }
-    },
-    [onOpenProfile, showToast]
-  );
-
-  const visibleKey = visiblePosts.map((p) => p.id).join(",");
 
   useEffect(() => {
     let mounted = true;
@@ -729,96 +516,6 @@ export function FeedTab({
     return () => window.removeEventListener(FEED_REFRESH_EVENT, onRefresh);
   }, [loadPosts]);
 
-  /* ---------- Enregistrement des vues (table post_views) ---------- */
-  useEffect(() => {
-    if (!activeUserId || !visibleKey || typeof IntersectionObserver === "undefined") {
-      return undefined;
-    }
-    const timers = new Map();
-    const io = new IntersectionObserver(
-      (entries) => {
-        entries.forEach((entry) => {
-          const { postId, authorId } = entry.target.dataset;
-          if (!postId || authorId === activeUserId || seenRef.current.has(postId)) return;
-
-          if (entry.isIntersecting) {
-            timers.set(
-              postId,
-              setTimeout(() => {
-                seenRef.current.add(postId);
-                supabase
-                  .from("post_views")
-                  .upsert(
-                    { post_id: postId, viewer_id: activeUserId },
-                    { onConflict: "post_id,viewer_id,view_date", ignoreDuplicates: true }
-                  )
-                  .then(() => {});
-              }, 1500)
-            );
-          } else {
-            clearTimeout(timers.get(postId));
-            timers.delete(postId);
-          }
-        });
-      },
-      { threshold: 0.6 }
-    );
-    document.querySelectorAll("[data-post-id]").forEach((el) => io.observe(el));
-    return () => {
-      timers.forEach(clearTimeout);
-      io.disconnect();
-    };
-  }, [activeUserId, visibleKey]);
-
-  /* ---------- Compteur de vues de mes publications ---------- */
-  useEffect(() => {
-    if (!activeUserId || !postIdsKey) return undefined;
-    const mine = posts.filter((p) => p.author_id === activeUserId).map((p) => p.id);
-    if (!mine.length) return undefined;
-    let cancelled = false;
-    supabase
-      .from("post_views")
-      .select("post_id")
-      .in("post_id", mine)
-      .then(({ data }) => {
-        if (cancelled || !data) return;
-        const counts = {};
-        data.forEach((r) => {
-          counts[r.post_id] = (counts[r.post_id] || 0) + 1;
-        });
-        setViewCounts(counts);
-      });
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeUserId, postIdsKey]);
-
-  /* ---------- Défilement infini ---------- */
-  useEffect(() => {
-    const el = sentinelRef.current;
-    if (!el || !hasMore || typeof IntersectionObserver === "undefined") return undefined;
-
-    const io = new IntersectionObserver(
-      (entries) => {
-        if (!entries[0].isIntersecting || loadingMore) return;
-
-        const filtered = feedTab === "following" || Boolean(tagFilter);
-        if (filtered && visiblePosts.length < 5) {
-          if (autoLoadsRef.current >= 10) return;
-          autoLoadsRef.current += 1;
-        } else {
-          autoLoadsRef.current = 0;
-        }
-        loadMore();
-      },
-      { rootMargin: "600px 0px" }
-    );
-
-    io.observe(el);
-    return () => io.disconnect();
-  }, [hasMore, loading, loadingMore, loadMore, feedTab, tagFilter, visiblePosts.length]);
-
   const handleDeletePost = async (postId) => {
     if (!window.confirm("Voulez-vous vraiment supprimer cette publication ?")) return;
     try {
@@ -860,12 +557,7 @@ export function FeedTab({
   const handleSendReport = async () => {
     if (!reportPost || !activeUserId) return;
     try {
-      const { error } = await supabase.from("post_reports").insert({
-        post_id: reportPost.id,
-        reporter_id: activeUserId,
-        reason: reportReason,
-      });
-      if (error) throw error;
+      await reportContent({ targetType: "post", targetId: reportPost.id, reason: reportReason });
       showToast("Signalement envoyé avec succès", "success");
       setReportPost(null);
     } catch (err) {
@@ -893,28 +585,10 @@ export function FeedTab({
 
     try {
       if (wasReposted) {
-        const { error } = await supabase
-          .from("post_reposts")
-          .delete()
-          .eq("post_id", postId)
-          .eq("user_id", activeUserId);
-        if (error) throw error;
+        await toggleRepost({ postId, userId: activeUserId, wasReposted: true });
         showToast("Républication retirée", "info");
       } else {
-        const { error } = await supabase
-          .from("post_reposts")
-          .insert({ post_id: postId, user_id: activeUserId });
-        if (error) throw error;
-
-        if (post.author_id && post.author_id !== activeUserId) {
-          await supabase.from("notifications").insert({
-            user_id: post.author_id,
-            actor_id: activeUserId,
-            type: "repost",
-            source_id: postId,
-            message: "a républié votre publication.",
-          });
-        }
+        await toggleRepost({ postId, userId: activeUserId, wasReposted: false });
 
         onRewardPoints?.("repost_post", "Publication républiée", postId);
         showPointsReward?.(3, "Publication républiée !");
@@ -1055,12 +729,6 @@ export function FeedTab({
       setNewCommentText((prev) => ({ ...prev, [postId]: "" }));
       if (audio) discardCommentRecording();
       showPointsReward?.(1, "Commentaire ajouté");
-
-      notifyPost(
-        posts.find((p) => p.id === postId),
-        activeUserId,
-        "comment"
-      );
     } catch (error) {
       handleDbError(error, showToast, "Impossible de commenter");
     } finally {
@@ -1150,8 +818,7 @@ export function FeedTab({
         if (event.data.size > 0) audioChunksRef.current.push(event.data);
       };
       mediaRecorderRef.current.onstop = () => {
-        const mime = mediaRecorderRef.current?.mimeType || "audio/webm";
-        const blob = new Blob(audioChunksRef.current, { type: mime });
+        const blob = new Blob(audioChunksRef.current, { type: "audio/webm" });
         setAudioBlob(blob);
         setAudioPreviewUrl(URL.createObjectURL(blob));
         stream.getTracks().forEach((track) => track.stop());
@@ -1199,8 +866,7 @@ export function FeedTab({
     );
 
     if (audioBlob) {
-      const audioExt = (audioBlob.type || "").includes("mp4") ? "m4a" : "webm";
-      const audioFile = new File([audioBlob], `voice-note.${audioExt}`, {
+      const audioFile = new File([audioBlob], "voice-note.webm", {
         type: audioBlob.type || "audio/webm",
       });
       uploads.push(
@@ -1223,38 +889,17 @@ export function FeedTab({
       media_urls: uploaded,
     };
 
-    let { data: created, error: postErr } = await supabase
-      .from("posts")
-      .insert([payload])
-      .select("id")
-      .single();
+    let { error: postErr } = await supabase.from("posts").insert([payload]);
 
     if (postErr && /media_urls/i.test(postErr.message || "")) {
       const { media_urls: _ignored, ...legacy } = payload;
-      ({ data: created, error: postErr } = await supabase
-        .from("posts")
-        .insert([legacy])
-        .select("id")
-        .single());
+      ({ error: postErr } = await supabase.from("posts").insert([legacy]));
       if (!postErr && uploaded.length > 1) {
         showToast("Seul le premier média a été publié (migration SQL manquante)", "info");
       }
     }
 
     if (postErr) throw postErr;
-
-    const pollQuestion = pollData?.question?.trim() || "";
-    const pollOptions = (pollData?.options || [])
-      .map((o) => (typeof o === "string" ? o.trim() : ""))
-      .filter(Boolean);
-
-    if (created?.id && pollQuestion && pollOptions.length >= 2) {
-      try {
-        await createPollForPost(created.id, pollQuestion, pollOptions);
-      } catch (pollErr) {
-        handleDbError(pollErr, showToast, "Publication créée, mais le sondage a échoué");
-      }
-    }
 
     if (alsoStory) {
       const storyMedia = uploaded.filter(
@@ -1282,26 +927,15 @@ export function FeedTab({
     setIsCreateOpen?.(false);
     showToast("Publication créée !", "success");
     loadPosts({ silent: true });
-    window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
   const handlePublish = async () => {
     const hasText = Boolean(newText.trim());
     const hasMedia = mediaItems.length > 0;
     const hasAudio = Boolean(audioBlob);
-    const pollQuestion = pollData?.question?.trim() || "";
-    const pollOptions = (pollData?.options || [])
-      .map((o) => (typeof o === "string" ? o.trim() : ""))
-      .filter(Boolean);
-    const hasPoll = Boolean(pollQuestion) && pollOptions.length >= 2;
+    const hasPoll = Boolean(pollData?.question?.trim());
 
     if (submitting) return;
-
-    if (pollQuestion && pollOptions.length < 2) {
-      showToast("Un sondage demande au moins 2 options", "error");
-      return;
-    }
-
     if (!hasText && !hasMedia && !hasAudio && !hasPoll) return;
 
     if (!activeUserId) {
@@ -1592,61 +1226,11 @@ export function FeedTab({
         <SocialSuggestions user_id={activeUserId} onOpenProfile={onOpenProfile} />
       )}
 
-      <div
-        className="sticky top-0 z-30 flex gap-1 p-1 rounded-xl border backdrop-blur"
-        style={{ borderColor: COLORS.border, background: COLORS.surface }}
-      >
-        {FEED_TABS.map(([key, label]) => (
-          <button
-            key={key}
-            type="button"
-            onClick={() => {
-              autoLoadsRef.current = 0;
-              setFeedTab(key);
-              window.scrollTo({ top: 0 });
-            }}
-            className="flex-1 py-2 rounded-lg text-xs font-bold transition active:scale-95"
-            style={
-              feedTab === key
-                ? { background: COLORS.gold, color: "#000" }
-                : { color: COLORS.muted }
-            }
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-
-      {tagFilter && (
-        <div
-          className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl border text-xs"
-          style={{ borderColor: COLORS.borderTeal, background: COLORS.surface }}
-        >
-          <span style={{ color: COLORS.ivory }}>
-            Publications avec{" "}
-            <strong style={{ color: COLORS.teal }}>#{tagFilter}</strong>
-          </span>
-          <button
-            type="button"
-            onClick={() => {
-              autoLoadsRef.current = 0;
-              setTagFilter(null);
-            }}
-            className="p-1 rounded-lg hover:bg-white/10"
-            style={{ color: COLORS.muted }}
-            aria-label="Retirer le filtre"
-          >
-            <X size={14} />
-          </button>
-        </div>
-      )}
-
       <div className="flex flex-col gap-4">
-        {visiblePosts.map((post) => (
+        {posts.map((post) => (
           <article
             key={post.id}
             data-post-id={post.id}
-            data-author-id={post.author_id}
             className="glass-card rounded-2xl p-5 shadow-xl border flex flex-col gap-3 relative"
             style={{ borderColor: COLORS.border }}
           >
@@ -1792,13 +1376,16 @@ export function FeedTab({
                 </div>
               </div>
             ) : (
-              <PostText
-                text={post.text}
-                translated={translatedMap[post.id]}
-                hasMedia={getPostMedia(post).length > 0}
-                onHashtagClick={handleHashtagClick}
-                onMentionClick={handleMentionClick}
-              />
+              <div
+                className="text-base leading-relaxed whitespace-pre-wrap"
+                style={{ color: COLORS.ivory }}
+              >
+                {translatedMap[post.id] ? (
+                  translatedMap[post.id]
+                ) : (
+                  <RichTextRenderer content={post.text} />
+                )}
+              </div>
             )}
 
             {translatedMap[post.id] && (
@@ -1861,7 +1448,7 @@ export function FeedTab({
                       }
                       className="text-[10px] underline hover:text-white flex items-center gap-0.5"
                     >
-                      <Eye size={11} /> {viewCounts[post.id] ?? post.views_count ?? 0}
+                      <Eye size={11} /> {post.views_count || 0}
                     </button>
                   </div>
                 )}
@@ -2024,32 +1611,20 @@ export function FeedTab({
             )}
           </article>
         ))}
-
-        {visiblePosts.length === 0 &&
-          !hasMore &&
-          (tagFilter || (feedTab === "following" && followingIds)) && (
-            <p className="text-center text-xs py-10" style={{ color: COLORS.muted }}>
-              {tagFilter
-                ? `Aucune publication avec #${tagFilter} pour l'instant.`
-                : "Aucune publication de vos abonnements pour l'instant."}
-            </p>
-          )}
       </div>
 
       {hasMore && (
-        <div
-          ref={sentinelRef}
-          className="py-6 text-center text-[11px]"
-          style={{ color: COLORS.muted }}
-        >
-          {loadingMore ? "Chargement..." : ""}
+        <div className="text-center pt-2">
+          <button
+            type="button"
+            onClick={loadMore}
+            disabled={loadingMore}
+            className="px-4 py-2 rounded-xl text-xs font-semibold border transition hover:bg-white/5"
+            style={{ borderColor: COLORS.border, color: COLORS.ivory }}
+          >
+            {loadingMore ? "Chargement..." : "Afficher plus de publications"}
+          </button>
         </div>
-      )}
-
-      {!hasMore && visiblePosts.length > 0 && (
-        <p className="text-center text-[11px] py-6" style={{ color: COLORS.muted }}>
-          Vous avez tout vu 🎉
-        </p>
       )}
 
       {reportPost && (
