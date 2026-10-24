@@ -6,8 +6,11 @@
     "androidScheme": "https"
   },
   "plugins": {
+    "CapacitorHttp": {
+      "enabled": true
+    },
     "CapacitorUpdater": {
-      "autoUpdate": true,
+      "autoUpdate": false,
       "appReadyTimeout": 10000,
       "responseTimeout": 20,
       "autoDeleteFailed": true,
