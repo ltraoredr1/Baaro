@@ -562,6 +562,16 @@ export function MainShell() {
               ) : null}
             </Suspense>
           </ErrorBoundary>
+
+          {/* Espace réservé en bas : le contenu remonte au-dessus de la barre de navigation
+              fixe et du bouton flottant de l'assistant (cache sinon les boutons du bas). */}
+          {(!isImmersive || showUi) && (
+            <div
+              className="lg:hidden"
+              aria-hidden="true"
+              style={{ height: "calc(9rem + env(safe-area-inset-bottom))" }}
+            />
+          )}
         </main>
       </div>
 
