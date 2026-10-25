@@ -23,11 +23,19 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
 export default supabase;
 
 // ========== ID UNIQUE ==========
-export const getCurrentUserId = async () => {
-  const { data: { user }, error } = await supabase.auth.getUser();
+// getSession() lit la session locale (aucun appel réseau, fonctionne hors ligne),
+// alors que getUser() interroge le serveur Supabase À CHAQUE appel.
+// La sécurité reste assurée côté serveur : les règles RLS vérifient le JWT.
+const getSessionUserId = async () => {
+  const { data, error } = await supabase.auth.getSession();
   if (error) throw error;
-  if (!user?.id) throw new Error("Non connecté");
-  return user.id;
+  return data?.session?.user?.id || null;
+};
+
+export const getCurrentUserId = async () => {
+  const id = await getSessionUserId();
+  if (!id) throw new Error("Non connecté");
+  return id;
 };
 
 // ========== FOLLOWS (auth.users.id) ==========
@@ -48,9 +56,14 @@ export const unfollowUser = async (targetUserId) => {
 };
 
 export const isFollowing = async (targetUserId) => {
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user?.id || !targetUserId || user.id === targetUserId) return false;
-  const { data } = await supabase.from("follows").select("follower_id").eq("follower_id", user.id).eq("followed_id", targetUserId).eq("status", "accepted").maybeSingle();
+  let uid = null;
+  try {
+    uid = await getSessionUserId();
+  } catch {
+    return false;
+  }
+  if (!uid || !targetUserId || uid === targetUserId) return false;
+  const { data } = await supabase.from("follows").select("follower_id").eq("follower_id", uid).eq("followed_id", targetUserId).eq("status", "accepted").maybeSingle();
   return Boolean(data);
 };
 
@@ -72,9 +85,11 @@ export const sendFriendRequest = async (targetUserId) => {
     { onConflict: "follower_id,followed_id" }
   ).select().single();
   if (!error) {
-    import("./lib/notifyInteraction.js").then((m) =>
-      m.notifyInteraction({ contentType: "user", interactionType: "friend_request", targetId: targetUserId })
-    );
+    import("./lib/notifyInteraction.js")
+      .then((m) =>
+        m.notifyInteraction({ contentType: "user", interactionType: "friend_request", targetId: targetUserId })
+      )
+      .catch(() => {});
   }
   return { data, error };
 };
@@ -89,9 +104,11 @@ export const acceptFriendRequest = async (followerId) => {
     { onConflict: "follower_id,followed_id" }
   );
   if (reciprocalError) console.warn("[friends] ligne réciproque non créée :", reciprocalError.message);
-  import("./lib/notifyInteraction.js").then((m) =>
-    m.notifyInteraction({ contentType: "user", interactionType: "friend_accepted", targetId: followerId })
-  );
+  import("./lib/notifyInteraction.js")
+    .then((m) =>
+      m.notifyInteraction({ contentType: "user", interactionType: "friend_accepted", targetId: followerId })
+    )
+    .catch(() => {});
   return result;
 };
 
@@ -149,10 +166,11 @@ export const getUserById = async (user_id) => {
   // Champs publics uniquement. Le téléphone n'est renvoyé que si le demandeur
   // est le propriétaire du profil (minimisation des données personnelles).
   const publicCols = "id,display_name,handle,flag,avatar_url,bio";
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  const isOwner = Boolean(user?.id && user.id === user_id);
+  let currentId = null;
+  try {
+    currentId = await getSessionUserId();
+  } catch {}
+  const isOwner = Boolean(currentId && currentId === user_id);
   const cols = isOwner ? `${publicCols},phone` : publicCols;
 
   return await supabase.from("profiles").select(cols).eq("id", user_id).maybeSingle();
