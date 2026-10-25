@@ -28,6 +28,80 @@ const REACTIONS = [
 ];
 
 /* =========================================================
+   0. ABONNEMENT : lecture fraîche + application idempotente
+   ---------------------------------------------------------
+   Avant : chaque publication gardait SA copie de « suis-je abonné ? ».
+   Après un abonnement depuis une publication, les autres publications
+   du même auteur affichaient encore « Suivre » ; un clic appelait alors
+   toggle_follow (qui BASCULE) et annulait l'abonnement, ou le refaisait
+   avec une nouvelle notification.
+   Maintenant : l'état vient de FeedTab (partagé par tout le fil) et,
+   au clic, on relit l'état réel en base avant de décider quoi faire.
+   ========================================================= */
+
+// Comptes dont une action d'abonnement est en cours (évite deux clics simultanés
+// depuis deux publications du même auteur).
+const followInFlight = new Set();
+
+async function readFollowState(followerId, targetId) {
+  const { data, error } = await supabase
+    .from("follows")
+    .select("status")
+    .eq("follower_id", followerId)
+    .eq("followed_id", targetId)
+    .maybeSingle();
+
+  if (error) throw error;
+
+  return Boolean(data && (!data.status || data.status === "accepted"));
+}
+
+/**
+ * Met la relation dans l'état voulu, sans jamais « inverser » par erreur.
+ * @returns {{ changed: boolean, following: boolean }}
+ */
+async function applyFollow(followerId, targetId, wantFollow) {
+  const current = await readFollowState(followerId, targetId);
+
+  // Déjà dans l'état voulu : on ne touche à rien (pas de bascule, pas de notification).
+  if (current === wantFollow) return { changed: false, following: current };
+
+  const { data, error } = await supabase.rpc("toggle_follow", {
+    p_target: targetId,
+  });
+
+  if (!error) {
+    const next = typeof data === "boolean" ? data : wantFollow;
+    return { changed: next !== current, following: next };
+  }
+
+  if (error?.message === "SOCIAL_RATE_LIMIT") throw error;
+
+  // Repli direct si la fonction toggle_follow est indisponible.
+  if (wantFollow) {
+    const { error: upsertError } = await supabase.from("follows").upsert(
+      {
+        follower_id: followerId,
+        followed_id: targetId,
+        status: "accepted",
+        is_friend: false,
+      },
+      { onConflict: "follower_id,followed_id" }
+    );
+    if (upsertError) throw upsertError;
+  } else {
+    const { error: deleteError } = await supabase
+      .from("follows")
+      .delete()
+      .eq("follower_id", followerId)
+      .eq("followed_id", targetId);
+    if (deleteError) throw deleteError;
+  }
+
+  return { changed: true, following: wantFollow };
+}
+
+/* =========================================================
    1. POLL CARD (Sondages)
    ========================================================= */
 
@@ -416,19 +490,32 @@ export const PollCard = memo(function PollCard({ postId, user_id }) {
 
 /* =========================================================
    2. SOCIAL POST ENHANCEMENTS (Interactions & Notifications corrigées + Boutons alignés)
+   ---------------------------------------------------------
+   Props d'abonnement (fournies par FeedTab, source unique pour tout le fil) :
+   - isFollowing : true / false, ou null tant que la liste n'est pas chargée
+   - onFollowChange(authorId, estAbonné) : met à jour toutes les publications
    ========================================================= */
 
 export const SocialPostEnhancements = memo(
-  function SocialPostEnhancements({ post, user_id, onLiked, onSaved, onShared }) {
+  function SocialPostEnhancements({
+    post,
+    user_id,
+    isFollowing = null,
+    onFollowChange,
+    onLiked,
+    onSaved,
+    onShared,
+  }) {
     const { showToast } = useToast();
 
     const [reaction, setReaction] = useState(null);
     const [reactionCount, setReactionCount] = useState(0);
     const [saved, setSaved] = useState(false);
     const [shareCount, setShareCount] = useState(0);
-    const [following, setFollowing] = useState(false);
     const [busy, setBusy] = useState(false);
     const [pop, setPop] = useState(false);
+
+    const following = isFollowing === true;
 
     // Fonction d'envoi de notification vers /api/social
     const sendNotification = async (interactionType) => {
@@ -456,6 +543,8 @@ export const SocialPostEnhancements = memo(
       }
     };
 
+    // L'état d'abonnement n'est PLUS chargé ici (une requête par publication en moins) :
+    // il vient de FeedTab.
     const load = useCallback(async () => {
       if (!post?.id) return;
 
@@ -464,7 +553,6 @@ export const SocialPostEnhancements = memo(
           likesResult,
           sharesResult,
           bookmarkResult,
-          followResult,
         ] = await Promise.all([
           supabase
             .from("post_likes")
@@ -484,23 +572,11 @@ export const SocialPostEnhancements = memo(
                 .eq("user_id", user_id)
                 .maybeSingle()
             : Promise.resolve({ data: null, error: null }),
-
-          isValidAuthUserId(user_id) &&
-          post.author_id &&
-          post.author_id !== user_id
-            ? supabase
-                .from("follows")
-                .select("followed_id")
-                .eq("follower_id", user_id)
-                .eq("followed_id", post.author_id)
-                .maybeSingle()
-            : Promise.resolve({ data: null, error: null }),
         ]);
 
         if (likesResult.error) throw likesResult.error;
         if (sharesResult.error) throw sharesResult.error;
         if (bookmarkResult.error) throw bookmarkResult.error;
-        if (followResult.error) throw followResult.error;
 
         const likeRows = likesResult.data || [];
 
@@ -513,14 +589,13 @@ export const SocialPostEnhancements = memo(
         );
         setSaved(!!bookmarkResult.data);
         setShareCount(sharesResult.count || 0);
-        setFollowing(!!followResult.data);
       } catch (error) {
         console.error(
           "[BAARO] Erreur chargement interactions :",
           error
         );
       }
-    }, [post?.id, post?.author_id, user_id]);
+    }, [post?.id, user_id]);
 
     useEffect(() => {
       load();
@@ -732,80 +807,67 @@ export const SocialPostEnhancements = memo(
         return;
       }
 
-      if (!post?.author_id || user_id === post.author_id || busy) {
+      const target = post?.author_id;
+
+      if (
+        !target ||
+        user_id === target ||
+        busy ||
+        isFollowing === null ||
+        followInFlight.has(target)
+      ) {
         return;
       }
 
+      followInFlight.add(target);
       setBusy(true);
 
-      const previousFollowing = following;
-      setFollowing(!previousFollowing);
+      const wantFollow = !following;
+
+      // Affichage immédiat sur TOUTES les publications de cet auteur.
+      onFollowChange?.(target, wantFollow);
 
       try {
-        const { data, error } = await supabase.rpc("toggle_follow", {
-          p_target: post.author_id,
-        });
+        // Relit l'état réel en base : jamais de bascule à l'aveugle.
+        const result = await applyFollow(user_id, target, wantFollow);
 
-        if (!error) {
-          const nextFollowing =
-            typeof data === "boolean" ? data : !previousFollowing;
+        onFollowChange?.(target, result.following);
 
-          setFollowing(nextFollowing);
-
+        if (!result.changed) {
           showToast(
-            nextFollowing
-              ? "Vous suivez maintenant ce compte"
-              : "Vous ne suivez plus ce compte",
-            "success"
+            wantFollow
+              ? "Vous suivez déjà ce compte"
+              : "Vous ne suiviez déjà plus ce compte",
+            "info"
           );
-
-          if (nextFollowing) {
-            await sendNotification("follow");
-          }
-
           return;
         }
 
-        if (previousFollowing) {
-          const { error: deleteError } = await supabase
-            .from("follows")
-            .delete()
-            .eq("follower_id", user_id)
-            .eq("followed_id", post.author_id);
+        showToast(
+          result.following
+            ? "Vous suivez maintenant ce compte"
+            : "Vous ne suivez plus ce compte",
+          "success"
+        );
 
-          if (deleteError) throw deleteError;
-
-          setFollowing(false);
-          showToast("Vous ne suivez plus ce compte", "success");
-        } else {
-          const { error: upsertError } = await supabase
-            .from("follows")
-            .upsert(
-              {
-                follower_id: user_id,
-                followed_id: post.author_id,
-                status: "accepted",
-                is_friend: false,
-              },
-              { onConflict: "follower_id,followed_id" }
-            );
-
-          if (upsertError) throw upsertError;
-
-          setFollowing(true);
-          showToast("Vous suivez maintenant ce compte", "success");
-
+        // Notification seulement quand l'abonnement vient réellement d'être créé.
+        if (result.following) {
           await sendNotification("follow");
         }
       } catch (error) {
         console.error("[BAARO] Erreur abonnement :", error);
-        setFollowing(previousFollowing);
+
+        // Retour à l'état d'avant le clic.
+        onFollowChange?.(target, isFollowing === true);
 
         showToast(
-          `Abonnement impossible : ${error?.message || "erreur inconnue"}`,
+          error?.message === "SOCIAL_RATE_LIMIT"
+            ? "Trop d'abonnements d'affilée, réessayez dans un instant."
+            : `Abonnement impossible : ${error?.message || "erreur inconnue"}`,
           "error"
         );
       } finally {
+        followInFlight.delete(target);
         setBusy(false);
       }
     };
@@ -816,7 +878,7 @@ export const SocialPostEnhancements = memo(
           <button
             type="button"
             onClick={follow}
-            disabled={busy}
+            disabled={busy || isFollowing === null}
             className="flex items-center justify-center gap-1 px-3 py-1.5 rounded-lg text-xs font-bold border transition-all active:scale-95 disabled:opacity-50"
             style={{
               borderColor: following ? COLORS.borderTeal : COLORS.border,
@@ -903,10 +965,19 @@ export const SocialPostEnhancements = memo(
 
 /* =========================================================
    3. SOCIAL SUGGESTIONS (Suggestions de comptes)
+   ---------------------------------------------------------
+   Props d'abonnement (fournies par FeedTab) :
+   - followingIds : Set des comptes déjà suivis (ils disparaissent des suggestions)
+   - onFollowChange(authorId, estAbonné)
    ========================================================= */
 
 export const SocialSuggestions = memo(
-  function SocialSuggestions({ user_id, onOpenProfile }) {
+  function SocialSuggestions({
+    user_id,
+    onOpenProfile,
+    followingIds = null,
+    onFollowChange,
+  }) {
     const { showToast } = useToast();
 
     const [items, setItems] = useState([]);
@@ -947,41 +1018,23 @@ export const SocialSuggestions = memo(
         return;
       }
 
-      if (busyId) return;
+      if (busyId || followInFlight.has(target)) return;
 
+      followInFlight.add(target);
       setBusyId(target);
 
       try {
-        const { data, error } = await supabase.rpc("toggle_follow", {
-          p_target: target,
-        });
+        // Lecture fraîche + abonnement idempotent (plus de double bascule).
+        const result = await applyFollow(user_id, target, true);
 
-        if (error) {
-          const functionMissing =
-            error.code === "PGRST202" || error.code === "42883";
-          if (!functionMissing) throw error;
-
-          const { error: upsertError } = await supabase.from("follows").upsert(
-            {
-              follower_id: user_id,
-              followed_id: target,
-              status: "accepted",
-              is_friend: false,
-            },
-            { onConflict: "follower_id,followed_id" }
-          );
-
-          if (upsertError) throw upsertError;
-        } else if (data === false) {
-          const { error: againError } = await supabase.rpc("toggle_follow", {
-            p_target: target,
-          });
-          if (againError) throw againError;
-        }
+        onFollowChange?.(target, result.following);
 
         const remaining = items.filter((entry) => entry.id !== target);
         setItems(remaining);
-        showToast("Abonnement ajouté", "success");
+        showToast(
+          result.changed ? "Abonnement ajouté" : "Vous suivez déjà ce compte",
+          result.changed ? "success" : "info"
+        );
 
         if (remaining.length < 3) loadSuggestions();
       } catch (error) {
@@ -994,11 +1047,21 @@ export const SocialSuggestions = memo(
           "error"
         );
       } finally {
+        followInFlight.delete(target);
         setBusyId(null);
       }
     };
 
-    if (!items.length) return null;
+    // Les comptes déjà suivis (depuis une publication ou ailleurs) ne sont plus proposés.
+    const visibleItems = useMemo(
+      () =>
+        followingIds
+          ? items.filter((entry) => !followingIds.has(entry.id))
+          : items,
+      [items, followingIds]
+    );
+
+    if (!visibleItems.length) return null;
 
     return (
       <section
@@ -1014,7 +1077,7 @@ export const SocialSuggestions = memo(
         </div>
 
         <div className="flex gap-3 overflow-x-auto pb-1">
-          {items.map((item) => (
+          {visibleItems.map((item) => (
             <div
               key={item.id}
               className="min-w-[160px] rounded-xl border p-3 transition-all hover:border-amber-400/50"
