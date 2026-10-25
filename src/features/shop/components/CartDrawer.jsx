@@ -64,7 +64,8 @@ export default function CartDrawer({ isOpen, onClose, id }) {
   const totalItems = cartItems.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
 
   if (!isOpen) return null;
-  return <div className="fixed inset-0 z-50 flex justify-end">
+  // Sur mobile/tablette, le panier s'arrête au-dessus de la barre de navigation fixe (≈ 5 rem)
+  return <div className="fixed inset-x-0 top-0 bottom-[calc(5rem+env(safe-area-inset-bottom))] lg:bottom-0 z-50 flex justify-end">
     <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
     <div className="relative w-full max-w-md h-full flex flex-col shadow-2xl" style={{ background: COLORS.surface }}>
       <div className="flex items-center justify-between p-4 border-b" style={{ borderColor: COLORS.border }}>
