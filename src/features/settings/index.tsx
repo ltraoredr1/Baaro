@@ -7,7 +7,8 @@
 // - Thème et langue appliqués par des effets (aussi quand ils viennent du cloud).
 // - Réglages natifs (anti-capture, biométrie) appliqués dans App.jsx dès le démarrage
 //   (plus ici : ils ne s'appliquaient qu'à l'ouverture de cet onglet).
-// - Activation de la biométrie vérifiée avant d'être enregistrée (confirmBiometricEnable).
+// - Biométrie : un seul interrupteur. APK = verrou natif (confirmBiometricEnable),
+//   web = empreinte WebAuthn (enableBiometric / disableBiometric).
 // - Messages : couleur ⚠️ dédiée et disparition automatique.
 // - Section 2FA comptée dans « aucun résultat ».
 // - Import / export / copie du JSON remplacés par : télécharger mes données,
@@ -59,6 +60,7 @@ import { uploadExternalMedia } from "../../lib/externalMedia.js";
 import { useSettings } from "../../hooks/useSettings.js";
 import { STORAGE_KEY as LOCAL_KEY } from "../../lib/appSettings.js";
 import { confirmBiometricEnable } from "../../lib/nativeSettings.js";
+import { enableBiometric, disableBiometric } from "../../lib/biometric.js";
 import { NotificationPrefsPanel } from "./NotificationPrefsPanel.jsx";
 import NotificationSoundSettings from "./NotificationSoundSettings.jsx";
 import BlockedUsersPanel from "./BlockedUsersPanel.jsx";
@@ -632,12 +634,23 @@ export default function SettingsTab({
     setMessage(t("reset_done"));
   };
 
-  // Active / désactive la biométrie. À l'activation, on vérifie que l'utilisateur
-  // peut réellement s'authentifier : sinon il se verrouillerait hors de l'app.
+  // Active / désactive la biométrie (un seul interrupteur pour l'APK et le web).
+  // - APK : on vérifie que l'utilisateur peut réellement s'authentifier (verrou natif),
+  //   sinon il se verrouillerait hors de l'app.
+  // - Web : on enregistre l'empreinte WebAuthn de cet appareil.
   const handleBiometricChange = async (value: boolean) => {
-    if (value && !(await confirmBiometricEnable())) {
-      setMessage("❌ " + t("action_error"));
-      return;
+    if (value) {
+      const ok = Capacitor.isNativePlatform()
+        ? await confirmBiometricEnable()
+        : user?.id
+          ? await enableBiometric(user.id, displayName)
+          : false;
+      if (!ok) {
+        setMessage("❌ " + t("action_error"));
+        return;
+      }
+    } else if (user?.id) {
+      disableBiometric(user.id);
     }
     void save({ biometric: value });
   };
@@ -794,6 +807,7 @@ export default function SettingsTab({
 
   const handleLogout = async () => {
     if (!window.confirm(t("logout_confirm"))) return;
+    try { sessionStorage.removeItem("baaro_bio_ok"); } catch { /* ignore */ }
     try {
       await supabase.auth.signOut({ scope: "local" });
     } catch {
@@ -809,6 +823,7 @@ export default function SettingsTab({
 
   const handleLogoutAll = async () => {
     if (!window.confirm(t("logout_all_confirm"))) return;
+    try { sessionStorage.removeItem("baaro_bio_ok"); } catch { /* ignore */ }
     setAccountBusy(true);
     try {
       await supabase.auth.signOut({ scope: "global" });
@@ -839,6 +854,7 @@ export default function SettingsTab({
     try {
       const { error: rpcError } = await supabase.rpc("delete_own_account");
       if (rpcError) throw rpcError;
+      if (user?.id) disableBiometric(user.id);
 
       try {
         await supabase.auth.signOut({ scope: "global" });
