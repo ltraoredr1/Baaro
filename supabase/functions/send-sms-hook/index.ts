@@ -101,50 +101,50 @@ Deno.serve(async (req: Request) => {
       return fail("Invalid SMS payload", 400);
     }
 
+    // La dernière ligne "@domaine #code" permet le remplissage automatique (Web OTP).
     const message =
       `BAARO: Votre code de vérification est ${otp}\n\n` +
-      `@baaro-xi.vercel.app #${otp}\n\n` +
-      `Ne partagez pas ce code.`;
+      `Ne partagez pas ce code.\n\n` +
+      `@baaro-xi.vercel.app #${otp}`;
 
-    const smsResponse = await fetch(
-      "https://api.infinireach.io/api/v1/messages",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-API-Key": apiKey,
-        },
-        body: JSON.stringify({
-          to: phone,
-          message,
-          from: fromPhone,
-          channel: "sms",
-          externalId: crypto.randomUUID(),
-        }),
-        signal: AbortSignal.timeout(15_000),
+    // Envoi en arrière-plan : Supabase n'attend la réponse du hook que ~5 s.
+    const sendSms = fetch("https://api.infinireach.io/api/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-API-Key": apiKey,
       },
-    );
+      body: JSON.stringify({
+        to: phone,
+        message,
+        from: fromPhone,
+        channel: "sms",
+        externalId: crypto.randomUUID(),
+      }),
+      signal: AbortSignal.timeout(20_000),
+    })
+      .then((res) => {
+        // Ne journalise pas le corps de la réponse : il peut contenir des données personnelles.
+        if (res.ok) {
+          console.log("[SMS hook] SMS provider accepted the request.");
+        } else {
+          console.error(`[SMS hook] SMS provider returned HTTP ${res.status}.`);
+        }
+      })
+      .catch((e) => {
+        console.error(
+          e?.name === "TimeoutError"
+            ? "[SMS hook] SMS provider request timed out."
+            : "[SMS hook] SMS provider request failed.",
+        );
+      });
 
-    if (!smsResponse.ok) {
-      // Ne journalise pas le corps de la réponse : il peut contenir des données personnelles.
-      console.error(
-        `[SMS hook] SMS provider returned HTTP ${smsResponse.status}.`,
-      );
-      return fail("SMS provider unavailable", 502);
-    }
-
-    console.log("[SMS hook] SMS provider accepted the request.");
+    // @ts-ignore EdgeRuntime est fourni par Supabase Edge Functions
+    EdgeRuntime.waitUntil(sendSms);
 
     return ok();
-  } catch (error) {
-    const timedOut = error instanceof Error && error.name === "TimeoutError";
-
-    console.error(
-      timedOut
-        ? "[SMS hook] SMS provider request timed out."
-        : "[SMS hook] Request failed.",
-    );
-
+  } catch {
+    console.error("[SMS hook] Request failed.");
     return fail("SMS delivery request failed", 502);
   }
 });
