@@ -62,6 +62,24 @@ async function recordConsents() {
   }
 }
 
+// Vérifie si un compte existe pour ce numéro, même quand on est déconnecté
+// (la fonction SQL "security definer" contourne la RLS de la table profiles)
+async function phoneAccountExists(normalizedPhone) {
+  const { data, error } = await supabase.rpc('phone_account_exists', {
+    p_phone: normalizedPhone,
+  });
+  if (!error) return !!data;
+
+  // Secours si la fonction SQL n'est pas encore créée
+  console.warn('[BAARO] RPC phone_account_exists indisponible :', error);
+  const { data: existingProfile } = await supabase
+    .from('profiles')
+    .select('id')
+    .eq('phone', normalizedPhone)
+    .maybeSingle();
+  return !!existingProfile;
+}
+
 export default function PhoneAuth({ onAuthSuccess }) {
   const [legalAccepted, setLegalAccepted] = useState(false);
   // Étapes : 'phone', 'login_password', 'register_password', 'otp_verify'
@@ -200,25 +218,21 @@ export default function PhoneAuth({ onAuthSuccess }) {
 
     setLoading(true);
     try {
-      // On vérifie si un profil existe déjà avec ce numéro
-      const { data: existingProfile } = await supabase
-        .from('profiles')
-        .select('id')
-        .eq('phone', normalizedPhone)
-        .maybeSingle();
+      const exists = await phoneAccountExists(normalizedPhone);
 
       setPhone(normalizedPhone);
+      setPassword('');
 
-      if (existingProfile) {
-        // Compte existant -> Demander directement le mot de passe (Pas de SMS)
+      if (exists) {
+        // Compte existant -> mot de passe seul (pas de SMS)
         setStep('login_password');
       } else {
-        // Nouveau compte -> Demander à créer un mot de passe avant l'envoi du SMS d'inscription
+        // Nouveau compte -> création du mot de passe puis SMS d'inscription
         setStep('register_password');
       }
     } catch (err) {
       console.error('Erreur vérification:', err);
-      setError("Une erreur est survenue.");
+      setError('Une erreur est survenue.');
     } finally {
       setLoading(false);
     }
