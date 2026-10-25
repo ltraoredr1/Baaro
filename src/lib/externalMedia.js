@@ -5,12 +5,20 @@ import { supabase } from "../supabaseClient.js";
  * Upload média vers R2 via /api/media (prepare -> PUT R2 -> finalize)
  * Compatible avec les 2 signatures :
  *  uploadExternalMedia(file, "posts")
- *  uploadExternalMedia(file, { folder: "theme", maxBytes: ..., onProgress: (pct) => {} })
- *
- * onProgress reçoit 0..100 pendant l'envoi vers R2 (progression réelle, octet par octet).
+ *  uploadExternalMedia(file, {
+ *    folder: "theme", onProgress: (pct) => {},
+ *    compress: true,        // images : réduites avant l'envoi (défaut true)
+ *    maxImageSide: 1280,    // côté max en pixels (ex. 512 pour un avatar)
+ *    imageQuality: 0.8,
+ *  })
  */
 
 const PUT_RETRIES = 3;
+
+// Réglages de compression des images
+const DEFAULT_MAX_SIDE = 1280;
+const DEFAULT_QUALITY = 0.8;
+const SKIP_COMPRESS_UNDER = 150 * 1024; // en dessous : on n'y touche pas
 
 // Dans l'APK (https://localhost), "/api/..." ne pointe pas vers Vercel :
 // on utilise donc une URL absolue en natif. Sur le web, rien ne change.
@@ -41,6 +49,50 @@ async function callMediaApi(payload, token) {
     );
   }
   return data;
+}
+
+/**
+ * Réduit une image avant l'envoi : redimensionne et recompresse (WebP, sinon JPEG).
+ * Ne touche pas aux GIF/SVG, ni aux petits fichiers, et garde l'original
+ * si le résultat n'est pas plus léger. En cas d'erreur, renvoie l'original.
+ */
+async function compressImage(
+  file,
+  { maxSide = DEFAULT_MAX_SIDE, quality = DEFAULT_QUALITY } = {}
+) {
+  try {
+    if (!file?.type?.startsWith("image/")) return file;
+    if (/gif|svg/i.test(file.type)) return file;
+    if (file.size < SKIP_COMPRESS_UNDER) return file;
+
+    const bitmap = await createImageBitmap(file, {
+      imageOrientation: "from-image",
+    });
+
+    const scale = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));
+    const width = Math.max(1, Math.round(bitmap.width * scale));
+    const height = Math.max(1, Math.round(bitmap.height * scale));
+
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    canvas.getContext("2d").drawImage(bitmap, 0, 0, width, height);
+    bitmap.close?.();
+
+    const toBlob = (type) =>
+      new Promise((resolve) => canvas.toBlob(resolve, type, quality));
+
+    let blob = await toBlob("image/webp");
+    if (!blob || blob.type !== "image/webp") blob = await toBlob("image/jpeg");
+    if (!blob || blob.size >= file.size) return file;
+
+    const base = (file.name || "image").replace(/\.[^.]+$/, "");
+    const ext = blob.type === "image/webp" ? "webp" : "jpg";
+    return new File([blob], `${base}.${ext}`, { type: blob.type });
+  } catch (error) {
+    console.warn("[BAARO] Compression image ignorée :", error);
+    return file;
+  }
 }
 
 // PUT avec XHR : fournit la progression réelle (fetch ne la donne pas).
@@ -95,9 +147,13 @@ async function putFileWithRetry(url, file, onProgress) {
   throw lastError;
 }
 
-export async function uploadExternalMedia(file, folderOrOptions = "posts") {
+export async function uploadExternalMedia(inputFile, folderOrOptions = "posts") {
   let folder = "posts";
   let onProgress = null;
+  let compress = true;
+  let maxImageSide = DEFAULT_MAX_SIDE;
+  let imageQuality = DEFAULT_QUALITY;
+
   if (typeof folderOrOptions === "string") {
     folder = folderOrOptions;
   } else if (folderOrOptions && typeof folderOrOptions === "object") {
@@ -106,7 +162,16 @@ export async function uploadExternalMedia(file, folderOrOptions = "posts") {
       typeof folderOrOptions.onProgress === "function"
         ? folderOrOptions.onProgress
         : null;
+    if (folderOrOptions.compress === false) compress = false;
+    if (folderOrOptions.maxImageSide) maxImageSide = folderOrOptions.maxImageSide;
+    if (folderOrOptions.imageQuality) imageQuality = folderOrOptions.imageQuality;
   }
+
+  // Réduit les images AVANT l'envoi : moins de données montantes et descendantes
+  const file = compress
+    ? await compressImage(inputFile, { maxSide: maxImageSide, quality: imageQuality })
+    : inputFile;
+
   const ext = file.name?.split(".").pop() || "bin";
   const size = file.size;
   const contentType = file.type || "application/octet-stream";
@@ -148,25 +213,43 @@ export async function uploadExternalMedia(file, folderOrOptions = "posts") {
 /**
  * Media URL helpers for BAARO.
  * Binary media is served from Cloudflare R2. Supabase Storage is not used.
- * (Repris tels quels du fichier collé : si ils sont déjà dans un autre fichier, tu peux les retirer ici.)
+ *
+ * Redimensionnement à la volée (optionnel) : mets VITE_IMAGE_RESIZE=1 si ton
+ * domaine R2 est un domaine personnalisé Cloudflare avec les « Transformations »
+ * d'images activées. Sinon les URL restent inchangées.
  */
+
+const RESIZE_ENABLED = import.meta.env.VITE_IMAGE_RESIZE === "1";
 
 function cleanUrl(url) {
   return typeof url === "string" && url.trim() ? url.trim() : url;
 }
 
+function resized(url, width, quality = 75) {
+  const clean = cleanUrl(url);
+  if (!RESIZE_ENABLED || typeof clean !== "string") return clean;
+  if (!/^https?:\/\//i.test(clean)) return clean;
+  if (/\.(gif|svg|mp4|webm|mov|m4v)(\?|#|$)/i.test(clean)) return clean;
+  try {
+    const { origin, pathname, search } = new URL(clean);
+    return `${origin}/cdn-cgi/image/width=${width},quality=${quality},format=auto${pathname}${search}`;
+  } catch {
+    return clean;
+  }
+}
+
 export function thumbUrl(url) {
-  return cleanUrl(url);
+  return resized(url, 400);
 }
 
 export function avatarUrl(url) {
-  return cleanUrl(url);
+  return resized(url, 160);
 }
 
 export function feedImageUrl(url) {
-  return cleanUrl(url);
+  return resized(url, 800);
 }
 
 export function fullImageUrl(url) {
-  return cleanUrl(url);
+  return resized(url, 1600, 80);
 }
