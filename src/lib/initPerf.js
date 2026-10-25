@@ -14,7 +14,7 @@ import { shouldPrefetch } from "./appSettings.js";
 let initialized = false;
 
 export function initPerf({
-  tabs = ["messages", "shop", "videos"],
+  tabs = ["messages", "stories", "debates", "shop", "discover", "videos"],
 } = {}) {
   if (initialized) return;
 
