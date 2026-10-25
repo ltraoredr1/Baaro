@@ -16,9 +16,9 @@ import {
   X,
   Menu,
 } from "lucide-react";
-import { useApp } from "../contexts/AppContext.jsx";
 import { COLORS as THEME_COLORS } from "../theme.js";
 import { useFeedTabPulse } from "../lib/feedTabRefresh.jsx";
+import { prefetchTab } from "../lib/prefetchTab.js";
 
 const FALLBACK = {
   bg: "#0B1220",
@@ -51,6 +51,13 @@ const MORE_ITEMS = [
   { id: "settings", label: "Réglages", icon: Settings },
 ];
 
+// Dès que le doigt touche (ou que la souris survole) un bouton, le code de
+// l'onglet commence à se télécharger : il est prêt quand le clic arrive.
+const warm = (id) => ({
+  onPointerEnter: () => prefetchTab(id),
+  onPointerDown: () => prefetchTab(id),
+});
+
 export function Navigation({ activeTab, setActiveTab, unreadMessages = 0 }) {
   const C = { ...FALLBACK, ...(THEME_COLORS || {}) };
   const { t } = useTranslation();
@@ -58,8 +65,6 @@ export function Navigation({ activeTab, setActiveTab, unreadMessages = 0 }) {
 
   // Animation de l'icône du Fil (double appui sur l'onglet Feed uniquement)
   const feedPulse = useFeedTabPulse();
-
-  useApp();
 
   const goTo = (id) => {
     setActiveTab(id);
@@ -85,6 +90,7 @@ export function Navigation({ activeTab, setActiveTab, unreadMessages = 0 }) {
               key={item.id}
               data-guide-tab={item.id}
               onClick={() => goTo(item.id)}
+              {...warm(item.id)}
               className={`flex items-center gap-3 px-3.5 py-2.5 rounded-2xl transition-all duration-300 group ${
                 isActive ? "shadow-md scale-[1.02]" : "hover:bg-white/5"
               }`}
@@ -160,6 +166,7 @@ export function Navigation({ activeTab, setActiveTab, unreadMessages = 0 }) {
                 key={item.id}
                 data-guide-tab={item.id}
                 onClick={() => goTo(item.id)}
+                {...warm(item.id)}
                 className={`flex flex-col items-center gap-1 px-2 py-1.5 rounded-xl transition-all duration-300 ${
                   isActive ? "scale-105" : "hover:opacity-100 opacity-70"
                 }`}
@@ -253,6 +260,7 @@ export function Navigation({ activeTab, setActiveTab, unreadMessages = 0 }) {
                     key={item.id}
                     type="button"
                     onClick={() => goTo(item.id)}
+                    {...warm(item.id)}
                     className="relative flex flex-col items-center gap-2.5 p-3.5 rounded-2xl border transition-all duration-300 active:scale-95 group shadow-lg cursor-pointer"
                     style={{
                       background: isActive
