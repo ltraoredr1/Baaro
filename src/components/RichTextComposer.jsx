@@ -13,6 +13,9 @@ import {
   Strikethrough,
   Quote,
   Code,
+  Type,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 
 const MAX_LENGTH = 10000;
@@ -49,6 +52,14 @@ function normalizeMaxLength(value) {
   return Math.max(0, Math.floor(number));
 }
 
+/**
+ * Props ajoutées (toutes optionnelles, comportement inchangé par défaut) :
+ *  - rows              : hauteur du champ (défaut 5)
+ *  - collapsibleTools  : barre d'outils repliable via un bouton « Outils de texte »
+ *  - defaultToolsOpen  : barre ouverte au départ (si collapsibleTools)
+ *  - enablePoll        : affiche le bouton / l'éditeur de sondage intégré (défaut true)
+ *  - compact           : pied de champ plus discret
+ */
 export default function RichTextComposer({
   value = "",
   onChange,
@@ -57,6 +68,11 @@ export default function RichTextComposer({
   pollData = null,
   onPollChange,
   className = "",
+  rows = 5,
+  collapsibleTools = false,
+  defaultToolsOpen = false,
+  enablePoll = true,
+  compact = false,
 }) {
   const textareaRef = useRef(null);
   const selectionFrameRef = useRef(null);
@@ -64,6 +80,9 @@ export default function RichTextComposer({
 
   const effectiveMaxLength = normalizeMaxLength(maxLength);
   const text = String(value ?? "").slice(0, effectiveMaxLength);
+
+  const [toolsOpen, setToolsOpen] = useState(defaultToolsOpen);
+  const toolsVisible = !collapsibleTools || toolsOpen;
 
   const [showPollEditor, setShowPollEditor] = useState(
     Boolean(pollData)
@@ -95,6 +114,11 @@ export default function RichTextComposer({
       }
     };
   }, []);
+
+  // Referme le menu IA quand la barre d'outils est repliée
+  useEffect(() => {
+    if (!toolsVisible) setShowAiMenu(false);
+  }, [toolsVisible]);
 
   const updateText = useCallback(
     (nextValue) => {
@@ -331,77 +355,80 @@ export default function RichTextComposer({
   );
 
   return (
-    <div className={`w-full space-y-3 ${className}`}>
-      <div
-        className="flex flex-wrap items-center gap-1.5"
-        role="toolbar"
-        aria-label="Mise en forme du texte"
-      >
-        {toolButton("Gras", Bold, () =>
-          insertAroundSelection("**")
-        )}
-
-        {toolButton("Italique", Italic, () =>
-          insertAroundSelection("*")
-        )}
-
-        {toolButton("Souligné", Underline, () =>
-          insertAroundSelection("++")
-        )}
-
-        {toolButton("Barré", Strikethrough, () =>
-          insertAroundSelection("~~")
-        )}
-
-        {toolButton("Code", Code, () =>
-          insertAroundSelection("`")
-        )}
-
-        {toolButton("Citation", Quote, () =>
-          insertLinePrefix("> ")
-        )}
-
-        {toolButton("Liste à puces", List, () =>
-          insertLinePrefix("- ")
-        )}
-
-        {toolButton("Liste numérotée", ListOrdered, () =>
-          insertLinePrefix("1. ")
-        )}
-
-        {toolButton("Ajouter un lien", LinkIcon, insertLink)}
-
-        {toolButton("Créer un sondage", BarChart2, togglePoll)}
-
-        <div className="relative">
-          <button
-            type="button"
-            title="Assistant IA"
-            aria-label="Assistant IA"
-            aria-expanded={showAiMenu}
-            aria-haspopup="menu"
-            onClick={() => setShowAiMenu((previous) => !previous)}
-            className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-amber-400/30 px-3 text-sm transition hover:bg-amber-400/10"
-          >
-            <Sparkles size={16} aria-hidden="true" />
-            IA
-          </button>
-
-          {showAiMenu && (
-            <div
-              role="menu"
-              aria-label="Actions de l'assistant IA"
-              className="absolute left-0 top-full z-30 mt-2 min-w-48 rounded-xl border border-white/10 bg-neutral-900 p-2 text-white shadow-xl"
-            >
-              {aiButton("improve", "✨ Améliorer le texte")}
-              {aiButton("correct", "✓ Corriger les fautes")}
-              {aiButton("hashtags", "# Générer des hashtags")}
-              {aiButton("summarize", "Résumé")}
-              {aiButton("translate", "Traduire en français")}
-            </div>
+    <div className={`w-full space-y-2 ${className}`}>
+      {toolsVisible && (
+        <div
+          className="flex flex-wrap items-center gap-1.5"
+          role="toolbar"
+          aria-label="Mise en forme du texte"
+        >
+          {toolButton("Gras", Bold, () =>
+            insertAroundSelection("**")
           )}
+
+          {toolButton("Italique", Italic, () =>
+            insertAroundSelection("*")
+          )}
+
+          {toolButton("Souligné", Underline, () =>
+            insertAroundSelection("++")
+          )}
+
+          {toolButton("Barré", Strikethrough, () =>
+            insertAroundSelection("~~")
+          )}
+
+          {toolButton("Code", Code, () =>
+            insertAroundSelection("`")
+          )}
+
+          {toolButton("Citation", Quote, () =>
+            insertLinePrefix("> ")
+          )}
+
+          {toolButton("Liste à puces", List, () =>
+            insertLinePrefix("- ")
+          )}
+
+          {toolButton("Liste numérotée", ListOrdered, () =>
+            insertLinePrefix("1. ")
+          )}
+
+          {toolButton("Ajouter un lien", LinkIcon, insertLink)}
+
+          {enablePoll &&
+            toolButton("Créer un sondage", BarChart2, togglePoll)}
+
+          <div className="relative">
+            <button
+              type="button"
+              title="Assistant IA"
+              aria-label="Assistant IA"
+              aria-expanded={showAiMenu}
+              aria-haspopup="menu"
+              onClick={() => setShowAiMenu((previous) => !previous)}
+              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-amber-400/30 px-3 text-sm transition hover:bg-amber-400/10"
+            >
+              <Sparkles size={16} aria-hidden="true" />
+              IA
+            </button>
+
+            {showAiMenu && (
+              <div
+                role="menu"
+                aria-label="Actions de l'assistant IA"
+                className="absolute left-0 top-full z-30 mt-2 min-w-48 rounded-xl border border-white/10 bg-neutral-900 p-2 text-white shadow-xl"
+              >
+                {aiButton("improve", "✨ Améliorer le texte")}
+                {aiButton("correct", "✓ Corriger les fautes")}
+                {aiButton("hashtags", "# Générer des hashtags")}
+                {aiButton("summarize", "Résumé")}
+                {aiButton("translate", "Traduire en français")}
+              </div>
+            )}
+          </div>
         </div>
-      </div>
+      )}
 
       <textarea
         ref={textareaRef}
@@ -409,19 +436,37 @@ export default function RichTextComposer({
         onChange={(event) => updateText(event.target.value)}
         placeholder={placeholder}
         maxLength={effectiveMaxLength}
-        rows={5}
+        rows={rows}
         className="w-full resize-y rounded-xl border border-white/10 bg-transparent p-3 text-sm leading-relaxed text-current outline-none transition focus:border-amber-400/60"
         aria-label="Contenu de la publication"
       />
 
-      <div className="flex items-center justify-between text-xs opacity-70">
-        <span>Markdown pris en charge</span>
-        <span aria-live="polite">
+      <div className="flex items-center justify-between text-xs">
+        {collapsibleTools ? (
+          <button
+            type="button"
+            onClick={() => setToolsOpen((previous) => !previous)}
+            aria-expanded={toolsOpen}
+            className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 font-medium transition hover:bg-white/10"
+          >
+            <Type size={13} aria-hidden="true" />
+            Outils de texte
+            {toolsOpen ? (
+              <ChevronUp size={13} aria-hidden="true" />
+            ) : (
+              <ChevronDown size={13} aria-hidden="true" />
+            )}
+          </button>
+        ) : (
+          !compact && <span className="opacity-70">Markdown pris en charge</span>
+        )}
+
+        <span className="opacity-70" aria-live="polite">
           {text.length}/{effectiveMaxLength}
         </span>
       </div>
 
-      {showPollEditor && (
+      {enablePoll && showPollEditor && (
         <div className="space-y-3 rounded-xl border border-white/10 p-3">
           <div className="flex items-center justify-between gap-2">
             <h4 className="text-sm font-semibold">
