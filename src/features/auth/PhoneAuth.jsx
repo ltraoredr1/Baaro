@@ -246,9 +246,8 @@ export default function PhoneAuth({ onAuthSuccess }) {
 
     try {
       setFresh();
-      const emailTech = phoneToEmail(phone);
       const { data, error: loginError } = await supabase.auth.signInWithPassword({
-        email: emailTech,
+        phone: normalizePhone(phone),
         password: password,
       });
 
@@ -322,20 +321,9 @@ export default function PhoneAuth({ onAuthSuccess }) {
       if (verifyError) throw verifyError;
       if (!data || !data.user) throw new Error('Validation échouée.');
 
-      const emailTech = phoneToEmail(phone);
-
-      if (isRecovery) {
-        // En mode récupération : mise à jour du mot de passe
-        const { error: updateError } = await supabase.auth.updateUser({ password: password });
-        if (updateError) throw updateError;
-      } else {
-        // En mode inscription : association de l'e-mail technique et du mot de passe
-        const { error: updateError } = await supabase.auth.updateUser({
-          email: emailTech,
-          password: password,
-        });
-        if (updateError) throw updateError;
-      }
+      // Inscription ou récupération : on rattache le mot de passe au numéro
+      const { error: updateError } = await supabase.auth.updateUser({ password: password });
+      if (updateError) throw updateError;
 
       await ensureProfile(data.user);
       if (!isRecovery) {
