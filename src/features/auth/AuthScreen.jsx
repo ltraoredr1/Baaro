@@ -17,8 +17,18 @@ import {
   getPendingRef,
 } from "../../lib/referralApi.js";
 import PhoneAuth from "./PhoneAuth.jsx";
+import AccountSuggestions from "./AccountSuggestions.jsx";
+import { rememberAccount, savePasswordCredential } from "../../lib/knownAccounts.js";
 
 const LEGAL_VERSION = "2026-10-01";
+const FRESH_KEY = "baaro_bio_fresh";
+
+function setFresh() {
+  try { sessionStorage.setItem(FRESH_KEY, "1"); } catch {}
+}
+function clearFresh() {
+  try { sessionStorage.removeItem(FRESH_KEY); } catch {}
+}
 
 /**
  * Écran d'authentification BAARO — « invité d'abord »
@@ -164,6 +174,9 @@ export default function AuthScreen() {
     setLoading(true);
 
     try {
+      // Évite que le verrou d'empreinte (web) redemande le doigt juste après le mot de passe
+      setFresh();
+
       // ========== CONNEXION ==========
       if (isLogin) {
         const { data, error: authError } = await supabase.auth.signInWithPassword({
@@ -193,6 +206,8 @@ export default function AuthScreen() {
           throw new Error("Session non créée. Réessaie dans quelques secondes.");
         }
 
+        rememberAccount("email", cleanEmail);
+        savePasswordCredential(cleanEmail, password);
         setSuccess("Ravi de vous revoir ! Connexion réussie.");
         return;
       }
@@ -248,17 +263,21 @@ export default function AuthScreen() {
         } catch (e) {
           console.error("[BAARO] Consents:", e);
         }
+        rememberAccount("email", cleanEmail);
+        savePasswordCredential(cleanEmail, password);
         setSuccess("Votre compte a été créé avec succès !");
         return;
       }
 
       // Cas 3 : inscription OK mais confirmation e-mail requise
+      clearFresh();
       if (user?.id) {
         try {
           await recordConsents();
         } catch (e) {
           console.error("[BAARO] Consents:", e);
         }
+        rememberAccount("email", cleanEmail);
         setSuccess(
           "Un e-mail de vérification a été envoyé. Ouvre ta boîte (et les spams), clique sur le lien, puis reconnecte-toi."
         );
@@ -270,6 +289,7 @@ export default function AuthScreen() {
         "Inscription enregistrée. Si tu ne reçois pas d’e-mail, vérifie les spams ou réessaie dans 1 minute."
       );
     } catch (err) {
+      clearFresh();
       console.error("Erreur authentification email :", err);
       setError(
         err?.message || "Une erreur s'est produite lors de l'authentification."
@@ -454,18 +474,27 @@ export default function AuthScreen() {
             </div>
 
             <div className="flex flex-col gap-3">
-              <input
-                type="email"
-                placeholder="Adresse email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-                autoComplete="email"
-                className="w-full px-4 py-3 rounded-xl border border-slate-800 bg-slate-950/60 text-slate-100 placeholder-slate-500 outline-none focus:border-amber-500/50 transition-colors text-sm"
-              />
+              <div>
+                <input
+                  type="email"
+                  name="email"
+                  placeholder="Adresse email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                  autoComplete="username"
+                  className="w-full px-4 py-3 rounded-xl border border-slate-800 bg-slate-950/60 text-slate-100 placeholder-slate-500 outline-none focus:border-amber-500/50 transition-colors text-sm"
+                />
+                <AccountSuggestions
+                  type="email"
+                  query={email}
+                  onPick={(v) => setEmail(v)}
+                />
+              </div>
               <div className="relative">
                 <input
                   type={showPassword ? "text" : "password"}
+                  name="password"
                   placeholder="Mot de passe"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}

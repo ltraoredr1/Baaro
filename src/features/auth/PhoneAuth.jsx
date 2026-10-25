@@ -2,9 +2,18 @@ import { useState, useEffect, useRef } from 'react';
 import PhoneInput, { isValidPhoneNumber } from 'react-phone-number-input';
 import 'react-phone-number-input/style.css';
 import { supabase } from '../../supabaseClient.js';
+import AccountSuggestions from './AccountSuggestions.jsx';
+import { rememberAccount, savePasswordCredential } from '../../lib/knownAccounts.js';
+import {
+  isBiometricAvailable,
+  hasBiometric,
+  enableBiometric,
+} from '../../lib/biometric.js';
 
 const RESEND_DELAY = 30;
 const LEGAL_VERSION = '2026-10-01';
+const OK_KEY = 'baaro_bio_ok';
+const FRESH_KEY = 'baaro_bio_fresh';
 
 function guessDefaultCountry() {
   try {
@@ -30,6 +39,13 @@ function phoneToEmail(phone) {
 function buildFallbackHandle(user_id) {
   const cleanId = String(user_id).replace(/-/g, '').slice(0, 12);
   return `@user_${cleanId}`;
+}
+
+function setFresh() {
+  try { sessionStorage.setItem(FRESH_KEY, '1'); } catch {}
+}
+function clearFresh() {
+  try { sessionStorage.removeItem(FRESH_KEY); } catch {}
 }
 
 // Enregistre l'acceptation des documents légaux sans jamais bloquer la connexion
@@ -60,9 +76,17 @@ export default function PhoneAuth({ onAuthSuccess }) {
   const [timeLeft, setTimeLeft] = useState(300);
   const [isRecovery, setIsRecovery] = useState(false);
 
+  // Empreinte (web uniquement) : un choix, désactivé par défaut
+  const [bioAvailable, setBioAvailable] = useState(false);
+  const [wantBio, setWantBio] = useState(false);
+
   const timerRef = useRef(null);
   const expiryTimerRef = useRef(null);
   const otpInputRef = useRef(null);
+
+  useEffect(() => {
+    isBiometricAvailable().then(setBioAvailable);
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -150,6 +174,19 @@ export default function PhoneAuth({ onAuthSuccess }) {
     }
   }
 
+  // Fin de connexion : mémorise le compte, propose le mot de passe au
+  // gestionnaire du navigateur, enregistre l'empreinte si choisie.
+  async function finishAuth(user) {
+    const cleanPhone = normalizePhone(phone);
+    rememberAccount('phone', cleanPhone);
+    savePasswordCredential(cleanPhone, password);
+    try { sessionStorage.setItem(OK_KEY, user.id); } catch {}
+    if (bioAvailable && wantBio && !hasBiometric(user.id)) {
+      await enableBiometric(user.id, cleanPhone);
+    }
+    if (onAuthSuccess) onAuthSuccess(user);
+  }
+
   // ÉTAPE 1 : Vérifier si le numéro existe déjà en base
   async function handleCheckPhone(event) {
     if (event) event.preventDefault();
@@ -194,6 +231,7 @@ export default function PhoneAuth({ onAuthSuccess }) {
     setLoading(true);
 
     try {
+      setFresh();
       const emailTech = phoneToEmail(phone);
       const { data, error: loginError } = await supabase.auth.signInWithPassword({
         email: emailTech,
@@ -205,8 +243,9 @@ export default function PhoneAuth({ onAuthSuccess }) {
       if (!data || !data.user) throw new Error('Utilisateur introuvable.');
 
       await ensureProfile(data.user);
-      if (onAuthSuccess) onAuthSuccess(data.user);
+      await finishAuth(data.user);
     } catch (err) {
+      clearFresh();
       console.error('Erreur connexion:', err);
       setError('Mot de passe incorrect ou compte introuvable.');
     } finally {
@@ -259,6 +298,7 @@ export default function PhoneAuth({ onAuthSuccess }) {
 
     setLoading(true);
     try {
+      setFresh();
       const { data, error: verifyError } = await supabase.auth.verifyOtp({
         phone: phone,
         token: normalizedOtp,
@@ -287,8 +327,9 @@ export default function PhoneAuth({ onAuthSuccess }) {
       if (!isRecovery) {
         await recordConsents();
       }
-      if (onAuthSuccess) onAuthSuccess(data.user);
+      await finishAuth(data.user);
     } catch (err) {
+      clearFresh();
       console.error('Erreur vérification OTP:', err);
       setError(err.message || 'Code incorrect ou expiré.');
     } finally {
@@ -330,6 +371,32 @@ export default function PhoneAuth({ onAuthSuccess }) {
     }
   }
 
+  // Champ invisible : relie le mot de passe au numéro pour le gestionnaire du navigateur
+  const hiddenUsername = (
+    <input
+      type="text"
+      name="username"
+      autoComplete="username"
+      value={phone}
+      readOnly
+      tabIndex={-1}
+      aria-hidden="true"
+      style={{ position: 'absolute', opacity: 0, height: 0, width: 0, pointerEvents: 'none' }}
+    />
+  );
+
+  const bioCheckbox = bioAvailable && (
+    <label className="flex items-center gap-2 text-xs text-slate-400">
+      <input
+        type="checkbox"
+        checked={wantBio}
+        onChange={(e) => setWantBio(e.target.checked)}
+        className="accent-amber-500"
+      />
+      <span>Activer l'empreinte digitale pour la prochaine fois</span>
+    </label>
+  );
+
   return (
     <div className="w-full max-w-sm mx-auto space-y-4">
       {/* 1. SAISIE DU NUMÉRO */}
@@ -348,6 +415,11 @@ export default function PhoneAuth({ onAuthSuccess }) {
               autoComplete="username"
               className="w-full border border-slate-700 rounded-xl px-3 py-2.5 text-xs outline-none bg-slate-950/60 text-slate-100"
             />
+            <AccountSuggestions
+              type="phone"
+              query={phone}
+              onPick={(v) => setPhone(v)}
+            />
           </div>
 
           {error && <p className="text-rose-400 text-xs">{error}</p>}
@@ -364,7 +436,8 @@ export default function PhoneAuth({ onAuthSuccess }) {
 
       {/* 2A. CONNEXION AVEC MOT DE PASSE (Compte existant) */}
       {step === 'login_password' && (
-        <form onSubmit={handleLoginWithPassword} className="space-y-4">
+        <form onSubmit={handleLoginWithPassword} className="space-y-4 relative">
+          {hiddenUsername}
           <div>
             <p className="text-xs text-slate-400 mb-2">
               Connexion pour : <span className="text-slate-200 font-semibold">{phone}</span>
@@ -374,6 +447,7 @@ export default function PhoneAuth({ onAuthSuccess }) {
             </label>
             <input
               type="password"
+              name="password"
               placeholder="Ton mot de passe"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
@@ -382,6 +456,8 @@ export default function PhoneAuth({ onAuthSuccess }) {
               required
             />
           </div>
+
+          {bioCheckbox}
 
           {error && <p className="text-rose-400 text-xs">{error}</p>}
 
@@ -414,7 +490,8 @@ export default function PhoneAuth({ onAuthSuccess }) {
 
       {/* 2B. CRÉATION DU MOT DE PASSE (Nouvelle inscription) */}
       {step === 'register_password' && (
-        <form onSubmit={handleStartRegistration} className="space-y-4">
+        <form onSubmit={handleStartRegistration} className="space-y-4 relative">
+          {hiddenUsername}
           <div>
             <p className="text-xs text-slate-400 mb-2">
               Première inscription pour : <span className="text-slate-200 font-semibold">{phone}</span>
@@ -424,6 +501,7 @@ export default function PhoneAuth({ onAuthSuccess }) {
             </label>
             <input
               type="password"
+              name="password"
               placeholder="Minimum 6 caractères"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
@@ -446,6 +524,8 @@ export default function PhoneAuth({ onAuthSuccess }) {
               <a href="/community-guidelines" className="underline text-amber-400">règles de la communauté</a>.
             </span>
           </label>
+
+          {bioCheckbox}
 
           {error && <p className="text-rose-400 text-xs">{error}</p>}
 
