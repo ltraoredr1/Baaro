@@ -3,19 +3,45 @@ import { useState, useEffect } from "react";
 import { supabase } from "../../supabaseClient.js";
 import { createPayment, getAvailableProviders } from "../../lib/paymentProvider.js";
 import { COLORS } from "../../theme.js"; // 🆕 Import du thème pour la cohérence visuelle
+import { CURRENCIES } from "../../components/ProductForm.jsx";
 
 const COUNTRY_CURRENCY = {
-  ML: "XOF", CI: "XOF", SN: "XOF", BF: "XOF", BJ: "XOF", TG: "XOF", GN: "XOF", CM: "XOF",
-  FR: "EUR", BE: "EUR", DE: "EUR", ES: "EUR", IT: "EUR", US: "USD", CA: "USD",
+  // UEMOA
+  ML: "XOF", CI: "XOF", SN: "XOF", BF: "XOF", BJ: "XOF", TG: "XOF", NE: "XOF", GW: "XOF",
+  // CEMAC
+  CM: "XAF", GA: "XAF", CG: "XAF", TD: "XAF", CF: "XAF", GQ: "XAF",
+  // Autres pays africains
+  GN: "GNF", MA: "MAD", DZ: "DZD", TN: "TND", NG: "NGN", GH: "GHS", EG: "EGP",
+  KE: "KES", ZA: "ZAR", CD: "CDF", MR: "MRU", RW: "RWF",
+  // Reste du monde
+  FR: "EUR", BE: "EUR", DE: "EUR", ES: "EUR", IT: "EUR", CH: "CHF", GB: "GBP", US: "USD", CA: "CAD",
+};
+
+// Le fuseau horaire est plus fiable que la langue du téléphone ("fr" ne dit pas le pays)
+const TIMEZONE_COUNTRY = {
+  "Africa/Bamako": "ML", "Africa/Dakar": "SN", "Africa/Abidjan": "CI", "Africa/Ouagadougou": "BF",
+  "Africa/Niamey": "NE", "Africa/Lome": "TG", "Africa/Porto-Novo": "BJ", "Africa/Bissau": "GW",
+  "Africa/Conakry": "GN", "Africa/Douala": "CM", "Africa/Libreville": "GA", "Africa/Brazzaville": "CG",
+  "Africa/Ndjamena": "TD", "Africa/Bangui": "CF", "Africa/Malabo": "GQ", "Africa/Casablanca": "MA",
+  "Africa/Algiers": "DZ", "Africa/Tunis": "TN", "Africa/Lagos": "NG", "Africa/Accra": "GH",
+  "Africa/Cairo": "EG", "Africa/Nairobi": "KE", "Africa/Johannesburg": "ZA", "Africa/Kinshasa": "CD",
+  "Africa/Lubumbashi": "CD", "Africa/Nouakchott": "MR", "Africa/Kigali": "RW",
+  "Europe/Paris": "FR", "Europe/Brussels": "BE", "Europe/Berlin": "DE", "Europe/Madrid": "ES",
+  "Europe/Rome": "IT", "Europe/Zurich": "CH", "Europe/London": "GB",
+  "America/Toronto": "CA", "America/Montreal": "CA", "America/Vancouver": "CA",
+  "America/New_York": "US", "America/Chicago": "US", "America/Los_Angeles": "US",
 };
 
 const TRIAL_DAYS = 30;
 
 function guessDefaultCountry() {
   try {
-    const locale = navigator.language || navigator.languages?.[0] || "";
-    const region = locale.split("-")[1];
-    if (region && region.length === 2) return region.toUpperCase();
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (TIMEZONE_COUNTRY[tz]) return TIMEZONE_COUNTRY[tz];
+  } catch { /* ignore */ }
+  try {
+    const region = (navigator.language || "").split("-")[1]?.toUpperCase();
+    if (region && COUNTRY_CURRENCY[region]) return region;
   } catch { /* ignore */ }
   return "ML";
 }
@@ -27,6 +53,9 @@ function guessDefaultCountry() {
  */
 export default function ShopRegistrationForm({ onRegistered }) {
   const [country, setCountry] = useState(guessDefaultCountry);
+  // Devise de la boutique : celle du pays par défaut, modifiable par l'utilisateur
+  const [currencyChoice, setCurrencyChoice] = useState(null);
+  const shopCurrency = currencyChoice || COUNTRY_CURRENCY[country] || "XOF";
   const [isPremium, setIsPremium] = useState(false);
   const [pricing, setPricing] = useState(null);
   const [providers, setProviders] = useState([]);
@@ -138,7 +167,7 @@ export default function ShopRegistrationForm({ onRegistered }) {
             category: category.trim() || null,
             country,
             city: city.trim(),
-            currency: COUNTRY_CURRENCY[country] || "XOF",
+            currency: shopCurrency,
             is_active: true,
             subscription_status: "trial",
             trial_ends_at: trialEnds.toISOString(),
@@ -151,7 +180,7 @@ export default function ShopRegistrationForm({ onRegistered }) {
         await supabase.from("shop_subscriptions").insert({
           shop_id: shop.id,
           amount: 0,
-          currency: COUNTRY_CURRENCY[country] || "XOF",
+          currency: shopCurrency,
           was_premium_rate: false,
           provider: "trial",
           payment_ref: `trial_${shop.id}_${Date.now()}`,
@@ -178,7 +207,7 @@ export default function ShopRegistrationForm({ onRegistered }) {
           category: category.trim() || null,
           country,
           city: city.trim(),
-          currency: currency || "XOF",
+          currency: shopCurrency,
           is_active: false,
           subscription_status: "none",
         })
@@ -262,13 +291,27 @@ export default function ShopRegistrationForm({ onRegistered }) {
 
       <select
         value={country}
-        onChange={(e) => setCountry(e.target.value)}
+        onChange={(e) => { setCountry(e.target.value); setCurrencyChoice(null); }}
         className="w-full border rounded-xl px-3 py-2 text-sm outline-none"
         style={{ background: COLORS.surface2, borderColor: COLORS.border, color: COLORS.ivory }}
       >
         {Object.keys(COUNTRY_CURRENCY).map((code) => (
           <option key={code} value={code} style={{ background: COLORS.surface, color: COLORS.ivory }}>
             {code}
+          </option>
+        ))}
+      </select>
+
+      <select
+        value={shopCurrency}
+        onChange={(e) => setCurrencyChoice(e.target.value)}
+        className="w-full border rounded-xl px-3 py-2 text-sm outline-none"
+        style={{ background: COLORS.surface2, borderColor: COLORS.border, color: COLORS.ivory }}
+        aria-label="Devise de la boutique"
+      >
+        {CURRENCIES.map((c) => (
+          <option key={c.code} value={c.code} style={{ background: COLORS.surface, color: COLORS.ivory }}>
+            {c.label}
           </option>
         ))}
       </select>
