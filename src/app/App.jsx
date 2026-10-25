@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { Routes, Route, useNavigate, useParams, Navigate } from "react-router-dom";
 import { useApp } from "../contexts/AppContext.jsx";
 import AuthScreen from "../features/auth/index.js";
+import BiometricGate from "../features/auth/BiometricGate.jsx";
 import { MainShell } from "./MainShell.jsx";
 import { LoadingScreen } from "./TabFallback.jsx";
 import InvitePage from "../pages/InvitePage.jsx";
@@ -154,7 +155,9 @@ function AppShell() {
 
   return (
     <ErrorBoundary>
-      <MainShell />
+      <BiometricGate>
+        <MainShell />
+      </BiometricGate>
     </ErrorBoundary>
   );
 }
