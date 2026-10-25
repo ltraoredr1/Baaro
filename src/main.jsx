@@ -4,8 +4,6 @@ import ReactDOM from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import { Provider } from "react-redux";
 import { Capacitor } from "@capacitor/core";
-import { StatusBar, Style } from "@capacitor/status-bar";
-import { CapacitorUpdater } from "@capgo/capacitor-updater";
 import App from "./app/App.jsx";
 import { AppProvider } from "./contexts/AppContext.jsx";
 import { ToastProvider } from "./components/ToastContext.jsx";
@@ -52,6 +50,8 @@ initPerf();
 
 // ===================================================================
 // FIX NATIF 2 : StatusBar + Capgo Updater
+// Les plugins natifs sont importés À LA DEMANDE : sur le web ils ne sont
+// plus chargés du tout (bundle plus léger, démarrage plus rapide).
 // ===================================================================
 const setupNative = async () => {
   if (!Capacitor.isNativePlatform()) return;
@@ -59,28 +59,29 @@ const setupNative = async () => {
   // Capgo - Notifier que l'app est prête EN PREMIER (évite le rollback :
   // Capgo annule la mise à jour si ce n'est pas appelé dans les 10 s).
   try {
+    const { CapacitorUpdater } = await import("@capgo/capacitor-updater");
     await CapacitorUpdater.notifyAppReady();
     console.log("[Capgo] App ready notified");
+
+    try {
+      CapacitorUpdater.addListener("updateAvailable", (res) => {
+        console.log("[Capgo] Update available", res);
+      });
+    } catch (e) {
+      console.log("[Capgo] listener error", e);
+    }
   } catch (e) {
     console.log("[Capgo] Updater not ready", e);
   }
 
   // StatusBar
   try {
+    const { StatusBar, Style } = await import("@capacitor/status-bar");
     await StatusBar.setOverlaysWebView({ overlay: false });
     await StatusBar.setStyle({ style: Style.Dark });
     await StatusBar.setBackgroundColor({ color: "#0b1220" });
   } catch (e) {
     console.log("StatusBar not available", e);
-  }
-
-  // Optionnel: écouter les updates
-  try {
-    CapacitorUpdater.addListener("updateAvailable", (res) => {
-      console.log("[Capgo] Update available", res);
-    });
-  } catch (e) {
-    console.log("[Capgo] listener error", e);
   }
 };
 
