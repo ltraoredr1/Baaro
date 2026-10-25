@@ -308,6 +308,10 @@ export default function PhoneAuth({ onAuthSuccess }) {
       setError('Le code doit contenir 6 chiffres.');
       return;
     }
+    if (!password || password.length < 6) {
+      setError('Le mot de passe doit contenir au moins 6 caractères.');
+      return;
+    }
 
     setLoading(true);
     try {
@@ -575,11 +579,30 @@ export default function PhoneAuth({ onAuthSuccess }) {
             />
           </div>
 
+          {isRecovery && (
+            <div>
+              <label className="block text-xs font-semibold mb-1 text-slate-400">
+                Nouveau mot de passe
+              </label>
+              <input
+                type="password"
+                name="password"
+                placeholder="Minimum 6 caractères"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoComplete="new-password"
+                minLength={6}
+                className="w-full border border-slate-700 rounded-xl px-3 py-2.5 text-xs outline-none bg-slate-950/60 text-slate-100"
+                required
+              />
+            </div>
+          )}
+
           {error && <p className="text-rose-400 text-xs">{error}</p>}
 
           <button
             type="submit"
-            disabled={loading || otp.length !== 6}
+            disabled={loading || otp.length !== 6 || (isRecovery && password.length < 6)}
             className="w-full py-3 rounded-xl font-bold text-xs shadow-lg transition disabled:opacity-50 bg-teal-500 text-slate-950 hover:bg-teal-400"
           >
             {loading ? 'Validation...' : 'Valider et finaliser'}
