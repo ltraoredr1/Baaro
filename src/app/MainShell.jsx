@@ -1,12 +1,9 @@
-import { useEffect, useRef, useState, Suspense } from "react";
+import { useEffect, useRef, useState, Suspense, lazy, memo } from "react";
+import { Capacitor } from "@capacitor/core";
 import { useApp } from "../contexts/AppContext.jsx";
 import { Header } from "../components/Header.jsx";
 import { Navigation } from "../components/Navigation.jsx";
-import ProfileModal from "../components/ProfileModal.jsx";
-import { NotificationDrawer } from "../components/NotificationDrawer.jsx";
-import { GlobalSearchModal } from "../components/GlobalSearchModal.jsx";
 import { ErrorBoundary } from "../components/ErrorBoundary.jsx";
-import { OnboardingModal } from "../features/profile/index.js";
 import { useApplyPendingReferral } from "../hooks/useApplyPendingReferral.js";
 import { useSettings } from "../hooks/useSettings.js";
 import { useToast } from "../components/ToastContext.jsx";
@@ -22,12 +19,36 @@ import { supabase } from "../supabaseClient.js";
 import { useCryptoKeys } from "../features/messaging/hooks/useCryptoKeys.js";
 import { useIncomingCalls } from "../features/messaging/hooks/useIncomingCalls.js";
 import { useIncomingCallFromPush } from "../features/messaging/hooks/useIncomingCallFromPush.js";
-import { ChatCallModal } from "../features/messaging/components/ChatCallModal.jsx";
 import { messageService } from "../features/messaging/lib/messageService.js";
 import { useNotificationSound } from "../hooks/useNotificationSound.js";
-import FloatingAiAssistant from "../components/FloatingAiAssistant.jsx";
-import { GuideHost, ONBOARDING_CLOSED_EVENT } from "../features/guide/index.js";
 import AnimatedTab from "../components/ui/AnimatedTab.jsx";
+
+// ---------------------------------------------------------------
+// Modales / modules secondaires : chargés à la demande (hors du
+// chemin critique du premier affichage).
+// ---------------------------------------------------------------
+const loadProfileModal = () => import("../components/ProfileModal.jsx");
+const ProfileModal = lazy(loadProfileModal);
+
+const loadChatCallModal = () =>
+  import("../features/messaging/components/ChatCallModal.jsx").then((m) => ({
+    default: m.ChatCallModal,
+  }));
+const ChatCallModal = lazy(loadChatCallModal);
+
+const NotificationDrawer = lazy(() =>
+  import("../components/NotificationDrawer.jsx").then((m) => ({ default: m.NotificationDrawer }))
+);
+const GlobalSearchModal = lazy(() =>
+  import("../components/GlobalSearchModal.jsx").then((m) => ({ default: m.GlobalSearchModal }))
+);
+const OnboardingModal = lazy(() =>
+  import("../features/profile/index.js").then((m) => ({ default: m.OnboardingModal }))
+);
+const GuideHost = lazy(() =>
+  import("../features/guide/index.js").then((m) => ({ default: m.GuideHost }))
+);
+const FloatingAiAssistant = lazy(() => import("../components/FloatingAiAssistant.jsx"));
 
 const THEME_BG_MAP = {
   midnight: "#0B1220",
@@ -47,6 +68,28 @@ const DOUBLE_TAP_DELAY = 350; // ms
 const FALLBACK_COLORS = {
   ivory: "#F5F3EF",
 };
+
+// Onglets « gardés en vie » : une fois visités, ils restent montés (cachés) et se
+// ré-affichent instantanément, avec leurs données et leur position de défilement.
+// Volontairement exclus : videos, debates, messages, assistant, settings, offline
+// (temps réel / caméra / son / lecture au montage).
+const KEEP_ALIVE_TABS = new Set(["feed", "discover", "friends", "community", "companies", "shop"]);
+
+// Un onglet caché n'est jamais re-rendu par le shell (comparateur mémoïsé).
+const KeepAliveSlot = memo(
+  function KeepAliveSlot({ active, children }) {
+    return (
+      <div
+        className={active ? "baaro-tab-in" : undefined}
+        style={active ? undefined : { display: "none" }}
+        aria-hidden={active ? undefined : true}
+      >
+        {children}
+      </div>
+    );
+  },
+  (prev, next) => !prev.active && !next.active
+);
 
 function LockedMessages({ onCreateAccount }) {
   return (
@@ -84,10 +127,91 @@ export function MainShell() {
     clearRealtimeIncoming();
   };
   const { playNotification } = useNotificationSound();
+  // Référence stable : évite de recréer le canal temps réel si la fonction change.
+  const playRef = useRef(playNotification);
+  playRef.current = playNotification;
+
   const [unreadMessages, setUnreadMessages] = useState(0);
   const [unreadNotifications, setUnreadNotifications] = useState(0);
 
+  const [activeTab, setActiveTab] = useState(() =>
+    loadLastTab("feed")
+  );
+
+  // Langue et thème : source unique = réglages (useSettings applique déjà le DOM,
+  // le stockage local et le cloud). Plus d'état local ni de clé "baaro_theme".
+  const { settings, update: updateSettings } = useSettings();
+  const lang = settings.lang;
+  const setLang = (l) => {
+    if (l && l !== settings.lang) void updateSettings({ lang: l });
+  };
+  const currentTheme = settings.theme || "midnight";
+  const setCurrentTheme = (themeId) => {
+    if (themeId && themeId !== settings.theme) void updateSettings({ theme: themeId });
+  };
+
+  // Couleur de la barre de statut : suit la couleur choisie pour le thème « custom ».
+  const statusBg =
+    currentTheme === "custom"
+      ? settings.customTheme?.bgColor || THEME_BG_MAP.custom
+      : THEME_BG_MAP[currentTheme] || THEME_BG_MAP.midnight;
+
+  const [inspectingProfileId, setInspectingProfileId] = useState(null);
+  const [profileReadOnly, setProfileReadOnly] = useState(false);
+  const [notifDrawerOpen, setNotifDrawerOpen] = useState(false);
+  const [searchModalOpen, setSearchModalOpen] = useState(false);
+  const [forceOnboarding, setForceOnboarding] = useState(false);
+
+  // --- ÉTAT GLOBAL POUR LA MODALE DE CRÉATION DU FIL & UI ---
+  const [isFeedCreateOpen, setIsFeedCreateOpen] = useState(false);
+  const [showUi, setShowUi] = useState(false);
+
+  // Modules secondaires (guide, assistant flottant, tiroirs...) : montés quand le
+  // navigateur est au repos, jamais pendant le premier affichage de l'onglet.
+  const [lateReady, setLateReady] = useState(false);
+
+  // État lu par l'écouteur du bouton Retour natif (évite de le ré-enregistrer
+  // à chaque changement d'onglet).
+  const navStateRef = useRef({});
+  navStateRef.current = {
+    activeTab,
+    notifDrawerOpen,
+    searchModalOpen,
+    inspectingProfileId,
+    forceOnboarding,
+    isFeedCreateOpen,
+  };
+
+  // Onglets déjà visités parmi ceux gardés en vie.
+  const keptRef = useRef(new Set());
+  if (KEEP_ALIVE_TABS.has(activeTab)) keptRef.current.add(activeTab);
+
+  // Montage différé des modules secondaires + préchargement des modales courantes.
+  useEffect(() => {
+    let cancelled = false;
+    const run = () => {
+      if (cancelled) return;
+      setLateReady(true);
+      loadChatCallModal().catch(() => {});
+      loadProfileModal().catch(() => {});
+    };
+    if (typeof window.requestIdleCallback === "function") {
+      const handle = window.requestIdleCallback(run, { timeout: 2500 });
+      return () => {
+        cancelled = true;
+        window.cancelIdleCallback?.(handle);
+      };
+    }
+    const handle = setTimeout(run, 1500);
+    return () => {
+      cancelled = true;
+      clearTimeout(handle);
+    };
+  }, []);
+
   // Compteurs persistants : ils ne dépendent plus de l’ouverture du drawer ou de l’onglet Chat.
+  // Premier calcul différé de 2 s (ne concurrence plus l'ouverture de l'onglet) et
+  // rafales d'événements regroupées (anti-rebond 400 ms).
   useEffect(() => {
     if (!id || isAnonymous) {
       setUnreadMessages(0);
@@ -95,6 +219,8 @@ export function MainShell() {
       return undefined;
     }
     let alive = true;
+    let debounce = null;
+
     const refreshCounters = async () => {
       const [conversations, notificationRows] = await Promise.all([
         messageService.getConversations(id).catch(() => []),
@@ -104,20 +230,31 @@ export function MainShell() {
       setUnreadMessages((conversations || []).filter((c) => c.unread).length);
       setUnreadNotifications(notificationRows.data?.length || 0);
     };
-    refreshCounters();
+
+    const scheduleRefresh = () => {
+      clearTimeout(debounce);
+      debounce = setTimeout(refreshCounters, 400);
+    };
+
+    const first = setTimeout(refreshCounters, 2000);
+
     const channel = supabase
       .channel(`global-baaro-events:${id}`)
-      .on("postgres_changes", { event: "*", schema: "public", table: "messages", filter: `recipient_id=eq.${id}` }, () => {
-        playNotification("baaro_pulse");
-        refreshCounters();
+      .on("postgres_changes", { event: "*", schema: "public", table: "messages", filter: `recipient_id=eq.${id}` }, (payload) => {
+        // Son uniquement pour un NOUVEAU message (pas quand on marque « lu »).
+        if (payload?.eventType === "INSERT") playRef.current?.("baaro_pulse");
+        scheduleRefresh();
       })
-      .on("postgres_changes", { event: "*", schema: "public", table: "notifications", filter: `user_id=eq.${id}` }, () => refreshCounters())
+      .on("postgres_changes", { event: "*", schema: "public", table: "notifications", filter: `user_id=eq.${id}` }, () => scheduleRefresh())
       .subscribe();
+
     return () => {
       alive = false;
+      clearTimeout(first);
+      clearTimeout(debounce);
       supabase.removeChannel(channel);
     };
-  }, [id, isAnonymous, playNotification]);
+  }, [id, isAnonymous]);
 
   // Les push ouverts depuis Android/Web amènent directement au bon module.
   useEffect(() => {
@@ -134,10 +271,6 @@ export function MainShell() {
   }, []);
 
   useApplyPendingReferral({ showToast });
-
-  const [activeTab, setActiveTab] = useState(() =>
-    loadLastTab("feed")
-  );
 
   // Les notifications push ouvrent la racine avec ?open_debate=<UUID>.
   // L'événement couvre aussi les clics depuis le drawer sans rechargement.
@@ -168,34 +301,6 @@ export function MainShell() {
     return () => window.removeEventListener("baaro:open-debate", onOpenDebate);
   }, []);
 
-  // Langue et thème : source unique = réglages (useSettings applique déjà le DOM,
-  // le stockage local et le cloud). Plus d'état local ni de clé "baaro_theme".
-  const { settings, update: updateSettings } = useSettings();
-  const lang = settings.lang;
-  const setLang = (l) => {
-    if (l && l !== settings.lang) void updateSettings({ lang: l });
-  };
-  const currentTheme = settings.theme || "midnight";
-  const setCurrentTheme = (themeId) => {
-    if (themeId && themeId !== settings.theme) void updateSettings({ theme: themeId });
-  };
-
-  // Couleur de la barre de statut : suit la couleur choisie pour le thème « custom ».
-  const statusBg =
-    currentTheme === "custom"
-      ? settings.customTheme?.bgColor || THEME_BG_MAP.custom
-      : THEME_BG_MAP[currentTheme] || THEME_BG_MAP.midnight;
-
-  const [inspectingProfileId, setInspectingProfileId] = useState(null);
-  const [profileReadOnly, setProfileReadOnly] = useState(false);
-  const [notifDrawerOpen, setNotifDrawerOpen] = useState(false);
-  const [searchModalOpen, setSearchModalOpen] = useState(false);
-  const [forceOnboarding, setForceOnboarding] = useState(false);
-
-  // --- ÉTAT GLOBAL POUR LA MODALE DE CRÉATION DU FIL & UI ---
-  const [isFeedCreateOpen, setIsFeedCreateOpen] = useState(false);
-  const [showUi, setShowUi] = useState(false);
-
   const COLORS = {
     ...FALLBACK_COLORS,
     ...(THEME_COLORS || {}),
@@ -222,114 +327,101 @@ export function MainShell() {
   };
 
   /* =========================================================
-     NATIVE BACK BUTTON / STATUS BAR
+     NATIVE : BARRE DE STATUT (seulement si thème / couleur change)
      ========================================================= */
   useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return undefined;
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const { StatusBar, Style } = await import("@capacitor/status-bar");
+        if (cancelled) return;
+        await StatusBar.setOverlaysWebView({ overlay: false });
+        await StatusBar.setStyle({
+          style: currentTheme === "light" ? Style.Light : Style.Dark,
+        });
+        await StatusBar.setBackgroundColor({ color: statusBg });
+      } catch {
+        // StatusBar indisponible
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentTheme, statusBg]);
+
+  /* =========================================================
+     NATIVE : BOUTON RETOUR (enregistré UNE seule fois)
+     ========================================================= */
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return undefined;
     let backListener = null;
     let cancelled = false;
 
-    const initNative = async () => {
+    (async () => {
       try {
-        const { Capacitor } = await import("@capacitor/core");
+        const { App: CapApp } = await import("@capacitor/app");
+        if (cancelled) return;
 
-        if (!Capacitor.isNativePlatform() || cancelled) {
-          return;
-        }
+        const l = await CapApp.addListener("backButton", () => {
+          const s = navStateRef.current;
 
-        const [{ App: CapApp }, { StatusBar, Style }] =
-          await Promise.all([
-            import("@capacitor/app"),
-            import("@capacitor/status-bar"),
-          ]);
-
-        if (cancelled) {
-          return;
-        }
-
-        try {
-          await StatusBar.setOverlaysWebView({
-            overlay: false,
-          });
-
-          await StatusBar.setStyle({
-            style: currentTheme === "light" ? Style.Light : Style.Dark,
-          });
-
-          await StatusBar.setBackgroundColor({
-            color: statusBg,
-          });
-        } catch {
-          // StatusBar indisponible
-        }
-
-        backListener = await CapApp.addListener(
-          "backButton",
-          ({ canGoBack }) => {
-            if (
-              notifDrawerOpen ||
-              searchModalOpen ||
-              inspectingProfileId ||
-              forceOnboarding ||
-              isFeedCreateOpen
-            ) {
-              setNotifDrawerOpen(false);
-              setSearchModalOpen(false);
-              setInspectingProfileId(null);
-              setProfileReadOnly(false);
-              setForceOnboarding(false);
-              setIsFeedCreateOpen(false);
-              return;
-            }
-
-            // La page « privacy » renvoie vers les réglages (comme son bouton Retour).
-            if (activeTab === "privacy") {
-              setActiveTab("settings");
-              return;
-            }
-
-            if (activeTab === "videos") {
-              setActiveTab("feed");
-              return;
-            }
-
-            if (activeTab !== "feed") {
-              setActiveTab("feed");
-              return;
-            }
-
-            CapApp.exitApp();
+          if (
+            s.notifDrawerOpen ||
+            s.searchModalOpen ||
+            s.inspectingProfileId ||
+            s.forceOnboarding ||
+            s.isFeedCreateOpen
+          ) {
+            setNotifDrawerOpen(false);
+            setSearchModalOpen(false);
+            setInspectingProfileId(null);
+            setProfileReadOnly(false);
+            setForceOnboarding(false);
+            setIsFeedCreateOpen(false);
+            return;
           }
-        );
 
-        // Démonté pendant l'await : on retire tout de suite l'écouteur
-        // (sinon les écouteurs s'empilent à chaque changement d'onglet).
+          // La page « privacy » renvoie vers les réglages (comme son bouton Retour).
+          if (s.activeTab === "privacy") {
+            setActiveTab("settings");
+            return;
+          }
+
+          if (s.activeTab === "videos") {
+            setActiveTab("feed");
+            return;
+          }
+
+          if (s.activeTab !== "feed") {
+            setActiveTab("feed");
+            return;
+          }
+
+          CapApp.exitApp();
+        });
+
+        // Démonté pendant l'await : on retire tout de suite l'écouteur.
         if (cancelled) {
-          backListener.remove();
-          backListener = null;
+          l.remove();
+          return;
         }
+        backListener = l;
       } catch {
         // Web
       }
-    };
-
-    initNative();
+    })();
 
     return () => {
       cancelled = true;
       if (backListener) {
         backListener.remove();
+        backListener = null;
       }
     };
-  }, [
-    activeTab,
-    currentTheme,
-    statusBg,
-    notifDrawerOpen,
-    searchModalOpen,
-    inspectingProfileId,
-    forceOnboarding,
-    isFeedCreateOpen,
-  ]);
+  }, []);
 
   /* =========================================================
      WELCOME TOAST
@@ -369,6 +461,8 @@ export function MainShell() {
   }, [activeTab]);
 
   const isImmersive = activeTab === "videos";
+
+  const isKeepAliveActive = KEEP_ALIVE_TABS.has(activeTab);
 
   const Tab = activeTab === "messages" && isAnonymous
     ? LockedMessages
@@ -469,30 +563,43 @@ export function MainShell() {
       }}
     >
       <TabPulseStyles />
+      <style>{`@keyframes baaroTabIn{from{opacity:0}to{opacity:1}}.baaro-tab-in{animation:baaroTabIn .18s ease-out}@media (prefers-reduced-motion:reduce){.baaro-tab-in{animation:none}}`}</style>
 
-      {incoming && <ChatCallModal mode="incoming" {...incoming} onClose={clearIncoming} />}
+      {incoming && (
+        <Suspense fallback={null}>
+          <ChatCallModal mode="incoming" {...incoming} onClose={clearIncoming} />
+        </Suspense>
+      )}
       <OfflineBanner />
 
-      <OnboardingModal
-        forceOpen={forceOnboarding}
-        onClose={() => {
-          setForceOnboarding(false);
-          // Le guide (visite ou IA, au choix) se propose juste après l'introduction.
-          window.dispatchEvent(new CustomEvent(ONBOARDING_CLOSED_EVENT));
-        }}
-      />
+      {(lateReady || forceOnboarding) && (
+        <Suspense fallback={null}>
+          <OnboardingModal
+            forceOpen={forceOnboarding}
+            onClose={() => {
+              setForceOnboarding(false);
+              // Le guide (visite ou IA, au choix) se propose juste après l'introduction.
+              import("../features/guide/index.js")
+                .then((m) =>
+                  window.dispatchEvent(new CustomEvent(m.ONBOARDING_CLOSED_EVENT))
+                )
+                .catch(() => {});
+            }}
+          />
+        </Suspense>
+      )}
 
       {/* =====================================================
           HEADER (BOUTON CRÉER INTELLIGENT SELON L'ONGLET)
           ===================================================== */}
       {(!isImmersive || showUi) && (
-          <Header
+        <Header
           lang={lang}
           setLang={setLang}
           userProfile={userProfile}
           onOpenProfile={() => setInspectingProfileId(id)}
-            onOpenNotifications={() => setNotifDrawerOpen(true)}
-            notificationCount={unreadNotifications}
+          onOpenNotifications={() => setNotifDrawerOpen(true)}
+          notificationCount={unreadNotifications}
           onOpenSearch={() => setSearchModalOpen(true)}
           isCreateOpen={activeTab === "feed" ? isFeedCreateOpen : false}
           onToggleCreate={() => {
@@ -540,27 +647,42 @@ export function MainShell() {
           tabIndex={-1}
         >
           <ErrorBoundary>
-            <Suspense fallback={<TabFallback />}>
-              {Tab ? (
-                <>
-                  <AnimatedTab tabKey={activeTab}>
-                    <Tab
-                      key={activeTab}
-                      {...(tabProps[activeTab] || {})}
-                    />
-                  </AnimatedTab>
-                  {(!isImmersive || showUi) && (
-                    <FutureModulePanel moduleId={activeTab} onNavigate={(moduleId, action) => {
-                      if (/IA|intelligent|montage|traduction|mémoire/i.test(action)) setActiveTab("assistant");
-                      else if (/sécurité|confidentialité|appareils|contrôles|export|privacy/i.test(action)) setActiveTab("settings");
-                      else if (/communauté|modération/i.test(action)) setActiveTab("community");
-                      else if (/recherche|historique/i.test(action)) setSearchModalOpen(true);
-                      else if (/vidéo|Story/i.test(action)) setActiveTab(action.includes("Story") ? "stories" : "videos");
-                    }} />
-                  )}
-                </>
-              ) : null}
-            </Suspense>
+            {/* Onglets gardés en vie : montés une fois, puis simplement cachés/affichés. */}
+            {[...keptRef.current].map((key) => {
+              const KeptTab = tabs[key];
+              if (!KeptTab) return null;
+              return (
+                <KeepAliveSlot key={key} active={key === activeTab}>
+                  <ErrorBoundary>
+                    <Suspense fallback={<TabFallback />}>
+                      <KeptTab {...(tabProps[key] || {})} />
+                    </Suspense>
+                  </ErrorBoundary>
+                </KeepAliveSlot>
+              );
+            })}
+
+            {/* Autres onglets : montés à l'ouverture, démontés à la sortie (comme avant). */}
+            {!isKeepAliveActive && Tab ? (
+              <Suspense fallback={<TabFallback />}>
+                <AnimatedTab tabKey={activeTab}>
+                  <Tab
+                    key={activeTab}
+                    {...(tabProps[activeTab] || {})}
+                  />
+                </AnimatedTab>
+              </Suspense>
+            ) : null}
+
+            {Tab && (!isImmersive || showUi) && (
+              <FutureModulePanel moduleId={activeTab} onNavigate={(moduleId, action) => {
+                if (/IA|intelligent|montage|traduction|mémoire/i.test(action)) setActiveTab("assistant");
+                else if (/sécurité|confidentialité|appareils|contrôles|export|privacy/i.test(action)) setActiveTab("settings");
+                else if (/communauté|modération/i.test(action)) setActiveTab("community");
+                else if (/recherche|historique/i.test(action)) setSearchModalOpen(true);
+                else if (/vidéo|Story/i.test(action)) setActiveTab(action.includes("Story") ? "stories" : "videos");
+              }} />
+            )}
           </ErrorBoundary>
 
           {/* Espace réservé en bas : le contenu remonte au-dessus de la barre de navigation
@@ -586,60 +708,76 @@ export function MainShell() {
         </div>
       )}
 
-      {/* MODALES ET ASSISTANT */}
+      {/* MODALES ET ASSISTANT (chargés à la demande) */}
       {inspectingProfileId && (
-        <ProfileModal
-          id={inspectingProfileId}
-          currentId={id}
-          onClose={() => {
-            setInspectingProfileId(null);
-            setProfileReadOnly(false);
-          }}
-          onNavigateToMessages={() => {
-            if (!isAnonymous) { try { sessionStorage.setItem("baaro:open_chat_with", inspectingProfileId); } catch {} }
-            setInspectingProfileId(null);
-            setProfileReadOnly(false);
-            setActiveTab("messages");
-          }}
-          onOpenSettings={() => {
-            setInspectingProfileId(null);
-            setProfileReadOnly(false);
-            setActiveTab("settings");
-          }}
-          readOnly={profileReadOnly}
-        />
+        <Suspense fallback={null}>
+          <ProfileModal
+            id={inspectingProfileId}
+            currentId={id}
+            onClose={() => {
+              setInspectingProfileId(null);
+              setProfileReadOnly(false);
+            }}
+            onNavigateToMessages={() => {
+              if (!isAnonymous) { try { sessionStorage.setItem("baaro:open_chat_with", inspectingProfileId); } catch {} }
+              setInspectingProfileId(null);
+              setProfileReadOnly(false);
+              setActiveTab("messages");
+            }}
+            onOpenSettings={() => {
+              setInspectingProfileId(null);
+              setProfileReadOnly(false);
+              setActiveTab("settings");
+            }}
+            readOnly={profileReadOnly}
+          />
+        </Suspense>
       )}
 
-      <NotificationDrawer
-        isOpen={notifDrawerOpen}
-        onClose={() => setNotifDrawerOpen(false)}
-        user_id={id}
-      />
+      {(lateReady || notifDrawerOpen) && (
+        <Suspense fallback={null}>
+          <NotificationDrawer
+            isOpen={notifDrawerOpen}
+            onClose={() => setNotifDrawerOpen(false)}
+            user_id={id}
+          />
+        </Suspense>
+      )}
 
-      <GlobalSearchModal
-        isOpen={searchModalOpen}
-        onClose={() => setSearchModalOpen(false)}
-        onSelectUser={(pid) => {
-          setProfileReadOnly(true);
-          setInspectingProfileId(pid);
-        }}
-        onSelectTab={(tid) => setActiveTab(tid)}
-        onSelectShop={() => setActiveTab("shop")}
-      />
+      {(lateReady || searchModalOpen) && (
+        <Suspense fallback={null}>
+          <GlobalSearchModal
+            isOpen={searchModalOpen}
+            onClose={() => setSearchModalOpen(false)}
+            onSelectUser={(pid) => {
+              setProfileReadOnly(true);
+              setInspectingProfileId(pid);
+            }}
+            onSelectTab={(tid) => setActiveTab(tid)}
+            onSelectShop={() => setActiveTab("shop")}
+          />
+        </Suspense>
+      )}
 
-      <GuideHost
-        activeTab={activeTab}
-        onNavigate={setActiveTab}
-        isAnonymous={isAnonymous}
-        displayName={userProfile?.display_name}
-        suppressed={forceOnboarding || (isImmersive && !showUi)}
-      />
+      {lateReady && (
+        <Suspense fallback={null}>
+          <GuideHost
+            activeTab={activeTab}
+            onNavigate={setActiveTab}
+            isAnonymous={isAnonymous}
+            displayName={userProfile?.display_name}
+            suppressed={forceOnboarding || (isImmersive && !showUi)}
+          />
+        </Suspense>
+      )}
 
-      {!isAnonymous && (
-        <FloatingAiAssistant
-          userProfile={userProfile}
-          hidden={activeTab === "assistant" || activeTab === "videos"}
-        />
+      {lateReady && !isAnonymous && (
+        <Suspense fallback={null}>
+          <FloatingAiAssistant
+            userProfile={userProfile}
+            hidden={activeTab === "assistant" || activeTab === "videos"}
+          />
+        </Suspense>
       )}
     </div>
   );
