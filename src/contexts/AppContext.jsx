@@ -3,6 +3,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useState,
 } from "react";
 import { supabase } from "../services/supabase.js";
@@ -13,6 +14,9 @@ export const AppContext = createContext(null);
 
 const GUEST_KEY = "baaro_is_guest";
 const GUEST_OK_KEY = "baaro_guest_ok";
+const PROFILE_CACHE_KEY = "baaro_profile_cache_v1";
+const DEVICE_REG_PREFIX = "baaro_device_reg:";
+const DEVICE_REG_EVERY_MS = 12 * 60 * 60 * 1000; // 12 h
 
 // Champs que le client a le droit d'envoyer. Les champs sensibles
 // (is_premium, is_verified, restricted, id, created_at...) sont ignorés.
@@ -131,6 +135,45 @@ function toUserProfile(data) {
   };
 }
 
+// ---------------------------------------------------------------
+// Cache local du profil : l'en-tête (nom, avatar) s'affiche tout de
+// suite au démarrage, même sans réseau. Seuls les champs publics sont
+// gardés (ni nom civil, ni date de naissance).
+// ---------------------------------------------------------------
+function readProfileCache(user_id) {
+  try {
+    const raw = localStorage.getItem(PROFILE_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || parsed.id !== user_id || !parsed.data) return null;
+    return parsed.data;
+  } catch {
+    return null;
+  }
+}
+
+function writeProfileCache(user_id, profileData) {
+  if (!user_id || !profileData) return;
+  safeSet(
+    PROFILE_CACHE_KEY,
+    JSON.stringify({
+      id: user_id,
+      data: {
+        display_name: profileData.display_name,
+        handle: profileData.handle,
+        flag: profileData.flag,
+        bio: profileData.bio,
+        avatar_url: profileData.avatar_url,
+        cover_url: profileData.cover_url,
+        location: profileData.location,
+        country: profileData.country,
+        is_private: profileData.is_private,
+        is_verified: profileData.is_verified,
+      },
+    })
+  );
+}
+
 export function AppProvider({ children }) {
   const [session, setSession] = useState(null);
   const [user, setUser] = useState(null);
@@ -200,8 +243,10 @@ export function AppProvider({ children }) {
       }
       if (data) {
         const normalized = { ...data, id: data.id || user_id };
+        const mapped = toUserProfile(normalized);
         setProfile(normalized);
-        setUserProfile(toUserProfile(normalized));
+        setUserProfile(mapped);
+        writeProfileCache(user_id, mapped);
         return normalized;
       }
       return null;
@@ -213,13 +258,14 @@ export function AppProvider({ children }) {
     }
   }, []);
 
+  // Renvoie true si le serveur a bien enregistré l'appareil.
   const registerDevice = useCallback(async () => {
     const {
       data: { session: currentSession },
     } = await supabase.auth.getSession();
-    if (!currentSession?.access_token) return;
+    if (!currentSession?.access_token) return false;
     try {
-      await fetch(`${API_BASE}/api/register-device`, {
+      const res = await fetch(`${API_BASE}/api/register-device`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -227,7 +273,10 @@ export function AppProvider({ children }) {
         },
         body: JSON.stringify({ deviceId: getDeviceId() }),
       });
-    } catch {}
+      return Boolean(res?.ok);
+    } catch {
+      return false;
+    }
   }, []);
 
   useEffect(() => {
@@ -324,10 +373,28 @@ export function AppProvider({ children }) {
   useEffect(() => {
     if (!id) return;
     let cancelled = false;
+
+    // 1. Affichage immédiat depuis le cache local (puis le réseau met à jour).
+    const cached = readProfileCache(id);
+    if (cached) {
+      setUserProfile((previous) => ({ ...previous, ...cached }));
+    }
+
     const loadUserData = async () => {
       await loadProfile(id);
       if (cancelled) return;
-      await registerDevice();
+
+      // 2. Enregistrement de l'appareil : différé de 3 s et au plus une fois
+      //    toutes les 12 h (ne ralentit plus chaque ouverture de l'app).
+      const regKey = `${DEVICE_REG_PREFIX}${id}`;
+      const last = Number(safeGet(regKey) || 0);
+      if (Date.now() - last < DEVICE_REG_EVERY_MS) return;
+
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+      if (cancelled) return;
+
+      const ok = await registerDevice();
+      if (ok) safeSet(regKey, String(Date.now()));
     };
     loadUserData().catch(() => {});
     return () => {
@@ -345,6 +412,7 @@ export function AppProvider({ children }) {
 
   const logout = useCallback(async () => {
     clearGuestFlags();
+    safeRemove(PROFILE_CACHE_KEY);
     try {
       await supabase.auth.signOut();
     } catch {}
@@ -387,40 +455,61 @@ export function AppProvider({ children }) {
           return { ok: false, error: retry.error };
         }
 
+        const mappedRetry = toUserProfile(retry.data);
         setProfile(retry.data);
         setUserProfile((previous) => ({
           ...previous,
-          ...toUserProfile(retry.data),
+          ...mappedRetry,
         }));
+        writeProfileCache(id, mappedRetry);
         return { ok: true, profile: retry.data };
       }
 
+      const mapped = toUserProfile(saved.data);
       setProfile(saved.data);
       setUserProfile((previous) => ({
         ...previous,
-        ...toUserProfile(saved.data),
+        ...mapped,
       }));
+      writeProfileCache(id, mapped);
       return { ok: true, profile: saved.data };
     },
     [id]
   );
 
-  const value = {
-    id,
-    user,
-    session,
-    profile,
-    userProfile,
-    user_id: id,
-    setProfile,
-    setUserProfile,
-    isGuest,
-    isAnonymous,
-    loading,
-    enableGuestMode,
-    logout,
-    updateProfile,
-  };
+  // Valeur mémoïsée : les composants qui utilisent useApp() ne se re-rendent
+  // plus à chaque rendu du fournisseur, seulement quand une valeur change.
+  const value = useMemo(
+    () => ({
+      id,
+      user,
+      session,
+      profile,
+      userProfile,
+      user_id: id,
+      setProfile,
+      setUserProfile,
+      isGuest,
+      isAnonymous,
+      loading,
+      enableGuestMode,
+      logout,
+      updateProfile,
+    }),
+    [
+      id,
+      user,
+      session,
+      profile,
+      userProfile,
+      isGuest,
+      isAnonymous,
+      loading,
+      enableGuestMode,
+      logout,
+      updateProfile,
+    ]
+  );
 
   return (
     <AppContext.Provider value={value}>{children}</AppContext.Provider>
