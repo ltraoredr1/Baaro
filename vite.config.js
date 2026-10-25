@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   // Chemins relatifs pour la compatibilité avec Capacitor.
   base: './',
 
@@ -17,6 +17,13 @@ export default defineConfig({
       '@': resolve(__dirname, 'src'),
     },
   },
+
+  // En production : retire console.log/debug et debugger (code plus léger).
+  // console.warn et console.error restent actifs pour le diagnostic.
+  esbuild:
+    mode === 'production'
+      ? { pure: ['console.log', 'console.debug'], drop: ['debugger'] }
+      : {},
 
   plugins: [
     react(),
@@ -86,8 +93,8 @@ export default defineConfig({
         skipWaiting: true,
         cleanupOutdatedCaches: true,
 
-        // Mettre en cache uniquement les images de même origine.
         runtimeCaching: [
+          // Images de même origine : cache d'abord (instantané au 2e affichage).
           {
             urlPattern: ({ url, sameOrigin }) =>
               sameOrigin &&
@@ -110,6 +117,27 @@ export default defineConfig({
               },
             },
           },
+
+          // Polices Google (si utilisées) : feuilles de style rafraîchies en
+          // arrière-plan, fichiers de police gardés un an.
+          {
+            urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
+            handler: 'StaleWhileRevalidate',
+            options: {
+              cacheName: 'baaro-google-fonts-css',
+              expiration: { maxEntries: 10, maxAgeSeconds: 60 * 60 * 24 * 30 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
+          {
+            urlPattern: /^https:\/\/fonts\.gstatic\.com\/.*/i,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'baaro-google-fonts-files',
+              expiration: { maxEntries: 30, maxAgeSeconds: 60 * 60 * 24 * 365 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
         ],
       },
 
@@ -122,22 +150,31 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
+    target: 'es2020',
+    sourcemap: false,
+    chunkSizeWarningLimit: 700,
 
     rollupOptions: {
       input: resolve(__dirname, 'index.html'),
 
       output: {
-        manualChunks: {
-          vendor: [
-            'react',
-            'react-dom',
-            'react-router-dom',
-          ],
-          supabase: [
-            '@supabase/supabase-js',
-          ],
+        // Découpage par bibliothèque : chaque morceau reste en cache navigateur
+        // d'un déploiement à l'autre, et les bibliothèques lourdes ne sont
+        // téléchargées que par les écrans qui s'en servent.
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return undefined;
+
+          if (/[\\/]node_modules[\\/](react|react-dom|react-router|react-router-dom|scheduler)[\\/]/.test(id)) {
+            return 'vendor';
+          }
+          if (id.includes('@supabase')) return 'supabase';
+          if (id.includes('@reduxjs') || id.includes('react-redux') || /[\\/]node_modules[\\/]redux/.test(id)) {
+            return 'redux';
+          }
+          if (id.includes('@daily-co')) return 'daily';
+          return undefined;
         },
       },
     },
   },
-});
+}));
