@@ -1,20 +1,35 @@
-import { useEffect } from "react";
+import { useEffect, Suspense, lazy } from "react";
 import { Routes, Route, useNavigate, useParams, Navigate } from "react-router-dom";
 import { useApp } from "../contexts/AppContext.jsx";
-import AuthScreen from "../features/auth/index.js";
-import BiometricGate from "../features/auth/BiometricGate.jsx";
-import { MainShell } from "./MainShell.jsx";
 import { LoadingScreen } from "./TabFallback.jsx";
-import InvitePage from "../pages/InvitePage.jsx";
-import { PrivacyPage } from "../components/PrivacyPage.jsx";
-import { LegalPage } from "../components/LegalPage.jsx";
 import { ErrorBoundary } from "../components/ErrorBoundary.jsx";
 import { callSocial } from "../lib/notifyInteraction.js";
 import { useSettings } from "../hooks/useSettings.js";
 import { usePushNotifications } from "../hooks/usePushNotifications.js";
 import { applyNativeSettings } from "../lib/nativeSettings.js";
 import { unlockAudio } from "../lib/callRingtone.js";
-import AdminSchemaGuard from "../pages/AdminSchemaGuard.jsx";
+
+// ---------------------------------------------------------------
+// Chargement à la demande : le bundle de démarrage ne contient plus
+// que l'authentification, le routeur et le contexte.
+// ---------------------------------------------------------------
+const loadMainShell = () =>
+  import("./MainShell.jsx").then((m) => ({ default: m.MainShell }));
+const MainShell = lazy(loadMainShell);
+// Téléchargement lancé tout de suite, EN PARALLÈLE de la vérification de session
+// (la plupart des ouvertures sont des utilisateurs déjà connectés).
+loadMainShell();
+
+const AuthScreen = lazy(() => import("../features/auth/index.js"));
+const BiometricGate = lazy(() => import("../features/auth/BiometricGate.jsx"));
+const InvitePage = lazy(() => import("../pages/InvitePage.jsx"));
+const PrivacyPage = lazy(() =>
+  import("../components/PrivacyPage.jsx").then((m) => ({ default: m.PrivacyPage }))
+);
+const LegalPage = lazy(() =>
+  import("../components/LegalPage.jsx").then((m) => ({ default: m.LegalPage }))
+);
+const AdminSchemaGuard = lazy(() => import("../pages/AdminSchemaGuard.jsx"));
 
 function InviteRouteGate() {
   const { code } = useParams();
@@ -111,16 +126,18 @@ function AppShell() {
   }, [navigate]);
 
   // 3. Stories programmées
+  // Premier passage retardé de 5 s : il ne concurrence plus le chargement initial.
   useEffect(() => {
     if (loading || !user?.id || user.is_anonymous === true) return;
     const sweep = () => {
       if (document.visibilityState === "hidden") return;
       callSocial("publish_due").catch(() => {});
     };
-    sweep();
+    const first = setTimeout(sweep, 5000);
     const timer = setInterval(sweep, 60_000);
     document.addEventListener("visibilitychange", sweep);
     return () => {
+      clearTimeout(first);
       clearInterval(timer);
       document.removeEventListener("visibilitychange", sweep);
     };
@@ -150,14 +167,20 @@ function AppShell() {
   const isAllowedGuest = Boolean(isGuest || user?.is_anonymous);
 
   if (!isRealUser && !isAllowedGuest) {
-    return <AuthScreen />;
+    return (
+      <Suspense fallback={<LoadingScreen />}>
+        <AuthScreen />
+      </Suspense>
+    );
   }
 
   return (
     <ErrorBoundary>
-      <BiometricGate>
-        <MainShell />
-      </BiometricGate>
+      <Suspense fallback={<LoadingScreen />}>
+        <BiometricGate>
+          <MainShell />
+        </BiometricGate>
+      </Suspense>
     </ErrorBoundary>
   );
 }
@@ -171,43 +194,25 @@ export default function App() {
     );
   }, [settings.block_screenshots, settings.biometric]);
 
-  // Capgo Live Update
-  useEffect(() => {
-    const initCapgo = async () => {
-      try {
-        const { CapacitorUpdater } = await import("@capgo/capacitor-updater");
-        const { Capacitor } = await import("@capacitor/core");
-
-        if (!Capacitor.isNativePlatform()) return;
-
-        await CapacitorUpdater.notifyAppReady();
-        console.log("[Capgo] App ready, listening for updates...");
-
-        CapacitorUpdater.addListener("updateAvailable", async () => {
-          console.log("[Capgo] Update available, downloading...");
-        });
-      } catch (e) {
-        console.log("[Capgo] Not on native:", e.message);
-      }
-    };
-    initCapgo();
-  }, []);
+  // Capgo : notifyAppReady() est déjà appelé dans main.jsx (une seule fois).
 
   return (
     <ErrorBoundary>
-      <Routes>
-        <Route path="/invite/:code" element={<InviteRouteGate />} />
-        <Route path="/privacy" element={<PrivacyRoute />} />
-        <Route path="/terms" element={<LegalRoute type="terms" />} />
-        <Route path="/community-guidelines" element={<LegalRoute type="community" />} />
-        <Route path="/refund-policy" element={<LegalRoute type="refund" />} />
-        <Route path="/creator-terms" element={<LegalRoute type="creator" />} />
-        <Route path="/merchant-terms" element={<LegalRoute type="merchant" />} />
-        <Route path="/cookies" element={<LegalRoute type="cookies" />} />
-        <Route path="/admin/schema" element={<AdminSchemaRoute />} />
-        <Route path="/*" element={<AppShell />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
+      <Suspense fallback={<LoadingScreen />}>
+        <Routes>
+          <Route path="/invite/:code" element={<InviteRouteGate />} />
+          <Route path="/privacy" element={<PrivacyRoute />} />
+          <Route path="/terms" element={<LegalRoute type="terms" />} />
+          <Route path="/community-guidelines" element={<LegalRoute type="community" />} />
+          <Route path="/refund-policy" element={<LegalRoute type="refund" />} />
+          <Route path="/creator-terms" element={<LegalRoute type="creator" />} />
+          <Route path="/merchant-terms" element={<LegalRoute type="merchant" />} />
+          <Route path="/cookies" element={<LegalRoute type="cookies" />} />
+          <Route path="/admin/schema" element={<AdminSchemaRoute />} />
+          <Route path="/*" element={<AppShell />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </Suspense>
     </ErrorBoundary>
   );
 }
