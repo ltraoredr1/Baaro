@@ -13,6 +13,13 @@ const loaders = {
   shop: () => import("../features/shop/index.js"),
   settings: () => import("../features/settings/index.tsx"),
   plus: () => import("../features/settings/index.tsx"),
+  // Onglets ajoutés (mêmes chemins que src/app/tabs.jsx) :
+  stories: () => import("../features/stories/StoriesTab.jsx"),
+  discover: () => import("../components/DiscoverHub.jsx"),
+  community: () => import("../components/CommunityTab.jsx"),
+  companies: () => import("../components/CompaniesTab.jsx"),
+  innovation: () => import("../features/innovation/index.js"),
+  economy: () => import("../features/economy/index.js"),
 };
 
 const prefetched = new Set();
