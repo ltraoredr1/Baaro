@@ -2,23 +2,21 @@ import React, { useState, useEffect, useCallback } from "react";
 import { supabase } from "../../supabaseClient.js";
 import { COLORS } from "../../theme.js";
 import { useToast } from "../../components/ToastContext.jsx";
-
-/** auth.users.id (UUID) uniquement — rejette email/handle */
-function isValidAuthUserId(value) {
-  if (!value || typeof value !== "string") return false;
-  if (value.startsWith("@") || (value.includes("@") && value.includes("."))) return false;
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
-}
+import { isValidAuthUserId } from "../../lib/currentUserId.js";
 
 function useCurrentUser() {
   const [id, setId] = useState(null);
   useEffect(() => {
     const get = async () => {
       try {
-        const { data: { user } } = await supabase.auth.getUser();
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
         if (user?.id && isValidAuthUserId(user.id)) setId(user.id);
         else {
-          const { data: { session } } = await supabase.auth.getSession();
+          const {
+            data: { session },
+          } = await supabase.auth.getSession();
           if (session?.user?.id && isValidAuthUserId(session.user.id)) {
             setId(session.user.id);
           }
@@ -60,7 +58,8 @@ const FollowButton = ({ targetId }) => {
       .eq("followed_id", targetId)
       .eq("status", "accepted")
       .maybeSingle();
-    if (error && error.code !== "PGRST116") console.error("[FollowButton] check", error);
+    if (error && error.code !== "PGRST116")
+      console.error("[FollowButton] check", error);
     setIsFollowing(!!data);
     setLoading(false);
   }, [id, targetId, validTarget, isSelf]);
