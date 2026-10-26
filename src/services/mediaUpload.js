@@ -1,38 +1,11 @@
 import { uploadExternalMedia } from "../lib/externalMedia.js";
+import { compressImage } from "../lib/imageCompress.js";
 
 const MAX_SIZE = 5 * 1024 * 1024; // 5 Mo après compression
 const ALLOWED = ["image/jpeg", "image/png", "image/webp", "image/gif"];
 
-export async function compressImage(file, { maxWidth = 1200, quality = 0.8 } = {}) {
-  if (!file.type.startsWith("image/")) return file;
-
-  const bitmap = await createImageBitmap(file);
-  let { width, height } = bitmap;
-
-  if (width > maxWidth) {
-    height = Math.round((height * maxWidth) / width);
-    width = maxWidth;
-  }
-
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return file;
-
-  ctx.drawImage(bitmap, 0, 0, width, height);
-  bitmap.close?.();
-
-  const blob = await new Promise((resolve) =>
-    canvas.toBlob(resolve, "image/webp", quality)
-  );
-
-  if (!blob) return file;
-
-  return new File([blob], file.name.replace(/\.\w+$/, ".webp"), {
-    type: "image/webp",
-  });
-}
+/** Ré-export pour les appelants qui importaient compressImage depuis ce module. */
+export { compressImage };
 
 export async function uploadShopMedia(
   file,
@@ -49,7 +22,10 @@ export async function uploadShopMedia(
     throw new Error("Image trop lourde (max ~5 Mo après compression)");
   }
 
-  const compressed = await compressImage(file);
+  const compressed = await compressImage(file, {
+    maxWidth: 1200,
+    quality: 0.8,
+  });
 
   if (compressed.size > MAX_SIZE) {
     throw new Error("Image trop lourde même après compression");
@@ -59,6 +35,8 @@ export async function uploadShopMedia(
     folder: "shop",
     user_id,
     maxBytes: MAX_SIZE,
+    // déjà compressé ici
+    compress: false,
   });
 
   return result.url;
