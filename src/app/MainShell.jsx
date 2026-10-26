@@ -480,6 +480,7 @@ export function MainShell() {
       onOpenDebates: () => setActiveTab("debates"),
       isCreateOpen: isFeedCreateOpen,
       setIsCreateOpen: setIsFeedCreateOpen,
+      isActive: activeTab === "feed",
     },
 
     friends: {
