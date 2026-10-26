@@ -19,14 +19,7 @@ import { makeClientMessageId, markMessageRead } from "../lib/chatFeatures.js";
 import { ChatInput, MAX_FILE_MB } from "./ChatInput.jsx";
 import { MessageBubble, messagePreviewText } from "./MessageBubble.jsx";
 import { messageService } from "../lib/messageService.js";
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-function isValidAuthUserId(value) {
-  if (!value || typeof value !== "string") return false;
-  if (value.startsWith("@") || (value.includes("@") && value.includes("."))) return false;
-  return UUID_RE.test(value);
-}
+import { isValidAuthUserId } from "../../../lib/currentUserId.js";
 
 function formatRelativeTime(iso) {
   if (!iso) return "";
