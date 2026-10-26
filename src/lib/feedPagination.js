@@ -2,8 +2,11 @@ import { supabase } from "../supabaseClient.js";
 import { withRetry } from "./perf.js";
 import { FOLLOWS } from "../features/stories/constants.js";
 
-// Nombre de posts chronologiques récupérés à chaque page, puis classés entre eux.
+// Affichage : nombre de posts rendus à chaque page.
 const PAGE_SIZE = 30;
+// Classement : nombre de posts récents récupérés d'un coup, puis classés ensemble.
+// Plus c'est grand, plus le classement « voit » loin (au prix d'une requête plus lourde).
+const POOL_SIZE = 90;
 
 const BASE_COLUMNS = `
   id,
@@ -25,9 +28,7 @@ const COLUMNS_WITH_MEDIA_URLS = BASE_COLUMNS.replace("media_type,", "media_type,
 let useMediaUrls = true; // passe à false si la colonne n'existe pas dans la base
 
 /* =========================================================
-   CLASSEMENT
-   Utilise uniquement des colonnes existantes de `posts` et
-   la table des abonnements déjà utilisée par les stories.
+   CLASSEMENT (unique, côté client — aucune modification de la base)
    ========================================================= */
 
 const FOLLOWING_TTL_MS = 5 * 60 * 1000;
@@ -83,26 +84,28 @@ export function scorePost(post, { userId, following, now = Date.now() }) {
 }
 
 export function rankRows(rows, ctx) {
+  const now = Date.now();
   return rows
-    .map((row) => ({ row, score: scorePost(row, ctx) }))
-    .sort((a, b) => b.score - a.score)
+    .map((row) => ({ row, score: scorePost(row, { ...ctx, now }) }))
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return new Date(b.row.created_at) - new Date(a.row.created_at); // égalité : le plus récent
+    })
     .map((x) => x.row);
 }
 
 /* =========================================================
-   PAGINATION
-   Le curseur reste chronologique (created_at, id) : aucune
-   publication n'est sautée ni répétée entre deux pages.
-   Seul l'ordre à l'intérieur d'une page est classé.
+   RÉCUPÉRATION CHRONOLOGIQUE (curseur created_at, id)
+   Aucune publication n'est sautée ni répétée entre deux lots.
    ========================================================= */
 
-function buildQuery(columns, cursor, pageSize) {
+function buildQuery(columns, cursor, size) {
   let q = supabase
     .from("posts")
     .select(columns)
     .order("created_at", { ascending: false })
     .order("id", { ascending: false })
-    .limit(pageSize);
+    .limit(size);
 
   if (cursor?.created_at && cursor?.id) {
     q = q.or(
@@ -114,36 +117,61 @@ function buildQuery(columns, cursor, pageSize) {
   return q;
 }
 
+async function fetchChronoPool(cursor, size) {
+  let { data, error } = await buildQuery(
+    useMediaUrls ? COLUMNS_WITH_MEDIA_URLS : BASE_COLUMNS,
+    cursor,
+    size
+  );
+
+  // Colonne media_urls absente : on réessaie sans elle (et on s'en souvient)
+  if (error && useMediaUrls && /media_urls/i.test(error.message || "")) {
+    useMediaUrls = false;
+    ({ data, error } = await buildQuery(BASE_COLUMNS, cursor, size));
+  }
+  if (error) throw error;
+
+  const rows = data || [];
+  const last = rows[rows.length - 1];
+  const next = rows.length === size && last ? { created_at: last.created_at, id: last.id } : null;
+  return { rows, next };
+}
+
+/* =========================================================
+   PAGINATION CLASSÉE
+   On récupère un lot de POOL_SIZE posts récents, on les classe
+   ensemble, puis on les sert par pages de PAGE_SIZE. Le reste du
+   lot attend dans le curseur ; quand il est presque vide, on
+   récupère le lot suivant (plus ancien) et on reclasse le tout.
+
+   Curseur (opaque pour l'appelant) : { chrono, exhausted, queue }
+   ========================================================= */
+
 export async function fetchFeedPage({
   cursor = null,
   pageSize = PAGE_SIZE,
+  poolSize = POOL_SIZE,
 } = {}) {
   return withRetry(
     async () => {
-      let { data, error } = await buildQuery(
-        useMediaUrls ? COLUMNS_WITH_MEDIA_URLS : BASE_COLUMNS,
-        cursor,
-        pageSize
-      );
+      let queue = cursor?.queue || [];
+      let chrono = cursor?.chrono ?? null;
+      let exhausted = cursor?.exhausted ?? false;
 
-      // Colonne media_urls absente : on réessaie sans elle (et on s'en souvient)
-      if (error && useMediaUrls && /media_urls/i.test(error.message || "")) {
-        useMediaUrls = false;
-        ({ data, error } = await buildQuery(BASE_COLUMNS, cursor, pageSize));
+      if (queue.length < pageSize && !exhausted) {
+        const pool = await fetchChronoPool(chrono, poolSize);
+        const seen = new Set(queue.map((p) => p.id));
+        queue = queue.concat(pool.rows.filter((r) => !seen.has(r.id)));
+        chrono = pool.next;
+        exhausted = !pool.next;
       }
-      if (error) throw error;
-
-      const chronological = data || [];
-
-      // Le curseur se calcule AVANT le classement, sur l'ordre chronologique
-      const last = chronological[chronological.length - 1];
-      const nextCursor =
-        chronological.length === pageSize && last
-          ? { created_at: last.created_at, id: last.id }
-          : null;
 
       const { userId, ids } = await getFollowingIds();
-      const rows = rankRows(chronological, { userId, following: ids });
+      queue = rankRows(queue, { userId, following: ids });
+
+      const rows = queue.slice(0, pageSize);
+      const rest = queue.slice(pageSize);
+      const nextCursor = rest.length > 0 || !exhausted ? { chrono, exhausted, queue: rest } : null;
 
       return { rows, nextCursor };
     },
