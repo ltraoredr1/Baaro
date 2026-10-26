@@ -1,5 +1,10 @@
 import { Capacitor } from "@capacitor/core";
 import { supabase } from "../supabaseClient.js";
+import {
+  compressImage,
+  DEFAULT_MAX_SIDE,
+  DEFAULT_QUALITY,
+} from "./imageCompress.js";
 
 /**
  * Upload média vers R2 via /api/media (prepare -> PUT R2 -> finalize)
@@ -14,11 +19,6 @@ import { supabase } from "../supabaseClient.js";
  */
 
 const PUT_RETRIES = 3;
-
-// Réglages de compression des images
-const DEFAULT_MAX_SIDE = 1280;
-const DEFAULT_QUALITY = 0.8;
-const SKIP_COMPRESS_UNDER = 150 * 1024; // en dessous : on n'y touche pas
 
 // Dans l'APK (https://localhost), "/api/..." ne pointe pas vers Vercel :
 // on utilise donc une URL absolue en natif. Sur le web, rien ne change.
@@ -49,50 +49,6 @@ async function callMediaApi(payload, token) {
     );
   }
   return data;
-}
-
-/**
- * Réduit une image avant l'envoi : redimensionne et recompresse (WebP, sinon JPEG).
- * Ne touche pas aux GIF/SVG, ni aux petits fichiers, et garde l'original
- * si le résultat n'est pas plus léger. En cas d'erreur, renvoie l'original.
- */
-async function compressImage(
-  file,
-  { maxSide = DEFAULT_MAX_SIDE, quality = DEFAULT_QUALITY } = {}
-) {
-  try {
-    if (!file?.type?.startsWith("image/")) return file;
-    if (/gif|svg/i.test(file.type)) return file;
-    if (file.size < SKIP_COMPRESS_UNDER) return file;
-
-    const bitmap = await createImageBitmap(file, {
-      imageOrientation: "from-image",
-    });
-
-    const scale = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));
-    const width = Math.max(1, Math.round(bitmap.width * scale));
-    const height = Math.max(1, Math.round(bitmap.height * scale));
-
-    const canvas = document.createElement("canvas");
-    canvas.width = width;
-    canvas.height = height;
-    canvas.getContext("2d").drawImage(bitmap, 0, 0, width, height);
-    bitmap.close?.();
-
-    const toBlob = (type) =>
-      new Promise((resolve) => canvas.toBlob(resolve, type, quality));
-
-    let blob = await toBlob("image/webp");
-    if (!blob || blob.type !== "image/webp") blob = await toBlob("image/jpeg");
-    if (!blob || blob.size >= file.size) return file;
-
-    const base = (file.name || "image").replace(/\.[^.]+$/, "");
-    const ext = blob.type === "image/webp" ? "webp" : "jpg";
-    return new File([blob], `${base}.${ext}`, { type: blob.type });
-  } catch (error) {
-    console.warn("[BAARO] Compression image ignorée :", error);
-    return file;
-  }
 }
 
 // PUT avec XHR : fournit la progression réelle (fetch ne la donne pas).

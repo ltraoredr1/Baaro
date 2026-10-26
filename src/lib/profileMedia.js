@@ -4,6 +4,7 @@
  * (jamais dans Supabase : la base ne garde que l'URL).
  */
 import { uploadExternalMedia } from "./externalMedia.js";
+import { compressImage } from "./imageCompress.js";
 
 const MAX_SIZE = 5 * 1024 * 1024;
 const ALLOWED = [
@@ -12,51 +13,6 @@ const ALLOWED = [
   "image/webp",
   "image/gif",
 ];
-
-async function compressImage(
-  file,
-  { maxWidth = 1600, quality = 0.82 } = {}
-) {
-  if (!file.type.startsWith("image/")) return file;
-  // Un GIF (souvent animé) reste tel quel : la compression le figerait
-  if (file.type === "image/gif" && file.size <= MAX_SIZE) return file;
-
-  try {
-    const bitmap = await createImageBitmap(file);
-    let { width, height } = bitmap;
-
-    if (width > maxWidth) {
-      height = Math.round((height * maxWidth) / width);
-      width = maxWidth;
-    }
-
-    const canvas = document.createElement("canvas");
-    canvas.width = width;
-    canvas.height = height;
-
-    const ctx = canvas.getContext("2d");
-    if (!ctx) {
-      bitmap.close?.();
-      return file;
-    }
-
-    ctx.drawImage(bitmap, 0, 0, width, height);
-    bitmap.close?.();
-
-    const blob = await new Promise((resolve) =>
-      canvas.toBlob(resolve, "image/webp", quality)
-    );
-
-    if (!blob) return file;
-
-    return new File([blob], "current.webp", {
-      type: "image/webp",
-    });
-  } catch {
-    // Format non lisible par le navigateur : on tente l'envoi du fichier d'origine
-    return file;
-  }
-}
 
 export async function uploadProfileMedia(
   file,
@@ -94,6 +50,7 @@ export async function uploadProfileMedia(
   const compressed = await compressImage(file, {
     maxWidth,
     quality: kind === "cover" ? 0.8 : 0.85,
+    preferName: "current",
   });
 
   if (compressed.size > MAX_SIZE) {
@@ -106,6 +63,8 @@ export async function uploadProfileMedia(
     folder: "profiles",
     user_id,
     maxBytes: MAX_SIZE,
+    // déjà compressé ici
+    compress: false,
   });
 
   return result.url;
