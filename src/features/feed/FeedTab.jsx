@@ -587,6 +587,17 @@ export function FeedTab({
     };
   }, [activeUserId, feedTab]);
 
+  const handleFollowChange = useCallback((authorId, isFollowing) => {
+    if (!authorId) return;
+
+    setFollowingIds((current) => {
+      const next = new Set(current || []);
+      if (isFollowing) next.add(authorId);
+      else next.delete(authorId);
+      return next;
+    });
+  }, []);
+
   const [tagFilter, setTagFilter] = useState(null);
 
   const visiblePosts = useMemo(() => {
@@ -1810,7 +1821,14 @@ export function FeedTab({
             <MediaGallery items={getPostMedia(post)} />
 
             <PollCard postId={post.id} user_id={activeUserId} />
-            <SocialPostEnhancements post={post} user_id={activeUserId} />
+            <SocialPostEnhancements
+              post={post}
+              user_id={activeUserId}
+              isFollowing={
+                followingIds ? followingIds.has(post.author_id) : null
+              }
+              onFollowChange={handleFollowChange}
+            />
 
             <div
               className="flex items-center justify-between gap-2 pt-2 border-t flex-wrap"
