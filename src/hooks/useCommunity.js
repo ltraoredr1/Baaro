@@ -1,17 +1,13 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { supabase } from "../supabaseClient.js";
+import { isValidAuthUserId } from "../lib/currentUserId.js";
+
+/** auth.users.id (UUID) — source unique : lib/currentUserId.js */
+export { isValidAuthUserId };
 
 const PAGE_SIZE = 50;
 const MSG_COLUMNS = "id, channel_id, sender_id, text, created_at";
 const PROFILE_COLUMNS = "id, display_name, handle, avatar_url";
-
-/** auth.users.id (UUID) */
-export function isValidAuthUserId(value) {
-  if (!value || typeof value !== "string") return false;
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-    value
-  );
-}
 
 function mergeMessages(a, b) {
   const map = new Map();
