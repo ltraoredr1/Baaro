@@ -1,12 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "../supabaseClient.js";
-
-/** auth.users.id (UUID) uniquement */
-function isValidAuthUserId(value) {
-  if (!value || typeof value !== "string") return false;
-  if (value.startsWith("@") || (value.includes("@") && value.includes("."))) return false;
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
-}
+import { isValidAuthUserId } from "../lib/currentUserId.js";
 
 /**
  * Liste les amis d'un utilisateur.
