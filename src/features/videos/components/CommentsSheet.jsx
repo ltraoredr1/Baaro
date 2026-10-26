@@ -1,14 +1,18 @@
-import { Send, X } from "lucide-react";
+import { Camera, Send, X } from "lucide-react";
 import { COLORS } from "../../../theme.js";
 import { baaroLogo } from "../constants.js";
 
-// comments : liste des commentaires de la vidéo ouverte.
+/**
+ * Feuille commentaires + bouton « Répondre en vidéo ».
+ */
 export default function CommentsSheet({
   comments,
   newComment,
   setNewComment,
   onSend,
   onClose,
+  onReplyWithVideo,
+  canReplyWithVideo = true,
 }) {
   return (
     <div className="fixed inset-0 z-[70] bg-black/70 backdrop-blur-sm flex items-end justify-center">
@@ -21,6 +25,7 @@ export default function CommentsSheet({
             </p>
           </div>
           <button
+            type="button"
             onClick={() => onClose()}
             className="h-9 w-9 rounded-full bg-white/10 flex items-center justify-center"
           >
@@ -38,7 +43,7 @@ export default function CommentsSheet({
               const commentHandle =
                 comment.profiles?.handle?.replace(/^@/, "") || "membre";
               return (
-                <div key={comment.id} className="flex gap-2">
+                <div key={comment.id} className="flex gap-2 group">
                   <div className="h-8 w-8 rounded-full bg-zinc-800 overflow-hidden shrink-0">
                     {comment.profiles?.avatar_url ? (
                       <img
@@ -54,9 +59,26 @@ export default function CommentsSheet({
                       />
                     )}
                   </div>
-                  <div>
-                    <div className="text-xs font-black">@{commentHandle}</div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <div className="text-xs font-black">@{commentHandle}</div>
+                      {comment.has_video_reply && (
+                        <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-amber-400/15 text-amber-300 font-bold">
+                          Réponse vidéo
+                        </span>
+                      )}
+                    </div>
                     <p className="text-sm text-white/75">{comment.content}</p>
+                    {canReplyWithVideo && onReplyWithVideo && (
+                      <button
+                        type="button"
+                        onClick={() => onReplyWithVideo(comment)}
+                        className="mt-1.5 inline-flex items-center gap-1 text-[11px] font-bold text-white/50 hover:text-amber-300 transition-colors"
+                      >
+                        <Camera size={12} />
+                        Répondre en vidéo
+                      </button>
+                    )}
                   </div>
                 </div>
               );
@@ -75,6 +97,7 @@ export default function CommentsSheet({
             className="flex-1 rounded-2xl bg-white/10 px-4 py-3 text-sm outline-none"
           />
           <button
+            type="button"
             onClick={onSend}
             className="h-12 w-12 rounded-2xl flex items-center justify-center"
             style={{ background: COLORS.gold, color: "#000" }}
