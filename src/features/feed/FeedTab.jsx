@@ -505,6 +505,7 @@ export function FeedTab({
   onRewardPoints,
   isCreateOpen,
   setIsCreateOpen,
+  isActive = true,
 }) {
   const propUserId = id || user_id || null;
   const { showToast, showPointsReward } = useToast();
@@ -1397,7 +1398,9 @@ export function FeedTab({
 
   return (
     <div className="flex flex-col gap-6 max-w-2xl mx-auto w-full pb-20">
-      {activeUserId && !isCreateOpen && (
+      {/* Le bouton est rendu via un portail dans document.body : il faut donc le
+          démonter explicitement quand l'onglet Feed (gardé en vie) est caché. */}
+      {isActive && activeUserId && !isCreateOpen && (
         <FloatingCreateButton onCreatePost={openCreate} />
       )}
 
