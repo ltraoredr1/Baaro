@@ -85,6 +85,22 @@ function Switch({ checked, onChange, label }) {
   );
 }
 
+/** Bouton de choix (actif = jaune) partagé par « économie de données » et « vitesse ». */
+function ChoiceButton({ active, onClick, className = "", children }) {
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      onClick={onClick}
+      className={`rounded-xl py-2 text-xs font-bold transition ${
+        active ? "bg-yellow-400 text-black" : "bg-white/10 text-white/70"
+      } ${className}`}
+    >
+      {children}
+    </button>
+  );
+}
+
 export default function VideoNextGenStudio({
   open,
   onClose,
@@ -196,19 +212,13 @@ export default function VideoNextGenStudio({
                 </div>
                 <div className="grid grid-cols-3 gap-2">
                   {SAVER_MODES.map((mode) => (
-                    <button
+                    <ChoiceButton
                       key={mode}
-                      type="button"
-                      aria-pressed={settings.dataSaver === mode}
+                      active={settings.dataSaver === mode}
                       onClick={() => onSettingsChange({ dataSaver: mode })}
-                      className={`rounded-xl py-2 text-xs font-bold transition ${
-                        settings.dataSaver === mode
-                          ? "bg-yellow-400 text-black"
-                          : "bg-white/10 text-white/70"
-                      }`}
                     >
                       {SAVER_LABEL[mode]}
-                    </button>
+                    </ChoiceButton>
                   ))}
                 </div>
                 <p className="mt-1.5 text-[11px] leading-relaxed text-white/40">
@@ -238,19 +248,14 @@ export default function VideoNextGenStudio({
                 </div>
                 <div className="flex gap-2">
                   {SPEEDS.map((speed) => (
-                    <button
+                    <ChoiceButton
                       key={speed}
-                      type="button"
-                      aria-pressed={settings.speed === speed}
+                      className="flex-1"
+                      active={settings.speed === speed}
                       onClick={() => onSettingsChange({ speed })}
-                      className={`flex-1 rounded-xl py-2 text-xs font-bold transition ${
-                        settings.speed === speed
-                          ? "bg-yellow-400 text-black"
-                          : "bg-white/10 text-white/70"
-                      }`}
                     >
                       ×{speed}
-                    </button>
+                    </ChoiceButton>
                   ))}
                 </div>
               </div>
