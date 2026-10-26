@@ -4,8 +4,17 @@ import { applyCors, getAdminClient, requireUser, rateLimitAsync } from "./_share
 import crypto from "node:crypto";
 
 const MAX_BYTES = 500 * 1024 * 1024;
-// "stories" ajouté (sans lui, l'envoi d'une story avec folder:'stories' serait refusé)
-const FOLDERS = new Set(["profiles", "posts", "videos", "stories", "chat", "shop", "misc"]);
+// Les dossiers utilisés par les uploads média doivent être explicitement autorisés.
+const FOLDERS = new Set([
+  "profiles",
+  "posts",
+  "videos",
+  "stories",
+  "comments",
+  "chat",
+  "shop",
+  "misc",
+]);
 
 function getR2() {
   const accountId = process.env.R2_ACCOUNT_ID;
