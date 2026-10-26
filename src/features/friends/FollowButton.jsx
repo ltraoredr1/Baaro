@@ -1,84 +1,98 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { supabase } from "../../supabaseClient.js";
-import { COLORS } from "../../theme.js";
+import { supabase, acceptFriendRequest } from "../../supabaseClient.js";
 import { useToast } from "../../components/ToastContext.jsx";
+import { notifyInteraction } from "../../lib/notifyInteraction.js";
+import { useCurrentUser } from "../../hooks/useCommunity.js";
+import { COLORS } from "../../theme.js";
+import { UserPlus, Clock, Users, Loader2 } from "lucide-react";
 import { isValidAuthUserId } from "../../lib/currentUserId.js";
 
-function useCurrentUser() {
-  const [id, setId] = useState(null);
-  useEffect(() => {
-    const get = async () => {
-      try {
-        const {
-          data: { user },
-        } = await supabase.auth.getUser();
-        if (user?.id && isValidAuthUserId(user.id)) setId(user.id);
-        else {
-          const {
-            data: { session },
-          } = await supabase.auth.getSession();
-          if (session?.user?.id && isValidAuthUserId(session.user.id)) {
-            setId(session.user.id);
-          }
-        }
-      } catch {}
-    };
-    get();
-    const { data: sub } = supabase.auth.onAuthStateChange((_e, session) => {
-      const uid = session?.user?.id || null;
-      setId(uid && isValidAuthUserId(uid) ? uid : null);
-    });
-    return () => sub?.subscription?.unsubscribe();
-  }, []);
-  return id;
-}
-
-/**
- * FollowButton — follower_id / followed_id = auth.users.id uniquement
- */
-const FollowButton = ({ targetId }) => {
-  const id = useCurrentUser();
+const FriendRequestButton = ({ targetId }) => {
+  const { id } = useCurrentUser();
   const { showToast } = useToast();
-  const [isFollowing, setIsFollowing] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [state, setState] = useState("loading");
+  const [busy, setBusy] = useState(false);
 
   const validTarget = isValidAuthUserId(targetId);
-  const isSelf = id && validTarget && id === targetId;
+  const isSelf = !!(id && validTarget && id === targetId);
 
   const check = useCallback(async () => {
     if (!id || !validTarget || isSelf) {
-      setIsFollowing(false);
-      setLoading(false);
+      setState("none");
       return;
     }
-    const { data, error } = await supabase
-      .from("follows")
-      .select("follower_id")
-      .eq("follower_id", id)
-      .eq("followed_id", targetId)
-      .eq("status", "accepted")
-      .maybeSingle();
-    if (error && error.code !== "PGRST116")
-      console.error("[FollowButton] check", error);
-    setIsFollowing(!!data);
-    setLoading(false);
+
+    try {
+      const [{ data: sent }, { data: received }] = await Promise.all([
+        supabase
+          .from("follows")
+          .select("status, is_friend")
+          .eq("follower_id", id)
+          .eq("followed_id", targetId)
+          .maybeSingle(),
+        supabase
+          .from("follows")
+          .select("status, is_friend")
+          .eq("follower_id", targetId)
+          .eq("followed_id", id)
+          .maybeSingle(),
+      ]);
+
+      if (
+        (sent?.status === "accepted" && sent?.is_friend === true) ||
+        (received?.status === "accepted" && received?.is_friend === true)
+      ) {
+        setState("friends");
+        return;
+      }
+
+      if (sent?.status === "pending" && sent?.is_friend === true) {
+        setState("pending_sent");
+        return;
+      }
+
+      if (received?.status === "pending" && received?.is_friend === true) {
+        setState("pending_received");
+        return;
+      }
+
+      setState("none");
+    } catch (e) {
+      console.error("[FriendRequestButton] check", e);
+      setState("none");
+    }
   }, [id, targetId, validTarget, isSelf]);
 
   useEffect(() => {
     check();
   }, [check]);
 
-  const toggle = async (e) => {
-    e.stopPropagation();
-    if (!id || !validTarget || isSelf) return;
-    const prev = isFollowing;
-    setIsFollowing(!prev);
-    setLoading(true);
+  const sendRequest = async (e) => {
+    e?.stopPropagation?.();
+    if (!id || !validTarget || isSelf || busy) return;
+
+    setBusy(true);
+    setState("pending_sent");
+
     try {
-      if (prev) {
+      const { data: existing, error: readErr } = await supabase
+        .from("follows")
+        .select("follower_id, status, is_friend")
+        .eq("follower_id", id)
+        .eq("followed_id", targetId)
+        .maybeSingle();
+
+      if (readErr && readErr.code !== "PGRST116") throw readErr;
+
+      if (existing?.is_friend && existing.status === "pending") {
+        setState("pending_sent");
+        return;
+      }
+
+      if (existing) {
         const { error } = await supabase
           .from("follows")
-          .delete()
+          .update({ status: "pending", is_friend: true })
           .eq("follower_id", id)
           .eq("followed_id", targetId);
         if (error) throw error;
@@ -86,38 +100,110 @@ const FollowButton = ({ targetId }) => {
         const { error } = await supabase.from("follows").insert({
           follower_id: id,
           followed_id: targetId,
-          status: "accepted",
-          is_friend: false,
+          status: "pending",
+          is_friend: true,
         });
-        if (error) throw error;
+        if (error && error.code !== "23505") throw error;
       }
+
+      setState("pending_sent");
+      notifyInteraction({
+        contentType: "user",
+        interactionType: "friend_request",
+        targetId,
+      });
     } catch (err) {
-      console.error("[FollowButton] toggle", err);
-      showToast(`Abonnement impossible : ${err?.message || "erreur"}`, "error");
-      setIsFollowing(prev);
+      console.error("[FriendRequestButton] send", err);
+      showToast(
+        `Demande impossible : ${err?.message || "erreur"}`,
+        "error",
+      );
+      await check();
     } finally {
-      setLoading(false);
+      setBusy(false);
     }
   };
 
-  if (!validTarget || isSelf) return null;
+  const acceptRequest = async (e) => {
+    e?.stopPropagation?.();
+    if (!id || busy) return;
+    setBusy(true);
+    try {
+      const { error } = await acceptFriendRequest(targetId);
+      if (error) throw error;
+      setState("friends");
+      showToast("Ami ajouté !", "success");
+    } catch (err) {
+      console.error("[FriendRequestButton] accept", err);
+      showToast(`Acceptation impossible : ${err?.message || "erreur"}`, "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!validTarget || isSelf || state === "loading") return null;
+
+  if (state === "friends") {
+    return (
+      <span
+        className="px-4 py-1.5 rounded-full text-xs font-black flex items-center gap-1.5"
+        style={{ background: "rgba(16,185,129,0.15)", color: "#10b981" }}
+      >
+        <Users size={13} /> Amis
+      </span>
+    );
+  }
+
+  if (state === "pending_sent") {
+    return (
+      <span
+        className="px-4 py-1.5 rounded-full text-xs font-black flex items-center gap-1.5"
+        style={{ background: COLORS.surface2, color: COLORS.muted }}
+      >
+        {busy ? (
+          <Loader2 size={13} className="animate-spin" />
+        ) : (
+          <Clock size={13} />
+        )}
+        Demande envoyée
+      </span>
+    );
+  }
+
+  if (state === "pending_received") {
+    return (
+      <button
+        type="button"
+        onClick={acceptRequest}
+        disabled={busy}
+        className="px-4 py-1.5 rounded-full text-xs font-black transition-all active:scale-95 shadow-lg flex items-center gap-1.5 disabled:opacity-50"
+        style={{ background: "rgba(16,185,129,0.18)", color: "#10b981" }}
+      >
+        {busy ? <Loader2 size={13} className="animate-spin" /> : <Users size={13} />}
+        Accepter
+      </button>
+    );
+  }
 
   return (
     <button
-      onClick={toggle}
-      disabled={loading || !id}
-      className="px-4 py-1.5 rounded-full text-xs font-black transition-all active:scale-95 hover:scale-105 shadow-lg"
+      type="button"
+      onClick={sendRequest}
+      disabled={busy || !id}
+      className="px-4 py-1.5 rounded-full text-xs font-black transition-all active:scale-95 hover:scale-105 shadow-lg flex items-center gap-1.5 disabled:opacity-50"
       style={{
-        background: isFollowing
-          ? COLORS.surface2
-          : `linear-gradient(135deg, ${COLORS.gold}, #ff8c42)`,
-        color: isFollowing ? COLORS.muted : COLORS.bg,
-        border: isFollowing ? `1px solid ${COLORS.border}` : "none",
+        background: `linear-gradient(135deg, ${COLORS.gold}, #ff8c42)`,
+        color: COLORS.bg,
       }}
     >
-      {loading ? "…" : isFollowing ? "Abonné" : "S'abonner"}
+      {busy ? (
+        <Loader2 size={13} className="animate-spin" />
+      ) : (
+        <UserPlus size={13} />
+      )}
+      Ajouter
     </button>
   );
 };
 
-export default FollowButton;
+export default FriendRequestButton;
