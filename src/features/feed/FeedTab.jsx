@@ -47,6 +47,17 @@ const STORY_DURATION_MS = 24 * 60 * 60 * 1000;
 const VOICE_PREFIX = "[vocal]";
 const EMPTY_REC = { postId: null, recording: false, blob: null, url: null };
 
+function pickCommentRecorderMime() {
+  if (typeof MediaRecorder === "undefined") return "";
+  const candidates = [
+    "audio/webm;codecs=opus",
+    "audio/webm",
+    "audio/mp4",
+    "audio/ogg;codecs=opus",
+  ];
+  return candidates.find((type) => MediaRecorder.isTypeSupported?.(type)) || "";
+}
+
 const FEED_TABS = [
   ["foryou", "Pour toi"],
   ["following", "Abonnés"],
@@ -530,6 +541,7 @@ export function FeedTab({
   const [commentRec, setCommentRec] = useState(EMPTY_REC);
   const [sendingComment, setSendingComment] = useState(false);
   const commentRecorderRef = useRef(null);
+  const commentStreamRef = useRef(null);
   const commentChunksRef = useRef([]);
 
   const [currentUserId, setCurrentUserId] = useState(propUserId);
@@ -686,6 +698,17 @@ export function FeedTab({
 
   useEffect(() => {
     return () => {
+      try {
+        if (
+          commentRecorderRef.current &&
+          commentRecorderRef.current.state !== "inactive"
+        ) {
+          commentRecorderRef.current.stop();
+        }
+      } catch {
+        // Le composant peut être démonté pendant l'arrêt du MediaRecorder.
+      }
+      commentStreamRef.current?.getTracks().forEach((track) => track.stop());
       if (commentRec.url) URL.revokeObjectURL(commentRec.url);
     };
   }, [commentRec.url]);
@@ -975,35 +998,65 @@ export function FeedTab({
 
   const startCommentRecording = async (postId) => {
     if (commentRec.recording) return;
+    if (
+      !navigator.mediaDevices?.getUserMedia ||
+      typeof MediaRecorder === "undefined"
+    ) {
+      showToast("L'enregistrement vocal n'est pas supporté sur cet appareil.", "error");
+      return;
+    }
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const rec = new MediaRecorder(stream);
+      commentStreamRef.current = stream;
+      const mime = pickCommentRecorderMime();
+      const rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
       commentChunksRef.current = [];
       rec.ondataavailable = (e) => {
         if (e.data.size > 0) commentChunksRef.current.push(e.data);
       };
+      rec.onerror = () => {
+        commentStreamRef.current?.getTracks().forEach((track) => track.stop());
+        commentStreamRef.current = null;
+        setCommentRec(EMPTY_REC);
+        showToast("Erreur pendant l'enregistrement vocal.", "error");
+      };
       rec.onstop = () => {
         const blob = new Blob(commentChunksRef.current, {
-          type: rec.mimeType || "audio/webm",
+          type: rec.mimeType || commentChunksRef.current[0]?.type || "audio/webm",
         });
+        commentChunksRef.current = [];
+        commentRecorderRef.current = null;
+        commentStreamRef.current?.getTracks().forEach((track) => track.stop());
+        commentStreamRef.current = null;
+
+        if (!blob.size) {
+          setCommentRec(EMPTY_REC);
+          showToast("Aucun son n'a été enregistré.", "error");
+          return;
+        }
+
         setCommentRec({
           postId,
           recording: false,
           blob,
           url: URL.createObjectURL(blob),
         });
-        stream.getTracks().forEach((t) => t.stop());
       };
       commentRecorderRef.current = rec;
-      rec.start();
+      rec.start(250);
       setCommentRec({ postId, recording: true, blob: null, url: null });
     } catch (err) {
+      commentStreamRef.current?.getTracks().forEach((track) => track.stop());
+      commentStreamRef.current = null;
+      console.error("Erreur accès micro commentaire :", err);
       showToast("Impossible d'accéder au microphone. Vérifiez les permissions.", "error");
     }
   };
 
   const stopCommentRecording = () => {
     if (commentRecorderRef.current?.state === "recording") {
+      commentRecorderRef.current.requestData?.();
       commentRecorderRef.current.stop();
     }
   };
