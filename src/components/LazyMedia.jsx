@@ -1,75 +1,61 @@
-
 import { useState, useEffect, useRef } from "react";
 import { COLORS as THEME_COLORS } from "../theme.js";
-import {
-  feedImageUrl,
-  avatarUrl,
-  fullImageUrl,
-} from "../lib/mediaUrl.js";
+import { feedImageUrl, avatarUrl, fullImageUrl } from "../lib/mediaUrl.js";
 
 const FALLBACK = {
   surface2: "rgba(255,255,255,0.06)",
   muted: "rgba(245,243,239,0.5)",
 };
 
+// Calculé une seule fois (et non à chaque rendu de chaque composant)
+const C = { ...FALLBACK, ...(THEME_COLORS || {}) };
+
 function resolveImageSource(src, variant, width) {
   if (!src || variant === "raw") return src || "";
-
-  if (variant === "avatar") {
-    return avatarUrl(src, width || 96);
-  }
-
-  if (variant === "full") {
-    return fullImageUrl(src);
-  }
-
+  if (variant === "avatar") return avatarUrl(src, width || 96);
+  if (variant === "full") return fullImageUrl(src);
   return feedImageUrl(src);
 }
 
-/**
- * Image à chargement différé.
- * Conserve les fonctions existantes de résolution des URL.
- */
-export function LazyImage({
-  src,
-  alt = "",
-  className = "",
+/** Bloc affiché quand un média est absent ou en erreur (partagé image / vidéo). */
+function MediaPlaceholder({ className = "", style, children, ...rest }) {
+  return (
+    <div
+      className={`flex items-center justify-center text-xs ${className}`}
+      style={{ color: C.muted, background: C.surface2, ...style }}
+      {...rest}
+    >
+      {children}
+    </div>
+  );
+}
+
+function LazyImageInner({
+  resolved,
+  alt,
+  className,
   style,
   aspectRatio,
   onClick,
-  variant = "feed",
-  width,
-  fit = "cover",
+  fit,
 }) {
-  const C = { ...FALLBACK, ...(THEME_COLORS || {}) };
-
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
 
-  const resolved = resolveImageSource(src, variant, width);
-
-  // Réinitialise l'état lorsqu'une nouvelle image est demandée.
-  useEffect(() => {
-    setLoaded(false);
-    setFailed(false);
-  }, [resolved]);
-
-  if (!resolved || failed) {
+  if (failed) {
     return (
-      <div
-        className={`flex items-center justify-center bg-black/40 text-xs ${className}`}
+      <MediaPlaceholder
+        className={className}
         style={{
-          color: C.muted,
           aspectRatio: aspectRatio || undefined,
           minHeight: aspectRatio ? undefined : 120,
-          background: C.surface2,
           ...style,
         }}
         role="img"
         aria-label={alt || "Média indisponible"}
       >
-        {failed ? "Image indisponible" : ""}
-      </div>
+        Image indisponible
+      </MediaPlaceholder>
     );
   }
 
@@ -78,8 +64,7 @@ export function LazyImage({
       className={`relative overflow-hidden bg-black/20 lazy-media-box ${className}`}
       style={{
         aspectRatio: aspectRatio || undefined,
-        minHeight:
-          fit === "contain" && !loaded ? 220 : undefined,
+        minHeight: fit === "contain" && !loaded ? 220 : undefined,
         ...style,
       }}
       onClick={onClick}
@@ -93,53 +78,79 @@ export function LazyImage({
       )}
 
       <img
-        key={resolved}
         src={resolved}
         alt={alt}
         loading="lazy"
         decoding="async"
-        style={
-          fit === "contain"
-            ? { maxHeight: "80vh" }
-            : undefined
-        }
-        onLoad={() => {
-          setLoaded(true);
-          setFailed(false);
-        }}
-        onError={() => {
-          setLoaded(false);
-          setFailed(true);
-        }}
+        style={fit === "contain" ? { maxHeight: "80vh" } : undefined}
+        onLoad={() => setLoaded(true)}
+        onError={() => setFailed(true)}
         className={`w-full ${
-          fit === "contain"
-            ? "h-auto object-contain"
-            : "h-full object-cover"
-        } transition-opacity duration-300 ${
-          loaded ? "opacity-100" : "opacity-0"
-        }`}
+          fit === "contain" ? "h-auto object-contain" : "h-full object-cover"
+        } transition-opacity duration-300 ${loaded ? "opacity-100" : "opacity-0"}`}
       />
     </div>
   );
 }
 
 /**
- * Vidéo à chargement différé.
- * La vidéo est chargée lorsqu'elle entre dans le viewport,
- * puis mise en pause lorsqu'elle en sort.
+ * Image à chargement différé.
+ * Le sous-composant est recréé (key) à chaque nouvelle URL : l'état
+ * « chargée / en erreur » repart donc de zéro sans effet de réinitialisation.
  */
-export function LazyVideo({
+export function LazyImage({
   src,
-  fit = "cover",
+  alt = "",
   className = "",
+  style,
+  aspectRatio,
+  onClick,
+  variant = "feed",
+  width,
+  fit = "cover",
+}) {
+  const resolved = resolveImageSource(src, variant, width);
+
+  if (!resolved) {
+    return (
+      <MediaPlaceholder
+        className={`bg-black/40 ${className}`}
+        style={{
+          aspectRatio: aspectRatio || undefined,
+          minHeight: aspectRatio ? undefined : 120,
+          ...style,
+        }}
+        role="img"
+        aria-label={alt || "Média indisponible"}
+      />
+    );
+  }
+
+  return (
+    <LazyImageInner
+      key={resolved}
+      resolved={resolved}
+      alt={alt}
+      className={className}
+      style={style}
+      aspectRatio={aspectRatio}
+      onClick={onClick}
+      fit={fit}
+    />
+  );
+}
+
+function LazyVideoInner({
+  src,
+  fit,
+  className,
   poster,
-  muted = true,
-  controls = true,
-  autoPlayWhenVisible = false,
+  muted,
+  controls,
+  autoPlayWhenVisible,
+  onError,
   ...rest
 }) {
-  const C = { ...FALLBACK, ...(THEME_COLORS || {}) };
-
   const [failed, setFailed] = useState(false);
   const [inView, setInView] = useState(false);
   const [hasEnteredView, setHasEnteredView] = useState(false);
@@ -147,15 +158,8 @@ export function LazyVideo({
   const videoRef = useRef(null);
   const boxRef = useRef(null);
 
-  // Une nouvelle URL ne doit pas conserver l'erreur précédente.
-  useEffect(() => {
-    setFailed(false);
-    setHasEnteredView(false);
-  }, [src]);
-
   useEffect(() => {
     const el = boxRef.current;
-
     if (!el) return undefined;
 
     if (typeof IntersectionObserver === "undefined") {
@@ -166,18 +170,12 @@ export function LazyVideo({
 
     const observer = new IntersectionObserver(
       ([entry]) => {
-        const visible =
-          entry.isIntersecting &&
-          entry.intersectionRatio >= 0.35;
+        const visible = entry.isIntersecting && entry.intersectionRatio >= 0.35;
 
         setInView(visible);
-
-        if (visible) {
-          setHasEnteredView(true);
-        }
+        if (visible) setHasEnteredView(true);
 
         const video = videoRef.current;
-
         if (!video) return;
 
         if (!visible) {
@@ -186,35 +184,27 @@ export function LazyVideo({
           } catch {
             // Certains navigateurs peuvent refuser cette opération.
           }
-
           return;
         }
 
         if (autoPlayWhenVisible) {
           video.muted = true;
-
           video.play().catch(() => {
             // La lecture automatique peut être bloquée par le navigateur.
           });
         }
       },
-      {
-        threshold: [0, 0.35, 0.7],
-      }
+      { threshold: [0, 0.35, 0.7] }
     );
 
     observer.observe(el);
+    return () => observer.disconnect();
+  }, [autoPlayWhenVisible]);
 
-    return () => {
-      observer.disconnect();
-    };
-  }, [src, autoPlayWhenVisible]);
-
-  // Nettoyage du lecteur lors du démontage du composant.
+  // Nettoyage du lecteur lors du démontage (y compris au changement d'URL).
   useEffect(() => {
     return () => {
       const video = videoRef.current;
-
       if (!video) return;
 
       try {
@@ -227,29 +217,22 @@ export function LazyVideo({
     };
   }, []);
 
-  if (!src || failed) {
+  if (failed) {
     return (
-      <div
-        className={`flex items-center justify-center bg-black text-xs ${className}`}
-        style={{
-          color: C.muted,
-          minHeight: 160,
-          background: C.surface2,
-        }}
+      <MediaPlaceholder
+        className={`bg-black ${className}`}
+        style={{ minHeight: 160 }}
         role="status"
       >
         Vidéo indisponible
-      </div>
+      </MediaPlaceholder>
     );
   }
 
   return (
-    <div
-      ref={boxRef}
-      className={`lazy-media-box ${className}`}
-    >
+    <div ref={boxRef} className={`lazy-media-box ${className}`}>
       <video
-        key={src}
+        {...rest}
         ref={videoRef}
         src={hasEnteredView ? src : undefined}
         poster={poster}
@@ -262,9 +245,53 @@ export function LazyVideo({
         muted={muted}
         playsInline
         preload={inView ? "metadata" : "none"}
-        onError={() => setFailed(true)}
-        {...rest}
+        onError={(event) => {
+          onError?.(event); // le onError du parent est conservé, il ne remplace plus le nôtre
+          setFailed(true);
+        }}
       />
     </div>
+  );
+}
+
+/**
+ * Vidéo à chargement différé : la source n'est chargée qu'à l'entrée dans le
+ * viewport, puis la vidéo est mise en pause à la sortie.
+ * Recréée (key) à chaque nouvelle URL : erreur et visibilité repartent de zéro.
+ */
+export function LazyVideo({
+  src,
+  fit = "cover",
+  className = "",
+  poster,
+  muted = true,
+  controls = true,
+  autoPlayWhenVisible = false,
+  ...rest
+}) {
+  if (!src) {
+    return (
+      <MediaPlaceholder
+        className={`bg-black ${className}`}
+        style={{ minHeight: 160 }}
+        role="status"
+      >
+        Vidéo indisponible
+      </MediaPlaceholder>
+    );
+  }
+
+  return (
+    <LazyVideoInner
+      key={src}
+      src={src}
+      fit={fit}
+      className={className}
+      poster={poster}
+      muted={muted}
+      controls={controls}
+      autoPlayWhenVisible={autoPlayWhenVisible}
+      {...rest}
+    />
   );
 }
