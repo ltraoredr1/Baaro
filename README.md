@@ -651,30 +651,80 @@ Les secrets tels que :
 
 ```text
 BAARO/
-├── api/                       # API Vercel — ne pas modifier sans nécessité
-├── android/                   # projet Android Capacitor
-├── locales/                   # traductions
-├── native-plugins/            # plugins natifs
-├── public/                    # assets publics / branding
-├── scripts/                   # contrôles, sécurité et validation
+├── .github/workflows/         # CI (Android, Capgo, dépendances)
+├── android/                   # projet Capacitor Android
+├── api/                       # API Vercel (serverless)
+│   ├── _lib/                  # helpers API (IA, push, …)
+│   ├── _shared.js
+│   ├── media.js, live.js, social.js
+│   ├── payments.js, payouts.js, webhooks.js
+│   └── translate.js, video-engine.js, …
+├── docs/                      # politiques, légal, monétisation
+├── locales/                   # traductions i18n (JSON)
+├── native-plugins/            # plugins natifs (nearby, …)
+├── public/                    # PWA, icônes, sons, branding
+│   ├── push-sw.js             # handlers Web Push (actif)
+│   └── service-worker.js      # LEGACY — ne pas enregistrer
+├── scripts/                   # checks production / sécurité / E2E
 ├── src/
-│   ├── components/            # composants UI
-│   ├── contexts/              # contextes React
-│   ├── features/              # modules fonctionnels
-│   ├── hooks/                 # hooks
+│   ├── app/                   # App, MainShell, tabs
+│   ├── components/            # UI partagée
+│   │   ├── community/         # ChannelItem, VoiceChannelUI, …
+│   │   └── ui/
+│   ├── contexts/              # AppContext
+│   ├── features/              # modules métier
+│   │   ├── ai/                # assistant / mode Griot (prompt serveur)
+│   │   ├── auth/              # AuthScreen, PhoneAuth, BiometricGate
+│   │   ├── contacts/
+│   │   ├── debates/
+│   │   ├── economy/           # EconomyTab, monétisation
+│   │   ├── feed/              # FeedTab
+│   │   ├── friends/           # FriendsTab, FollowButton, FriendRequestButton
+│   │   ├── messaging/         # MessagesTab, E2E crypto, appels
+│   │   │   ├── components/
+│   │   │   ├── hooks/
+│   │   │   └── lib/
+│   │   ├── shop/              # boutique, commandes
+│   │   ├── stories/
+│   │   ├── videos/            # VideosTab, Video Studio
+│   │   ├── settings/
+│   │   ├── profile/
+│   │   ├── offline/
+│   │   ├── guide/
+│   │   ├── future/
+│   │   └── innovation/
+│   ├── hooks/                 # hooks globaux (useSocial, useCommunity, …)
 │   ├── lib/                   # logique partagée
-│   ├── pages/                 # pages
-│   ├── services/              # services applicatifs
-│   └── store/                 # état applicatif
+│   │   ├── currentUserId.js   # identité UUID canonique
+│   │   ├── imageCompress.js   # compression image unique
+│   │   ├── externalMedia.js   # upload R2
+│   │   ├── largeVideoUpload.js
+│   │   ├── nearby.js          # Nearby Android
+│   │   └── pushNotifications.js, …
+│   ├── pages/
+│   ├── services/              # companyApi, shopApi, mediaUpload, …
+│   ├── store/
+│   ├── main.jsx
+│   ├── supabaseClient.js
+│   └── theme.js
 ├── supabase/
-│   ├── migrations/             # migration active unifiée
-│   ├── legacy_migrations/      # historique/audit
-│   └── functions/              # fonctions Supabase
-├── worker/                    # traitements média lourds
+│   ├── config.toml
+│   ├── functions/             # edge functions
+│   └── migrations / SQL       # schémas & RLS
+├── worker/                    # traitements média lourds (FFmpeg / IA)
 ├── capacitor.config.json
 ├── vite.config.js
-└── package.json
+├── package.json
+└── .env.example
 ```
+
+### Points d’architecture à retenir
+
+- **Identité** : `auth.users.id` === `profiles.id` (helpers dans `src/lib/currentUserId.js`).
+- **Médias** : compression unique (`imageCompress.js`) → upload R2 (`externalMedia.js` / `largeVideoUpload.js`).
+- **Messagerie** : module unique sous `features/messaging/` (plus d’alias `friends/MessagesTab`).
+- **Griot / IA** : prompt système côté serveur (`api/live.js`), pas de doublon client.
+- **Alias de compat** (ré-exports uniquement) : `src/nearby.js`, `CompaniesTab.jsx`, `communityChannelItem.jsx`, `services/mediaService.js`.
 
 ---
 
