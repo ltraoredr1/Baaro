@@ -65,6 +65,7 @@ export function Header({
   onOpenSearch,
   isCreateOpen = false,
   onToggleCreate,
+  showCreate = false, // uniquement onglet Feed
 }) {
   const C = { ...FALLBACK, ...(THEME_COLORS || {}) };
   const { isAnonymous } = useApp() || {};
@@ -256,26 +257,29 @@ export function Header({
             </div>
           )}
 
-          {/* Création */}
-          <button
-            onClick={handleCreateClick}
-            aria-label={isCreateOpen ? "Fermer la création" : "Créer"}
-            className="flex items-center gap-1 px-2 py-1.5 rounded-full font-bold text-xs border transition-all active:scale-95"
-            style={{
-              background: isCreateOpen ? C.surface2 : C.gold,
-              borderColor: C.borderGold,
-              color: isCreateOpen ? C.ivory : "#000",
-            }}
-          >
-            {isCreateOpen ? (
-              <X size={13} />
-            ) : (
-              <Plus size={13} strokeWidth={3} />
-            )}
-            <span className="hidden xs:inline">
-              {isCreateOpen ? "Fermer" : "Créer"}
-            </span>
-          </button>
+          {/* Création — visible uniquement sur l'onglet Feed */}
+          {showCreate && (
+            <button
+              type="button"
+              onClick={handleCreateClick}
+              aria-label={isCreateOpen ? "Fermer la création" : "Créer une publication"}
+              className="flex items-center gap-1 px-2 py-1.5 rounded-full font-bold text-xs border transition-all active:scale-95"
+              style={{
+                background: isCreateOpen ? C.surface2 : C.gold,
+                borderColor: C.borderGold,
+                color: isCreateOpen ? C.ivory : "#000",
+              }}
+            >
+              {isCreateOpen ? (
+                <X size={13} />
+              ) : (
+                <Plus size={13} strokeWidth={3} />
+              )}
+              <span className="hidden xs:inline">
+                {isCreateOpen ? "Fermer" : "Créer"}
+              </span>
+            </button>
+          )}
 
           {/* Langue */}
           <div

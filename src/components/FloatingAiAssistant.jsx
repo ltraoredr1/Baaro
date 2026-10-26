@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { Bot, X } from "lucide-react";
+import { Bot, X, HelpCircle } from "lucide-react";
 import { COLORS } from "../theme.js";
 // ⚠️ Ajuste ce chemin vers ton vrai dossier (ex: ../features/ai/AiAssistantTab.jsx)
 import AiAssistantTab from "../features/ai/AiAssistantTab.jsx";
@@ -57,6 +57,8 @@ function savePos(p) {
  *  - userProfile
  *  - onPublishAction(text) : optionnel
  *  - hidden : true sur l'onglet IA pour éviter le doublon
+ *  - Clic court : ouvrir l'assistant
+ *  - Clic long (~450 ms) ou bouton Aide dans le panneau : ouvrir le guide
  */
 export default function FloatingAiAssistant({
   userProfile,
@@ -69,6 +71,21 @@ export default function FloatingAiAssistant({
   const [dragging, setDragging] = useState(false);
   const dragRef = useRef(null);
   const justDraggedRef = useRef(false);
+  const longPressTimerRef = useRef(null);
+  const longPressFiredRef = useRef(false);
+
+  const openGuide = () => {
+    window.dispatchEvent(
+      new CustomEvent("baaro:open-guide", { detail: { view: "choose" } })
+    );
+  };
+
+  const clearLongPress = () => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  };
 
   // Écoute des boutons "Demander à l'IA" placés sur les posts
   useEffect(() => {
@@ -101,6 +118,13 @@ export default function FloatingAiAssistant({
   }, []);
 
   const onPointerDown = (e) => {
+    longPressFiredRef.current = false;
+    clearLongPress();
+    longPressTimerRef.current = setTimeout(() => {
+      longPressFiredRef.current = true;
+      longPressTimerRef.current = null;
+      openGuide();
+    }, 450);
     if (e.pointerType === "mouse" && e.button !== 0) return;
     const rect = e.currentTarget.getBoundingClientRect();
     dragRef.current = {
@@ -115,6 +139,7 @@ export default function FloatingAiAssistant({
   };
 
   const onPointerMove = (e) => {
+    // Annule le long-press dès qu'on glisse
     const d = dragRef.current;
     if (!d) return;
     const dx = e.clientX - d.sx;
@@ -122,6 +147,7 @@ export default function FloatingAiAssistant({
     if (!d.moved && Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
     if (!d.moved) {
       d.moved = true;
+      clearLongPress();
       setDragging(true);
     }
     d.last = clampPos({ x: d.ox + dx, y: d.oy + dy });
@@ -129,6 +155,7 @@ export default function FloatingAiAssistant({
   };
 
   const endDrag = () => {
+    clearLongPress();
     const d = dragRef.current;
     dragRef.current = null;
     if (!d?.moved) return;
@@ -148,6 +175,10 @@ export default function FloatingAiAssistant({
 
   const onFabClick = () => {
     if (justDraggedRef.current) return;
+    if (longPressFiredRef.current) {
+      longPressFiredRef.current = false;
+      return;
+    }
     setOpen(true);
   };
 
@@ -166,14 +197,28 @@ export default function FloatingAiAssistant({
           borderColor: COLORS.borderGold,
         }}
       >
-        <button
-          type="button"
-          onClick={() => setOpen(false)}
-          className="absolute top-2 right-2 z-10 p-1.5 rounded-full bg-black/50 text-white"
-          aria-label="Fermer l'assistant"
-        >
-          <X size={16} />
-        </button>
+        <div className="absolute top-2 right-2 z-10 flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              openGuide();
+            }}
+            className="p-1.5 rounded-full bg-black/50 text-white"
+            aria-label="Ouvrir le guide BAARO"
+            title="Guide / Aide"
+          >
+            <HelpCircle size={16} />
+          </button>
+          <button
+            type="button"
+            onClick={() => setOpen(false)}
+            className="p-1.5 rounded-full bg-black/50 text-white"
+            aria-label="Fermer l'assistant"
+          >
+            <X size={16} />
+          </button>
+        </div>
         <div className="flex-1 overflow-y-auto p-3 pt-10">
           <AiAssistantTab
             userProfile={userProfile}
@@ -201,7 +246,7 @@ export default function FloatingAiAssistant({
             ...(pos ? { left: pos.x, top: pos.y } : {}),
             transition: dragging ? "none" : "left 0.2s ease, top 0.2s ease, transform 0.15s ease",
           }}
-          aria-label="Ouvrir l'assistant IA (glisser pour déplacer)"
+          aria-label="Assistant IA (appui long : guide)"
         >
           <Bot size={26} />
         </button>
