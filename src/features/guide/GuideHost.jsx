@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Compass, Bot, Clock, HelpCircle, X } from "lucide-react";
+import { Compass, Bot, Clock, X } from "lucide-react";
 import { COLORS } from "../../theme.js";
 import GuideTour from "./GuideTour.jsx";
 import GuideAiChat from "./GuideAiChat.jsx";
@@ -154,23 +154,7 @@ export default function GuideHost({
 
   return (
     <>
-      {/* Bouton flottant « ? » (caché quand le guide est ouvert) */}
-      {!suppressed && !view && (
-        <button
-          type="button"
-          onClick={() => open()}
-          className="fixed z-[1000] left-[5.5rem] top-[calc(env(safe-area-inset-top)+1.5rem)] w-10 h-10 rounded-full flex items-center justify-center shadow-xl border active:scale-95 transition-transform"
-          style={{
-            background: COLORS.surface,
-            borderColor: COLORS.borderGold,
-            color: COLORS.gold,
-          }}
-          aria-label={t.help}
-          title={t.help}
-        >
-          <HelpCircle size={20} />
-        </button>
-      )}
+      {/* Bouton « ? » retiré du header : ouverture via le FAB IA (baaro:open-guide) */}
 
       {/* Choix du mode */}
       {view === "choose" && (
