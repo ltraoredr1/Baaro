@@ -7,6 +7,10 @@ import {
   uploadLargeVideo,
 } from "../../../services/mediaService.js";
 import { supabase } from "../../../supabaseClient.js";
+import {
+  buildCollabPayload,
+  registerVideoHashtags,
+} from "../../../lib/videoEngagement.js";
 import { MAX_PHOTOS } from "../constants.js";
 import { formatTime } from "../utils/format.js";
 import { insertVideo } from "../utils/videosApi.js";
@@ -18,30 +22,29 @@ import {
   renderToFile,
 } from "../utils/videoRenderer.js";
 
-// Helper de génération par IA Gemini via l'API backend sécurisée
 async function generateGeminiVisual(promptText) {
   try {
     const file = await generateAIImage(
-      `Création visuelle verticale 9:16 attrayante pour réseau social: ${promptText}`
+      `Création visuelle verticale 9:16 attrayante pour réseau social: ${promptText}`,
     );
     if (!file) return null;
-
-    return {
-      file,
-      url: URL.createObjectURL(file),
-    };
+    return { file, url: URL.createObjectURL(file) };
   } catch (error) {
     console.warn("Génération visuelle Gemini indisponible / repli local :", error);
     return null;
   }
 }
 
-// Fenêtre de publication : choix du média (vidéo / photos / texte / Gemini IA), aperçu, envoi.
+/**
+ * Composeur vidéo + collab (stitch / duo / reply) + hashtags.
+ */
 export function useVideoCreator({
   user,
   loadVideos,
   onRewardPoints,
   soundPicker,
+  collab = null,
+  onCollabConsumed,
 }) {
   const { showToast, showPointsReward } = useToast();
   const { selectedSound, muteOriginal, stopSoundPreview, resetSound } =
@@ -75,6 +78,20 @@ export function useVideoCreator({
       if (previewUrl) URL.revokeObjectURL(previewUrl);
     };
   }, [previewUrl]);
+
+  // Préremplir le titre si réponse / stitch / duo
+  useEffect(() => {
+    if (!collab?.mode || uploadTitle) return;
+    if (collab.mode === "reply" && collab.commentAuthor) {
+      setUploadTitle(
+        `Réponse à @${String(collab.commentAuthor).replace(/^@/, "")}`,
+      );
+    } else if (collab.mode === "stitch" && collab.sourceTitle) {
+      setUploadTitle(`Stitch · ${collab.sourceTitle}`);
+    } else if (collab.mode === "duo" && collab.sourceTitle) {
+      setUploadTitle(`Duo · ${collab.sourceTitle}`);
+    }
+  }, [collab, uploadTitle]);
 
   const handlePhotosSelected = (fileList) => {
     const incoming = Array.from(fileList || []).filter((f) =>
@@ -149,17 +166,14 @@ export function useVideoCreator({
         }
 
         setGenerateProgress(0.2);
-
-        // Appel à la génération d'image via le backend sécurisé
         const geminiResult = await generateGeminiVisual(text);
         setGenerateProgress(0.5);
 
         if (geminiResult) {
           const aiImage = await loadImage(geminiResult.url);
-          totalMs = 6000; // 6 secondes pour le visuel IA
+          totalMs = 6000;
           drawFrame = makePhotoDrawer([aiImage], 6);
         } else {
-          // Fallback Canvas local texte animé si le backend ou l'IA n'est pas disponible
           const words = text.split(/\s+/).length;
           totalMs = Math.min(15, Math.max(5, Math.ceil(words * 0.5))) * 1000;
           drawFrame = makeTextDrawer(text, textTheme);
@@ -213,11 +227,11 @@ export function useVideoCreator({
     setUploadTitle("");
     setUploadDescription("");
     setUploadProgress(0);
+    onCollabConsumed?.();
   };
 
   const handleFileSelected = (file) => {
     if (!file) return;
-    // Certains mobiles envoient un fichier vidéo sans type MIME : on teste aussi l'extension
     if (!looksLikeVideo(file)) {
       showToast("Sélectionne un fichier vidéo.", "error");
       return;
@@ -244,14 +258,11 @@ export function useVideoCreator({
     setUploading(true);
     setUploadProgress(10);
 
-    // La durée est lue pendant l'envoi (et non après), pour gagner du temps.
     const durationPromise = generated
       ? Promise.resolve(formatTime(generatedSeconds))
       : readDuration(selectedFile).catch(() => "00:00");
 
     try {
-      // <= 500 Mo : R2 direct (/api/media) ; > 500 Mo : worker multipart.
-      // La progression réelle occupe la plage 10 -> 65 %.
       const uploaded = await uploadLargeVideo(selectedFile, {
         user_id: user.id,
         onProgress: (pct) =>
@@ -275,10 +286,9 @@ export function useVideoCreator({
       }
       setUploadProgress(80);
 
-      const {
-        data: created,
-        error: dbError,
-      } = await insertVideo(
+      const collabFields = buildCollabPayload(collab);
+
+      const { data: created, error: dbError } = await insertVideo(
         {
           author_id: user.id,
           video_url: publicUrl,
@@ -288,6 +298,7 @@ export function useVideoCreator({
           views: 0,
           likes: 0,
           sound_id: selectedSound?.id ? String(selectedSound.id) : null,
+          ...collabFields,
         },
         selectedSound
           ? {
@@ -300,6 +311,19 @@ export function useVideoCreator({
       );
 
       if (dbError) throw dbError;
+
+      await registerVideoHashtags(
+        created?.id,
+        uploadTitle,
+        uploadDescription,
+      );
+
+      if (collab?.replyToCommentId) {
+        await supabase
+          .from("video_comments")
+          .update({ has_video_reply: true })
+          .eq("id", collab.replyToCommentId);
+      }
 
       setUploadProgress(100);
       onRewardPoints?.("publish_video", "Vidéo publiée", created?.id);
@@ -356,5 +380,6 @@ export function useVideoCreator({
     resetUpload,
     handleFileSelected,
     handleUpload,
+    collab,
   };
 }

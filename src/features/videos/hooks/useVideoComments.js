@@ -1,17 +1,14 @@
-
 import { useState } from "react";
 import { supabase } from "../../../supabaseClient.js";
 import { useToast } from "../../../components/ToastContext.jsx";
 
 async function notifyVideoComment(videoId) {
   if (!videoId) return;
-
   try {
     const {
       data: { session },
       error: sessionError,
     } = await supabase.auth.getSession();
-
     if (sessionError || !session?.access_token) return;
 
     const response = await fetch("/api/social", {
@@ -30,21 +27,18 @@ async function notifyVideoComment(videoId) {
 
     if (!response.ok) {
       const result = await response.json().catch(() => ({}));
-      console.warn(
-        "[video-comment-notification]",
-        result.error || response.status,
-      );
+      console.warn("[video-comment-notification]", result.error || response.status);
     }
   } catch (error) {
-    // Une erreur de notification ne doit pas annuler le commentaire.
-    console.warn(
-      "[video-comment-notification]",
-      error?.message || error,
-    );
+    console.warn("[video-comment-notification]", error?.message || error);
   }
 }
 
-export function useVideoComments({ user, setVideos, onRewardPoints }) {
+/**
+ * Commentaires vidéo + réponse en vidéo.
+ * onReplyWithVideo(comment, videoId) → ouvre le composeur en mode reply.
+ */
+export function useVideoComments({ user, setVideos, onRewardPoints, onReplyWithVideo }) {
   const { showToast, showPointsReward } = useToast();
 
   const [showComments, setShowComments] = useState(null);
@@ -57,7 +51,7 @@ export function useVideoComments({ user, setVideos, onRewardPoints }) {
     const { data, error } = await supabase
       .from("video_comments")
       .select(
-        "id, content, created_at, profiles:author_id(display_name, handle, flag, avatar_url)",
+        "id, content, created_at, has_video_reply, parent_comment_id, author_id, profiles:author_id(display_name, handle, flag, avatar_url)",
       )
       .eq("video_id", videoId)
       .order("created_at", { ascending: true });
@@ -90,8 +84,6 @@ export function useVideoComments({ user, setVideos, onRewardPoints }) {
       if (error) throw error;
 
       setNewComment("");
-
-      // Le commentaire est enregistré avant l'envoi de la notification.
       await notifyVideoComment(videoId);
       await openComments(videoId);
 
@@ -114,6 +106,18 @@ export function useVideoComments({ user, setVideos, onRewardPoints }) {
     }
   };
 
+  const replyWithVideo = (comment) => {
+    if (!showComments || !comment?.id) return;
+    onReplyWithVideo?.({
+      mode: "reply",
+      replyToCommentId: comment.id,
+      replyToVideoId: showComments,
+      commentPreview: comment.content,
+      commentAuthor: comment.profiles?.handle || comment.profiles?.display_name,
+    });
+    setShowComments(null);
+  };
+
   const closeComments = () => setShowComments(null);
 
   return {
@@ -124,5 +128,6 @@ export function useVideoComments({ user, setVideos, onRewardPoints }) {
     openComments,
     closeComments,
     sendComment,
+    replyWithVideo,
   };
 }
