@@ -601,12 +601,11 @@ export function MainShell() {
           onOpenNotifications={() => setNotifDrawerOpen(true)}
           notificationCount={unreadNotifications}
           onOpenSearch={() => setSearchModalOpen(true)}
+          showCreate={activeTab === "feed"}
           isCreateOpen={activeTab === "feed" ? isFeedCreateOpen : false}
           onToggleCreate={() => {
             if (activeTab === "feed") {
               setIsFeedCreateOpen((prev) => !prev);
-            } else if (activeTab === "videos") {
-              window.dispatchEvent(new CustomEvent("baaro:open-video-create"));
             }
           }}
         />
