@@ -1,0 +1,334 @@
+[1mdiff --git a/src/features/settings/constants.ts b/src/features/settings/constants.ts[m
+[1mindex 4ab8b2b..cd8b5b8 100644[m
+[1m--- a/src/features/settings/constants.ts[m
+[1m+++ b/src/features/settings/constants.ts[m
+[36m@@ -4,15 +4,15 @@[m [mexport const STORAGE_KEY = "baaro_settings_v23";[m
+ export const APP_VERSION = "2.0.0-v23";[m
+ [m
+ export const THEMES = [[m
+[31m-  { id: "midnight", labelKey: "theme_midnight", bg: "#0B1220" },[m
+[31m-  { id: "oled", labelKey: "theme_oled", bg: "#000000" },[m
+[31m-  { id: "emerald", labelKey: "theme_emerald", bg: "#061A14" },[m
+[31m-  { id: "light", labelKey: "theme_light", bg: "#F8FAFC" },[m
+[31m-  { id: "sunset", labelKey: "theme_sunset", bg: "#2A1215" },[m
+[31m-  { id: "ocean", labelKey: "theme_ocean", bg: "#0A1628" },[m
+[31m-  { id: "forest", labelKey: "theme_forest", bg: "#0E1F14" },[m
+[31m-  { id: "desert", labelKey: "theme_desert", bg: "#1F1A14" },[m
+[31m-  { id: "custom", labelKey: "theme_custom", bg: "custom" },[m
+[32m+[m[32m  { id: "midnight", labelKey: "theme_midnight", bg: "#101827", accent: "#FF785F", accent2: "#6FE7D2" },[m
+[32m+[m[32m  { id: "oled", labelKey: "theme_oled", bg: "#000000", accent: "#FF8A65", accent2: "#69E4D0" },[m
+[32m+[m[32m  { id: "emerald", labelKey: "theme_emerald", bg: "#071C18", accent: "#B8E36D", accent2: "#5DE0BE" },[m
+[32m+[m[32m  { id: "light", labelKey: "theme_light", bg: "#F7F4EE", accent: "#E85D4A", accent2: "#159E91" },[m
+[32m+[m[32m  { id: "sunset", labelKey: "theme_sunset", bg: "#2A151A", accent: "#FF9B71", accent2: "#F4C27A" },[m
+[32m+[m[32m  { id: "ocean", labelKey: "theme_ocean", bg: "#0D2035", accent: "#6ED6FF", accent2: "#73E4C5" },[m
+[32m+[m[32m  { id: "forest", labelKey: "theme_forest", bg: "#102018", accent: "#B8E36D", accent2: "#8FE0B1" },[m
+[32m+[m[32m  { id: "desert", labelKey: "theme_desert", bg: "#241B15", accent: "#FFB86B", accent2: "#E5D08A" },[m
+[32m+[m[32m  { id: "custom", labelKey: "theme_custom", bg: "custom", accent: "#D9AE52", accent2: "#2DBFA6" },[m
+ ] as const;[m
+ [m
+ export type CustomTheme = { bgImage?: string | null; bgColor: string; accent: string; fg?: string };[m
+[36m@@ -74,5 +74,3 @@[m [mexport const AI_REGIONS = [[m
+ export const RTL = new Set(["ar", "nqo"]);[m
+ [m
+ // Traductions en cours de validation par des locuteurs[m
+[31m-[m
+[31m-[m
+[1mdiff --git a/src/features/settings/index.tsx b/src/features/settings/index.tsx[m
+[1mindex 0ccac79..4b5aa13 100644[m
+[1m--- a/src/features/settings/index.tsx[m
+[1m+++ b/src/features/settings/index.tsx[m
+[36m@@ -1482,7 +1482,7 @@[m [mexport default function SettingsTab({[m
+                   key={th.id}[m
+                   type="button"[m
+                   onClick={() => save({ theme: th.id })}[m
+[31m-                  className="p-3 rounded-xl border text-center text-xs font-bold"[m
+[32m+[m[32m                  className="p-2 rounded-xl border text-left text-xs font-bold transition-transform hover:-translate-y-0.5"[m
+                   style={{[m
+                     background: isCustom ? customTheme.bgColor : th.bg,[m
+                     backgroundImage:[m
+[36m@@ -1492,17 +1492,18 @@[m [mexport default function SettingsTab({[m
+                     backgroundSize: "cover",[m
+                     backgroundPosition: "center",[m
+                     borderColor: selected ? COLORS.gold : COLORS.border,[m
+[31m-                    color: th.id === "light" ? "#0B1220" : COLORS.ivory,[m
+[32m+[m[32m                    color: th.id === "light" ? "#162033" : COLORS.ivory,[m
+                   }}[m
+                 >[m
+[31m-                  {t(th.labelKey)}[m
+[31m-                  {selected && ([m
+[31m-                    <Check[m
+[31m-                      size={12}[m
+[31m-                      className="inline ml-1"[m
+[31m-                      style={{ color: COLORS.gold }}[m
+[31m-                    />[m
+[31m-                  )}[m
+[32m+[m[32m                  <span className="mb-2 flex h-8 items-end gap-1 rounded-lg p-1.5" style={{ background: "rgba(255,255,255,0.12)" }}>[m
+[32m+[m[32m                    <span className="h-2.5 w-2.5 rounded-full" style={{ background: isCustom ? customTheme.accent : th.accent }} />[m
+[32m+[m[32m                    <span className="h-2.5 flex-1 rounded-sm" style={{ background: "rgba(255,255,255,0.72)" }} />[m
+[32m+[m[32m                    <span className="h-2.5 w-1/4 rounded-sm" style={{ background: isCustom ? customTheme.accent : th.accent2 }} />[m
+[32m+[m[32m                  </span>[m
+[32m+[m[32m                  <span className="flex items-center justify-between gap-1">[m
+[32m+[m[32m                    <span className="truncate">{t(th.labelKey)}</span>[m
+[32m+[m[32m                    {selected && <Check size={13} style={{ color: isCustom ? customTheme.accent : th.accent }} />}[m
+[32m+[m[32m                  </span>[m
+                 </button>[m
+               );[m
+             })}[m
+[1mdiff --git a/src/features/settings/state.ts b/src/features/settings/state.ts[m
+[1mindex 0ceeb5d..a79f06e 100644[m
+[1m--- a/src/features/settings/state.ts[m
+[1m+++ b/src/features/settings/state.ts[m
+[36m@@ -39,8 +39,8 @@[m [mexport function uiLang(lang: string): string {[m
+ [m
+ /** Thème personnalisé par défaut (correspond à CustomTheme). */[m
+ export const DEFAULT_CUSTOM_THEME: CustomTheme = {[m
+[31m-  bgColor: "#0B1220",[m
+[31m-  accent: "#D9AE52",[m
+[32m+[m[32m  bgColor: "#101827",[m
+[32m+[m[32m  accent: "#FF785F",[m
+   bgImage: null,[m
+ };[m
+ [m
+[1mdiff --git a/src/index.css b/src/index.css[m
+[1mindex 1d618ca..d6692a6 100644[m
+[1m--- a/src/index.css[m
+[1m+++ b/src/index.css[m
+[36m@@ -11,8 +11,8 @@[m [mbody,[m
+   height: 100%;[m
+   margin: 0;[m
+   padding: 0;[m
+[31m-  background-color: #0b1220;[m
+[31m-  color: #f4efe3;[m
+[32m+[m[32m  background-color: var(--baaro-bg, #101827);[m
+[32m+[m[32m  color: var(--baaro-fg, #f8fafc);[m
+   font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;[m
+   overflow-x: hidden;[m
+   -webkit-font-smoothing: antialiased;[m
+[36m@@ -35,16 +35,17 @@[m [mhtml[data-baaro-theme] #root {[m
+   background-color: transparent;[m
+ }[m
+ [m
+[31m-html[data-baaro-theme="midnight"] { background-color: #0b1220; }[m
+[32m+[m[32mhtml[data-baaro-theme="midnight"] { background-color: var(--baaro-bg, #101827); }[m
+ html[data-baaro-theme="oled"]     { background-color: #000000; }[m
+[31m-html[data-baaro-theme="emerald"]  { background-color: #061a14; }[m
+[31m-html[data-baaro-theme="sunset"]   { background-color: #2a1215; }[m
+[31m-html[data-baaro-theme="ocean"]    { background-color: #0a1628; }[m
+[31m-html[data-baaro-theme="forest"]   { background-color: #0e1f14; }[m
+[31m-html[data-baaro-theme="desert"]   { background-color: #1f1a14; }[m
+[32m+[m[32mhtml[data-baaro-theme="emerald"]  { background-color: var(--baaro-bg, #071c18); }[m
+[32m+[m[32mhtml[data-baaro-theme="light"]    { background-color: var(--baaro-bg, #f7f4ee); }[m
+[32m+[m[32mhtml[data-baaro-theme="sunset"]   { background-color: var(--baaro-bg, #2a151a); }[m
+[32m+[m[32mhtml[data-baaro-theme="ocean"]    { background-color: var(--baaro-bg, #0d2035); }[m
+[32m+[m[32mhtml[data-baaro-theme="forest"]   { background-color: var(--baaro-bg, #102018); }[m
+[32m+[m[32mhtml[data-baaro-theme="desert"]   { background-color: var(--baaro-bg, #241b15); }[m
+ [m
+ html[data-baaro-theme="custom"] {[m
+[31m-  background-color: var(--baaro-custom-bg, #0b1220);[m
+[32m+[m[32m  background-color: var(--baaro-custom-bg, #101827);[m
+   background-image: var(--baaro-custom-image, none);[m
+   background-size: cover;[m
+   background-position: center;[m
+[36m@@ -57,8 +58,8 @@[m [mhtml[data-baaro-theme="custom"] {[m
+   top: 0;[m
+   z-index: 9999;[m
+   padding: 0.75rem 1.25rem;[m
+[31m-  background: #d9ae52;[m
+[31m-  color: #0b1220;[m
+[32m+[m[32m  background: var(--baaro-accent, #ff785f);[m
+[32m+[m[32m  color: var(--baaro-fg, #101827);[m
+   font-weight: 700;[m
+   border-radius: 0 0 0.75rem 0;[m
+ }[m
+[36m@@ -73,16 +74,16 @@[m [mhtml[data-baaro-theme="custom"] {[m
+ }[m
+ [m
+ ::-webkit-scrollbar-track {[m
+[31m-  background: rgba(11, 18, 32, 0.6);[m
+[32m+[m[32m  background: color-mix(in srgb, var(--baaro-bg, #101827) 82%, transparent);[m
+ }[m
+ [m
+ ::-webkit-scrollbar-thumb {[m
+[31m-  background: rgba(217, 174, 82, 0.25);[m
+[32m+[m[32m  background: var(--baaro-accent-border, rgba(255, 120, 95, 0.34));[m
+   border-radius: 9999px;[m
+ }[m
+ [m
+ ::-webkit-scrollbar-thumb:hover {[m
+[31m-  background: rgba(217, 174, 82, 0.5);[m
+[32m+[m[32m  background: var(--baaro-accent, #ff785f);[m
+ }[m
+ [m
+ .no-scrollbar {[m
+[36m@@ -95,42 +96,42 @@[m [mhtml[data-baaro-theme="custom"] {[m
+ }[m
+ [m
+ .glass-panel {[m
+[31m-  background: rgba(17, 26, 44, 0.75);[m
+[32m+[m[32m  background: color-mix(in srgb, var(--baaro-surface, #182238) 88%, transparent);[m
+   backdrop-filter: blur(16px);[m
+   -webkit-backdrop-filter: blur(16px);[m
+[31m-  border: 1px solid rgba(255, 255, 255, 0.08);[m
+[32m+[m[32m  border: 1px solid var(--baaro-border, rgba(255, 255, 255, 0.10));[m
+ }[m
+ [m
+ .glass-card {[m
+   background: linear-gradient([m
+     135deg,[m
+[31m-    rgba(26, 39, 64, 0.6) 0%,[m
+[31m-    rgba(17, 26, 44, 0.8) 100%[m
+[32m+[m[32m    color-mix(in srgb, var(--baaro-surface-2, #22304A) 70%, transparent) 0%,[m
+[32m+[m[32m    color-mix(in srgb, var(--baaro-surface, #182238) 94%, transparent) 100%[m
+   );[m
+   backdrop-filter: blur(12px);[m
+   -webkit-backdrop-filter: blur(12px);[m
+[31m-  border: 1px solid rgba(255, 255, 255, 0.08);[m
+[32m+[m[32m  border: 1px solid var(--baaro-border, rgba(255, 255, 255, 0.10));[m
+ }[m
+ [m
+ .glass-card:hover {[m
+[31m-  border-color: rgba(217, 174, 82, 0.3);[m
+[32m+[m[32m  border-color: var(--baaro-accent-border, rgba(255, 120, 95, 0.34));[m
+   box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);[m
+ }[m
+ [m
+ .gold-glow {[m
+[31m-  box-shadow: 0 0 20px rgba(217, 174, 82, 0.25);[m
+[32m+[m[32m  box-shadow: 0 0 20px var(--baaro-accent-glow, rgba(255, 120, 95, 0.22));[m
+ }[m
+ [m
+ .teal-glow {[m
+[31m-  box-shadow: 0 0 20px rgba(45, 191, 166, 0.25);[m
+[32m+[m[32m  box-shadow: 0 0 20px var(--baaro-accent-2-glow, rgba(111, 231, 210, 0.20));[m
+ }[m
+ [m
+ .text-gradient-gold {[m
+   background: linear-gradient([m
+     135deg,[m
+[31m-    #f5c86b 0%,[m
+[31m-    #d9ae52 50%,[m
+[31m-    #b88b2a 100%[m
+[32m+[m[32m    var(--baaro-accent-light, #ff9b71) 0%,[m
+[32m+[m[32m    var(--baaro-accent, #ff785f) 50%,[m
+[32m+[m[32m    color-mix(in srgb, var(--baaro-accent, #ff785f) 70%, #000) 100%[m
+   );[m
+   -webkit-background-clip: text;[m
+   background-clip: text;[m
+[36m@@ -140,8 +141,8 @@[m [mhtml[data-baaro-theme="custom"] {[m
+ .text-gradient-teal {[m
+   background: linear-gradient([m
+     135deg,[m
+[31m-    #4ee1c8 0%,[m
+[31m-    #2dbfa6 100%[m
+[32m+[m[32m    var(--baaro-accent-2-light, #9af3e2) 0%,[m
+[32m+[m[32m    var(--baaro-accent-2, #6fe7d2) 100%[m
+   );[m
+   -webkit-background-clip: text;[m
+   background-clip: text;[m
+[1mdiff --git a/src/lib/appSettings.js b/src/lib/appSettings.js[m
+[1mindex e980467..f29831d 100644[m
+[1m--- a/src/lib/appSettings.js[m
+[1m+++ b/src/lib/appSettings.js[m
+[36m@@ -13,6 +13,7 @@[m
+  * - applySettingsToDom applique tous les réglages et émet "baaro:settings".[m
+  */[m
+ import { supabase } from "../supabaseClient.js";[m
+[32m+[m[32mimport { THEME_PRESETS } from "../theme.js";[m
+ [m
+ export const STORAGE_KEY = "baaro_settings_v23";[m
+ export const SETTINGS_EVENT = "baaro:settings";[m
+[36m@@ -158,14 +159,35 @@[m [mexport function applySettingsToDom(settings) {[m
+     root.dataset.baaroLocalCache = flag(s.local_cache);[m
+     root.dataset.baaroPrivacyAi = flag(s.privacy_ai);[m
+ [m
+[31m-    // Thème personnalisé : variables CSS utilisables par l'app (voir index.css).[m
+[32m+[m[32m    // Palette active : tous les composants peuvent consommer ces variables,[m
+[32m+[m[32m    // y compris ceux qui reçoivent COLORS via un style inline.[m
+     const ct = s.theme === "custom" ? s.customTheme : null;[m
+[32m+[m[32m    const preset = THEME_PRESETS[s.theme] || THEME_PRESETS.midnight;[m
+     const setVar = (name, value) => {[m
+       if (value) root.style.setProperty(name, value);[m
+       else root.style.removeProperty(name);[m
+     };[m
+[31m-    setVar("--baaro-custom-bg", ct?.bgColor);[m
+[31m-    setVar("--baaro-custom-accent", ct?.accent);[m
+[32m+[m[32m    const palette = ct[m
+[32m+[m[32m      ? { ...preset, bg: ct.bgColor || preset.bg, accent: ct.accent || preset.accent, fg: ct.fg || preset.fg }[m
+[32m+[m[32m      : preset;[m
+[32m+[m[32m    setVar("--baaro-bg", palette.bg);[m
+[32m+[m[32m    setVar("--baaro-surface", palette.surface);[m
+[32m+[m[32m    setVar("--baaro-surface-2", palette.surface2);[m
+[32m+[m[32m    setVar("--baaro-surface-hover", palette.surfaceHover);[m
+[32m+[m[32m    setVar("--baaro-accent", palette.accent);[m
+[32m+[m[32m    setVar("--baaro-accent-light", palette.accent);[m
+[32m+[m[32m    setVar("--baaro-accent-glow", `color-mix(in srgb, ${palette.accent} 22%, transparent)`);[m
+[32m+[m[32m    setVar("--baaro-accent-border", `color-mix(in srgb, ${palette.accent} 34%, transparent)`);[m
+[32m+[m[32m    setVar("--baaro-accent-2", palette.accent2);[m
+[32m+[m[32m    setVar("--baaro-accent-2-light", palette.accent2);[m
+[32m+[m[32m    setVar("--baaro-accent-2-glow", `color-mix(in srgb, ${palette.accent2} 20%, transparent)`);[m
+[32m+[m[32m    setVar("--baaro-accent-2-border", `color-mix(in srgb, ${palette.accent2} 30%, transparent)`);[m
+[32m+[m[32m    setVar("--baaro-fg", palette.fg);[m
+[32m+[m[32m    setVar("--baaro-muted", palette.muted);[m
+[32m+[m[32m    setVar("--baaro-muted-light", `color-mix(in srgb, ${palette.fg} 72%, transparent)`);[m
+[32m+[m[32m    setVar("--baaro-border", palette.border);[m
+[32m+[m[32m    setVar("--baaro-custom-bg", palette.bg);[m
+[32m+[m[32m    setVar("--baaro-custom-accent", palette.accent);[m
+     setVar("--baaro-custom-image", ct?.bgImage ? `url("${ct.bgImage}")` : "");[m
+   } catch (_) {}[m
+ }[m
+[1mdiff --git a/src/theme.js b/src/theme.js[m
+[1mindex ba9a352..ed4f9f4 100644[m
+[1m--- a/src/theme.js[m
+[1m+++ b/src/theme.js[m
+[36m@@ -1,21 +1,34 @@[m
+[31m-// Palette de couleurs de BAARO : fond marine sombre, accents or et teal, texte ivoire.[m
+[32m+[m[32m// Système visuel BAARO : une palette claire et chaleureuse, déclinée par thème.[m
+[32m+[m[32m// Les valeurs utilisent des variables CSS afin que les réglages soient appliqués[m
+[32m+[m[32m// à toute l’interface, y compris aux composants qui consomment COLORS inline.[m
+[32m+[m[32mexport const THEME_PRESETS = {[m
+[32m+[m[32m  midnight: { bg: "#101827", surface: "#182238", surface2: "#22304A", surfaceHover: "#2B3D5B", accent: "#FF785F", accent2: "#6FE7D2", fg: "#F8FAFC", muted: "#A8B2C4", border: "rgba(255,255,255,0.10)" },[m
+[32m+[m[32m  oled: { bg: "#000000", surface: "#101114", surface2: "#1A1D22", surfaceHover: "#252A31", accent: "#FF8A65", accent2: "#69E4D0", fg: "#F7F7F8", muted: "#A6AAB4", border: "rgba(255,255,255,0.14)" },[m
+[32m+[m[32m  emerald: { bg: "#071C18", surface: "#102C25", surface2: "#194136", surfaceHover: "#235846", accent: "#B8E36D", accent2: "#5DE0BE", fg: "#F5F8F2", muted: "#A8B9AF", border: "rgba(225,255,235,0.12)" },[m
+[32m+[m[32m  light: { bg: "#F7F4EE", surface: "#FFFFFF", surface2: "#EEF2F4", surfaceHover: "#E4EAED", accent: "#E85D4A", accent2: "#159E91", fg: "#162033", muted: "#667085", border: "rgba(22,32,51,0.12)" },[m
+[32m+[m[32m  sunset: { bg: "#2A151A", surface: "#402329", surface2: "#593139", surfaceHover: "#70424A", accent: "#FF9B71", accent2: "#F4C27A", fg: "#FFF7F1", muted: "#C9A9A2", border: "rgba(255,235,225,0.13)" },[m
+[32m+[m[32m  ocean: { bg: "#0D2035", surface: "#15304B", surface2: "#1E4262", surfaceHover: "#2B5577", accent: "#6ED6FF", accent2: "#73E4C5", fg: "#F2FAFF", muted: "#A2B9CC", border: "rgba(220,245,255,0.13)" },[m
+[32m+[m[32m  forest: { bg: "#102018", surface: "#1B3325", surface2: "#274A33", surfaceHover: "#356243", accent: "#B8E36D", accent2: "#8FE0B1", fg: "#F3F8F1", muted: "#AABCAA", border: "rgba(230,255,235,0.12)" },[m
+[32m+[m[32m  desert: { bg: "#241B15", surface: "#38291F", surface2: "#4D392B", surfaceHover: "#604938", accent: "#FFB86B", accent2: "#E5D08A", fg: "#FFF8EF", muted: "#C9B6A1", border: "rgba(255,241,220,0.14)" },[m
+[32m+[m[32m};[m
+[32m+[m
+ export const COLORS = {[m
+[31m-  bg: "#0B1220",[m
+[31m-  surface: "#111A2C",[m
+[31m-  surface2: "#1A2740",[m
+[31m-  surfaceHover: "#203152",[m
+[31m-  gold: "#D9AE52",[m
+[31m-  goldLight: "#F5C86B",[m
+[31m-  goldGlow: "rgba(217, 174, 82, 0.25)",[m
+[31m-  teal: "#2DBFA6",[m
+[31m-  tealLight: "#4EE1C8",[m
+[31m-  tealGlow: "rgba(45, 191, 166, 0.25)",[m
+[32m+[m[32m  bg: "var(--baaro-bg, #101827)",[m
+[32m+[m[32m  surface: "var(--baaro-surface, #182238)",[m
+[32m+[m[32m  surface2: "var(--baaro-surface-2, #22304A)",[m
+[32m+[m[32m  surfaceHover: "var(--baaro-surface-hover, #2B3D5B)",[m
+[32m+[m[32m  gold: "var(--baaro-accent, #FF785F)",[m
+[32m+[m[32m  goldLight: "var(--baaro-accent-light, #FF9B71)",[m
+[32m+[m[32m  goldGlow: "var(--baaro-accent-glow, rgba(255,120,95,0.22))",[m
+[32m+[m[32m  teal: "var(--baaro-accent-2, #6FE7D2)",[m
+[32m+[m[32m  tealLight: "var(--baaro-accent-2-light, #9AF3E2)",[m
+[32m+[m[32m  tealGlow: "var(--baaro-accent-2-glow, rgba(111,231,210,0.20))",[m
+   purple: "#8B5CF6",[m
+   rose: "#EC4899",[m
+[31m-  ivory: "#F4EFE3",[m
+[31m-  muted: "#8A93A6",[m
+[31m-  mutedLight: "#A0ABC0",[m
+[31m-  border: "rgba(255, 255, 255, 0.08)",[m
+[31m-  borderGold: "rgba(217, 174, 82, 0.3)",[m
+[31m-  borderTeal: "rgba(45, 191, 166, 0.3)",[m
+[32m+[m[32m  ivory: "var(--baaro-fg, #F8FAFC)",[m
+[32m+[m[32m  muted: "var(--baaro-muted, #A8B2C4)",[m
+[32m+[m[32m  mutedLight: "var(--baaro-muted-light, #C0C9D8)",[m
+[32m+[m[32m  border: "var(--baaro-border, rgba(255,255,255,0.10))",[m
+[32m+[m[32m  borderGold: "var(--baaro-accent-border, rgba(255,120,95,0.34))",[m
+[32m+[m[32m  borderTeal: "var(--baaro-accent-2-border, rgba(111,231,210,0.30))",[m
+ };[m
