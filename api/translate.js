@@ -31,6 +31,7 @@ const ALLOWED_LANGS = new Set([
   "fr", "en", "es", "pt", "ar", "zh", "hi", "ru", "ja", "de",
   "sw", "it", "ko", "tr", "nl", "pl", "uk", "vi", "id", "th",
   "bn", "ha", "yo", "ig", "am", "zu", "af", "fa", "he", "sv",
+  "bm",
 ]);
 
 const LANG_NAMES = {
@@ -64,6 +65,7 @@ const LANG_NAMES = {
   fa: "فارسی",
   he: "עברית",
   sv: "svenska",
+  bm: "bambara (bamanankan)",
 };
 
 function jsonError(res, status, message) {
@@ -136,6 +138,26 @@ async function invokeGeminiMedia({
     messages,
     system,
     maxTokens: maxTokens || 2000,
+  });
+}
+
+/**
+ * Traduction textuelle via Gemini (meilleur que les petits modèles Groq sur les
+ * langues peu dotées comme le bambara). Retourne null si Gemini n'est pas
+ * configuré, pour permettre le repli sur Groq.
+ */
+async function invokeGeminiTranslation({ messages, system, maxTokens }) {
+  const cfg = providerConfig("gemini");
+
+  if (!cfg) return null;
+
+  return callOpenAICompatible({
+    key: cfg.key,
+    base: cfg.base,
+    model: cfg.model,
+    messages,
+    system,
+    maxTokens: maxTokens || 1200,
   });
 }
 
@@ -327,17 +349,27 @@ export default async function handler(req, res) {
 
   const targetName = LANG_NAMES[targetLang];
 
-  let contentHash;
+  // Mode privé (messages de chat) : le texte n'est JAMAIS lu ni écrit dans le
+  // cache partagé content_translations, car ces messages sont chiffrés de bout en bout.
+  const isPrivate = body.private === true;
 
-  try {
-    contentHash = await hashText(`${targetLang}:${text}`);
-  } catch (error) {
-    console.error("[translate-hash error]", error?.message || error);
-    return jsonError(res, 500, "Impossible de préparer la traduction.");
+  // Le bambara (cible ou source probable) passe par Gemini ; Groq en repli.
+  const involvesBambara =
+    targetLang === "bm" || sourceLang === "bm" || body.preferBambara === true;
+
+  let contentHash = "";
+
+  if (!isPrivate) {
+    try {
+      contentHash = await hashText(`${targetLang}:${text}`);
+    } catch (error) {
+      console.error("[translate-hash error]", error?.message || error);
+      return jsonError(res, 500, "Impossible de préparer la traduction.");
+    }
   }
 
   // Cache Supabase : un échec du cache ne bloque pas la traduction.
-  try {
+  if (!isPrivate) try {
     const { data: cached, error } = await admin
       .from("content_translations")
       .select("translated_text, source_lang, target_lang")
@@ -374,37 +406,66 @@ export default async function handler(req, res) {
     sourceLang
       ? `Langue source déclarée : ${sourceLang}.`
       : "Détecte automatiquement la langue source.",
+    "Si le texte est déjà dans la langue cible, renvoie-le tel quel, sans le modifier.",
+    ...(involvesBambara
+      ? [
+          "Le bambara (bamanankan, Mali) s'écrit en alphabet latin avec les lettres ɛ ɔ ɲ ŋ.",
+          "Comprends l'écriture familière et les messages sans accents ni caractères spéciaux.",
+          "Si un mot ou une expression n'a pas d'équivalent sûr, garde-le tel quel plutôt que d'inventer.",
+        ]
+      : []),
     "",
     "TEXTE SOURCE :",
     text,
   ].join("\n");
 
+  const requestPayload = {
+    messages: [
+      {
+        role: "user",
+        content: prompt,
+      },
+    ],
+    system:
+      "Tu es un traducteur professionnel multilingue pour BAARO. " +
+      "Traduis fidèlement le contenu fourni sans ajouter de commentaires.",
+    maxTokens: 1200,
+  };
+
   try {
-    const result = await invokeGroqTranslation({
-      messages: [
-        {
-          role: "user",
-          content: prompt,
-        },
-      ],
-      system:
-        "Tu es un traducteur professionnel multilingue pour BAARO. " +
-        "Traduis fidèlement le contenu fourni sans ajouter de commentaires.",
-      maxTokens: 1200,
-    });
+    let result = null;
+    let provider = "groq";
+
+    if (involvesBambara) {
+      try {
+        result = await invokeGeminiTranslation(requestPayload);
+        if (result) provider = "gemini";
+      } catch (error) {
+        console.warn(
+          "[translate-gemini warning, repli Groq]",
+          error?.message || error
+        );
+        result = null;
+      }
+    }
+
+    if (!result) {
+      result = await invokeGroqTranslation(requestPayload);
+      provider = "groq";
+    }
 
     const translated = String(result.reply || "").trim();
 
     if (!translated) {
       throw Object.assign(
-        new Error("Groq a retourné une traduction vide."),
+        new Error("Le service de traduction a retourné une réponse vide."),
         { status: 502 }
       );
     }
 
     // Cache best-effort. Une erreur de cache ne doit pas annuler
-    // une traduction déjà réussie.
-    try {
+    // une traduction déjà réussie. Jamais en mode privé (chat chiffré).
+    if (!isPrivate) try {
       const { error } = await admin
         .from("content_translations")
         .upsert(
@@ -434,12 +495,12 @@ export default async function handler(req, res) {
       );
     }
 
-    res.setHeader("X-BAARO-AI-Provider", "groq");
+    res.setHeader("X-BAARO-AI-Provider", provider);
     res.setHeader(
       "X-BAARO-AI-Model",
       result.modelUsed || "unknown"
     );
-    res.setHeader("X-BAARO-AI-Cache", "MISS");
+    res.setHeader("X-BAARO-AI-Cache", isPrivate ? "BYPASS" : "MISS");
 
     return res.status(200).json({
       ok: true,
@@ -447,7 +508,7 @@ export default async function handler(req, res) {
       sourceLang: sourceLang || "auto",
       targetLang,
       cached: false,
-      provider: "groq",
+      provider,
       model: result.modelUsed || null,
     });
   } catch (error) {

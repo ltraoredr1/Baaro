@@ -9,3 +9,6 @@ Baaro-*.zip
 baaro-*.zip
 BAARO-*.zip
 *.bak
+
+# Fichiers WASM ONNX copiés au build (scripts/copy-ort-wasm.mjs)
+public/ort/

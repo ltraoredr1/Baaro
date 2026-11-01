@@ -18,6 +18,7 @@ import { deserializePayload, decryptMessage } from "../lib/crypto.js";
 import { makeClientMessageId, markMessageRead } from "../lib/chatFeatures.js";
 import { ChatInput, MAX_FILE_MB } from "./ChatInput.jsx";
 import { MessageBubble, messagePreviewText } from "./MessageBubble.jsx";
+import { AutoTranslateToggle } from "./AutoTranslateToggle.jsx";
 import { messageService } from "../lib/messageService.js";
 import { isValidAuthUserId } from "../../../lib/currentUserId.js";
 
@@ -792,6 +793,7 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
             </button>
 
             <div className="flex items-center gap-0.5">
+              <AutoTranslateToggle color={C.gold} />
               <button
                 onClick={() => startCall("voice")}
                 disabled={callStarting}

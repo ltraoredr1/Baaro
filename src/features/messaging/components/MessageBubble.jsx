@@ -8,6 +8,8 @@ import {
   Play, Pause, FileText, X, MoreHorizontal, Reply, Copy, Trash2, Star, Pin,
 } from "lucide-react";
 import { CHAT_REACTIONS } from "../lib/chatFeatures.js";
+import { VoiceTranscript } from "./VoiceTranscript.jsx";
+import { ChatTranslate } from "./ChatTranslate.jsx";
 
 /** Texte court décrivant un message (aperçu dans les citations et la barre de réponse) */
 export function messagePreviewText(m) {
@@ -264,7 +266,12 @@ export function MessageBubble({
             ) : message.type === "video" ? (
               <video src={message.media_url} controls preload="metadata" className="rounded-lg max-w-full max-h-72" />
             ) : message.type === "voice" ? (
-              <VoicePlayer src={message.media_url} duration={message.media_duration} isMe={isMe} />
+              <>
+                <VoicePlayer src={message.media_url} duration={message.media_duration} isMe={isMe} />
+                {!pending && !message.failed && !isTmpId && (
+                  <VoiceTranscript src={message.media_url} isMe={isMe} />
+                )}
+              </>
             ) : (
               <a
                 href={message.media_url}
@@ -282,7 +289,12 @@ export function MessageBubble({
               </a>
             )
           ) : (
-            <p className="whitespace-pre-wrap break-words">{textToShow}</p>
+            <>
+              <p className="whitespace-pre-wrap break-words">{textToShow}</p>
+              {!isMe && !isDeleted && !isExpired && !message.decryptFailed && body && String(body).trim().length > 1 && (
+                <ChatTranslate text={String(body)} isMe={isMe} />
+              )}
+            </>
           )}
 
           <div className={`text-[10px] mt-1 flex gap-1.5 items-center ${isMe ? "text-white/70 justify-end" : "opacity-50"}`}>

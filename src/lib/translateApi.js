@@ -39,6 +39,7 @@ export const TRANSLATE_LANGS = [
   { code: "fa", label: "فارسی" },
   { code: "he", label: "עברית" },
   { code: "sv", label: "Svenska" },
+  { code: "bm", label: "Bamanankan (Bambara)" },
 ];
 
 const LANG_CODES = new Set(TRANSLATE_LANGS.map((l) => l.code));
@@ -147,8 +148,14 @@ async function post(path, body, { signal, timeoutMs = 30000 } = {}, fallbackMess
 
 /**
  * Traduit un texte vers targetLang (code ISO, ex: "en").
+ *
+ * options :
+ *   - signal, timeoutMs : réseau
+ *   - private : true pour un message privé (chat) → le serveur ne le met PAS en cache
+ *   - preferBambara : true pour privilégier le moteur adapté au bambara (Bambara ⇄ Français)
  */
 export async function translateText(text, targetLang, sourceLang = null, options = {}) {
+  const { private: isPrivate = false, preferBambara = false, ...netOptions } = options;
   const clean = String(text ?? "").trim();
   if (!clean) throw new TranslateError("Il n'y a aucun texte à traduire.", 400);
   if (clean.length > MAX_TEXT_LENGTH) {
@@ -157,13 +164,19 @@ export async function translateText(text, targetLang, sourceLang = null, options
   const target = assertTargetLang(targetLang);
   const source = sourceLang ? normalizeLang(sourceLang) : null;
 
-  const cacheKey = `${source || "auto"}|${target}|${clean}`;
+  const cacheKey = `${isPrivate ? "p" : "g"}|${source || "auto"}|${target}|${clean}`;
   if (textCache.has(cacheKey)) return textCache.get(cacheKey);
 
   const data = await post(
     "/api/translate",
-    { text: clean, targetLang: target, ...(source ? { sourceLang: source } : {}) },
-    options,
+    {
+      text: clean,
+      targetLang: target,
+      ...(source ? { sourceLang: source } : {}),
+      ...(isPrivate ? { private: true } : {}),
+      ...(preferBambara ? { preferBambara: true } : {}),
+    },
+    netOptions,
     "Traduction impossible. Réessaie dans un instant."
   );
 

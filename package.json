@@ -7,7 +7,9 @@
     "node": "24.x"
   },
   "scripts": {
+    "predev": "node scripts/copy-ort-wasm.mjs",
     "dev": "vite",
+    "prebuild": "node scripts/copy-ort-wasm.mjs",
     "build": "vite build",
     "preview": "vite preview",
     "check:production": "node scripts/check-production.mjs",
@@ -36,7 +38,8 @@
     "capgo:upload:beta": "npm run build && npx @capgo/cli@latest bundle upload --channel beta",
     "capgo:upload:delta": "npm run build && npx @capgo/cli@latest bundle upload --channel production --delta",
     "capgo:list": "npx @capgo/cli@latest bundle list",
-    "ci": "npm run check:lock && npm run check:production && npm run audit:security && npm run check:e2e && npm run check:e2e:smoke && npm run check:payout && npm run check:performance && npm run check:android && npm run build"
+    "ci": "npm run check:lock && npm run check:production && npm run audit:security && npm run check:e2e && npm run check:e2e:smoke && npm run check:payout && npm run check:performance && npm run check:android && npm run build",
+    "test:chat-translate": "node scripts/test-chat-autotranslate.mjs"
   },
   "dependencies": {
     "@aparajita/capacitor-biometric-auth": "^7.0.1",
@@ -57,6 +60,7 @@
     "@capgo/capacitor-updater": "^8.53.1",
     "@daily-co/daily-js": "^0.70.0",
     "@google/genai": "^2.30.0",
+    "@huggingface/transformers": "^3.5.0",
     "@mediapipe/tasks-vision": "^0.10.14",
     "@reduxjs/toolkit": "^2.2.7",
     "@supabase/supabase-js": "^2.45.0",
