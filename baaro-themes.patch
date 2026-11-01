@@ -1,0 +1,415 @@
+diff --git a/src/app/MainShell.jsx b/src/app/MainShell.jsx
+index 897ecb0..d89b9c3 100644
+--- a/src/app/MainShell.jsx
++++ b/src/app/MainShell.jsx
+@@ -51,15 +51,16 @@ const GuideHost = lazy(() =>
+ const FloatingAiAssistant = lazy(() => import("../components/FloatingAiAssistant.jsx"));
+ 
+ const THEME_BG_MAP = {
+-  midnight: "#0B1220",
++  midnight: "#182848",
+   oled: "#000000",
+-  emerald: "#061A14",
+-  light: "#F8FAFC",
+-  sunset: "#2A1215",
+-  ocean: "#0A1628",
+-  forest: "#0E1F14",
+-  desert: "#1F1A14",
+-  custom: "#0B1220",
++  emerald: "#0F3B2E",
++  light: "#F6F1E7",
++  sunset: "#4A1F2B",
++  ocean: "#0F3A5F",
++  forest: "#1E4D2B",
++  desert: "#4A3A28",
++  indigo: "#2A2F6E",
++  custom: "#182848",
+ };
+ 
+ const WELCOME_TOAST_KEY = "baaro:welcome_toast_shown";
+diff --git a/src/app/TabFallback.jsx b/src/app/TabFallback.jsx
+index 5141522..39e6621 100644
+--- a/src/app/TabFallback.jsx
++++ b/src/app/TabFallback.jsx
+@@ -4,7 +4,7 @@ const FALLBACK = {
+   muted: "rgba(245,243,239,0.5)",
+   ivory: "#F5F3EF",
+   gold: "#D9AE52",
+-  bg: "#0B1220",
++  bg: "var(--b-bg, #182848)",
+ };
+ 
+ export function TabFallback() {
+diff --git a/src/components/BackBar.jsx b/src/components/BackBar.jsx
+index 1bd1e1e..9926817 100644
+--- a/src/components/BackBar.jsx
++++ b/src/components/BackBar.jsx
+@@ -5,8 +5,8 @@ import { ArrowLeft } from "lucide-react";
+ import { COLORS as THEME_COLORS } from "../theme.js";
+ 
+ const FALLBACK = {
+-  surface: "#111A2C",
+-  border: "rgba(255,255,255,0.08)",
++  surface: "var(--b-surface, #223560)",
++  border: "var(--b-border, rgba(255,255,255,0.12))",
+   ivory: "#F5F3EF",
+ };
+ 
+diff --git a/src/components/CommunityTab.jsx b/src/components/CommunityTab.jsx
+index a652644..2b8327e 100644
+--- a/src/components/CommunityTab.jsx
++++ b/src/components/CommunityTab.jsx
+@@ -36,10 +36,10 @@ import VoiceChannelUI from "./community/VoiceChannelUI.jsx";
+    Thème de secours (fusionné avec theme.js)
+    ────────────────────────────────────────────── */
+ const FALLBACK = {
+-  bg: "#0B1220",
+-  surface: "#111A2C",
++  bg: "var(--b-bg, #182848)",
++  surface: "var(--b-surface, #223560)",
+   surface2: "rgba(255,255,255,0.06)",
+-  border: "rgba(255,255,255,0.08)",
++  border: "var(--b-border, rgba(255,255,255,0.12))",
+   ivory: "#F5F3EF",
+   muted: "rgba(245,243,239,0.5)",
+   gold: "#D9AE52",
+diff --git a/src/components/ErrorBoundary.jsx b/src/components/ErrorBoundary.jsx
+index 80be51a..c34dc59 100644
+--- a/src/components/ErrorBoundary.jsx
++++ b/src/components/ErrorBoundary.jsx
+@@ -5,7 +5,7 @@ const FALLBACK = {
+   ivory: "#F5F3EF",
+   muted: "rgba(245,243,239,0.6)",
+   gold: "#D9AE52",
+-  surface: "#0B1220",
++  surface: "var(--b-bg, #182848)",
+   surface2: "rgba(255,255,255,0.06)",
+   border: "rgba(255,255,255,0.1)",
+ };
+diff --git a/src/components/Header.jsx b/src/components/Header.jsx
+index 6597f19..53de323 100644
+--- a/src/components/Header.jsx
++++ b/src/components/Header.jsx
+@@ -15,10 +15,10 @@ import { useApp } from "../contexts/AppContext.jsx";
+ import { setAppLanguage, SUPPORTED_LANGUAGES } from "../../i18n.js";
+ 
+ const FALLBACK = {
+-  bg: "#0B1220",
+-  surface: "#111A2C",
++  bg: "var(--b-bg, #182848)",
++  surface: "var(--b-surface, #223560)",
+   surface2: "rgba(255,255,255,0.06)",
+-  border: "rgba(255,255,255,0.08)",
++  border: "var(--b-border, rgba(255,255,255,0.12))",
+   borderGold: "rgba(217,174,82,0.2)",
+   borderTeal: "rgba(45,191,166,0.2)",
+   ivory: "#F5F3EF",
+diff --git a/src/components/ImageUpload.jsx b/src/components/ImageUpload.jsx
+index bf59bcb..c757ad1 100644
+--- a/src/components/ImageUpload.jsx
++++ b/src/components/ImageUpload.jsx
+@@ -6,7 +6,7 @@ import { useToast } from "./ToastContext.jsx";
+ 
+ const FALLBACK = {
+   surface2: "rgba(255,255,255,0.06)",
+-  border: "rgba(255,255,255,0.08)",
++  border: "var(--b-border, rgba(255,255,255,0.12))",
+   muted: "rgba(245,243,239,0.5)",
+   gold: "#D9AE52",
+ };
+diff --git a/src/components/Navigation.jsx b/src/components/Navigation.jsx
+index 7c758b7..5557566 100644
+--- a/src/components/Navigation.jsx
++++ b/src/components/Navigation.jsx
+@@ -21,10 +21,10 @@ import { useFeedTabPulse } from "../lib/feedTabRefresh.jsx";
+ import { prefetchTab } from "../lib/prefetchTab.js";
+ 
+ const FALLBACK = {
+-  bg: "#0B1220",
+-  surface: "#111A2C",
++  bg: "var(--b-bg, #182848)",
++  surface: "var(--b-surface, #223560)",
+   surface2: "rgba(255,255,255,0.06)",
+-  border: "rgba(255,255,255,0.08)",
++  border: "var(--b-border, rgba(255,255,255,0.12))",
+   borderGold: "rgba(217,174,82,0.25)",
+   ivory: "#F5F3EF",
+   muted: "rgba(245,243,239,0.5)",
+diff --git a/src/components/community/ChannelItem.jsx b/src/components/community/ChannelItem.jsx
+index 8c07071..f6f3f20 100644
+--- a/src/components/community/ChannelItem.jsx
++++ b/src/components/community/ChannelItem.jsx
+@@ -7,7 +7,7 @@ const FALLBACK = {
+   gold: "#D9AE52",
+   ivory: "#F5F3EF",
+   muted: "rgba(245,243,239,0.5)",
+-  bg: "#0B1220",
++  bg: "var(--b-bg, #182848)",
+   teal: "#2DBFA6",
+ };
+ 
+diff --git a/src/components/community/UnreadBadge.jsx b/src/components/community/UnreadBadge.jsx
+index 254b6cc..b06724e 100644
+--- a/src/components/community/UnreadBadge.jsx
++++ b/src/components/community/UnreadBadge.jsx
+@@ -3,7 +3,7 @@ import { COLORS as THEME_COLORS } from '../../theme.js';
+ 
+ const FALLBACK = {
+   gold: "#D9AE52",
+-  bg: "#0B1220",
++  bg: "var(--b-bg, #182848)",
+ };
+ 
+ function UnreadBadge({ count, isMention = false }) {
+diff --git a/src/features/messaging/components/MessagesTab.jsx b/src/features/messaging/components/MessagesTab.jsx
+index 128beb5..e291738 100644
+--- a/src/features/messaging/components/MessagesTab.jsx
++++ b/src/features/messaging/components/MessagesTab.jsx
+@@ -70,10 +70,10 @@ function lastMessagePreview(msg, myId, plain) {
+ }
+ 
+ const FALLBACK = {
+-  bg: "#0B1220",
+-  surface: "#111A2C",
++  bg: "var(--b-bg, #182848)",
++  surface: "var(--b-surface, #223560)",
+   surface2: "rgba(255,255,255,0.06)",
+-  border: "rgba(255,255,255,0.08)",
++  border: "var(--b-border, rgba(255,255,255,0.12))",
+   borderGold: "rgba(217,174,82,0.28)",
+   ivory: "#F5F3EF",
+   muted: "rgba(245,243,239,0.55)",
+diff --git a/src/features/settings/constants.ts b/src/features/settings/constants.ts
+index 4ab8b2b..826f087 100644
+--- a/src/features/settings/constants.ts
++++ b/src/features/settings/constants.ts
+@@ -4,14 +4,15 @@ export const STORAGE_KEY = "baaro_settings_v23";
+ export const APP_VERSION = "2.0.0-v23";
+ 
+ export const THEMES = [
+-  { id: "midnight", labelKey: "theme_midnight", bg: "#0B1220" },
++  { id: "midnight", labelKey: "theme_midnight", bg: "#182848" },
++  { id: "light", labelKey: "theme_light", bg: "#F6F1E7" },
++  { id: "ocean", labelKey: "theme_ocean", bg: "#0F3A5F" },
++  { id: "emerald", labelKey: "theme_emerald", bg: "#0F3B2E" },
++  { id: "indigo", labelKey: "theme_indigo", bg: "#2A2F6E" },
++  { id: "sunset", labelKey: "theme_sunset", bg: "#4A1F2B" },
++  { id: "forest", labelKey: "theme_forest", bg: "#1E4D2B" },
++  { id: "desert", labelKey: "theme_desert", bg: "#4A3A28" },
+   { id: "oled", labelKey: "theme_oled", bg: "#000000" },
+-  { id: "emerald", labelKey: "theme_emerald", bg: "#061A14" },
+-  { id: "light", labelKey: "theme_light", bg: "#F8FAFC" },
+-  { id: "sunset", labelKey: "theme_sunset", bg: "#2A1215" },
+-  { id: "ocean", labelKey: "theme_ocean", bg: "#0A1628" },
+-  { id: "forest", labelKey: "theme_forest", bg: "#0E1F14" },
+-  { id: "desert", labelKey: "theme_desert", bg: "#1F1A14" },
+   { id: "custom", labelKey: "theme_custom", bg: "custom" },
+ ] as const;
+ 
+diff --git a/src/features/settings/index.tsx b/src/features/settings/index.tsx
+index 46f4a70..56fb1f1 100644
+--- a/src/features/settings/index.tsx
++++ b/src/features/settings/index.tsx
+@@ -1493,7 +1493,7 @@ export default function SettingsTab({
+                     backgroundSize: "cover",
+                     backgroundPosition: "center",
+                     borderColor: selected ? COLORS.gold : COLORS.border,
+-                    color: th.id === "light" ? "#0B1220" : COLORS.ivory,
++                    color: th.id === "light" ? "#1B2438" : "#F7F2E7",
+                   }}
+                 >
+                   {t(th.labelKey)}
+diff --git a/src/features/settings/strings.ts b/src/features/settings/strings.ts
+index 8748865..bef6cf0 100644
+--- a/src/features/settings/strings.ts
++++ b/src/features/settings/strings.ts
+@@ -20,6 +20,7 @@ export const STRINGS: Record<string, Record<string, string>> = {
+     appearance: "Apparence",
+     theme: "Thème",
+     theme_midnight: "Nuit",
++    theme_indigo: "Indigo",
+     theme_oled: "OLED",
+     theme_emerald: "Émeraude",
+     language: "Langue de l'interface",
+@@ -221,6 +222,7 @@ download_data_error: "❌ Impossible d'exporter les données",
+     appearance: "Appearance",
+     theme: "Theme",
+     theme_midnight: "Midnight",
++    theme_indigo: "Indigo",
+     theme_oled: "OLED",
+     theme_emerald: "Emerald",
+     language: "Interface language",
+@@ -421,6 +423,7 @@ download_data_error: "❌ Could not export your data",
+     appearance: "المظهر",
+     theme: "السمة",
+     theme_midnight: "ليلي",
++    theme_indigo: "نيلي",
+     theme_oled: "OLED",
+     theme_emerald: "زمردي",
+     language: "لغة الواجهة",
+@@ -599,6 +602,7 @@ download_data_error: "❌ تعذّر تصدير بياناتك",
+     appearance: "Yɛlɛma",
+     theme: "Kɔlɔrɔ",
+     theme_midnight: "Su",
++    theme_indigo: "Indigo",
+     theme_oled: "OLED",
+     theme_emerald: "Kɛnɛ",
+     language: "Kan",
+diff --git a/src/index.css b/src/index.css
+index 1d618ca..ff237d6 100644
+--- a/src/index.css
++++ b/src/index.css
+@@ -11,8 +11,8 @@ body,
+   height: 100%;
+   margin: 0;
+   padding: 0;
+-  background-color: #0b1220;
+-  color: #f4efe3;
++  background-color: var(--b-bg, #182848);
++  color: var(--b-ivory, #f7f2e7);
+   font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+   overflow-x: hidden;
+   -webkit-font-smoothing: antialiased;
+@@ -35,17 +35,85 @@ html[data-baaro-theme] #root {
+   background-color: transparent;
+ }
+ 
+-html[data-baaro-theme="midnight"] { background-color: #0b1220; }
+-html[data-baaro-theme="oled"]     { background-color: #000000; }
+-html[data-baaro-theme="emerald"]  { background-color: #061a14; }
+-html[data-baaro-theme="sunset"]   { background-color: #2a1215; }
+-html[data-baaro-theme="ocean"]    { background-color: #0a1628; }
+-html[data-baaro-theme="forest"]   { background-color: #0e1f14; }
+-html[data-baaro-theme="desert"]   { background-color: #1f1a14; }
++/* Palettes : --b-bg (fond), --b-surface / --b-surface2 / --b-hover (cartes), --b-ivory (texte),
++   --b-muted* (texte secondaire), --b-border, --b-glow (halo décoratif du fond). */
++:root,
++html[data-baaro-theme="midnight"] {
++  --b-bg: #182848; --b-surface: #223560; --b-surface2: #2d4278; --b-hover: #38508f;
++  --b-ivory: #f7f2e7; --b-muted: #aeb8d0; --b-muted-light: #c7d0e4;
++  --b-border: rgba(255, 255, 255, 0.12);
++  --b-glow: radial-gradient(900px 520px at 12% -8%, rgba(45, 191, 166, 0.22), transparent 60%),
++            radial-gradient(800px 520px at 100% 0%, rgba(217, 174, 82, 0.18), transparent 60%);
++}
++html[data-baaro-theme="oled"] {
++  --b-bg: #000000; --b-surface: #0e0f12; --b-surface2: #17181d; --b-hover: #1f2127;
++  --b-ivory: #f7f2e7; --b-muted: #9aa3b5; --b-muted-light: #b4bccb;
++  --b-border: rgba(255, 255, 255, 0.1); --b-glow: none;
++}
++html[data-baaro-theme="emerald"] {
++  --b-bg: #0f3b2e; --b-surface: #17503f; --b-surface2: #1f6350; --b-hover: #2a7761;
++  --b-ivory: #f4f7ee; --b-muted: #a9c7b8; --b-muted-light: #c4dccf;
++  --b-border: rgba(255, 255, 255, 0.13);
++  --b-glow: radial-gradient(900px 520px at 90% -10%, rgba(217, 174, 82, 0.2), transparent 60%);
++}
++html[data-baaro-theme="sunset"] {
++  --b-bg: #4a1f2b; --b-surface: #5e2b38; --b-surface2: #733846; --b-hover: #874555;
++  --b-ivory: #fff4ea; --b-muted: #dbb4b8; --b-muted-light: #ecccce;
++  --b-border: rgba(255, 255, 255, 0.14);
++  --b-glow: radial-gradient(900px 520px at 100% -10%, rgba(245, 158, 11, 0.3), transparent 60%),
++            radial-gradient(700px 480px at 0% 0%, rgba(236, 72, 153, 0.18), transparent 60%);
++}
++html[data-baaro-theme="ocean"] {
++  --b-bg: #0f3a5f; --b-surface: #174d7a; --b-surface2: #20609a; --b-hover: #2b73b3;
++  --b-ivory: #f2f8fc; --b-muted: #a9c6df; --b-muted-light: #c4d9ec;
++  --b-border: rgba(255, 255, 255, 0.14);
++  --b-glow: radial-gradient(900px 520px at 10% -10%, rgba(78, 225, 200, 0.22), transparent 60%);
++}
++html[data-baaro-theme="forest"] {
++  --b-bg: #1e4d2b; --b-surface: #28613a; --b-surface2: #327448; --b-hover: #3e8a57;
++  --b-ivory: #f4f8ee; --b-muted: #b0cdb7; --b-muted-light: #c9e0cf;
++  --b-border: rgba(255, 255, 255, 0.14);
++  --b-glow: radial-gradient(900px 520px at 100% -10%, rgba(217, 174, 82, 0.2), transparent 60%);
++}
++html[data-baaro-theme="desert"] {
++  --b-bg: #4a3a28; --b-surface: #5e4a33; --b-surface2: #735c41; --b-hover: #886f4f;
++  --b-ivory: #fbf3e4; --b-muted: #d3c0a2; --b-muted-light: #e5d5bb;
++  --b-border: rgba(255, 255, 255, 0.14);
++  --b-glow: radial-gradient(900px 520px at 80% -10%, rgba(245, 200, 107, 0.26), transparent 60%);
++}
++html[data-baaro-theme="indigo"] {
++  --b-bg: #2a2f6e; --b-surface: #363c86; --b-surface2: #444b9c; --b-hover: #535bb3;
++  --b-ivory: #f6f5ff; --b-muted: #b9bde6; --b-muted-light: #d0d3f0;
++  --b-border: rgba(255, 255, 255, 0.15);
++  --b-glow: radial-gradient(900px 520px at 90% -10%, rgba(139, 92, 246, 0.3), transparent 60%),
++            radial-gradient(700px 480px at 0% 0%, rgba(45, 191, 166, 0.16), transparent 60%);
++}
++html[data-baaro-theme="light"] {
++  --b-bg: #f6f1e7; --b-surface: #ffffff; --b-surface2: #efe7d6; --b-hover: #e6dcc6;
++  --b-ivory: #1b2438; --b-muted: #5b6780; --b-muted-light: #44506a;
++  --b-border: rgba(27, 36, 56, 0.14);
++  --b-glow: radial-gradient(900px 520px at 12% -8%, rgba(45, 191, 166, 0.14), transparent 60%),
++            radial-gradient(800px 520px at 100% 0%, rgba(217, 174, 82, 0.18), transparent 60%);
++}
++
++html[data-baaro-theme] {
++  background-color: var(--b-bg);
++  background-image: var(--b-glow);
++  background-attachment: fixed;
++  color: var(--b-ivory);
++}
++
++/* Thème clair : les composants écrits en Tailwind avec du texte blanc / des bordures blanches
++   sont recolorés (les boutons qui ont une couleur de fond propre gardent leur texte blanc). */
++html[data-baaro-theme="light"] [class*="text-white"]:not([class*="bg-"]) { color: var(--b-ivory); }
++html[data-baaro-theme="light"] [class*="border-white"] { border-color: var(--b-border); }
++html[data-baaro-theme="light"] [class*="bg-black/9"] { background-color: var(--b-surface); }
++html[data-baaro-theme="light"] input,
++html[data-baaro-theme="light"] textarea { color: var(--b-ivory); }
+ 
+ html[data-baaro-theme="custom"] {
+-  background-color: var(--baaro-custom-bg, #0b1220);
+-  background-image: var(--baaro-custom-image, none);
++  background-color: var(--baaro-custom-bg, #182848);
++  background-image: var(--baaro-custom-image, var(--b-glow));
+   background-size: cover;
+   background-position: center;
+   background-attachment: fixed;
+diff --git a/src/main.jsx b/src/main.jsx
+index 6843d45..33d1d82 100644
+--- a/src/main.jsx
++++ b/src/main.jsx
+@@ -79,7 +79,7 @@ const setupNative = async () => {
+     const { StatusBar, Style } = await import("@capacitor/status-bar");
+     await StatusBar.setOverlaysWebView({ overlay: false });
+     await StatusBar.setStyle({ style: Style.Dark });
+-    await StatusBar.setBackgroundColor({ color: "#0b1220" });
++    await StatusBar.setBackgroundColor({ color: "#182848" });
+   } catch (e) {
+     console.log("StatusBar not available", e);
+   }
+diff --git a/src/theme.js b/src/theme.js
+index ba9a352..e3a67de 100644
+--- a/src/theme.js
++++ b/src/theme.js
+@@ -1,9 +1,10 @@
+-// Palette de couleurs de BAARO : fond marine sombre, accents or et teal, texte ivoire.
++// Palette de BAARO. Fonds, surfaces et textes viennent de variables CSS définies par thème
++// (voir index.css) ; les accents or / teal restent fixes (ils reçoivent un alpha en hexa).
+ export const COLORS = {
+-  bg: "#0B1220",
+-  surface: "#111A2C",
+-  surface2: "#1A2740",
+-  surfaceHover: "#203152",
++  bg: "var(--b-bg, #182848)",
++  surface: "var(--b-surface, #223560)",
++  surface2: "var(--b-surface2, #2D4278)",
++  surfaceHover: "var(--b-hover, #38508F)",
+   gold: "#D9AE52",
+   goldLight: "#F5C86B",
+   goldGlow: "rgba(217, 174, 82, 0.25)",
+@@ -12,10 +13,10 @@ export const COLORS = {
+   tealGlow: "rgba(45, 191, 166, 0.25)",
+   purple: "#8B5CF6",
+   rose: "#EC4899",
+-  ivory: "#F4EFE3",
+-  muted: "#8A93A6",
+-  mutedLight: "#A0ABC0",
+-  border: "rgba(255, 255, 255, 0.08)",
++  ivory: "var(--b-ivory, #F7F2E7)",
++  muted: "var(--b-muted, #AEB8D0)",
++  mutedLight: "var(--b-muted-light, #C7D0E4)",
++  border: "var(--b-border, rgba(255, 255, 255, 0.12))",
+   borderGold: "rgba(217, 174, 82, 0.3)",
+   borderTeal: "rgba(45, 191, 166, 0.3)",
+ };
