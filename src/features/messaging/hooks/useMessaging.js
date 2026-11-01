@@ -17,6 +17,16 @@ import {
   deserializePayload,
 } from "../lib/crypto.js";
 import { useCryptoKeys } from "./useCryptoKeys.js";
+import { messageService } from "../lib/messageService.js";
+import { sendSmsFallback, cacheSmsNumberFromProfile } from "../../../lib/smsFallback.js";
+import {
+  enqueueOutbox,
+  removeFromOutbox,
+  updateOutbox,
+  getOutbox,
+  isOffline,
+  isNetworkError,
+} from "../../../lib/messageOutbox.js";
 
 const PAGE_FIRST = 150;
 const PAGE_OLDER = 50;
@@ -348,19 +358,33 @@ export function useMessaging(conversation_id, current_user_id, recipient_id) {
       if (!clean || !conversation_id || !current_user_id || !recipient_id) {
         return { ok: false, error: "Paramètres manquants" };
       }
-      if (!keysReady) {
+      const clientId =
+        options.clientMessageId ||
+        (crypto?.randomUUID
+          ? crypto.randomUUID()
+          : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
+
+      // Mode Zéro Data : hors ligne, le message est mis en boîte d'envoi (affiché « en attente »)
+      // et partira tout seul au retour du réseau.
+      const queueOffline = () => {
+        enqueueOutbox(current_user_id, {
+          clientMessageId: clientId,
+          conversationId: conversation_id,
+          recipientId: recipient_id,
+          text: clean,
+          replyToId: options.replyToId || null,
+          expiresAt: options.expiresAt || null,
+          queuedAt: options.queuedAt || Date.now(),
+        });
+      };
+
+      if (!keysReady && !isOffline()) {
         return {
           ok: false,
           error: keysError || "Clés de chiffrement pas encore prêtes. Réessayez dans un instant.",
         };
       }
       setSendError(null);
-
-      const clientId =
-        options.clientMessageId ||
-        (crypto?.randomUUID
-          ? crypto.randomUUID()
-          : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
 
       // Affichage immédiat (sauf si le vrai message est déjà présent, cas d'un renvoi après succès silencieux)
       const optimistic = {
@@ -385,6 +409,21 @@ export function useMessaging(conversation_id, current_user_id, recipient_id) {
         if (existing && !isTmp(existing.id)) return prev;
         return mergeMessages(prev, [optimistic]);
       });
+
+      if (isOffline() || !keysReady) {
+        queueOffline();
+        // Repli SMS (si activé) : une seule fois par message, pas lors d'un renvoi automatique
+        if (isOffline() && !options.queuedAt) {
+          sendSmsFallback(recipient_id, clean).then((r) => {
+            if (!r.ok) return;
+            updateOutbox(current_user_id, clientId, { sms: { sentAt: Date.now() } });
+            setMessages((prev) =>
+              prev.map((m) => (m.client_message_id === clientId ? { ...m, viaSms: true } : m))
+            );
+          });
+        }
+        return { ok: true, queued: true, data: { id: clientId, queued: true } };
+      }
 
       try {
         let recipientPub = recipientKeyCache.current;
@@ -427,6 +466,7 @@ export function useMessaging(conversation_id, current_user_id, recipient_id) {
                 m.client_message_id === clientId ? { ...m, pending: false, failed: false } : m
               )
             );
+            removeFromOutbox(current_user_id, clientId);
             return { ok: true, data: { id: clientId, duplicate: true } };
           }
           throw error;
@@ -444,8 +484,14 @@ export function useMessaging(conversation_id, current_user_id, recipient_id) {
             },
           ])
         );
+        removeFromOutbox(current_user_id, clientId);
         return { ok: true, data };
       } catch (err) {
+        // Coupure réseau en plein envoi : on garde le message en attente au lieu de l'afficher en échec
+        if (isNetworkError(err)) {
+          queueOffline();
+          return { ok: true, queued: true, data: { id: clientId, queued: true } };
+        }
         const msg = err?.message || "Échec envoi";
         setSendError(msg);
         markFailed(clientId);
@@ -533,8 +579,85 @@ export function useMessaging(conversation_id, current_user_id, recipient_id) {
     [current_user_id]
   );
 
+  // Quand on a du réseau, on mémorise le numéro du contact pour un éventuel repli SMS futur
+  useEffect(() => {
+    if (recipient_id && !isOffline()) void cacheSmsNumberFromProfile(supabase, recipient_id);
+  }, [recipient_id]);
+
+  // --- Mode Zéro Data : boîte d'envoi -------------------------------------------------
+  const sendMessageRef = useRef(sendMessage);
+  sendMessageRef.current = sendMessage;
+  const flushingRef = useRef(false);
+
+  // Réaffiche (en « attente ») les messages mis en boîte d'envoi, même après fermeture de l'app
+  useEffect(() => {
+    if (!conversation_id || !current_user_id) return;
+    const queued = getOutbox(current_user_id, conversation_id);
+    if (!queued.length) return;
+    setMessages((prev) =>
+      mergeMessages(
+        prev,
+        queued
+          .filter((q) => !prev.some((m) => m.client_message_id === q.clientMessageId && !isTmp(m.id)))
+          .map((q) => ({
+            id: `tmp-${q.clientMessageId}`,
+            client_message_id: q.clientMessageId,
+            conversation_id,
+            sender_id: current_user_id,
+            recipient_id: q.recipientId,
+            type: "text",
+            text: "",
+            plaintext: q.text,
+            encrypted: true,
+            decryptFailed: false,
+            reply_to_id: q.replyToId || null,
+            expires_at: q.expiresAt || null,
+            created_at: new Date(q.queuedAt).toISOString(),
+            pending: true,
+            failed: false,
+          }))
+      )
+    );
+  }, [conversation_id, current_user_id]);
+
+  // Renvoie la boîte d'envoi (dans l'ordre) dès que le réseau est là et que les clés sont prêtes
+  const flushOutbox = useCallback(async () => {
+    if (flushingRef.current || isOffline() || !keysReady) return;
+    if (!conversation_id || !current_user_id) return;
+    const queued = getOutbox(current_user_id, conversation_id).sort(
+      (a, b) => a.queuedAt - b.queuedAt
+    );
+    if (!queued.length) return;
+    flushingRef.current = true;
+    try {
+      for (const q of queued) {
+        const res = await sendMessageRef.current(q.text, {
+          clientMessageId: q.clientMessageId,
+          replyToId: q.replyToId,
+          expiresAt: q.expiresAt,
+          queuedAt: q.queuedAt,
+        });
+        if (!res?.ok) break; // refus serveur : on garde la suite en attente, on réessaiera
+        if (res.queued) break; // le réseau a de nouveau coupé
+        if (res.data?.id && !res.data?.duplicate) {
+          messageService.notifyNewMessage(res.data.id).catch(() => {});
+        }
+      }
+    } finally {
+      flushingRef.current = false;
+    }
+  }, [conversation_id, current_user_id, keysReady]);
+
+  useEffect(() => {
+    void flushOutbox();
+    const onOnline = () => void flushOutbox();
+    window.addEventListener("online", onOnline);
+    return () => window.removeEventListener("online", onOnline);
+  }, [flushOutbox]);
+
   return {
     messages,
+    flushOutbox,
     // Plus de spinner infini si les clés échouent : l'erreur est exposée via keysError
     loading: loading || (!keysReady && !keysError),
     sendMessage,

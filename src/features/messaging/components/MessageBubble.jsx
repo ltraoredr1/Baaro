@@ -301,6 +301,7 @@ export function MessageBubble({
             {pinned && <Pin size={11} aria-label="Épinglé" />}
             {starred && <Star size={11} fill="currentColor" aria-label="Favori" />}
             <span>{time}</span>
+            {isMe && message.viaSms && <span title="Envoyé par SMS (non chiffré)">SMS</span>}
             {isMe && !message.failed && (pending ? <span>⏳</span> : <span>{read ? "✓✓" : "✓"}</span>)}
             {message.failed && (
               <button type="button" onClick={() => onRetry?.(message)} className="underline text-red-200">

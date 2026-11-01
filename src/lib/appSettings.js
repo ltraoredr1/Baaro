@@ -25,6 +25,8 @@ export const DEFAULT_SETTINGS = {
   data_saver: true,
   autoplay_video: false,
   offline_sync: true,
+  // Repli SMS quand il n'y a pas de data (non chiffré de bout en bout) : désactivé par défaut.
+  sms_fallback: false,
   ai_region: "auto",
   ai_suggest: true,
   auto_translate: true,

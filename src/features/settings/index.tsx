@@ -922,7 +922,8 @@ export default function SettingsTab({
         "data_network",
         "data_saver",
         "autoplay_video",
-        "offline_sync"
+        "offline_sync",
+        "sms_fallback"
       ),
       performance: match(
         "performance_section",
@@ -1766,6 +1767,19 @@ export default function SettingsTab({
             desc={t("offline_sync_desc")}
             enabled={settings.offline_sync}
             onChange={(v) => save({ offline_sync: v })}
+          />
+          <ToggleRow
+            title={t("sms_fallback")}
+            desc={t("sms_fallback_desc")}
+            enabled={settings.sms_fallback}
+            onChange={async (v) => {
+              if (v) {
+                const { requestSmsPermission } = await import("../../lib/smsFallback.js");
+                const ok = await requestSmsPermission();
+                if (!ok) return; // permission refusée ou non disponible : on n'active pas
+              }
+              save({ sms_fallback: v });
+            }}
           />
         </CollapsibleSection>
       )}

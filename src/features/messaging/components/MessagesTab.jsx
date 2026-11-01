@@ -418,7 +418,7 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
       });
       if (!result?.ok) notify(result?.error || "Impossible d'envoyer le message");
       else {
-        if (result.data?.id && !result.data?.duplicate) {
+        if (result.data?.id && !result.data?.duplicate && !result.queued) {
           messageService.notifyNewMessage(result.data.id).catch((error) =>
             console.warn("[MessagesTab] notification message:", error?.message || error)
           );
