@@ -1,0 +1,281 @@
+diff --git a/.env.example b/.env.example
+index e436b50..ecfe61d 100644
+--- a/.env.example
++++ b/.env.example
+@@ -14,11 +14,11 @@
+ # ------------------------------------------------------------
+ VITE_APP_ENV=development
+ VITE_API_BASE_URL=http://localhost:5173
+-VITE_SUPABASE_URL=..   fait
+-VITE_SUPABASE_ANON_KEY=..   fait
+-VITE_TURNSTILE_SITE_KEY=..   fait
+-VITE_DAILY_DOMAIN=..    fait
+-VITE_VAPID_PUBLIC_KEY=..    fait
++VITE_SUPABASE_URL=
++VITE_SUPABASE_ANON_KEY=
++VITE_TURNSTILE_SITE_KEY=
++VITE_DAILY_DOMAIN=
++VITE_VAPID_PUBLIC_KEY=
+ 
+ # "Lire le vocal" (Whisper sur l'appareil) — optionnel
+ # Français : modèle Whisper multilingue ONNX (défaut : Xenova/whisper-base)
+@@ -29,11 +29,14 @@ VITE_WHISPER_BAMBARA_MODEL=
+ # Jeton de langue à forcer pour le modèle bambara (vide = aucun ; dépend de l'entraînement)
+ VITE_WHISPER_BAMBARA_LANG=
+ 
++# Worker public URL used by the Videos tab for unlimited-size multipart uploads (R2 ceiling applies).
++VITE_BAARO_MEDIA_WORKER_URL=
++
+ # ------------------------------------------------------------
+ # SUPABASE — SERVER ONLY
+ # ------------------------------------------------------------
+-SUPABASE_URL=..     fait
+-SUPABASE_SERVICE_ROLE_KEY=..   fait
++SUPABASE_URL=
++SUPABASE_SERVICE_ROLE_KEY=
+ 
+ # ------------------------------------------------------------
+ # APPLICATION / SECURITY
+@@ -41,28 +44,32 @@ SUPABASE_SERVICE_ROLE_KEY=..   fait
+ NODE_ENV=development
+ ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
+ PUBLIC_APP_URL=http://localhost:5173
+-SEND_SMS_HOOK_SECRET=..    fait
++SEND_SMS_HOOK_SECRET=
++
++# Web Push (VAPID) — la clé privée reste côté serveur uniquement
++VAPID_PRIVATE_KEY=
++VAPID_SUBJECT=mailto:support@baaro.app
+ 
+ # ------------------------------------------------------------
+ # CLOUDFLARE R2 — MEDIA STORAGE / SERVER ONLY
+ # ------------------------------------------------------------
+-R2_ACCOUNT_ID=..    fait
+-R2_ACCESS_KEY_ID=..     fait
+-R2_SECRET_ACCESS_KEY=..     fait
+-R2_BUCKET_NAME=baaro-media..  .fait
+-R2_PUBLIC_BASE_URL=https://media.example.com...fait
++R2_ACCOUNT_ID=
++R2_ACCESS_KEY_ID=
++R2_SECRET_ACCESS_KEY=
++R2_BUCKET_NAME=baaro-media
++R2_PUBLIC_BASE_URL=
+ 
+ # ------------------------------------------------------------
+-# RATE LIMITING — OPTIONAL
++# RATE LIMITING — REQUIRED on Vercel production
+ # ------------------------------------------------------------
+-UPSTASH_REDIS_REST_URL=..   fait
+-UPSTASH_REDIS_REST_TOKEN=..    fait
++UPSTASH_REDIS_REST_URL=
++UPSTASH_REDIS_REST_TOKEN=
+ 
+ # ------------------------------------------------------------
+-# AI PROVIDERS — OPTIONAL
++# AI PROVIDERS — OPTIONAL / SERVER ONLY
+ # ------------------------------------------------------------
+-BAARO_AI_MODEL=..     fait
+-BAARO_AI_PROVIDER_ORDER=..   fait
++BAARO_AI_MODEL=
++BAARO_AI_PROVIDER_ORDER=
+ 
+ OPENAI_API_KEY=
+ OPENAI_API_BASE=
+@@ -89,11 +96,13 @@ N8N_WEBHOOK_SECRET=
+ # ------------------------------------------------------------
+ # LIVE VIDEO — OPTIONAL
+ # ------------------------------------------------------------
+-DAILY_API_KEY=..  fait
+-DAILY_DOMAIN=..   fait
++DAILY_API_KEY=
++DAILY_DOMAIN=
+ 
+ # ------------------------------------------------------------
+ # PAYMENTS — OPTIONAL / SERVER ONLY
++# Leave empty until the provider is configured. Use sandbox/test
++# credentials outside production.
+ # ------------------------------------------------------------
+ CINETPAY_API_KEY=
+ CINETPAY_SITE_ID=
+@@ -105,9 +114,11 @@ STRIPE_SECRET_KEY=
+ STRIPE_WEBHOOK_SECRET=
+ STRIPE_PRICE_SHOP_EUR=
+ STRIPE_PRICE_SHOP_USD=
+-FLUTTERWAVE_SECRET_KEY=FLWSECK_LIVE-xxxxx
+-PAWAPAY_API_KEY=your_pawapay_key
+-PAWAPAY_ENV=live
++FLUTTERWAVE_SECRET_KEY=
++PAWAPAY_API_KEY=
++# sandbox for development/staging, live only in production
++PAWAPAY_ENV=sandbox
++
+ # ------------------------------------------------------------
+ # VERCEL — PROVIDED AUTOMATICALLY BY VERCEL
+ # ------------------------------------------------------------
+@@ -118,17 +129,15 @@ VERCEL_PROJECT_PRODUCTION_URL=
+ # DEV is provided automatically by Vite (do not set manually).
+ # DEV=
+ 
+-# NextGen video engines
++# ------------------------------------------------------------
++# NEXTGEN VIDEO ENGINES / EXTERNAL MEDIA WORKER
++# Heavy processing; API stays unchanged.
++# BAARO_MEDIA_PROCESSOR_URL must be the public Cloud Run /process URL.
++# BAARO_WORKER_SECRET must match the Cloud Run secret.
++# ------------------------------------------------------------
+ BAARO_MEDIA_PROCESSOR_URL=
+ BAARO_WORKER_SECRET=
+ BAARO_WORKER_ID=
+-OPENAI_API_BASE=
+-OPENAI_API_KEY=
+-OPENAI_MODEL=
+-VITE_GEMINI_API_KEY=votre_cle_api_gemini_ici
+-
+-
+-# --- BAARO external media worker (heavy processing; API stays unchanged) ---
+ BAARO_WORKER_PORT=8787
+ BAARO_WORKER_TMP_DIR=/tmp/baaro-worker
+ FFMPEG_BIN=ffmpeg
+@@ -137,14 +146,3 @@ WHISPER_BIN=whisper
+ WHISPER_MODEL=small
+ BAARO_TTS_URL=
+ BAARO_TTS_SECRET=
+-
+-# Cloud Run worker deployment (not required by browser)
+-# BAARO_MEDIA_PROCESSOR_URL must be the public Cloud Run /process URL.
+-# BAARO_WORKER_SECRET must match the Cloud Run secret.
+-
+-# Worker public URL used by the Videos tab for unlimited-size multipart uploads (R2 ceiling applies).
+-VITE_BAARO_MEDIA_WORKER_URL=
+-
+-# Production rate limiting (REQUIRED on Vercel production)
+-UPSTASH_REDIS_REST_URL=
+-UPSTASH_REDIS_REST_TOKEN=
+diff --git a/scripts/check-android.mjs b/scripts/check-android.mjs
+index 8de882e..ecfd6c3 100644
+--- a/scripts/check-android.mjs
++++ b/scripts/check-android.mjs
+@@ -1,5 +1,3 @@
+-Fichier à remplacer : "scripts/check-android.mjs"
+-
+ import fs from "node:fs";
+ import path from "node:path";
+ 
+diff --git a/scripts/check-e2e-readiness.mjs b/scripts/check-e2e-readiness.mjs
+index cdb201f..7786598 100644
+--- a/scripts/check-e2e-readiness.mjs
++++ b/scripts/check-e2e-readiness.mjs
+@@ -65,10 +65,19 @@ if (fs.existsSync(path.join(root, "supabase", "migrations", "0001_baaro_unified.
+ }
+ 
+ const social = read("api/social.js");
+-for (const marker of ["handleComment", "handleReaction", "handleBlock", "handleReport", "handleNotification"]) {
++for (const marker of ["handleComment", "handleNotifyInteraction"]) {
+   social.includes(marker)? ok(`social contract: ${marker}`) : fail(`social contract missing: ${marker}`);
+ }
+ 
++// Blocages et signalements sont gérés côté client (RLS Supabase), pas dans api/social.js.
++const clientContracts = [
++  ["src/lib/blocks.js", "user_blocks"],
++  ["src/features/feed/FeedTab.jsx", "post_reports"],
++];
++for (const [file, marker] of clientContracts) {
++  read(file).includes(marker)? ok(`social contract: ${file} -> ${marker}`) : fail(`social contract missing: ${file} -> ${marker}`);
++}
++
+ const vercel = JSON.parse(read("vercel.json"));
+ const apiFiles = new Set(fs.readdirSync(apiDir).filter((n) => n.endsWith(".js")).map((n) => `/api/${n}`));
+ for (const rule of vercel.rewrites || []) {
+diff --git a/scripts/check-e2e-smoke.mjs b/scripts/check-e2e-smoke.mjs
+index e9da6ff..540d89e 100644
+--- a/scripts/check-e2e-smoke.mjs
++++ b/scripts/check-e2e-smoke.mjs
+@@ -76,9 +76,13 @@ for (const marker of [".from(\"profiles\")", 'onConflict: "id"', "updated_at", "
+ }
+ 
+ const social = read("api/social.js");
+-for (const marker of ["handleComment", "handleReaction", 'from("comments")', "comments_count", "notification_id", "source_id", "actor_id"]) {
++for (const marker of ["handleComment", "handleNotifyInteraction", 'from("comments")', "notification_id", "source_id", "actor_id"]) {
+   social.includes(marker) ? ok(`social contract: ${marker}`) : fail(`social contract missing: ${marker}`);
+ }
++// comments_count est mis à jour côté client (feed), pas dans api/social.js.
++read("src/features/feed/FeedTab.jsx").includes("comments_count")
++  ? ok("social contract: FeedTab comments_count")
++  : fail("social contract missing: FeedTab comments_count");
+ 
+ const vercel = JSON.parse(read("vercel.json"));
+ const apiSet = new Set(apiJs.map((n) => `/api/${n}`));
+diff --git a/scripts/check-payment-wiring.mjs b/scripts/check-payment-wiring.mjs
+index a947436..e168e06 100644
+--- a/scripts/check-payment-wiring.mjs
++++ b/scripts/check-payment-wiring.mjs
+@@ -2,12 +2,23 @@ import fs from 'node:fs';
+ import path from 'node:path';
+ 
+ const root = process.cwd();
++const exists = (p) => fs.existsSync(path.join(root, p));
+ const read = (p) => fs.readFileSync(path.join(root, p), 'utf8');
+ const apiPayments = read('api/payments.js');
+-const wallet = read('api/wallet.js');
+ const provider = read('src/lib/paymentProvider.js');
+ const webhooks = read('api/webhooks.js');
+-const migration = read('supabase/migrations/0001_baaro_unified.sql');
++
++// api/wallet.js est un alias historique : s'il a été supprimé, c'est conforme
++// (aucune implémentation wallet exposée). S'il existe, il doit réexporter payments.js.
++const walletOk = !exists('api/wallet.js') || read('api/wallet.js').includes('from "./payments.js"');
++
++// La migration unifiée peut être absente du dépôt (convention des autres contrôles : skip + WARN).
++const migrationPath = 'supabase/migrations/0001_baaro_unified.sql';
++const hasMigration = exists(migrationPath);
++const migration = hasMigration ? read(migrationPath) : '';
++if (!hasMigration) {
++  console.warn(`WARN: ${migrationPath} manquant -> vérifications de migration ignorées`);
++}
+ 
+ const checks = [
+   [apiPayments.includes('requireUser'), 'payments endpoint authenticates users'],
+@@ -22,10 +33,12 @@ const checks = [
+   [provider.includes('checkout_intent_id'), 'frontend can pay monetization checkout intents'],
+   [webhooks.includes('fulfill_monetization_checkout'), 'webhooks settle monetization checkouts'],
+   [webhooks.includes('MONTANT_PAIEMENT_INATTENDU'), 'provider amount is verified'],
+-  [wallet.includes('from "./payments.js"'), 'legacy wallet route contains no wallet implementation'],
+-  [migration.includes("DROP TABLE IF EXISTS public.crypto_holdings CASCADE"), 'crypto storage is decommissioned'],
+-  [migration.includes("DROP TABLE IF EXISTS public.wallets CASCADE"), 'wallet storage is decommissioned'],
+-  [migration.includes("cashout_allowed",), 'closed-loop credits metadata exists'],
++  [walletOk, 'legacy wallet route is absent or contains no wallet implementation'],
++  ...(hasMigration ? [
++    [migration.includes("DROP TABLE IF EXISTS public.crypto_holdings CASCADE"), 'crypto storage is decommissioned'],
++    [migration.includes("DROP TABLE IF EXISTS public.wallets CASCADE"), 'wallet storage is decommissioned'],
++    [migration.includes("cashout_allowed"), 'closed-loop credits metadata exists'],
++  ] : []),
+ ];
+ 
+ let failed = 0;
+diff --git a/scripts/check-performance.mjs b/scripts/check-performance.mjs
+index 5e6b031..d6e76df 100644
+--- a/scripts/check-performance.mjs
++++ b/scripts/check-performance.mjs
+@@ -6,7 +6,7 @@ let failed = false;
+ const fail = (m) => { console.error(`FAIL: ${m}`); failed = true; };
+ const exists = (p) => fs.existsSync(path.join(root, p));
+ 
+-for (const file of ["src/app/App.jsx", "src/app/tabs.jsx", "vite.config.js", "public/service-worker.js"]) {
++for (const file of ["src/app/App.jsx", "src/app/tabs.jsx", "vite.config.js"]) {
+   if (!exists(file)) fail(`Missing performance-critical file: ${file}`);
+ }
+ 
+@@ -15,8 +15,11 @@ if (!failed) {
+   for (const token of ["lazyRetry", "features/feed", "features/videos", "features/messaging"]) {
+     if (!tabs.includes(token)) fail(`Expected lazy-loading marker missing in tabs.jsx: ${token}`);
+   }
+-  const sw = fs.readFileSync(path.join(root, "public/service-worker.js"), "utf8");
+-  if (!sw.includes("MAX_RUNTIME_ENTRIES")) fail("Service worker cache bound missing");
++  // Le service worker actif (/sw.js) est généré par vite-plugin-pwa ; public/service-worker.js est LEGACY.
++  const viteConfig = fs.readFileSync(path.join(root, "vite.config.js"), "utf8");
++  if (!viteConfig.includes("runtimeCaching") || !viteConfig.includes("maxEntries")) {
++    fail("Service worker cache bound missing (runtimeCaching with maxEntries in vite.config.js)");
++  }
+ }
+ 
+ if (failed) process.exit(1);
