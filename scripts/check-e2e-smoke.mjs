@@ -76,9 +76,13 @@ for (const marker of [".from(\"profiles\")", 'onConflict: "id"', "updated_at", "
 }
 
 const social = read("api/social.js");
-for (const marker of ["handleComment", "handleReaction", 'from("comments")', "comments_count", "notification_id", "source_id", "actor_id"]) {
+for (const marker of ["handleComment", "handleNotifyInteraction", 'from("comments")', "notification_id", "source_id", "actor_id"]) {
   social.includes(marker) ? ok(`social contract: ${marker}`) : fail(`social contract missing: ${marker}`);
 }
+// comments_count est mis à jour côté client (feed), pas dans api/social.js.
+read("src/features/feed/FeedTab.jsx").includes("comments_count")
+  ? ok("social contract: FeedTab comments_count")
+  : fail("social contract missing: FeedTab comments_count");
 
 const vercel = JSON.parse(read("vercel.json"));
 const apiSet = new Set(apiJs.map((n) => `/api/${n}`));

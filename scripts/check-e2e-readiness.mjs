@@ -65,8 +65,17 @@ if (fs.existsSync(path.join(root, "supabase", "migrations", "0001_baaro_unified.
 }
 
 const social = read("api/social.js");
-for (const marker of ["handleComment", "handleReaction", "handleBlock", "handleReport", "handleNotification"]) {
+for (const marker of ["handleComment", "handleNotifyInteraction"]) {
   social.includes(marker)? ok(`social contract: ${marker}`) : fail(`social contract missing: ${marker}`);
+}
+
+// Blocages et signalements sont gérés côté client (RLS Supabase), pas dans api/social.js.
+const clientContracts = [
+  ["src/lib/blocks.js", "user_blocks"],
+  ["src/features/feed/FeedTab.jsx", "post_reports"],
+];
+for (const [file, marker] of clientContracts) {
+  read(file).includes(marker)? ok(`social contract: ${file} -> ${marker}`) : fail(`social contract missing: ${file} -> ${marker}`);
 }
 
 const vercel = JSON.parse(read("vercel.json"));
