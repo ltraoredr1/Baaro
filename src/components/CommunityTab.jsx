@@ -10,6 +10,8 @@ import {
   Plus,
   Hash,
   Volume2,
+  Mic,
+  Square,
   Loader2,
   X,
   Lock,
@@ -32,6 +34,8 @@ import { COLORS as THEME_COLORS } from "../theme.js";
 import ChannelItem from "./communityChannelItem.jsx";
 import GroupModerationPanel from "./community/GroupModerationPanel.jsx";
 import VoiceChannelUI from "./community/VoiceChannelUI.jsx";
+import { formatDuration, getBestAudioMime } from "../lib/chatMedia.js";
+import { parseEphemeralVoice } from "../lib/ephemeralVoice.js";
 
 /* ──────────────────────────────────────────────
    Thème de secours (fusionné avec theme.js)
@@ -179,6 +183,11 @@ export default function CommunityTab({ onOpenProfile }) {
   const [selectedCategory, setSelectedCategory] = useState("all");
   const [msgText, setMsgText] = useState("");
   const [sending, setSending] = useState(false);
+  const [voiceRecording, setVoiceRecording] = useState(false);
+  const [voiceBlob, setVoiceBlob] = useState(null);
+  const [voicePreviewUrl, setVoicePreviewUrl] = useState("");
+  const [voiceSeconds, setVoiceSeconds] = useState(0);
+  const [voiceSending, setVoiceSending] = useState(false);
 
   const [showCreateGroup, setShowCreateGroup] = useState(false);
   const [showCreateChannel, setShowCreateChannel] = useState(false);
@@ -204,10 +213,14 @@ export default function CommunityTab({ onOpenProfile }) {
   /* ── Refs ── */
   const messagesEndRef = useRef(null);
   const chatContainerRef = useRef(null);
+  const voiceRecorderRef = useRef(null);
+  const voiceStreamRef = useRef(null);
+  const voiceChunksRef = useRef([]);
+  const voiceStartedAtRef = useRef(0);
 
   /* ── Messages du canal (avec pagination) ── */
   const {
-    messages = [], sendMessage, loading: msgLoading,
+    messages = [], sendMessage, sendVoiceMessage, loading: msgLoading,
     loadOlder, hasMore, loadingOlder, error: msgError,
   } = useChannelMessages(selectedChannel?.id) || {};
 
@@ -376,6 +389,123 @@ export default function CommunityTab({ onOpenProfile }) {
     try { await sendMessage(msgText); setMsgText(""); }
     catch (err) { showToast(err.message || "Envoi impossible"); }
     finally { setSending(false); }
+  };
+
+  useEffect(() => {
+    if (!voiceRecording) return undefined;
+
+    const timer = window.setInterval(() => {
+      const elapsed = Math.floor(
+        (Date.now() - voiceStartedAtRef.current) / 1000
+      );
+
+      setVoiceSeconds(elapsed);
+
+      if (elapsed >= 90) {
+        voiceRecorderRef.current?.stop?.();
+        setVoiceRecording(false);
+        showToast("Vocal limité à 1 min 30");
+      }
+    }, 250);
+
+    return () => window.clearInterval(timer);
+  }, [voiceRecording]);
+
+  const startVoiceRecording = async () => {
+    if (!canPost || voiceRecording || voiceSending) return;
+
+    if (
+      !navigator.mediaDevices?.getUserMedia ||
+      typeof MediaRecorder === "undefined"
+    ) {
+      showToast("L'enregistrement vocal n'est pas disponible sur cet appareil");
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+      });
+
+      const mimeType = getBestAudioMime();
+      const recorder = new MediaRecorder(
+        stream,
+        mimeType ? { mimeType } : undefined
+      );
+
+      voiceStreamRef.current = stream;
+      voiceRecorderRef.current = recorder;
+      voiceChunksRef.current = [];
+      voiceStartedAtRef.current = Date.now();
+
+      setVoiceSeconds(0);
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          voiceChunksRef.current.push(event.data);
+        }
+      };
+
+      recorder.onstop = () => {
+        const blob = new Blob(voiceChunksRef.current, {
+          type: recorder.mimeType || mimeType || "audio/webm",
+        });
+
+        setVoiceBlob(blob);
+        setVoicePreviewUrl(URL.createObjectURL(blob));
+
+        stream.getTracks().forEach((track) => track.stop());
+        voiceStreamRef.current = null;
+      };
+
+      recorder.start();
+      setVoiceRecording(true);
+    } catch (error) {
+      voiceStreamRef.current?.getTracks?.().forEach((track) => track.stop());
+      showToast("Impossible d'accéder au microphone. Vérifie les permissions.");
+      console.error("[community voice message] start:", error);
+    }
+  };
+
+  const stopVoiceRecording = () => {
+    if (!voiceRecorderRef.current || !voiceRecording) return;
+
+    voiceRecorderRef.current.stop();
+    setVoiceRecording(false);
+  };
+
+  const discardVoiceRecording = () => {
+    voiceRecorderRef.current?.stop?.();
+    voiceStreamRef.current?.getTracks?.().forEach((track) => track.stop());
+
+    voiceRecorderRef.current = null;
+    voiceChunksRef.current = [];
+
+    setVoiceRecording(false);
+    setVoiceBlob(null);
+
+    if (voicePreviewUrl) {
+      URL.revokeObjectURL(voicePreviewUrl);
+    }
+
+    setVoicePreviewUrl("");
+    setVoiceSeconds(0);
+  };
+
+  const sendRecordedVoice = async () => {
+    if (!voiceBlob || voiceSending || !canPost) return;
+
+    setVoiceSending(true);
+
+    try {
+      await sendVoiceMessage(voiceBlob, voiceSeconds);
+      discardVoiceRecording();
+      showToast("Vocal envoyé — il disparaîtra dans 24 h");
+    } catch (error) {
+      showToast(error.message || "Envoi du vocal impossible");
+    } finally {
+      setVoiceSending(false);
+    }
   };
 
   const handlePeekInvite = async () => {
@@ -729,7 +859,35 @@ export default function CommunityTab({ onOpenProfile }) {
                             <div className="max-w-[80%] px-3 py-2 rounded-2xl text-sm"
                               style={{ background: mine ? C.gold : C.surface2, color: mine ? "#000" : C.ivory }}>
                               {!mine && <p className="text-[10px] font-bold mb-0.5 opacity-70">{name}</p>}
-                              <p className="break-words whitespace-pre-wrap">{m.text}</p>
+                              {(() => {
+                                const voice = parseEphemeralVoice(m.text);
+
+                                if (!voice) {
+                                  return (
+                                    <p className="break-words whitespace-pre-wrap">
+                                      {m.text}
+                                    </p>
+                                  );
+                                }
+
+                                return (
+                                  <div className="min-w-[220px] space-y-1.5">
+                                    <div className="flex items-center gap-2 font-bold">
+                                      <Mic size={15} />
+                                      <span>Message vocal éphémère</span>
+                                    </div>
+                                    <audio
+                                      src={voice.url}
+                                      controls
+                                      preload="metadata"
+                                      className="w-full h-8"
+                                    />
+                                    <p className="text-[10px] opacity-70">
+                                      {formatDuration(voice.duration)} · disparaît après 24 h
+                                    </p>
+                                  </div>
+                                );
+                              })()}
                             </div>
                           </div>
                         );
@@ -740,8 +898,108 @@ export default function CommunityTab({ onOpenProfile }) {
                     {/* Zone de saisie */}
                     {member ? (
                       canPost ? (
-                        <form onSubmit={handleSend} className="p-3 border-t flex gap-2 shrink-0"
+                        <form onSubmit={handleSend} className="p-3 border-t flex flex-wrap gap-2 shrink-0"
                           style={{ borderColor: C.border, background: C.surface || C.bg }}>
+                          {(voiceRecording || voiceBlob) && (
+                            <div
+                              className="w-full flex items-center gap-2 rounded-xl px-3 py-2"
+                              style={{
+                                background: C.surface2,
+                                border: `1px solid ${C.border}`,
+                              }}
+                            >
+                              {voiceRecording ? (
+                                <>
+                                  <span
+                                    className="w-2 h-2 rounded-full bg-red-500 animate-pulse"
+                                    aria-hidden
+                                  />
+                                  <span className="text-xs font-bold">
+                                    Enregistrement {formatDuration(voiceSeconds)} / 1:30
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={stopVoiceRecording}
+                                    className="ml-auto p-1.5 rounded-lg"
+                                    style={{
+                                      background: "#dc2626",
+                                      color: "#fff",
+                                    }}
+                                    aria-label="Arrêter l'enregistrement vocal"
+                                  >
+                                    <Square size={14} fill="currentColor" />
+                                  </button>
+                                </>
+                              ) : (
+                                <>
+                                  <Mic size={15} style={{ color: C.teal }} />
+                                  <span className="text-xs font-bold">
+                                    Vocal prêt · {formatDuration(voiceSeconds)}
+                                  </span>
+                                  <audio
+                                    src={voicePreviewUrl}
+                                    controls
+                                    preload="metadata"
+                                    className="h-7 flex-1 min-w-[130px]"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={discardVoiceRecording}
+                                    className="p-1.5 rounded-lg"
+                                    style={{ color: "#f87171" }}
+                                    aria-label="Supprimer le vocal"
+                                  >
+                                    Supprimer
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={sendRecordedVoice}
+                                    disabled={voiceSending}
+                                    className="px-3 py-1.5 rounded-lg text-xs font-bold disabled:opacity-40"
+                                    style={{
+                                      background: C.teal,
+                                      color: "#000",
+                                    }}
+                                  >
+                                    {voiceSending ? "Envoi…" : "Envoyer"}
+                                  </button>
+                                </>
+                              )}
+                            </div>
+                          )}
+                          <button
+                            type="button"
+                            onClick={
+                              voiceRecording
+                                ? stopVoiceRecording
+                                : startVoiceRecording
+                            }
+                            disabled={voiceSending || Boolean(voiceBlob)}
+                            className="p-2.5 rounded-xl disabled:opacity-40"
+                            style={{
+                              background: voiceRecording
+                                ? "#dc2626"
+                                : C.surface2,
+                              color: voiceRecording ? "#fff" : C.teal,
+                              border: `1px solid ${C.border}`,
+                            }}
+                            aria-label={
+                              voiceRecording
+                                ? "Arrêter l'enregistrement vocal"
+                                : "Enregistrer un message vocal"
+                            }
+                            title={
+                              voiceRecording
+                                ? "Arrêter"
+                                : "Message vocal éphémère"
+                            }
+                          >
+                            {voiceRecording ? (
+                              <Square size={18} fill="currentColor" />
+                            ) : (
+                              <Mic size={18} />
+                            )}
+                          </button>
                           <input value={msgText} onChange={(e) => setMsgText(e.target.value)} placeholder="Écrire un message…"
                             className="flex-1 px-3 py-2.5 rounded-xl border text-sm outline-none"
                             style={{ background: C.surface2, borderColor: C.border, color: C.ivory }} />

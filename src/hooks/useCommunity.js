@@ -1,6 +1,12 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { supabase } from "../supabaseClient.js";
 import { isValidAuthUserId } from "../lib/currentUserId.js";
+import { uploadVoiceBlob } from "../lib/chatMedia.js";
+import {
+  encodeEphemeralVoice,
+  isEphemeralVoiceExpired,
+  parseEphemeralVoice,
+} from "../lib/ephemeralVoice.js";
 
 /** auth.users.id (UUID) — source unique : lib/currentUserId.js */
 export { isValidAuthUserId };
@@ -65,6 +71,7 @@ export function useCommunity(externalId) {
   const [allUsers, setAllUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [clock, setClock] = useState(() => Date.now());
 
   const loadAll = useCallback(
     async (silent = false) => {
@@ -506,6 +513,14 @@ export function useChannelMessages(channelId) {
     };
   }, [channelId, ensureProfiles]);
 
+  useEffect(() => {
+    const hasEphemeral = rows.some((row) => parseEphemeralVoice(row.text));
+    if (!hasEphemeral) return undefined;
+
+    const timer = window.setInterval(() => setClock(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, [rows]);
+
   const loadOlder = useCallback(async () => {
     if (!channelId || !hasMore || loadingOlder || rows.length === 0) return;
     setLoadingOlder(true);
@@ -557,6 +572,41 @@ export function useChannelMessages(channelId) {
     [id, channelId, ensureProfiles]
   );
 
+  const sendVoiceMessage = useCallback(
+    async (blob, durationSeconds = 0) => {
+      if (!isValidAuthUserId(id) || !channelId) {
+        throw new Error("Non connecté ou canal manquant");
+      }
+
+      const uploaded = await uploadVoiceBlob(blob, id, durationSeconds);
+
+      const voiceText = encodeEphemeralVoice({
+        url: uploaded.url,
+        mime: uploaded.mime,
+        duration: uploaded.duration,
+        size: uploaded.size,
+      });
+
+      const { data, error } = await supabase
+        .from("channel_messages")
+        .insert({
+          channel_id: channelId,
+          sender_id: id,
+          text: voiceText,
+        })
+        .select(MSG_COLUMNS)
+        .single();
+
+      if (error) throw error;
+
+      if (data) {
+        ensureProfiles([data]);
+        setRows((prev) => mergeMessages(prev, [data]));
+      }
+    },
+    [id, channelId, ensureProfiles]
+  );
+
   const deleteMessage = useCallback(async (messageId) => {
     const { data, error } = await supabase
       .from("channel_messages")
@@ -578,11 +628,16 @@ export function useChannelMessages(channelId) {
 
   const messages = useMemo(
     () =>
-      rows.map((m) => ({
-        ...m,
-        profiles: profilesById[m.sender_id] || null,
-      })),
-    [rows, profilesById]
+      rows
+        .filter((m) => {
+          const voice = parseEphemeralVoice(m.text);
+          return !voice || !isEphemeralVoiceExpired(voice, clock);
+        })
+        .map((m) => ({
+          ...m,
+          profiles: profilesById[m.sender_id] || null,
+        })),
+    [rows, profilesById, clock]
   );
 
   return {
@@ -593,6 +648,7 @@ export function useChannelMessages(channelId) {
     hasMore,
     loadOlder,
     sendMessage,
+    sendVoiceMessage,
     deleteMessage,
     reportMessage,
     id,
