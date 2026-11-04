@@ -51,7 +51,8 @@ export function useVideoCreator({
     soundPicker;
 
   const [showUpload, setShowUpload] = useState(false);
-  const [selectedFile, setSelectedFile] = useState(null);
+  const [selectedFiles, setSelectedFiles] = useState([]);
+  const selectedFile = selectedFiles[0] || null; // compat
   const [previewUrl, setPreviewUrl] = useState("");
   const [uploadTitle, setUploadTitle] = useState("");
   const [uploadDescription, setUploadDescription] = useState("");
@@ -207,8 +208,11 @@ export function useVideoCreator({
   };
 
   const backToCreator = () => {
+    selectedFiles.forEach((f) => {
+      if (f._previewUrl) URL.revokeObjectURL(f._previewUrl);
+    });
     if (previewUrl) URL.revokeObjectURL(previewUrl);
-    setSelectedFile(null);
+    setSelectedFiles([]);
     setPreviewUrl("");
     setGenerated(false);
     setBakedAudio(false);
@@ -221,8 +225,11 @@ export function useVideoCreator({
     setTextContent("");
     setGenerated(false);
     setBakedAudio(false);
+    selectedFiles.forEach((f) => {
+      if (f._previewUrl) URL.revokeObjectURL(f._previewUrl);
+    });
     if (previewUrl) URL.revokeObjectURL(previewUrl);
-    setSelectedFile(null);
+    setSelectedFiles([]);
     setPreviewUrl("");
     setUploadTitle("");
     setUploadDescription("");
@@ -230,105 +237,143 @@ export function useVideoCreator({
     onCollabConsumed?.();
   };
 
-  const handleFileSelected = (file) => {
-    if (!file) return;
-    if (!looksLikeVideo(file)) {
-      showToast("Sélectionne un fichier vidéo.", "error");
+  const handleFileSelected = (fileOrList) => {
+    const list =
+      fileOrList && typeof fileOrList.length === "number"
+        ? Array.from(fileOrList)
+        : fileOrList
+        ? [fileOrList]
+        : [];
+
+    const videos = list.filter((f) => looksLikeVideo(f));
+    if (videos.length === 0) {
+      showToast("Sélectionne au moins une vidéo.", "error");
       return;
     }
 
     if (previewUrl) URL.revokeObjectURL(previewUrl);
+    selectedFiles.forEach((f) => {
+      if (f._previewUrl) URL.revokeObjectURL(f._previewUrl);
+    });
+
+    const withPreview = videos.map((f) => {
+      f._previewUrl = URL.createObjectURL(f);
+      return f;
+    });
+
     setGenerated(false);
     setBakedAudio(false);
-    setSelectedFile(file);
-    setPreviewUrl(URL.createObjectURL(file));
+    setSelectedFiles(withPreview);
+    setPreviewUrl(withPreview[0]._previewUrl);
   };
 
   const handleUpload = async () => {
-    if (!selectedFile) {
-      showToast("Sélectionne une vidéo.", "error");
+    if (!selectedFiles.length) {
+      showToast("Sélectionne au moins une vidéo.", "error");
       return;
     }
-
     if (!user) {
       showToast("Connecte-toi pour publier.", "error");
       return;
     }
 
     setUploading(true);
-    setUploadProgress(10);
+    setUploadProgress(0);
 
-    const durationPromise = generated
-      ? Promise.resolve(formatTime(generatedSeconds))
-      : readDuration(selectedFile).catch(() => "00:00");
+    const total = selectedFiles.length;
+    let done = 0;
+    let successCount = 0;
 
     try {
-      const uploaded = await uploadLargeVideo(selectedFile, {
-        user_id: user.id,
-        onProgress: (pct) =>
-          setUploadProgress(10 + Math.round((pct / 100) * 55)),
-      });
-      const publicUrl = uploaded.publicUrl || uploaded.url;
-      setUploadProgress(65);
+      for (const file of selectedFiles) {
+        const base = Math.round((done / total) * 100);
+        const slice = 100 / total;
 
-      const duration = await durationPromise;
+        const durationPromise =
+          generated && selectedFiles.length === 1
+            ? Promise.resolve(formatTime(generatedSeconds))
+            : readDuration(file).catch(() => "00:00");
 
-      let soundUrl = null;
-      if (selectedSound?.audio_url && !bakedAudio) {
-        soundUrl = selectedSound.audio_url;
-        if (selectedSound.file) {
-          const uploadedAudio = await uploadExternalMedia(
-            selectedSound.file,
-            "videos",
-          );
-          soundUrl = uploadedAudio.publicUrl || uploadedAudio.url;
+        const uploaded = await uploadLargeVideo(file, {
+          user_id: user.id,
+          onProgress: (pct) =>
+            setUploadProgress(base + Math.round((pct / 100) * slice * 0.7)),
+        });
+        const publicUrl = uploaded.publicUrl || uploaded.url;
+
+        const duration = await durationPromise;
+
+        let soundUrl = null;
+        if (selectedSound?.audio_url && !bakedAudio) {
+          soundUrl = selectedSound.audio_url;
+          if (selectedSound.file) {
+            const uploadedAudio = await uploadExternalMedia(
+              selectedSound.file,
+              "videos",
+            );
+            soundUrl = uploadedAudio.publicUrl || uploadedAudio.url;
+          }
         }
+
+        const collabFields = buildCollabPayload(collab);
+
+        const { data: created, error: dbError } = await insertVideo(
+          {
+            author_id: user.id,
+            video_url: publicUrl,
+            title:
+              uploadTitle.trim() ||
+              (total > 1
+                ? `Vidéo BAARO (\( {done + 1}/ \){total})`
+                : "Vidéo BAARO"),
+            description: uploadDescription.trim() || null,
+            duration,
+            views: 0,
+            likes: 0,
+            sound_id: selectedSound?.id ? String(selectedSound.id) : null,
+            ...collabFields,
+          },
+          selectedSound
+            ? {
+                sound_title: selectedSound.title || null,
+                ...(soundUrl
+                  ? { sound_url: soundUrl, mute_original: !!muteOriginal }
+                  : {}),
+              }
+            : {},
+        );
+
+        if (dbError) throw dbError;
+
+        await registerVideoHashtags(
+          created?.id,
+          uploadTitle,
+          uploadDescription,
+        );
+
+        successCount += 1;
+        done += 1;
+        setUploadProgress(Math.round((done / total) * 100));
       }
-      setUploadProgress(80);
 
-      const collabFields = buildCollabPayload(collab);
-
-      const { data: created, error: dbError } = await insertVideo(
-        {
-          author_id: user.id,
-          video_url: publicUrl,
-          title: uploadTitle.trim() || "Vidéo BAARO",
-          description: uploadDescription.trim() || null,
-          duration,
-          views: 0,
-          likes: 0,
-          sound_id: selectedSound?.id ? String(selectedSound.id) : null,
-          ...collabFields,
-        },
-        selectedSound
-          ? {
-              sound_title: selectedSound.title || null,
-              ...(soundUrl
-                ? { sound_url: soundUrl, mute_original: !!muteOriginal }
-                : {}),
-            }
-          : {},
-      );
-
-      if (dbError) throw dbError;
-
-      await registerVideoHashtags(
-        created?.id,
-        uploadTitle,
-        uploadDescription,
-      );
-
-      if (collab?.replyToCommentId) {
+      if (collab?.replyToCommentId && successCount > 0) {
         await supabase
           .from("video_comments")
           .update({ has_video_reply: true })
           .eq("id", collab.replyToCommentId);
       }
 
-      setUploadProgress(100);
-      onRewardPoints?.("publish_video", "Vidéo publiée", created?.id);
-      showPointsReward?.(25, "Vidéo publiée");
-      showToast("Vidéo publiée avec succès 🎉", "success");
+      onRewardPoints?.("publish_video", "Vidéos publiées");
+      showPointsReward?.(
+        25 * successCount,
+        `${successCount} vidéo(s) publiée(s)`,
+      );
+      showToast(
+        successCount === 1
+          ? "Vidéo publiée avec succès 🎉"
+          : `${successCount} vidéos publiées avec succès 🎉`,
+        "success",
+      );
 
       setShowUpload(false);
       resetUpload();
@@ -345,10 +390,11 @@ export function useVideoCreator({
     }
   };
 
-  return {
+  return {  return {
     showUpload,
     setShowUpload,
     selectedFile,
+    selectedFiles,
     previewUrl,
     uploadTitle,
     setUploadTitle,

@@ -846,6 +846,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
       {/* Commandes vocales, gestes de la main et mouvements de tête */}
       <HandsFreeControls
         activeVideoId={activeId}
+        isPlaying={!!activeId && playback.playingId === activeId}
         isMuted={playback.muted}
         onNext={() => goToNext(activeId)}
         onPrevious={() => goToPrevious(activeId)}

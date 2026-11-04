@@ -19,6 +19,7 @@ export default function UploadModal({
     showUpload,
     setShowUpload,
     selectedFile,
+    selectedFiles = [],
     uploadTitle,
     setUploadTitle,
     uploadDescription,
@@ -110,10 +111,11 @@ export default function UploadModal({
             ref={fileInputRef}
             type="file"
             accept="video/*"
+            multiple
             className="hidden"
             onChange={(event) => {
-              handleFileSelected(event.target.files?.[0]);
-              // permet de re-choisir le même fichier après une annulation
+              handleFileSelected(event.target.files);
+              // permet de re-choisir les mêmes fichiers après une annulation
               event.target.value = "";
             }}
           />
@@ -198,9 +200,11 @@ export default function UploadModal({
             style={{ background: COLORS.gold, color: "#000" }}
           >
             {uploading
-              ? "Publication en cours…"
+              ? `Publication… ${uploadProgress}%`
               : compressing
               ? "Optimisation en cours…"
+              : selectedFiles?.length > 1
+              ? `Publier ${selectedFiles.length} vidéos`
               : "Publier la vidéo"}
           </button>
         </div>

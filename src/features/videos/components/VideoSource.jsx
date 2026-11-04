@@ -29,7 +29,7 @@ export default function VideoSource({ creator, camera }) {
         className="w-full rounded-2xl border border-white/10 bg-white/[0.05] px-4 py-3 flex items-center justify-center gap-2 text-sm font-bold"
       >
         <Plus size={18} />
-        Choisir une vidéo dans la galerie
+        Choisir une ou plusieurs vidéos
       </button>
     </div>
   );

@@ -3,8 +3,12 @@ import { Capacitor } from "@capacitor/core";
 import { SpeechRecognition } from "@capacitor-community/speech-recognition";
 import { FilesetResolver, HandLandmarker, FaceLandmarker } from "@mediapipe/tasks-vision";
 import {
-  Mic, MicOff, Camera, CameraOff, Sparkles, X,
+  Mic, MicOff, Camera, CameraOff, Sparkles, X, Settings2,
 } from "lucide-react";
+import {
+  loadCommandPrefs,
+} from "../lib/commandPreferences.js";
+import CommandPrefsPanel from "./CommandPrefsPanel.jsx";
 
 const VISION_WASM =
   "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
@@ -90,9 +94,13 @@ export default function HandsFreeControls({
 }) {
   const [voiceEnabled, setVoiceEnabled] = useState(false);
   const [cameraEnabled, setCameraEnabled] = useState(false);
-  const [status, setStatus] = useState("Mode mains libres désactivé");
+  const [status, setStatus] = useState("Touchez pour activer voix / gestes");
   const [error, setError] = useState("");
   const [expanded, setExpanded] = useState(false);
+  const [showPrefs, setShowPrefs] = useState(false);
+  const [commandPrefs, setCommandPrefs] = useState(loadCommandPrefs);
+  const commandPrefsRef = useRef(commandPrefs);
+  commandPrefsRef.current = commandPrefs;
   const [flash, setFlash] = useState("");
 
   // Panneau fermé : on affiche brièvement l'action reconnue.
@@ -452,15 +460,20 @@ export default function HandsFreeControls({
               const thumbUp = thumbTip.y < thumbJoint.y &&
                 !fingersOpen[0] && !fingersOpen[1] && !openPalm;
 
+              const map = commandPrefsRef.current?.gestureMap || {};
               if (thumbUp) {
-                runAction("like", "Geste : j'aime");
+                const act = map.thumbUp || "like";
+                if (act !== "none") runAction(act, "Geste : pouce");
               } else if (openPalm) {
-                runAction("toggle-play", "Geste : pause / reprise");
+                const act = map.openPalm || "toggle-play";
+                if (act !== "none") runAction(act, "Geste : paume");
               } else if (previousHandXRef.current != null) {
                 const dx = wrist.x - previousHandXRef.current;
                 if (Math.abs(dx) > 0.22) {
-                  runAction(dx < 0 ? "next" : "previous",
-                    dx < 0 ? "Geste : vidéo suivante" : "Geste : vidéo précédente");
+                  const act = dx < 0 ? (map.swipeLeft || "next") : (map.swipeRight || "previous");
+                  if (act !== "none") {
+                    runAction(act, dx < 0 ? "Geste : swipe ←" : "Geste : swipe →");
+                  }
                 }
               }
               previousHandXRef.current = wrist.x;
@@ -474,11 +487,15 @@ export default function HandsFreeControls({
               if (previousNoseRef.current) {
                 const dx = nose.x - previousNoseRef.current.x;
                 const dy = nose.y - previousNoseRef.current.y;
+                const map = commandPrefsRef.current?.gestureMap || {};
                 if (Math.abs(dx) > 0.12) {
-                  runAction(dx < 0 ? "next" : "previous",
-                    dx < 0 ? "Tête : vidéo suivante" : "Tête : vidéo précédente");
+                  const act = dx < 0 ? (map.headLeft || "next") : (map.headRight || "previous");
+                  if (act !== "none") {
+                    runAction(act, dx < 0 ? "Tête : ←" : "Tête : →");
+                  }
                 } else if (Math.abs(dy) > 0.14) {
-                  runAction("toggle-play", "Tête : pause / reprise");
+                  const act = map.headUpDown || "toggle-play";
+                  if (act !== "none") runAction(act, "Tête : ↕");
                 }
               }
               previousNoseRef.current = { x: nose.x, y: nose.y };
@@ -586,6 +603,15 @@ export default function HandsFreeControls({
             </div>
             <button
               type="button"
+              onClick={() => setShowPrefs(true)}
+              aria-label="Personnaliser"
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white/10 active:scale-95"
+              title="Personnaliser les commandes"
+            >
+              <Settings2 size={14} />
+            </button>
+            <button
+              type="button"
               onClick={() => setExpanded(false)}
               aria-label="Fermer"
               className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white/10 active:scale-95"
@@ -613,8 +639,21 @@ export default function HandsFreeControls({
             Voix : « suivante », « précédente », « j'aime », « pause », « reprendre »,
             « couper le son », « activer le son », « commentaires », « plein écran ».
           </p>
+          <p className="mt-1.5 text-[10px] leading-relaxed text-white/50">
+            Gestes : 👍 j&apos;aime · ✋ pause/reprise · glisser la main ←/→ changer de vidéo ·
+            bouger la tête gauche/droite ou haut/bas.
+          </p>
+          <p className="mt-1 text-[10px] text-yellow-400/80">
+            Active « Gestes » puis autorise la caméra. Bon éclairage recommandé.
+          </p>
         </section>
       )}
+      <CommandPrefsPanel
+        open={showPrefs}
+        onClose={() => setShowPrefs(false)}
+        onSaved={(p) => setCommandPrefs(p)}
+      />
     </>
   );
 }
+

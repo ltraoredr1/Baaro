@@ -4,12 +4,21 @@ import { supabase } from "../../../supabaseClient.js";
 // Lecture du flux : vidéo visible, son, progression, gestion éco-données et arrêt automatique.
 export function useFeedPlayback({ visibleVideos }) {
   const [playingId, setPlayingId] = useState(null);
-  const [muted, setMuted] = useState(true);
+  const [muted, setMuted] = useState(() => {
+    try {
+      const saved = localStorage.getItem("baaro:video-muted");
+      if (saved === "false") return false;
+      if (saved === "true") return true;
+    } catch {}
+    return false; // son activé par défaut
+  });
   const [progress, setProgress] = useState({});
   const [videoErrors, setVideoErrors] = useState({});
   const videoRefs = useRef({});
   const audioRefs = useRef({});
-  const mutedRef = useRef(true);
+  const mutedRef = useRef(false);
+  // synchroniser au premier rendu
+  mutedRef.current = muted;
   const playingIdRef = useRef(null);
   playingIdRef.current = playingId;
   const viewedRef = useRef(new Set());
@@ -112,6 +121,9 @@ export function useFeedPlayback({ visibleVideos }) {
     const next = Boolean(nextMuted);
     mutedRef.current = next;
     setMuted(next);
+    try {
+      localStorage.setItem("baaro:video-muted", String(next));
+    } catch {}
     Object.entries(videoRefs.current).forEach(([id, video]) => {
       if (video) video.muted = next || video.dataset.muteOriginal === "1";
       const audio = audioRefs.current[id];
