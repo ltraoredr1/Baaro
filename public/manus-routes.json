@@ -1,0 +1,44 @@
+{
+  "routes": [
+    {
+      "path": "/",
+      "title": "BAARO"
+    },
+    {
+      "path": "/invite/:code",
+      "title": "Invitation BAARO"
+    },
+    {
+      "path": "/privacy",
+      "title": "Confidentialité"
+    },
+    {
+      "path": "/terms",
+      "title": "Conditions d'utilisation"
+    },
+    {
+      "path": "/community-guidelines",
+      "title": "Règles de la communauté"
+    },
+    {
+      "path": "/refund-policy",
+      "title": "Politique de remboursement"
+    },
+    {
+      "path": "/creator-terms",
+      "title": "Conditions créateurs"
+    },
+    {
+      "path": "/merchant-terms",
+      "title": "Conditions marchands"
+    },
+    {
+      "path": "/cookies",
+      "title": "Politique de cookies"
+    },
+    {
+      "path": "/admin/schema",
+      "title": "Administration du schéma"
+    }
+  ]
+}
