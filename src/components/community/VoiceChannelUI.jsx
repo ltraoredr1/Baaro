@@ -31,7 +31,7 @@ function getParticipantList() {
   }));
 }
 
-export default function VoiceChannelUI({ channelId, user_id, C }) {
+export default function VoiceChannelUI({ channelId, roomName, user_id, C, radio = false }) {
   const [joined, setJoined] = useState(false);
   const [muted, setMuted] = useState(true);
   const [connecting, setConnecting] = useState(false);
@@ -58,7 +58,7 @@ export default function VoiceChannelUI({ channelId, user_id, C }) {
       // Le serveur doit vérifier l'appartenance au groupe avant
       // de renvoyer un jeton Daily pour ce canal vocal.
       const result = await getCallToken({
-        roomName: `community-${channelId}`,
+        roomName: roomName || `community-${channelId}`,
         userName: user_id,
         isOwner: false,
       });
@@ -170,12 +170,14 @@ export default function VoiceChannelUI({ channelId, user_id, C }) {
 
       <div className="text-center">
         <h3 className="font-bold text-lg" style={{ color: C.ivory }}>
-          Canal vocal
+          {radio ? "BAARO Radio" : "Canal vocal"}
         </h3>
         <p className="text-sm mt-1" style={{ color: C.muted }}>
           {joined
             ? `${participants.length} participant(s) connecté(s)`
-            : "Rejoins le salon pour parler avec les membres."}
+            : radio
+              ? "Une conversation audio légère pour les débats, cours et tontines."
+              : "Rejoins le salon pour parler avec les membres."}
         </p>
       </div>
 
@@ -255,7 +257,7 @@ export default function VoiceChannelUI({ channelId, user_id, C }) {
           ) : (
             <Phone size={18} />
           )}
-          {connecting ? "Connexion…" : "Rejoindre le vocal"}
+          {connecting ? "Connexion…" : radio ? "🎙️ Parler" : "Rejoindre le vocal"}
         </button>
       ) : (
         <div className="flex items-center justify-center gap-4">

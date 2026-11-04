@@ -16,6 +16,7 @@ import {
   Globe,
   Link2,
   Megaphone,
+  Radio,
   Copy,
   Trash2,
   Shield,
@@ -171,6 +172,7 @@ export default function CommunityTab({ onOpenProfile }) {
   /* ── États UI ── */
   const [selectedGroup, setSelectedGroup] = useState(null);
   const [selectedChannel, setSelectedChannel] = useState(null);
+  const [radioChannel, setRadioChannel] = useState(null);
   const [activeTab, setActiveTab] = useState("groups");
   const [mobileView, setMobileView] = useState("groups");
   const [groupSearch, setGroupSearch] = useState("");
@@ -298,7 +300,27 @@ export default function CommunityTab({ onOpenProfile }) {
     setPendingGroupId(null);
   }, [groups, pendingGroupId]);
 
-  const handleSelectChannel = (channel) => { setSelectedChannel(channel); setMobileView("chat"); };
+  const handleSelectChannel = (channel) => {
+    setRadioChannel(null);
+    setSelectedChannel(channel);
+    setMobileView("chat");
+  };
+
+  const handleOpenRadio = () => {
+    if (!selectedGroup?.id || !member) {
+      showToast("Rejoins le groupe pour parler");
+      return;
+    }
+
+    setSelectedChannel(null);
+    setRadioChannel({
+      id: `radio-${selectedGroup.id}`,
+      name: "BAARO Radio",
+      type: "voice",
+      roomName: `community-radio-${selectedGroup.id}`,
+    });
+    setMobileView("chat");
+  };
 
   const handleCreateGroup = async (e) => {
     e?.preventDefault?.();
@@ -588,6 +610,19 @@ export default function CommunityTab({ onOpenProfile }) {
                     )}
                   </div>
                   <p className="text-[10px] mt-1 truncate" style={{ color: C.muted }}>{selectedGroup.description || "—"}</p>
+                  <button
+                    type="button"
+                    onClick={handleOpenRadio}
+                    className="mt-3 w-full flex items-center justify-center gap-2 py-2 rounded-xl text-xs font-black transition-transform active:scale-[0.98]"
+                    style={{
+                      background: "linear-gradient(135deg, #D9AE52, #ff8c42)",
+                      color: "#08111f",
+                    }}
+                    title="Ouvrir BAARO Radio"
+                  >
+                    <Radio size={15} />
+                    🎙️ Parler
+                  </button>
                   {!member && (
                     <button type="button" onClick={() => handleJoin(selectedGroup)}
                       className="mt-2 w-full py-1.5 rounded-lg text-xs font-bold" style={{ background: C.teal, color: "#000" }}>
@@ -630,24 +665,35 @@ export default function CommunityTab({ onOpenProfile }) {
 
           {/* Colonne 3 : Chat / Vocal */}
           <div className={`flex-1 flex flex-col min-w-0 min-h-0 ${mobileView === "chat" ? "" : "hidden md:flex"}`}>
-            {selectedChannel ? (
+            {(selectedChannel || radioChannel) ? (
               <>
+                {(() => {
+                  const activeChannel = selectedChannel || radioChannel;
+
+                  return (
+                    <>
                 {/* En-tête du canal */}
                 <div className="flex items-center gap-2 p-3 border-b shrink-0" style={{ borderColor: C.border }}>
                   <button type="button" className="md:hidden" onClick={() => setMobileView("channels")}><ArrowLeft size={18} /></button>
-                  {selectedChannel.type === "voice" ? <Volume2 size={16} style={{ color: C.teal }} />
-                    : selectedChannel.type === "announce" ? <Megaphone size={16} style={{ color: C.gold }} />
+                  {activeChannel.type === "voice" ? <Volume2 size={16} style={{ color: C.teal }} />
+                    : activeChannel.type === "announce" ? <Megaphone size={16} style={{ color: C.gold }} />
                     : <Hash size={16} style={{ color: C.gold }} />}
-                  <span className="font-bold text-sm">{selectedChannel.name}</span>
-                  {selectedChannel.type === "announce" && (
+                  <span className="font-bold text-sm">{activeChannel.name}</span>
+                  {activeChannel.type === "announce" && (
                     <span className="text-[9px] px-1.5 py-0.5 rounded font-bold"
                       style={{ background: "rgba(217,174,82,0.2)", color: C.gold }}>Annonces</span>
                   )}
                 </div>
 
                 {/* ── Canal vocal ── */}
-                {selectedChannel.type === "voice" ? (
-                  <VoiceChannelUI channelId={selectedChannel.id} user_id={id} C={C} />
+                {activeChannel.type === "voice" ? (
+                  <VoiceChannelUI
+                    channelId={activeChannel.id}
+                    roomName={activeChannel.roomName}
+                    user_id={id}
+                    C={C}
+                    radio={Boolean(activeChannel.roomName)}
+                  />
                 ) : (
                   /* ── Canal texte / annonce ── */
                   <>
@@ -716,6 +762,9 @@ export default function CommunityTab({ onOpenProfile }) {
                     )}
                   </>
                 )}
+                    </>
+                  );
+                })()}
               </>
             ) : (
               <div className="flex-1 flex items-center justify-center text-sm" style={{ color: C.muted }}>

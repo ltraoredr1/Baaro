@@ -201,6 +201,82 @@ async function createMeetingToken(
   return data.token;
 }
 
+
+async function handleCommunityRadioToken(req, res, user, admin, liveId) {
+  const match = /^(community-radio|community)-([0-9a-f-]{36})$/i.exec(liveId);
+  if (!match || !UUID_RE.test(match[2])) return null;
+
+  let groupId = match[2];
+
+  if (match[1].toLowerCase() === "community") {
+    const { data: channel, error: channelError } = await admin
+      .from("channels")
+      .select("id, group_id, type")
+      .eq("id", groupId)
+      .maybeSingle();
+
+    if (channelError) throw channelError;
+
+    if (!channel || channel.type !== "voice") {
+      return res.status(404).json({
+        error: "Canal vocal introuvable",
+      });
+    }
+
+    groupId = channel.group_id;
+  }
+
+  const { data: membership, error: membershipError } = await admin
+    .from("group_members")
+    .select("role")
+    .eq("group_id", groupId)
+    .eq("user_id", user.id)
+    .maybeSingle();
+
+  if (membershipError) throw membershipError;
+
+  if (!membership) {
+    const { data: group, error: groupError } = await admin
+      .from("groups")
+      .select("owner_id")
+      .eq("id", groupId)
+      .maybeSingle();
+
+    if (groupError) throw groupError;
+
+    if (!group || group.owner_id !== user.id) {
+      return res.status(403).json({
+        error: "Tu dois être membre de ce groupe pour parler",
+      });
+    }
+  }
+
+  const roomName = sanitizeRoomName(liveId);
+
+  const dailyRoom = await createDailyRoom(roomName, {
+    maxParticipants: 100,
+    expHours: 12,
+  });
+
+  const isOwner =
+    membership?.role === "owner" ||
+    membership?.role === "admin";
+
+  const token = await createMeetingToken(roomName, {
+    userId: user.id,
+    userName: req.body?.userName || "Participant",
+    isOwner,
+  });
+
+  return res.status(200).json({
+    ok: true,
+    token,
+    roomName,
+    url: dailyRoom?.url || roomUrl(roomName),
+    isOwner,
+  });
+}
+
 // ============== AI CONFIG ==============
 
 const AI_PROVIDER_CASCADE = [
