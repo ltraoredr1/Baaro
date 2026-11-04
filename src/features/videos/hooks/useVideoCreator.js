@@ -390,7 +390,7 @@ export function useVideoCreator({
     }
   };
 
-  return {  return {
+  return {
     showUpload,
     setShowUpload,
     selectedFile,
