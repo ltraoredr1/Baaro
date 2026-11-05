@@ -1,0 +1,2327 @@
+diff --git a/.gitignore b/.gitignore
+index f887f28..b3e5acb 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -28,6 +28,7 @@ android/local.properties
+ *.apk
+ *.aab
+ public/ort/
++public/mediapipe/
+ public/onnx/
+ coverage/
+ tmp/
+diff --git a/package.json b/package.json
+index e399dfa..8aac8c2 100644
+--- a/package.json
++++ b/package.json
+@@ -7,9 +7,9 @@
+     "node": "24.x"
+   },
+   "scripts": {
+-    "predev": "node scripts/copy-ort-wasm.mjs",
++    "predev": "node scripts/copy-ort-wasm.mjs && node scripts/copy-mediapipe-wasm.mjs",
+     "dev": "vite",
+-    "prebuild": "node scripts/copy-ort-wasm.mjs",
++    "prebuild": "node scripts/copy-ort-wasm.mjs && node scripts/copy-mediapipe-wasm.mjs",
+     "build": "vite build",
+     "preview": "vite preview",
+     "check:production": "node scripts/check-production.mjs",
+diff --git a/public/models/README.md b/public/models/README.md
+new file mode 100644
+index 0000000..029f8b9
+--- /dev/null
++++ b/public/models/README.md
+@@ -0,0 +1,19 @@
++# Modèles MediaPipe (suivi du visage et du corps)
++
++Les effets « Visage & corps » (déformations, vieillir / rajeunir) ont besoin de deux
++fichiers modèles, servis depuis ce dossier (la CSP interdit les CDN externes) :
++
++| Fichier | Sert à | Téléchargement |
++| --- | --- | --- |
++| `face_landmarker.task` | visage (obligatoire) | https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task |
++| `pose_landmarker_lite.task` | corps (effets « Corps ») | https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task |
++
++```bash
++cd public/models
++curl -LO https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task
++curl -LO https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task
++```
++
++Les fichiers WebAssembly (`public/mediapipe/wasm/`) sont copiés automatiquement par
++`npm run dev` / `npm run build`. Sans ces modèles, les filtres d'ambiance marchent
++normalement ; seul l'onglet « Visage & corps » affiche « Suivi indisponible ».
+diff --git a/scripts/copy-mediapipe-wasm.mjs b/scripts/copy-mediapipe-wasm.mjs
+new file mode 100644
+index 0000000..7ffbb64
+--- /dev/null
++++ b/scripts/copy-mediapipe-wasm.mjs
+@@ -0,0 +1,28 @@
++#!/usr/bin/env node
++/**
++ * Copie les fichiers WebAssembly de MediaPipe (suivi du visage et du corps pour les
++ * effets « Visage & corps ») vers public/mediapipe/wasm/.
++ *
++ * Même logique que copy-ort-wasm.mjs : on sert ces fichiers depuis notre propre domaine
++ * pour garder la CSP stricte (script-src 'self'). Ne bloque jamais le build.
++ */
++import { existsSync, mkdirSync, readdirSync, copyFileSync } from "node:fs";
++import { dirname, join, resolve } from "node:path";
++import { fileURLToPath } from "node:url";
++
++const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
++const src = join(root, "node_modules", "@mediapipe", "tasks-vision", "wasm");
++const dest = join(root, "public", "mediapipe", "wasm");
++
++if (!existsSync(src)) {
++  console.warn("[copy-mediapipe-wasm] @mediapipe/tasks-vision introuvable : lance `npm install`.");
++  process.exit(0);
++}
++const files = readdirSync(src).filter((f) => /^vision_wasm.*\.(wasm|js)$/.test(f));
++if (!files.length) {
++  console.warn("[copy-mediapipe-wasm] aucun fichier vision_wasm* trouvé dans", src);
++  process.exit(0);
++}
++mkdirSync(dest, { recursive: true });
++for (const f of files) copyFileSync(join(src, f), join(dest, f));
++console.log(`[copy-mediapipe-wasm] ${files.length} fichier(s) copié(s) vers public/mediapipe/wasm/`);
+diff --git a/src/features/videos/VideosTab.jsx b/src/features/videos/VideosTab.jsx
+index ea5560c..b4eba7e 100644
+--- a/src/features/videos/VideosTab.jsx
++++ b/src/features/videos/VideosTab.jsx
+@@ -13,6 +13,7 @@ import UploadModal from "./components/UploadModal.jsx";
+ import VideoCard, { isImageVideo } from "./components/VideoCard.jsx";
+ 
+ import { useCamera } from "./hooks/useCamera.js";
++import { useFaceFx } from "./hooks/useFaceFx.js";
+ import { useVideoFilter } from "./hooks/useVideoFilter.js";
+ import { useFeedPlayback } from "./hooks/useFeedPlayback.js";
+ import { usePlaybackSettings, SPEEDS } from "./hooks/usePlaybackSettings.js";
+@@ -79,7 +80,18 @@ export function VideosTab({ onRewardPoints, onExit }) {
+ 
+   const { showToast } = useToast();
+ 
+-  const filter = useVideoFilter();
++  const baseFilter = useVideoFilter();
++  const faceFx = useFaceFx();
++  // Objet unique passé à la caméra, à l'aperçu et à la publication.
++  const filter = {
++    ...baseFilter,
++    face: faceFx,
++    anyActive: baseFilter.active || faceFx.active,
++    reset: () => {
++      baseFilter.reset();
++      faceFx.reset();
++    },
++  };
+ 
+   const creator = useVideoCreator({
+     user,
+diff --git a/src/features/videos/components/CameraOverlay.jsx b/src/features/videos/components/CameraOverlay.jsx
+index 7aba6a7..357c2ab 100644
+--- a/src/features/videos/components/CameraOverlay.jsx
++++ b/src/features/videos/components/CameraOverlay.jsx
+@@ -4,7 +4,8 @@ import { COLORS } from "../../../theme.js";
+ import { cssFilterString } from "../filters/index.js";
+ import { formatTime } from "../utils/format.js";
+ import FilterOverlayCanvas from "./FilterOverlayCanvas.jsx";
+-import FilterPicker from "./FilterPicker.jsx";
++import EffectsPanel from "./EffectsPanel.jsx";
++import FaceFxCanvas from "./FaceFxCanvas.jsx";
+ 
+ // Plein écran caméra ; camera = retour de useCamera.
+ export default function CameraOverlay({ camera, filter }) {
+@@ -62,6 +63,9 @@ export default function CameraOverlay({ camera, filter }) {
+               filter: filter?.active ? cssFilterString(filter.spec, 0.5) : "none",
+             }}
+           />
++          {filter?.face?.active && (
++            <FaceFxCanvas videoRef={cameraVideoRef} fx={filter.face} mirror={cameraFacing === "user"} fit="cover" cssFilter={cssFilterString(filter.spec, 0.5)} />
++          )}
+           {filter?.active && (
+             <FilterOverlayCanvas
+               spec={filter.spec}
+@@ -85,7 +89,7 @@ export default function CameraOverlay({ camera, filter }) {
+       <div className="p-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] flex flex-col items-center gap-3">
+         {filter && showFilters && (
+           <div className="w-full max-w-md max-h-[34dvh] overflow-y-auto rounded-3xl bg-zinc-900/95 p-3">
+-            <FilterPicker
++            <EffectsPanel
+               filter={filter}
+               disabled={cameraRecording && !cameraFiltered}
+             />
+@@ -125,7 +129,7 @@ export default function CameraOverlay({ camera, filter }) {
+             className="flex items-center gap-1.5 rounded-full bg-white/10 px-4 py-2 text-xs font-bold"
+           >
+             <Sparkles size={14} />
+-            {filter.active ? `Filtre : ${filter.info?.label || "actif"}` : "Filtres"}
++            {filter.anyActive ? "Effets actifs" : "Filtres & effets"}
+           </button>
+         )}
+         {cameraError && (
+diff --git a/src/features/videos/components/CreatorPanel.jsx b/src/features/videos/components/CreatorPanel.jsx
+index 0e396f8..a8c1388 100644
+--- a/src/features/videos/components/CreatorPanel.jsx
++++ b/src/features/videos/components/CreatorPanel.jsx
+@@ -1,4 +1,4 @@
+-import FilterPicker from "./FilterPicker.jsx";
++import EffectsPanel from "./EffectsPanel.jsx";
+ import PhotoCreator from "./PhotoCreator.jsx";
+ import TextCreator from "./TextCreator.jsx";
+ import VideoSource from "./VideoSource.jsx";
+@@ -31,7 +31,7 @@ export default function CreatorPanel({ creator, camera, filter }) {
+         <VideoSource creator={creator} camera={camera} />
+       )}
+       {filter && createMode !== "video" && (
+-        <FilterPicker filter={filter} disabled={creator.generating} />
++        <EffectsPanel filter={filter} disabled={creator.generating} faceEnabled={false} />
+       )}
+       {createMode === "photo" && <PhotoCreator creator={creator} />}
+       {createMode === "text" && <TextCreator creator={creator} />}
+diff --git a/src/features/videos/components/EffectsPanel.jsx b/src/features/videos/components/EffectsPanel.jsx
+new file mode 100644
+index 0000000..b66359a
+--- /dev/null
++++ b/src/features/videos/components/EffectsPanel.jsx
+@@ -0,0 +1,39 @@
++import { useState } from "react";
++import FaceFxPicker from "./FaceFxPicker.jsx";
++import FilterPicker from "./FilterPicker.jsx";
++
++// Panneau unique : « Filtres » (ambiances, infinies) et « Visage & corps » (déformations, âge).
++// filter = objet fusionné de VideosTab { ...useVideoFilter(), face: useFaceFx(), anyActive, reset }.
++export default function EffectsPanel({ filter, disabled = false, faceEnabled = true, className = "" }) {
++  const [tab, setTab] = useState("filters");
++  const showFace = faceEnabled && !!filter?.face;
++  const current = showFace ? tab : "filters";
++
++  return (
++    <div className={`space-y-3 ${className}`}>
++      {showFace && (
++        <div className="grid grid-cols-2 gap-1 rounded-2xl bg-white/5 p-1">
++          {[
++            ["filters", "🎨 Filtres", filter.active],
++            ["face", "🧬 Visage & corps", filter.face.active],
++          ].map(([id, label, on]) => (
++            <button
++              key={id}
++              type="button"
++              onClick={() => setTab(id)}
++              className={`rounded-xl py-2 text-xs font-bold ${current === id ? "bg-white text-black" : "text-white/60"}`}
++            >
++              {label}
++              {on ? " •" : ""}
++            </button>
++          ))}
++        </div>
++      )}
++      {current === "filters" ? (
++        <FilterPicker filter={filter} disabled={disabled} />
++      ) : (
++        <FaceFxPicker fx={filter.face} disabled={disabled} />
++      )}
++    </div>
++  );
++}
+diff --git a/src/features/videos/components/FaceFxCanvas.jsx b/src/features/videos/components/FaceFxCanvas.jsx
+new file mode 100644
+index 0000000..1281516
+--- /dev/null
++++ b/src/features/videos/components/FaceFxCanvas.jsx
+@@ -0,0 +1,51 @@
++import { useEffect, useRef } from "react";
++import { FaceFxProcessor } from "../faceFx/processor.js";
++
++// Calque d'aperçu : redessine la vidéo avec les déformations. Posé au-dessus de la
++// <video> (pointer-events: none), il laisse la vidéo visible tant que le suivi n'est pas prêt.
++export default function FaceFxCanvas({ videoRef, fx, mirror = false, fit = "contain", maxSide = 720, cssFilter = "none" }) {
++  const canvasRef = useRef(null);
++  const fxRef = useRef(fx);
++  fxRef.current = fx;
++  const enabled = !!fx?.active;
++
++  useEffect(() => {
++    if (!enabled) return undefined;
++    const processor = new FaceFxProcessor();
++    let raf = 0;
++    const loop = () => {
++      const canvas = canvasRef.current;
++      const video = videoRef.current;
++      const resolved = fxRef.current?.resolved;
++      if (canvas && video && video.readyState >= 2 && video.videoWidth) {
++        const r = processor.process(video, video.videoWidth, video.videoHeight, resolved, { maxSide });
++        const ctx = canvas.getContext("2d");
++        if (r.source === video) {
++          ctx.clearRect(0, 0, canvas.width, canvas.height);
++        } else {
++          if (canvas.width !== r.w || canvas.height !== r.h) {
++            canvas.width = r.w;
++            canvas.height = r.h;
++          }
++          ctx.drawImage(r.source, 0, 0);
++        }
++      }
++      raf = requestAnimationFrame(loop);
++    };
++    raf = requestAnimationFrame(loop);
++    return () => {
++      cancelAnimationFrame(raf);
++      processor.dispose();
++    };
++  }, [enabled, videoRef, maxSide]);
++
++  if (!enabled) return null;
++  return (
++    <canvas
++      ref={canvasRef}
++      aria-hidden="true"
++      className="pointer-events-none absolute inset-0 h-full w-full"
++      style={{ objectFit: fit, transform: mirror ? "scaleX(-1)" : "none", filter: cssFilter }}
++    />
++  );
++}
+diff --git a/src/features/videos/components/FaceFxPicker.jsx b/src/features/videos/components/FaceFxPicker.jsx
+new file mode 100644
+index 0000000..133f037
+--- /dev/null
++++ b/src/features/videos/components/FaceFxPicker.jsx
+@@ -0,0 +1,175 @@
++import { useEffect, useState } from "react";
++import { ChevronLeft, ChevronRight, RotateCcw, Shuffle, SlidersHorizontal } from "lucide-react";
++import { COLORS } from "../../../theme.js";
++import { FACE_FX_CATEGORIES, FACE_PARAMS, BODY_PARAMS, SKIN_PARAMS, FX_NONE, FX_RANDOM, faceFxByCategory } from "../faceFx/presets.js";
++import { MASK_CATEGORIES, MASK_NONE, MASK_RANDOM, masksByCategory } from "../faceFx/masks.js";
++import { ensureTracker, subscribeTracker } from "../faceFx/tracker.js";
++
++const INFINITE = "infinite";
++const swatch = (sw) => `linear-gradient(160deg, ${sw[0]}, ${sw[1]})`;
++
++function Chip({ active, disabled, onClick, sw, emoji, label }) {
++  return (
++    <button type="button" disabled={disabled} aria-pressed={active} onClick={onClick} className="flex w-[60px] shrink-0 flex-col items-center gap-1 disabled:opacity-40">
++      <span className="flex h-12 w-12 items-center justify-center rounded-2xl text-xl" style={{ background: swatch(sw), outline: active ? `2px solid ${COLORS.gold}` : "2px solid transparent", outlineOffset: 2 }}>
++        {emoji}
++      </span>
++      <span className={`w-full truncate text-center text-[10px] ${active ? "font-black text-white" : "text-white/55"}`}>{label}</span>
++    </button>
++  );
++}
++
++const GROUPS = [
++  ["Visage", FACE_PARAMS],
++  ["Corps", BODY_PARAMS],
++  ["Peau & âge", SKIN_PARAMS],
++];
++
++// Sélecteur de déformations : âge, visage, corps, délire + variantes infinies.
++// fx = retour de useFaceFx().
++export default function FaceFxPicker({ fx, disabled = false }) {
++  const { state, resolved, info, active, pick, surprise, step, patch, setParam, reset, setMask, maskSurprise, maskStep, setMaskHue, clearMask, maskInfo } = fx;
++  const maskIds = new Set(MASK_CATEGORIES.map((c) => c.id));
++  const isMaskTab = (t) => maskIds.has(t);
++  const hasMask = state.mask.id !== MASK_NONE;
++  const hasWarp = resolved.hasWarp;
++  const [tab, setTab] = useState(state.id === FX_RANDOM ? INFINITE : "age");
++  const [mixer, setMixer] = useState(false);
++  const [tracker, setTracker] = useState({ status: { face: "idle", pose: "idle" }, error: {} });
++
++  useEffect(() => subscribeTracker(setTracker), []);
++  useEffect(() => {
++    if (active) ensureTracker({ pose: resolved.needsPose });
++  }, [active, resolved.needsPose]);
++
++  const tabs = [{ id: INFINITE, emoji: "∞", label: "Infini" }, ...MASK_CATEGORIES, ...FACE_FX_CATEGORIES];
++  const value = (id) => {
++    const base = resolved.params[id] ?? (id === "age" ? resolved.age : id === "smooth" ? resolved.smooth : 0);
++    return state.adjust[id] ?? base / (state.intensity || 1);
++  };
++
++  const err = tracker.error.face || (resolved.needsPose ? tracker.error.pose : "");
++  const loading = active && (tracker.status.face === "loading" || (resolved.needsPose && tracker.status.pose === "loading"));
++
++  return (
++    <div className="space-y-3 text-white">
++      <div className="flex gap-1.5 overflow-x-auto pb-1" role="tablist" aria-label="Catégories de déformations">
++        {tabs.map((t) => (
++          <button key={t.id} type="button" role="tab" aria-selected={tab === t.id} onClick={() => setTab(t.id)} className={`shrink-0 rounded-full px-3 py-1.5 text-xs font-bold ${tab === t.id ? "bg-white text-black" : "bg-white/10 text-white/70"}`}>
++            {t.emoji} {t.label}
++          </button>
++        ))}
++      </div>
++
++      {tab === INFINITE ? (
++        <div className="space-y-2 rounded-2xl bg-white/[0.06] p-3">
++          <div className="flex items-center gap-2">
++            <button type="button" disabled={disabled || state.id !== FX_RANDOM} onClick={() => step(-1)} aria-label="Mutation précédente" className="flex h-9 w-9 items-center justify-center rounded-full bg-white/10 disabled:opacity-40">
++              <ChevronLeft size={18} />
++            </button>
++            <div className="min-w-0 flex-1 text-center">
++              <div className="truncate text-sm font-black">{state.id === FX_RANDOM ? info.label : "Génère une mutation unique"}</div>
++            </div>
++            <button type="button" disabled={disabled || state.id !== FX_RANDOM} onClick={() => step(1)} aria-label="Mutation suivante" className="flex h-9 w-9 items-center justify-center rounded-full bg-white/10 disabled:opacity-40">
++              <ChevronRight size={18} />
++            </button>
++          </div>
++          <button type="button" disabled={disabled} onClick={surprise} className="flex w-full items-center justify-center gap-2 rounded-xl py-2.5 text-sm font-black disabled:opacity-40" style={{ background: COLORS.gold, color: "#000" }}>
++            <Shuffle size={16} /> Mute-moi
++          </button>
++          <p className="text-center text-[10px] text-white/40">Chaque numéro combine yeux, nez, bouche, mâchoire… différemment. Fais défiler avec ◀ ▶.</p>
++          <div className="flex items-center gap-2 pt-2">
++            <button type="button" disabled={disabled || state.mask.id !== MASK_RANDOM} onClick={() => maskStep(-1)} aria-label="Animal précédent" className="flex h-9 w-9 items-center justify-center rounded-full bg-white/10 disabled:opacity-40">
++              <ChevronLeft size={18} />
++            </button>
++            <div className="min-w-0 flex-1 text-center text-sm font-black">
++              {state.mask.id === MASK_RANDOM && maskInfo ? `${maskInfo.emoji} ${maskInfo.label}` : "Animal & accessoire au hasard"}
++            </div>
++            <button type="button" disabled={disabled || state.mask.id !== MASK_RANDOM} onClick={() => maskStep(1)} aria-label="Animal suivant" className="flex h-9 w-9 items-center justify-center rounded-full bg-white/10 disabled:opacity-40">
++              <ChevronRight size={18} />
++            </button>
++          </div>
++          <button type="button" disabled={disabled} onClick={maskSurprise} className="flex w-full items-center justify-center gap-2 rounded-xl bg-white/15 py-2.5 text-sm font-black disabled:opacity-40">
++            🐾 Animal surprise
++          </button>
++        </div>
++      ) : isMaskTab(tab) ? (
++        <div className="flex gap-2.5 overflow-x-auto pb-1">
++          <Chip active={!hasMask} disabled={disabled} onClick={clearMask} sw={["#3f3f46", "#18181b"]} emoji="🚫" label="Aucun" />
++          {masksByCategory(tab).map((p) => (
++            <Chip key={p.id} active={state.mask.id === p.id} disabled={disabled} onClick={() => setMask(p.id)} sw={p.sw} emoji={p.emoji} label={p.label} />
++          ))}
++        </div>
++      ) : (
++        <div className="flex gap-2.5 overflow-x-auto pb-1">
++          <Chip active={state.id === FX_NONE} disabled={disabled} onClick={reset} sw={["#3f3f46", "#18181b"]} emoji="🚫" label="Aucun" />
++          {faceFxByCategory(tab).map((p) => (
++            <Chip key={p.id} active={state.id === p.id} disabled={disabled} onClick={() => pick(p.id)} sw={p.sw} emoji={p.emoji} label={p.label} />
++          ))}
++        </div>
++      )}
++
++      {loading && <p className="rounded-xl bg-white/[0.06] px-3 py-2 text-center text-[11px] text-white/70">Chargement du suivi du visage…</p>}
++      {active && err && (
++        <p className="rounded-xl border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-[11px] text-amber-200">
++          Suivi indisponible : {err}. Voir public/models/README.md.
++        </p>
++      )}
++      {active && !err && !loading && tracker.status.face === "ready" && (
++        <p className="text-center text-[10px] text-white/40">
++          {resolved.needsPose ? "Place-toi en entier dans le cadre pour les effets corps." : "Le visage doit être face caméra et bien éclairé."}
++        </p>
++      )}
++
++      {hasMask && (
++        <div className="space-y-2 rounded-2xl bg-white/[0.06] p-3">
++          <div className="flex items-center justify-between text-xs">
++            <span className="font-bold">{maskInfo?.emoji} {maskInfo?.label}</span>
++            <button type="button" aria-label="Retirer l'animal" disabled={disabled} onClick={clearMask} className="flex h-7 w-7 items-center justify-center rounded-full bg-white/10 disabled:opacity-40">
++              <RotateCcw size={14} />
++            </button>
++          </div>
++          {state.mask.id !== MASK_RANDOM && (
++            <label className="block text-[11px] text-white/60">
++              <span className="flex justify-between">Couleur <span>{Math.round(state.mask.hue)}°</span></span>
++              <input type="range" min={-180} max={180} step={1} value={state.mask.hue} disabled={disabled} onChange={(e) => setMaskHue(Number(e.target.value))} className="w-full accent-yellow-400" />
++            </label>
++          )}
++        </div>
++      )}
++
++      {hasWarp && (
++        <div className="space-y-2 rounded-2xl bg-white/[0.06] p-3">
++          <div className="flex items-center justify-between text-xs">
++            <span className="font-bold">{info.emoji} {info.label}</span>
++            <div className="flex gap-1.5">
++              <button type="button" aria-label="Réglages" aria-pressed={mixer} onClick={() => setMixer((v) => !v)} className={`flex h-7 w-7 items-center justify-center rounded-full ${mixer ? "bg-yellow-400 text-black" : "bg-white/10"}`}>
++                <SlidersHorizontal size={14} />
++              </button>
++              <button type="button" aria-label="Retirer l'effet" disabled={disabled} onClick={reset} className="flex h-7 w-7 items-center justify-center rounded-full bg-white/10 disabled:opacity-40">
++                <RotateCcw size={14} />
++              </button>
++            </div>
++          </div>
++          <label className="block text-[11px] text-white/60">
++            <span className="flex justify-between">Intensité <span>{Math.round(state.intensity * 100)}%</span></span>
++            <input type="range" min={0} max={1.5} step={0.01} value={state.intensity} disabled={disabled} onChange={(e) => patch({ intensity: Number(e.target.value) })} className="w-full accent-yellow-400" />
++          </label>
++          {mixer &&
++            GROUPS.map(([title, list]) => (
++              <div key={title} className="space-y-1.5">
++                <div className="pt-1 text-[10px] font-black uppercase tracking-wide text-white/40">{title}</div>
++                {list.map((p) => (
++                  <label key={p.id} className="block text-[11px] text-white/60">
++                    <span className="flex justify-between">{p.label} <span>{Math.round(value(p.id) * 100)}</span></span>
++                    <input type="range" min={p.min ?? -1} max={1} step={0.01} value={value(p.id)} disabled={disabled} onChange={(e) => setParam(p.id, Number(e.target.value))} className="w-full accent-yellow-400" />
++                  </label>
++                ))}
++              </div>
++            ))}
++        </div>
++      )}
++    </div>
++  );
++}
++
+diff --git a/src/features/videos/components/UploadModal.jsx b/src/features/videos/components/UploadModal.jsx
+index 8197913..e0f65a5 100644
+--- a/src/features/videos/components/UploadModal.jsx
++++ b/src/features/videos/components/UploadModal.jsx
+@@ -207,7 +207,7 @@ export default function UploadModal({
+               ? "Optimisation en cours…"
+               : selectedFiles?.length > 1
+               ? `Publier ${selectedFiles.length} vidéos`
+-              : filter?.active && !creator.generated && !selectedFile?._filterBaked
++              : filter?.anyActive && !creator.generated && !selectedFile?._filterBaked
+               ? "Appliquer le filtre et publier"
+               : "Publier la vidéo"}
+           </button>
+diff --git a/src/features/videos/components/UploadPreview.jsx b/src/features/videos/components/UploadPreview.jsx
+index 0c22ca1..5476098 100644
+--- a/src/features/videos/components/UploadPreview.jsx
++++ b/src/features/videos/components/UploadPreview.jsx
+@@ -1,6 +1,7 @@
+ import { cssFilterString } from "../filters/index.js";
+ import FilterOverlayCanvas from "./FilterOverlayCanvas.jsx";
+-import FilterPicker from "./FilterPicker.jsx";
++import EffectsPanel from "./EffectsPanel.jsx";
++import FaceFxCanvas from "./FaceFxCanvas.jsx";
+ 
+ // Aperçu de la vidéo choisie ou générée, avant publication.
+ // Le filtre n'est appliqué qu'aux vidéos « brutes » (galerie) : une vidéo générée
+@@ -19,7 +20,7 @@ export default function UploadPreview({ creator, soundPicker, filter }) {
+     selectedFile,
+   } = creator;
+   const filterable = !!filter && !generated && !selectedFile?._filterBaked;
+-  const showFilter = filterable && filter.active;
++  const showFilter = filterable && !!filter.spec;
+   const { muteOriginal, selectedSound, stopSoundPreview } = soundPicker;
+ 
+   return (
+@@ -48,6 +49,7 @@ export default function UploadPreview({ creator, soundPicker, filter }) {
+         }}
+       />
+       {showFilter && <FilterOverlayCanvas spec={filter.spec} />}
++      {filterable && <FaceFxCanvas videoRef={previewVideoRef} fx={filter.face} cssFilter={showFilter ? cssFilterString(filter.spec, 0.5) : "none"} />}
+       {selectedSound?.audio_url && !bakedAudio && (
+         <audio
+           ref={previewAudioRef}
+@@ -71,7 +73,7 @@ export default function UploadPreview({ creator, soundPicker, filter }) {
+         {generated ? "Modifier" : "Changer"}
+       </button>
+     </div>
+-    {filterable && <FilterPicker filter={filter} disabled={uploading} />}
++    {filterable && <EffectsPanel filter={filter} disabled={uploading} />}
+     </div>
+   );
+ }
+diff --git a/src/features/videos/faceFx/geometry.js b/src/features/videos/faceFx/geometry.js
+new file mode 100644
+index 0000000..1480617
+--- /dev/null
++++ b/src/features/videos/faceFx/geometry.js
+@@ -0,0 +1,130 @@
++// Points-clés du visage (maillage MediaPipe, 468/478 points) et du corps (33 points)
++// convertis en « espace aspect » : x * (largeur/hauteur), y inchangé.
++
++const avg = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
++const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
++const sub = (a, b) => ({ x: a.x - b.x, y: a.y - b.y });
++const norm = (v) => {
++  const l = Math.hypot(v.x, v.y) || 1;
++  return { x: v.x / l, y: v.y / l };
++};
++
++export function analyzeFace(lm, aspect) {
++  if (!lm || lm.length < 400) return null;
++  const P = (i) => ({ x: lm[i].x * aspect, y: lm[i].y });
++  const top = P(10);
++  const chin = P(152);
++  const sideA = P(234);
++  const sideB = P(454);
++  const W = dist(sideA, sideB);
++  const H = dist(top, chin);
++  if (!(W > 0.02) || !(H > 0.02)) return null;
++  const right = norm(sub(sideB, sideA)); // axe « droite » du visage
++  const up = norm(sub(top, chin)); // axe « haut » du visage
++  const center = {
++    x: (top.x + chin.x + sideA.x + sideB.x) / 4,
++    y: (top.y + chin.y + sideA.y + sideB.y) / 4,
++  };
++  const eyeA = avg(P(33), P(133));
++  const eyeB = avg(P(263), P(362));
++  const browMid = avg(P(105), P(334));
++  const rot = Math.atan2(right.y, right.x);
++  const half = W / 2;
++  const clamp01 = (v) => Math.min(1, Math.max(0, v));
++  // Repère « unité » du masque : 1 = demi-largeur du visage, x vers la droite du visage, y vers le bas.
++  const unit = (p) => ({
++    x: ((p.x - center.x) * right.x + (p.y - center.y) * right.y) / half,
++    y: -((p.x - center.x) * up.x + (p.y - center.y) * up.y) / half,
++  });
++  const lid = (u, l, a, b) => dist(P(u), P(l)) / Math.max(dist(P(a), P(b)), 1e-6);
++  const eyeRatio = (lid(159, 145, 33, 133) + lid(386, 374, 263, 362)) / 2;
++  const mouthGap = dist(P(13), P(14)) / W;
++  const noseU = unit(P(1));
++  return {
++    unit,
++    blink: clamp01((0.2 - eyeRatio) / 0.1),
++    mouthOpen: clamp01((mouthGap - 0.03) / 0.25),
++    yaw: Math.min(1, Math.max(-1, noseU.x)),
++    roll: Math.atan2(up.x, -up.y),
++    unitPx: half,
++    W,
++    H,
++    right,
++    up,
++    center,
++    top,
++    chin,
++    sideA,
++    sideB,
++    eyes: [eyeA, eyeB],
++    brows: [P(105), P(334)],
++    browMid,
++    forehead: avg(top, browMid),
++    noseTip: P(1),
++    nostrils: [P(129), P(358)],
++    mouthC: avg(P(13), P(14)),
++    mouthCorners: [P(61), P(291)],
++    jaw: [P(172), P(397)],
++    cheeks: [P(50), P(280)],
++    shader: {
++      cx: center.x,
++      cy: center.y,
++      rx: (W / 2) * 1.08,
++      ry: (H / 2) * 1.08,
++      rot,
++      hair: { cx: top.x + up.x * H * 0.18, cy: top.y + up.y * H * 0.18, rx: W * 0.95, ry: H * 0.62 },
++      eyeL: eyeA,
++      eyeR: eyeB,
++      noseL: P(129),
++      noseR: P(358),
++      mouthL: P(61),
++      mouthR: P(291),
++    },
++  };
++}
++
++export function analyzeBody(lm, aspect) {
++  if (!lm || lm.length < 29) return null;
++  const P = (i) => ({ x: lm[i].x * aspect, y: lm[i].y, v: lm[i].visibility ?? 1 });
++  const sh = [P(11), P(12)];
++  const hip = [P(23), P(24)];
++  if (sh.some((p) => p.v < 0.4) || dist(sh[0], sh[1]) < 0.03) return null;
++  const shMid = avg(sh[0], sh[1]);
++  const torsoLen = hip.every((p) => p.v > 0.3) ? dist(shMid, avg(hip[0], hip[1])) : dist(sh[0], sh[1]) * 1.3;
++  const hipMid = hip.every((p) => p.v > 0.3) ? avg(hip[0], hip[1]) : { x: shMid.x, y: shMid.y + torsoLen };
++  const lerp = (a, b, t) => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
++  const shoulderW = dist(sh[0], sh[1]);
++  const hipPts = hip.every((p) => p.v > 0.3) ? hip : [
++    { x: hipMid.x - shoulderW * 0.35, y: hipMid.y },
++    { x: hipMid.x + shoulderW * 0.35, y: hipMid.y },
++  ];
++  const knees = [P(25), P(26)];
++  const ankles = [P(27), P(28)];
++  const hasLegs = knees.every((p) => p.v > 0.4) && ankles.every((p) => p.v > 0.3);
++  return {
++    shoulders: sh,
++    shMid,
++    hips: hipPts,
++    hipMid,
++    shoulderW,
++    torsoLen,
++    waist: [lerp(sh[0], hipPts[0], 0.62), lerp(sh[1], hipPts[1], 0.62)],
++    belly: lerp(shMid, hipMid, 0.7),
++    elbows: [P(13), P(14)].map((p) => (p.v > 0.4 ? p : null)),
++    head: { x: P(0).x, y: P(0).y - torsoLen * 0.08, r: torsoLen * 0.42 },
++    knees: hasLegs ? knees : null,
++    ankles: hasLegs ? ankles : null,
++  };
++}
++
++// Lissage exponentiel des points entre deux images (évite le tremblement).
++export function smoothLandmarks(prev, next, alpha = 0.55) {
++  if (!next) return null;
++  if (!prev || prev.length !== next.length) return next.map((p) => ({ ...p }));
++  return next.map((p, i) => ({
++    x: prev[i].x + (p.x - prev[i].x) * alpha,
++    y: prev[i].y + (p.y - prev[i].y) * alpha,
++    z: p.z,
++    visibility: p.visibility,
++  }));
++}
+diff --git a/src/features/videos/faceFx/masks.js b/src/features/videos/faceFx/masks.js
+new file mode 100644
+index 0000000..a50282a
+--- /dev/null
++++ b/src/features/videos/faceFx/masks.js
+@@ -0,0 +1,656 @@
++import { makeRng, rgbToHex, rotateHue, toRgb } from "../filters/utils.js";
++
++// Têtes d'animaux et accessoires dessinés en vectoriel (aucune image à charger).
++// Repère de dessin : 1 unité = demi-largeur du visage, y vers le bas, origine = centre du
++// visage. Les yeux / nez / bouche sont posés sur les vrais points du visage (F).
++
++const TAU = Math.PI * 2;
++const tint = (hex, hue) => (hue ? rgbToHex(rotateHue(toRgb(hex), hue)) : hex);
++
++const ell = (c, x, y, rx, ry, color, rot = 0) => {
++  c.beginPath();
++  c.ellipse(x, y, rx, ry, rot, 0, TAU);
++  c.fillStyle = color;
++  c.fill();
++};
++const poly = (c, pts, color) => {
++  c.beginPath();
++  pts.forEach(([x, y], i) => (i ? c.lineTo(x, y) : c.moveTo(x, y)));
++  c.closePath();
++  c.fillStyle = color;
++  c.fill();
++};
++const line = (c, pts, color, w) => {
++  c.beginPath();
++  pts.forEach(([x, y], i) => (i ? c.lineTo(x, y) : c.moveTo(x, y)));
++  c.strokeStyle = color;
++  c.lineWidth = w;
++  c.lineCap = "round";
++  c.lineJoin = "round";
++  c.stroke();
++};
++const vgrad = (c, y0, y1, a, b) => {
++  const g = c.createLinearGradient(0, y0, 0, y1);
++  g.addColorStop(0, a);
++  g.addColorStop(1, b);
++  return g;
++};
++const rgrad = (c, r, a, b) => {
++  const g = c.createRadialGradient(0, -r * 0.3, r * 0.1, 0, 0, r);
++  g.addColorStop(0, a);
++  g.addColorStop(1, b);
++  return g;
++};
++
++// Les visages plus longs que la moyenne allongent un peu la tête de l'animal.
++let stretch = 1;
++
++// Tête de base (ellipse dégradée).
++const head = (c, P, rx = 1.3, ry0 = 1.4, y0 = -0.05) => {
++  const ry = ry0 * stretch;
++  const y = y0 * stretch;
++  c.beginPath();
++  c.ellipse(0, y, rx, ry, 0, 0, TAU);
++  c.fillStyle = vgrad(c, y - ry, y + ry, P.light || P.fur, P.fur);
++  c.fill();
++};
++
++const eye = (c, F, side, r, P, opts = {}) => {
++  const e = F.eyes[side];
++  const x = opts.x ?? e.x;
++  const y = opts.y ?? e.y;
++  if (F.blink > 0.55) {
++    line(c, [[x - r, y], [x, y + r * 0.35], [x + r, y]], P.line || "#2a1a14", r * 0.28);
++    return;
++  }
++  ell(c, x, y, r, r * 1.08, opts.sclera || "#fff");
++  const look = -Math.sign(x) * r * 0.12;
++  ell(c, x + look, y + r * 0.05, r * 0.62, r * 0.7, opts.iris || P.iris || "#2b1b12");
++  ell(c, x + look, y + r * 0.05, r * 0.32, r * 0.38, "#000");
++  ell(c, x + look + r * 0.2, y - r * 0.22, r * 0.2, r * 0.2, "#fff");
++};
++
++const mouth = (c, F, x, y, w, P, opts = {}) => {
++  const open = F.mouth;
++  if (open < 0.12) {
++    line(c, [[x - w * 0.5, y - w * 0.04], [x - w * 0.22, y + w * 0.12], [x, y], [x + w * 0.22, y + w * 0.12], [x + w * 0.5, y - w * 0.04]], P.line || "#3a1d14", w * 0.09);
++    return;
++  }
++  const h = w * (0.12 + open * 0.75);
++  c.beginPath();
++  c.ellipse(x, y + h * 0.45, w * 0.5, h * 0.55 + w * 0.05, 0, 0, TAU);
++  c.fillStyle = "#4a0f1a";
++  c.fill();
++  if (opts.tongue !== false) ell(c, x, y + h * 0.85, w * 0.28, h * 0.28 + 0.02, "#ff7a8e");
++};
++
++const whiskers = (c, x, y, len, color = "#ffffffcc", w = 0.035) => {
++  [-1, 1].forEach((s) => {
++    [-0.14, 0, 0.14].forEach((dy) => {
++      line(c, [[s * x, y], [s * (x + len), y + dy * len * 1.6]], color, w);
++    });
++  });
++};
++
++const earPair = (c, fn) => [-1, 1].forEach((s) => {
++  c.save();
++  c.scale(s, 1);
++  fn();
++  c.restore();
++});
++
++// ───────────────────────── Animaux ─────────────────────────
++// Chaque dessinateur : (c, F, P) avec P = palette déjà teintée.
++const ANIMALS = {
++  chat: {
++    emoji: "🐱", label: "Chat", sw: ["#ffc27a", "#d9822b"],
++    pal: { fur: "#f0a64a", light: "#ffc680", dark: "#c9772a", inner: "#ff9fb2", nose: "#ff7a95", iris: "#3c8a3a" },
++    draw(c, F, P) {
++      earPair(c, () => {
++        poly(c, [[0.35, -1.0], [1.15, -1.75], [1.35, -0.45]], P.fur);
++        poly(c, [[0.55, -0.95], [1.08, -1.4], [1.2, -0.62]], P.inner);
++      });
++      head(c, P);
++      [-1, 1].forEach((s) => [0, 1, 2].forEach((i) => {
++        line(c, [[s * (0.2 + i * 0.22), -1.3], [s * (0.2 + i * 0.22) + s * 0.04, -0.95]], P.dark, 0.09);
++      }));
++      ell(c, 0, 0.55, 0.62, 0.5, P.light === P.fur ? "#fff" : "#fff1dd");
++      eye(c, F, 0, 0.23, P);
++      eye(c, F, 1, 0.23, P);
++      poly(c, [[-0.13, 0.28], [0.13, 0.28], [0, 0.42]], P.nose);
++      mouth(c, F, 0, 0.68, 0.55, P);
++      whiskers(c, 0.55, 0.52, 0.85);
++    },
++  },
++  chien: {
++    emoji: "🐶", label: "Chien", sw: ["#e8c9a0", "#8a5a2b"],
++    pal: { fur: "#d9a066", light: "#efc896", dark: "#7a4a22", nose: "#1f1612", iris: "#4a2a12" },
++    draw(c, F, P) {
++      earPair(c, () => {
++        c.save();
++        c.rotate(0.25);
++        ell(c, 1.35, -0.2, 0.42, 0.95, P.dark);
++        c.restore();
++      });
++      head(c, P);
++      ell(c, -0.62, -0.2, 0.42, 0.45, P.dark);
++      ell(c, 0, 0.58, 0.72, 0.58, "#f8e7cf");
++      eye(c, F, 0, 0.22, P);
++      eye(c, F, 1, 0.22, P);
++      ell(c, 0, 0.32, 0.26, 0.19, P.nose);
++      ell(c, -0.07, 0.27, 0.07, 0.04, "#ffffff88");
++      mouth(c, F, 0, 0.78, 0.55, P);
++    },
++  },
++  lapin: {
++    emoji: "🐰", label: "Lapin", sw: ["#fbe6ef", "#e9a3c0"],
++    pal: { fur: "#f4efe9", light: "#ffffff", dark: "#d8cfc5", inner: "#ffb6cc", nose: "#ff8fb0", iris: "#7a2a3a" },
++    draw(c, F, P) {
++      earPair(c, () => {
++        ell(c, 0.5, -2.25, 0.34, 1.15, P.fur, 0.1);
++        ell(c, 0.5, -2.2, 0.19, 0.92, P.inner, 0.1);
++      });
++      head(c, P);
++      ell(c, 0, 0.55, 0.55, 0.42, "#fff");
++      eye(c, F, 0, 0.21, P);
++      eye(c, F, 1, 0.21, P);
++      poly(c, [[-0.1, 0.3], [0.1, 0.3], [0, 0.4]], P.nose);
++      mouth(c, F, 0, 0.62, 0.42, P, { tongue: false });
++      if (F.mouth < 0.12) {
++        c.fillStyle = "#fff";
++        c.fillRect(-0.12, 0.64, 0.11, 0.2);
++        c.fillRect(0.01, 0.64, 0.11, 0.2);
++        c.strokeStyle = "#cfc4ba";
++        c.lineWidth = 0.02;
++        c.strokeRect(-0.12, 0.64, 0.11, 0.2);
++        c.strokeRect(0.01, 0.64, 0.11, 0.2);
++      }
++      whiskers(c, 0.5, 0.5, 0.7, "#c9bdb2");
++    },
++  },
++  ours: {
++    emoji: "🐻", label: "Ours", sw: ["#c99a6b", "#6b4423"],
++    pal: { fur: "#a8744a", light: "#c4905f", dark: "#6b4423", inner: "#d9a77a", nose: "#2a1810", iris: "#2a1810" },
++    draw(c, F, P) {
++      earPair(c, () => {
++        ell(c, 0.95, -1.05, 0.42, 0.42, P.fur);
++        ell(c, 0.95, -1.05, 0.24, 0.24, P.inner);
++      });
++      head(c, P);
++      ell(c, 0, 0.55, 0.62, 0.5, "#e6c39d");
++      eye(c, F, 0, 0.17, P, { sclera: "#f6eadb" });
++      eye(c, F, 1, 0.17, P, { sclera: "#f6eadb" });
++      ell(c, 0, 0.33, 0.22, 0.15, P.nose);
++      mouth(c, F, 0, 0.68, 0.5, P);
++    },
++  },
++  panda: {
++    emoji: "🐼", label: "Panda", sw: ["#f2f2f2", "#222"],
++    pal: { fur: "#f6f6f6", light: "#ffffff", dark: "#1c1c1c", nose: "#1c1c1c", iris: "#1c1c1c" },
++    draw(c, F, P) {
++      earPair(c, () => ell(c, 0.98, -1.1, 0.45, 0.45, P.dark));
++      head(c, P);
++      [0, 1].forEach((i) => {
++        const e = F.eyes[i];
++        c.save();
++        c.translate(e.x, e.y + 0.05);
++        c.rotate(-Math.sign(e.x) * 0.5);
++        ell(c, 0, 0, 0.28, 0.4, P.dark);
++        c.restore();
++      });
++      eye(c, F, 0, 0.14, P, { sclera: "#fff" });
++      eye(c, F, 1, 0.14, P, { sclera: "#fff" });
++      ell(c, 0, 0.42, 0.2, 0.14, P.nose);
++      mouth(c, F, 0, 0.72, 0.5, P);
++    },
++  },
++  renard: {
++    emoji: "🦊", label: "Renard", sw: ["#ff9a4d", "#c2410c"],
++    pal: { fur: "#ee7b2a", light: "#f59a4a", dark: "#2a1a14", inner: "#fff2e0", nose: "#1c1c1c", iris: "#5a2d0c" },
++    draw(c, F, P) {
++      earPair(c, () => {
++        poly(c, [[0.3, -1.0], [1.05, -2.05], [1.4, -0.4]], P.fur);
++        poly(c, [[0.62, -1.4], [1.05, -2.05], [1.2, -1.2]], P.dark);
++        poly(c, [[0.62, -0.95], [1.0, -1.45], [1.15, -0.65]], P.inner);
++      });
++      head(c, P);
++      earPair(c, () => poly(c, [[0.1, 0.3], [1.35, -0.05], [1.0, 0.95]], P.inner));
++      poly(c, [[-0.4, 0.2], [0.4, 0.2], [0, 1.15]], P.inner);
++      eye(c, F, 0, 0.2, P, { sclera: "#fff6df" });
++      eye(c, F, 1, 0.2, P, { sclera: "#fff6df" });
++      ell(c, 0, 0.62, 0.15, 0.11, P.nose);
++      mouth(c, F, 0, 0.92, 0.4, P);
++    },
++  },
++  lion: {
++    emoji: "🦁", label: "Lion", sw: ["#ffcf6b", "#b45309"],
++    pal: { fur: "#e9b04f", light: "#f7cf7a", dark: "#8a4a12", mane: "#a0561a", nose: "#4a2a1a", iris: "#4a2a0a" },
++    draw(c, F, P) {
++      for (let i = 0; i < 18; i += 1) {
++        const a = (i / 18) * TAU;
++        ell(c, Math.cos(a) * 1.35, Math.sin(a) * 1.45 - 0.05, 0.6, 0.6, i % 2 ? P.mane : P.dark);
++      }
++      ell(c, 0, -0.05, 1.5, 1.6, P.mane);
++      earPair(c, () => ell(c, 0.95, -1.15, 0.3, 0.3, P.fur));
++      head(c, P, 1.12, 1.22);
++      ell(c, 0, 0.5, 0.58, 0.48, "#fbe6bd");
++      eye(c, F, 0, 0.2, P, { sclera: "#fff6df" });
++      eye(c, F, 1, 0.2, P, { sclera: "#fff6df" });
++      poly(c, [[-0.16, 0.25], [0.16, 0.25], [0, 0.42]], P.nose);
++      mouth(c, F, 0, 0.66, 0.5, P);
++    },
++  },
++  tigre: {
++    emoji: "🐯", label: "Tigre", sw: ["#ffb347", "#c2410c"],
++    pal: { fur: "#f08a24", light: "#f7a94a", dark: "#2a1a10", nose: "#ff7a95", iris: "#3a8a2a" },
++    draw(c, F, P) {
++      earPair(c, () => ell(c, 0.95, -1.1, 0.4, 0.4, P.fur));
++      head(c, P);
++      for (let i = 0; i < 3; i += 1) {
++        earPair(c, () => {
++          line(c, [[0.1 + i * 0.28, -1.38], [0.22 + i * 0.28, -0.98]], P.dark, 0.1);
++          line(c, [[1.05, -0.35 + i * 0.35], [1.28, -0.2 + i * 0.35]], P.dark, 0.1);
++        });
++      }
++      ell(c, 0, 0.55, 0.66, 0.52, "#fff4e0");
++      eye(c, F, 0, 0.21, P, { sclera: "#fff6df" });
++      eye(c, F, 1, 0.21, P, { sclera: "#fff6df" });
++      poly(c, [[-0.14, 0.28], [0.14, 0.28], [0, 0.43]], P.nose);
++      mouth(c, F, 0, 0.7, 0.5, P);
++      whiskers(c, 0.55, 0.55, 0.8);
++    },
++  },
++  singe: {
++    emoji: "🐵", label: "Singe", sw: ["#c8956a", "#6b4423"],
++    pal: { fur: "#8a5a35", light: "#a9724a", dark: "#4a2d18", inner: "#f2c9a0", nose: "#3a2418", iris: "#2a1a10" },
++    draw(c, F, P) {
++      earPair(c, () => {
++        ell(c, 1.3, 0.0, 0.42, 0.45, P.fur);
++        ell(c, 1.3, 0.0, 0.26, 0.28, P.inner);
++      });
++      head(c, P);
++      ell(c, -0.38, 0.15, 0.55, 0.5, P.inner);
++      ell(c, 0.38, 0.15, 0.55, 0.5, P.inner);
++      ell(c, 0, 0.62, 0.7, 0.5, P.inner);
++      eye(c, F, 0, 0.18, P);
++      eye(c, F, 1, 0.18, P);
++      ell(c, -0.08, 0.38, 0.05, 0.035, P.nose);
++      ell(c, 0.08, 0.38, 0.05, 0.035, P.nose);
++      mouth(c, F, 0, 0.74, 0.5, P);
++    },
++  },
++  cochon: {
++    emoji: "🐷", label: "Cochon", sw: ["#ffc2d4", "#e0678a"],
++    pal: { fur: "#f9a8c0", light: "#fcc4d6", dark: "#d9688a", nose: "#f27a9c", iris: "#4a1a2a" },
++    draw(c, F, P) {
++      earPair(c, () => poly(c, [[0.3, -1.05], [1.25, -1.5], [1.45, -0.35]], P.dark));
++      head(c, P);
++      eye(c, F, 0, 0.19, P);
++      eye(c, F, 1, 0.19, P);
++      ell(c, 0, 0.5, 0.5, 0.38, P.nose);
++      ell(c, -0.17, 0.5, 0.075, 0.14, "#8a2a48");
++      ell(c, 0.17, 0.5, 0.075, 0.14, "#8a2a48");
++      mouth(c, F, 0, 0.98, 0.45, P);
++    },
++  },
++  grenouille: {
++    emoji: "🐸", label: "Grenouille", sw: ["#9be37a", "#2f8a2f"],
++    pal: { fur: "#5cc24a", light: "#86dc6a", dark: "#2f8a2f", nose: "#2f8a2f", iris: "#1a1a1a" },
++    draw(c, F, P) {
++      earPair(c, () => {
++        ell(c, 0.62, -1.15, 0.5, 0.5, P.fur);
++        ell(c, 0.62, -1.15, 0.38, 0.38, "#fff");
++        ell(c, 0.62, -1.15, 0.2, 0.22, "#1a1a1a");
++        ell(c, 0.68, -1.22, 0.07, 0.07, "#fff");
++      });
++      head(c, P, 1.35, 1.2, 0.05);
++      ell(c, -0.12, 0.2, 0.025, 0.025, P.dark);
++      ell(c, 0.12, 0.2, 0.025, 0.025, P.dark);
++      mouth(c, F, 0, 0.7, 1.15, P);
++      ell(c, -0.85, 0.45, 0.2, 0.15, "#ff8a8a88");
++      ell(c, 0.85, 0.45, 0.2, 0.15, "#ff8a8a88");
++    },
++  },
++  hibou: {
++    emoji: "🦉", label: "Hibou", sw: ["#caa57a", "#6b4a2a"],
++    pal: { fur: "#9a6f45", light: "#b88a5c", dark: "#5a3a1f", disc: "#f4e3c4", nose: "#f2a516", iris: "#e8a010" },
++    draw(c, F, P) {
++      earPair(c, () => poly(c, [[0.3, -1.15], [1.1, -1.85], [1.25, -0.8]], P.dark));
++      head(c, P);
++      [0, 1].forEach((i) => {
++        const e = F.eyes[i];
++        ell(c, e.x, e.y, 0.5, 0.52, P.disc);
++        ell(c, e.x, e.y, 0.5, 0.52, "#00000000");
++      });
++      eye(c, F, 0, 0.32, P, { sclera: "#fffbe8", iris: "#e8a010" });
++      eye(c, F, 1, 0.32, P, { sclera: "#fffbe8", iris: "#e8a010" });
++      poly(c, [[-0.16, 0.3], [0.16, 0.3], [0, 0.7]], P.nose);
++      for (let i = 0; i < 3; i += 1) line(c, [[-0.5 + i * 0.5, 0.95], [-0.45 + i * 0.5, 1.15]], P.dark, 0.07);
++    },
++  },
++  elephant: {
++    emoji: "🐘", label: "Éléphant", sw: ["#c3cad6", "#6b7688"],
++    pal: { fur: "#9aa5b8", light: "#b4bdcc", dark: "#6e7a8e", inner: "#e9b6c0", nose: "#8a95a8", iris: "#2a2f3a" },
++    draw(c, F, P) {
++      earPair(c, () => {
++        ell(c, 1.55, -0.05, 0.85, 1.15, P.dark);
++        ell(c, 1.5, -0.05, 0.62, 0.9, P.inner);
++      });
++      head(c, P);
++      eye(c, F, 0, 0.17, P);
++      eye(c, F, 1, 0.17, P);
++      // trompe
++      c.beginPath();
++      c.moveTo(-0.38, 0.2);
++      c.quadraticCurveTo(-0.42, 1.55, 0.0, 1.9);
++      c.quadraticCurveTo(0.42, 1.55, 0.38, 0.2);
++      c.closePath();
++      c.fillStyle = vgrad(c, 0.2, 1.9, P.light, P.fur);
++      c.fill();
++      for (let i = 0; i < 4; i += 1) line(c, [[-0.34, 0.6 + i * 0.28], [0.34, 0.6 + i * 0.28]], P.dark, 0.035);
++      earPair(c, () => poly(c, [[0.45, 0.85], [0.95, 1.3], [0.62, 1.05]], "#fff6e0"));
++    },
++  },
++  vache: {
++    emoji: "🐮", label: "Vache", sw: ["#fff", "#8a8a8a"],
++    pal: { fur: "#fbfbfb", light: "#fff", dark: "#2a2a2a", nose: "#f7b5c0", iris: "#2a1a10", horn: "#f4e4b8" },
++    draw(c, F, P) {
++      earPair(c, () => {
++        poly(c, [[0.55, -1.2], [0.8, -1.75], [1.0, -1.15]], P.horn);
++        c.save();
++        c.rotate(-0.35);
++        ell(c, 1.45, -0.6, 0.55, 0.28, P.fur);
++        ell(c, 1.45, -0.6, 0.38, 0.17, "#f7b5c0");
++        c.restore();
++      });
++      head(c, P);
++      ell(c, -0.7, -0.75, 0.42, 0.34, P.dark);
++      ell(c, 0.55, 0.05, 0.3, 0.5, P.dark);
++      ell(c, 0, 0.7, 0.78, 0.55, P.nose);
++      eye(c, F, 0, 0.2, P);
++      eye(c, F, 1, 0.2, P);
++      ell(c, -0.3, 0.68, 0.09, 0.12, "#a8455a");
++      ell(c, 0.3, 0.68, 0.09, 0.12, "#a8455a");
++      mouth(c, F, 0, 1.0, 0.4, P);
++    },
++  },
++  licorne: {
++    emoji: "🦄", label: "Licorne", sw: ["#fbc8ff", "#7c3aed"],
++    pal: { fur: "#fdf6ff", light: "#ffffff", dark: "#c9a4e8", mane: "#ff8fd0", mane2: "#8fb0ff", nose: "#ff9fc4", iris: "#7a3acf", horn: "#ffd86b" },
++    draw(c, F, P) {
++      earPair(c, () => {
++        for (let i = 0; i < 4; i += 1) ell(c, 1.15 + i * 0.05, -0.6 + i * 0.5, 0.42, 0.5, i % 2 ? P.mane : P.mane2);
++      });
++      earPair(c, () => poly(c, [[0.55, -1.15], [0.95, -1.8], [1.05, -1.0]], P.fur));
++      head(c, P);
++      poly(c, [[-0.2, -1.2], [0.2, -1.2], [0, -2.5]], P.horn);
++      for (let i = 0; i < 4; i += 1) line(c, [[-0.17 + i * 0.03, -1.45 - i * 0.28], [0.17 - i * 0.03, -1.55 - i * 0.28]], "#e8b83a", 0.05);
++      ell(c, -0.2, -1.15, 0.5, 0.35, P.mane);
++      ell(c, 0.25, -1.1, 0.5, 0.33, P.mane2);
++      eye(c, F, 0, 0.22, P);
++      eye(c, F, 1, 0.22, P);
++      ell(c, -0.07, 0.4, 0.04, 0.03, P.dark);
++      ell(c, 0.07, 0.4, 0.04, 0.03, P.dark);
++      ell(c, -0.75, 0.4, 0.2, 0.13, "#ff9fc488");
++      ell(c, 0.75, 0.4, 0.2, 0.13, "#ff9fc488");
++      mouth(c, F, 0, 0.7, 0.5, P);
++    },
++  },
++  souris: {
++    emoji: "🐭", label: "Souris", sw: ["#d9d9e0", "#7a7a88"],
++    pal: { fur: "#b9b9c4", light: "#d4d4dc", dark: "#8a8a98", inner: "#ffb6c8", nose: "#ff8fa8", iris: "#2a2a30" },
++    draw(c, F, P) {
++      earPair(c, () => {
++        ell(c, 1.05, -1.1, 0.7, 0.7, P.fur);
++        ell(c, 1.05, -1.1, 0.5, 0.5, P.inner);
++      });
++      head(c, P);
++      ell(c, 0, 0.55, 0.55, 0.45, "#eaeaf0");
++      eye(c, F, 0, 0.2, P);
++      eye(c, F, 1, 0.2, P);
++      ell(c, 0, 0.38, 0.14, 0.1, P.nose);
++      mouth(c, F, 0, 0.7, 0.42, P, { tongue: false });
++      whiskers(c, 0.45, 0.55, 0.85, "#ffffffdd");
++    },
++  },
++};
++
++// ───────────────────────── Accessoires ─────────────────────────
++const ACCESSORIES = {
++  couronne: {
++    emoji: "👑", label: "Couronne", sw: ["#ffe27a", "#c9921a"],
++    draw(c, F, hue) {
++      const y = F.top - 0.08;
++      poly(c, [[-0.85, y], [-0.85, y - 0.55], [-0.45, y - 0.25], [0, y - 0.7], [0.45, y - 0.25], [0.85, y - 0.55], [0.85, y]], tint("#f7c531", hue));
++      c.fillStyle = tint("#c9921a", hue);
++      c.fillRect(-0.85, y - 0.1, 1.7, 0.12);
++      [[-0.85, y - 0.55], [0, y - 0.7], [0.85, y - 0.55]].forEach(([x, yy]) => ell(c, x, yy, 0.09, 0.09, "#ff4d6d"));
++      ell(c, 0, y - 0.3, 0.08, 0.08, "#4dabff");
++    },
++  },
++  lunettes: {
++    emoji: "🕶️", label: "Lunettes", sw: ["#444", "#111"],
++    draw(c, F, hue) {
++      const [a, b] = F.eyes;
++      const col = tint("#14141a", hue);
++      [a, b].forEach((e) => {
++        c.beginPath();
++        c.roundRect ? c.roundRect(e.x - 0.42, e.y - 0.26, 0.84, 0.55, 0.2) : c.rect(e.x - 0.42, e.y - 0.26, 0.84, 0.55);
++        c.fillStyle = col;
++        c.fill();
++        ell(c, e.x - 0.15, e.y - 0.1, 0.12, 0.05, "#ffffff55", -0.4);
++      });
++      line(c, [[a.x + 0.42, a.y - 0.05], [b.x - 0.42, b.y - 0.05]], col, 0.07);
++      line(c, [[a.x - 0.42, a.y - 0.05], [a.x - 0.95, a.y - 0.12]], col, 0.06);
++      line(c, [[b.x + 0.42, b.y - 0.05], [b.x + 0.95, b.y - 0.12]], col, 0.06);
++    },
++  },
++  moustache: {
++    emoji: "🥸", label: "Moustache", sw: ["#6b4a2a", "#2a1a0f"],
++    draw(c, F, hue) {
++      const y = (F.nose.y + F.mouth0.y) / 2 + 0.05;
++      const col = tint("#3a2414", hue);
++      earPair(c, () => {
++        c.beginPath();
++        c.moveTo(0, y - 0.05);
++        c.bezierCurveTo(0.25, y - 0.22, 0.75, y - 0.1, 0.95, y + 0.2);
++        c.bezierCurveTo(0.6, y + 0.1, 0.3, y + 0.15, 0, y + 0.12);
++        c.closePath();
++        c.fillStyle = col;
++        c.fill();
++      });
++    },
++  },
++  "nez-clown": {
++    emoji: "🤡", label: "Nez de clown", sw: ["#ff8a8a", "#d11"],
++    draw(c, F, hue) {
++      const g = c.createRadialGradient(F.nose.x - 0.07, F.nose.y - 0.07, 0.02, F.nose.x, F.nose.y, 0.3);
++      g.addColorStop(0, tint("#ff8a8a", hue));
++      g.addColorStop(1, tint("#d41a1a", hue));
++      c.beginPath();
++      c.arc(F.nose.x, F.nose.y, 0.28, 0, TAU);
++      c.fillStyle = g;
++      c.fill();
++    },
++  },
++  cornes: {
++    emoji: "😈", label: "Cornes", sw: ["#ff6b6b", "#7a0a0a"],
++    draw(c, F, hue) {
++      const y = F.top;
++      earPair(c, () => {
++        c.beginPath();
++        c.moveTo(0.35, y + 0.1);
++        c.quadraticCurveTo(0.45, y - 0.7, 0.95, y - 0.85);
++        c.quadraticCurveTo(0.78, y - 0.35, 0.78, y + 0.15);
++        c.closePath();
++        c.fillStyle = tint("#d61f2c", hue);
++        c.fill();
++      });
++    },
++  },
++  aureole: {
++    emoji: "😇", label: "Auréole", sw: ["#fff3b0", "#f0b429"],
++    draw(c, F, hue) {
++      c.beginPath();
++      c.ellipse(0, F.top - 0.45, 0.8, 0.2, 0, 0, TAU);
++      c.strokeStyle = tint("#ffd54a", hue);
++      c.lineWidth = 0.14;
++      c.stroke();
++      c.strokeStyle = "#fff6c4";
++      c.lineWidth = 0.04;
++      c.stroke();
++    },
++  },
++  cowboy: {
++    emoji: "🤠", label: "Cowboy", sw: ["#c8935a", "#6b3f1a"],
++    draw(c, F, hue) {
++      const y = F.top + 0.02;
++      const col = tint("#a8703a", hue);
++      ell(c, 0, y, 1.9, 0.22, col);
++      c.beginPath();
++      c.moveTo(-0.85, y - 0.02);
++      c.quadraticCurveTo(-0.9, y - 0.85, -0.3, y - 0.85);
++      c.quadraticCurveTo(0, y - 0.6, 0.3, y - 0.85);
++      c.quadraticCurveTo(0.9, y - 0.85, 0.85, y - 0.02);
++      c.closePath();
++      c.fillStyle = col;
++      c.fill();
++      c.fillStyle = tint("#5a331a", hue);
++      c.fillRect(-0.86, y - 0.22, 1.72, 0.14);
++    },
++  },
++  noel: {
++    emoji: "🎅", label: "Bonnet de Noël", sw: ["#ff5a5a", "#a10f1f"],
++    draw(c, F, hue) {
++      const y = F.top + 0.05;
++      c.beginPath();
++      c.moveTo(-1.0, y);
++      c.quadraticCurveTo(-0.8, y - 1.3, 0.9, y - 1.25);
++      c.quadraticCurveTo(1.2, y - 0.6, 1.0, y);
++      c.closePath();
++      c.fillStyle = tint("#d9232f", hue);
++      c.fill();
++      ell(c, 0, y, 1.2, 0.2, "#fff");
++      ell(c, 0.95, y - 1.3, 0.2, 0.2, "#fff");
++    },
++  },
++  "oreilles-chat": {
++    emoji: "😺", label: "Oreilles de chat", sw: ["#ffd1e0", "#e0678a"],
++    draw(c, F, hue) {
++      const y = F.top;
++      earPair(c, () => {
++        poly(c, [[0.2, y + 0.2], [0.75, y - 0.85], [1.1, y + 0.3]], tint("#2b2b33", hue));
++        poly(c, [[0.4, y + 0.1], [0.75, y - 0.5], [0.95, y + 0.2]], tint("#ff9fb2", hue));
++      });
++      poly(c, [[-0.1, F.nose.y - 0.05], [0.1, F.nose.y - 0.05], [0, F.nose.y + 0.08]], tint("#ff7a95", hue));
++      whiskers(c, 0.55, F.nose.y + 0.12, 0.75, "#ffffffdd");
++    },
++  },
++  "oreilles-lapin": {
++    emoji: "🐇", label: "Oreilles de lapin", sw: ["#fbe6ef", "#e9a3c0"],
++    draw(c, F, hue) {
++      const y = F.top;
++      earPair(c, () => {
++        ell(c, 0.5, y - 0.95, 0.3, 1.0, tint("#f4efe9", hue), 0.12);
++        ell(c, 0.5, y - 0.9, 0.17, 0.8, tint("#ffb6cc", hue), 0.12);
++      });
++    },
++  },
++  fleurs: {
++    emoji: "🌸", label: "Couronne de fleurs", sw: ["#ffc2e0", "#ec4899"],
++    draw(c, F, hue) {
++      const cols = ["#ff7aa8", "#ffd166", "#b78cff", "#7de0b0"];
++      for (let i = 0; i < 9; i += 1) {
++        const a = Math.PI + (i / 8) * Math.PI;
++        const x = Math.cos(a) * 1.1;
++        const y = F.top + 0.35 + Math.sin(a) * 0.55 + 0.25;
++        for (let k = 0; k < 5; k += 1) {
++          const b = (k / 5) * TAU;
++          ell(c, x + Math.cos(b) * 0.1, y + Math.sin(b) * 0.1, 0.08, 0.08, tint(cols[i % 4], hue));
++        }
++        ell(c, x, y, 0.06, 0.06, "#fff3b0");
++      }
++    },
++  },
++};
++
++export const MASK_NONE = "none";
++export const MASK_RANDOM = "random";
++
++export const MASK_CATEGORIES = [
++  { id: "animals", emoji: "🐾", label: "Animaux" },
++  { id: "accessories", emoji: "🎩", label: "Accessoires" },
++];
++
++export const MASK_PRESETS = [
++  ...Object.entries(ANIMALS).map(([id, a]) => ({ id, cat: "animals", emoji: a.emoji, label: a.label, sw: a.sw })),
++  ...Object.entries(ACCESSORIES).map(([id, a]) => ({ id, cat: "accessories", emoji: a.emoji, label: a.label, sw: a.sw })),
++];
++export const masksByCategory = (cat) => MASK_PRESETS.filter((m) => m.cat === cat);
++
++const ANIMAL_IDS = Object.keys(ANIMALS);
++const ACCESSORY_IDS = Object.keys(ACCESSORIES);
++
++// Un entier → un animal + une couleur + (souvent) un accessoire : infini.
++export function resolveMask(mask) {
++  if (!mask || mask.id === MASK_NONE) return null;
++  if (mask.id === MASK_RANDOM) {
++    const rng = makeRng((mask.seed || 1) * 2246822519);
++    const animal = ANIMAL_IDS[Math.floor(rng() * ANIMAL_IDS.length)];
++    const acc = rng() < 0.6 ? ACCESSORY_IDS[Math.floor(rng() * ACCESSORY_IDS.length)] : null;
++    return { animal, accessory: acc, hue: Math.round((rng() * 2 - 1) * 150 * (rng() < 0.65 ? 1 : 0.2)), scale: 0.9 + rng() * 0.3 };
++  }
++  if (ANIMALS[mask.id]) return { animal: mask.id, accessory: null, hue: mask.hue || 0, scale: 1 };
++  if (ACCESSORIES[mask.id]) return { animal: null, accessory: mask.id, hue: mask.hue || 0, scale: 1 };
++  return null;
++}
++
++export const describeMask = (mask) => {
++  if (!mask || mask.id === MASK_NONE) return null;
++  if (mask.id === MASK_RANDOM) {
++    const r = resolveMask(mask);
++    return { label: `${ANIMALS[r.animal].label}${r.accessory ? " + " + ACCESSORIES[r.accessory].label.toLowerCase() : ""} #${mask.seed}`, emoji: ANIMALS[r.animal].emoji };
++  }
++  const p = MASK_PRESETS.find((m) => m.id === mask.id);
++  return p ? { label: p.label, emoji: p.emoji } : null;
++};
++
++// Dessine le masque. face = analyzeFace(), (w, h) = taille du canvas en pixels.
++export function drawMask(ctx, face, mask, w, h) {
++  const r = resolveMask(mask);
++  if (!r || !face) return;
++  const unit = face.unitPx * h;
++  const U = face.unit;
++  const eyes = face.eyes.map(U);
++  // Les yeux doivent rester dans une plage raisonnable pour que le dessin reste joli.
++  const F = {
++    eyes: eyes.sort((a, b) => a.x - b.x),
++    nose: U(face.noseTip),
++    mouth0: U(face.mouthC),
++    top: U(face.top).y - 0.06,
++    blink: face.blink,
++    mouth: face.mouthOpen,
++  };
++  const yaw = face.yaw;
++  stretch = Math.min(1.5, Math.max(0.9, face.H / face.W / 1.3));
++
++  ctx.save();
++  ctx.translate(face.center.x * h, face.center.y * h);
++  ctx.rotate(face.roll);
++  ctx.scale(unit * (r.scale || 1), unit * (r.scale || 1));
++  if (r.animal) {
++    const a = ANIMALS[r.animal];
++    const P = {};
++    Object.entries(a.pal).forEach(([k, v]) => {
++      P[k] = tint(v, r.hue);
++    });
++    P.line = "#3a1d14";
++    // Tête + oreilles ne bougent pas ; les traits du visage glissent avec la rotation de la tête.
++    ctx.save();
++    ctx.translate(yaw * 0.12, 0);
++    a.draw(ctx, F, P);
++    ctx.restore();
++  }
++  if (r.accessory) ACCESSORIES[r.accessory].draw(ctx, { ...F, top: F.top }, r.hue);
++  ctx.restore();
++}
+diff --git a/src/features/videos/faceFx/operators.js b/src/features/videos/faceFx/operators.js
+new file mode 100644
+index 0000000..d612abd
+--- /dev/null
++++ b/src/features/videos/faceFx/operators.js
+@@ -0,0 +1,203 @@
++import { MAX_OPS } from "./warpRenderer.js";
++import { MASK_NONE, resolveMask } from "./masks.js";
++import {
++  BODY_IDS,
++  FX_NONE,
++  FX_RANDOM,
++  generateParams,
++  getFaceFxPreset,
++} from "./presets.js";
++
++// ───────────── État → réglages ─────────────
++export const DEFAULT_MASK = Object.freeze({ id: MASK_NONE, seed: 0, hue: 0 });
++export const DEFAULT_FX_STATE = Object.freeze({ id: FX_NONE, seed: 0, intensity: 1, adjust: {}, mask: DEFAULT_MASK });
++const MAX_SEED = 2147483646;
++
++const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
++
++export function normalizeFxState(raw = {}) {
++  const adjust = {};
++  if (raw.adjust && typeof raw.adjust === "object") {
++    Object.entries(raw.adjust).forEach(([k, v]) => {
++      const n = Number(v);
++      if (Number.isFinite(n)) adjust[k] = clamp(n, -1.5, 1.5);
++    });
++  }
++  const intensity = Number(raw.intensity);
++  return {
++    id: typeof raw.id === "string" && raw.id ? raw.id : FX_NONE,
++    seed: Math.floor(clamp(Number(raw.seed) || 0, 0, MAX_SEED)),
++    intensity: Number.isFinite(intensity) ? clamp(intensity, 0, 1.5) : 1,
++    adjust,
++    mask: {
++      id: typeof raw.mask?.id === "string" && raw.mask.id ? raw.mask.id : MASK_NONE,
++      seed: Math.floor(clamp(Number(raw.mask?.seed) || 0, 0, MAX_SEED)),
++      hue: clamp(Number(raw.mask?.hue) || 0, -180, 180),
++    },
++  };
++}
++
++// { params, age, smooth, needsPose, active } : tout ce dont le rendu a besoin.
++export function resolveFaceFx(rawState) {
++  const state = normalizeFxState(rawState);
++  let base = {};
++  if (state.id === FX_RANDOM) base = generateParams(state.seed || 1);
++  else if (state.id !== FX_NONE) base = getFaceFxPreset(state.id)?.p || {};
++
++  const merged = { ...base };
++  Object.entries(state.adjust).forEach(([k, v]) => {
++    merged[k] = (merged[k] || 0) + v;
++  });
++  const params = {};
++  let age = 0;
++  let smooth = 0;
++  let needsPose = false;
++  let active = false;
++  Object.entries(merged).forEach(([k, raw]) => {
++    const v = clamp(raw * state.intensity, k === "smooth" ? 0 : -1.5, 1.5);
++    if (Math.abs(v) < 0.02) return;
++    active = true;
++    if (k === "age") age = clamp(v, -1, 1);
++    else if (k === "smooth") smooth = clamp(v, 0, 1);
++    else {
++      params[k] = v;
++      if (BODY_IDS.has(k)) needsPose = true;
++    }
++  });
++  const mask = resolveMask(state.mask) ? state.mask : null;
++  const hasWarp = active;
++  return { params, age, smooth, needsPose, hasWarp, mask, active: active || !!mask };
++}
++
++// ───────────── Réglages → opérateurs ─────────────
++const BULGE = 0;
++const SHIFT = 1;
++const ANISO = 2;
++
++class Ops {
++  constructor() {
++    this.list = [];
++  }
++  push(o) {
++    if (this.list.length < MAX_OPS) this.list.push(o);
++  }
++  bulge(pt, r, s) {
++    if (Math.abs(s) < 0.005) return;
++    this.push({ x: pt.x, y: pt.y, r, type: BULGE, a: clamp(s, -0.85, 0.85) });
++  }
++  shift(pt, r, vx, vy) {
++    this.push({ x: pt.x, y: pt.y, r, type: SHIFT, a: vx, b: vy });
++  }
++  aniso(pt, r, sx, sy) {
++    this.push({ x: pt.x, y: pt.y, r, type: ANISO, a: clamp(sx, -0.85, 0.85), b: clamp(sy, -0.85, 0.85) });
++  }
++}
++
++// vecteur = a * droite + b * haut (axes propres au visage, qui suit l'inclinaison de la tête)
++const along = (g, a, b) => ({
++  x: g.right.x * a + g.up.x * b,
++  y: g.right.y * a + g.up.y * b,
++});
++
++// +1 si le point est du côté « droite » du centre, -1 sinon.
++const side = (g, pt) =>
++  Math.sign((pt.x - g.center.x) * g.right.x + (pt.y - g.center.y) * g.right.y) || 1;
++
++function faceOps(ops, g, P, age) {
++  const W = g.W;
++  // Le contexte « vieux / jeune » influence aussi la forme.
++  const old = Math.max(age, 0);
++  const young = Math.max(-age, 0);
++  const eyes = (P.eyes || 0) - old * 0.12 + young * 0.22;
++  g.eyes.forEach((e) => ops.bulge(e, W * 0.24, eyes * 0.6));
++
++  if (P.eyeDist) {
++    g.eyes.forEach((e) => {
++      const v = along(g, side(g, e) * W * 0.09 * P.eyeDist, 0);
++      ops.shift(e, W * 0.3, v.x, v.y);
++    });
++  }
++  ops.bulge(g.noseTip, W * 0.22, (P.nose || 0) * 0.65);
++  if (P.noseWidth) {
++    g.nostrils.forEach((n) => {
++      const v = along(g, side(g, n) * W * 0.07 * P.noseWidth, 0);
++      ops.shift(n, W * 0.16, v.x, v.y);
++    });
++  }
++  ops.bulge(g.mouthC, W * 0.26, (P.mouth || 0) * 0.55);
++  if (P.mouthWidth) {
++    g.mouthCorners.forEach((m) => {
++      const v = along(g, side(g, m) * W * 0.09 * P.mouthWidth, 0);
++      ops.shift(m, W * 0.18, v.x, v.y);
++    });
++  }
++  const smile = (P.smile || 0) - old * 0.3;
++  if (Math.abs(smile) > 0.01) {
++    g.mouthCorners.forEach((m) => {
++      const v = along(g, 0, W * 0.07 * smile);
++      ops.shift(m, W * 0.2, v.x, v.y);
++    });
++  }
++  g.cheeks.forEach((c) => ops.bulge(c, W * 0.3, ((P.cheeks || 0) - old * 0.2) * 0.55));
++  if (P.jaw || old) {
++    g.jaw.forEach((j) => {
++      const out = side(g, j) * W * 0.08 * (P.jaw || 0);
++      const sag = -W * 0.05 * old;
++      const v = along(g, out, sag);
++      ops.shift(j, W * 0.3, v.x, v.y);
++    });
++  }
++  const chin = (P.chin || 0) - young * 0.3;
++  if (Math.abs(chin) > 0.01) {
++    const v = along(g, 0, -W * 0.16 * chin);
++    ops.shift(g.chin, W * 0.32, v.x, v.y);
++  }
++  ops.bulge(g.forehead, W * 0.34, (P.forehead || 0) * 0.55);
++  if (P.faceWidth) {
++    [g.sideA, g.sideB].forEach((s) => {
++      const v = along(g, side(g, s) * W * 0.1 * P.faceWidth, 0);
++      ops.shift(s, W * 0.55, v.x, v.y);
++    });
++  }
++  if (P.faceLength) {
++    const v = along(g, 0, -W * 0.22 * P.faceLength);
++    ops.shift(g.chin, W * 0.7, v.x, v.y);
++  }
++}
++
++function bodyOps(ops, b, P) {
++  const sw = b.shoulderW;
++  const L = b.torsoLen;
++  const center = (a, c) => ({ x: (a.x + c.x) / 2, y: (a.y + c.y) / 2 });
++  // Déplace les deux côtés vers l'extérieur (outward > 0 : plus large) ou l'intérieur.
++  const squeeze = (pair, mid, r, outward) => {
++    pair.forEach((pt) => {
++      const dir = Math.sign(pt.x - mid.x) || 1;
++      ops.shift(pt, r, dir * outward, 0);
++    });
++  };
++  if (P.head) ops.bulge(b.head, b.head.r * 2.2, P.head * 0.6);
++  if (P.shoulders) squeeze(b.shoulders, b.shMid, sw * 0.7, sw * 0.14 * P.shoulders);
++  if (P.arms) b.elbows.forEach((e) => e && ops.bulge(e, sw * 0.55, P.arms * 0.55));
++  if (P.waist) squeeze(b.waist, b.belly, L * 0.45, sw * 0.17 * P.waist);
++  if (P.belly) ops.bulge(b.belly, L * 0.55, P.belly * 0.6);
++  if (P.hips) squeeze(b.hips, b.hipMid, L * 0.35, sw * 0.15 * P.hips);
++  if (P.legs && b.knees) {
++    // Étire verticalement autour des genoux : jambes plus longues (> 0) ou courtes.
++    const k = center(b.knees[0], b.knees[1]);
++    ops.aniso(k, L * 1.4, 0, 0.35 * P.legs);
++  }
++}
++
++// Construit la scène du shader. face/body = résultats de analyzeFace / analyzeBody.
++export function buildScene(resolved, face, body) {
++  const ops = new Ops();
++  if (face) faceOps(ops, face, resolved.params, resolved.age);
++  if (body) bodyOps(ops, body, resolved.params);
++  return {
++    ops: ops.list,
++    face: face ? face.shader : null,
++    age: resolved.age,
++    smooth: resolved.smooth,
++  };
++}
+diff --git a/src/features/videos/faceFx/presets.js b/src/features/videos/faceFx/presets.js
+new file mode 100644
+index 0000000..0ef33b8
+--- /dev/null
++++ b/src/features/videos/faceFx/presets.js
+@@ -0,0 +1,117 @@
++import { makeRng } from "../filters/utils.js";
++
++// Réglages de déformation (de -1 à +1, 0 = neutre).
++export const FACE_PARAMS = [
++  { id: "eyes", label: "Taille des yeux" },
++  { id: "eyeDist", label: "Écart des yeux" },
++  { id: "nose", label: "Taille du nez" },
++  { id: "noseWidth", label: "Largeur du nez" },
++  { id: "mouth", label: "Taille de la bouche" },
++  { id: "mouthWidth", label: "Largeur de la bouche" },
++  { id: "smile", label: "Sourire / moue" },
++  { id: "cheeks", label: "Joues" },
++  { id: "jaw", label: "Mâchoire" },
++  { id: "chin", label: "Menton" },
++  { id: "forehead", label: "Front" },
++  { id: "faceWidth", label: "Largeur du visage" },
++  { id: "faceLength", label: "Longueur du visage" },
++];
++
++export const BODY_PARAMS = [
++  { id: "head", label: "Taille de la tête" },
++  { id: "shoulders", label: "Épaules" },
++  { id: "arms", label: "Bras" },
++  { id: "waist", label: "Taille" },
++  { id: "belly", label: "Ventre" },
++  { id: "hips", label: "Hanches" },
++  { id: "legs", label: "Jambes" },
++];
++
++export const SKIN_PARAMS = [
++  { id: "age", label: "Âge (jeune ← → vieux)" },
++  { id: "smooth", label: "Peau lisse", min: 0 },
++];
++
++export const ALL_PARAMS = [...FACE_PARAMS, ...BODY_PARAMS, ...SKIN_PARAMS];
++export const BODY_IDS = new Set(BODY_PARAMS.map((p) => p.id));
++
++export const FX_NONE = "none";
++export const FX_RANDOM = "random";
++
++export const FACE_FX_CATEGORIES = [
++  { id: "age", emoji: "⏳", label: "Âge" },
++  { id: "face", emoji: "🤪", label: "Visage" },
++  { id: "body", emoji: "🕺", label: "Corps" },
++  { id: "fun", emoji: "👽", label: "Délire" },
++];
++
++const fx = (cat, id, emoji, label, sw, p) => ({ id, cat, emoji, label, sw, p });
++
++export const FACE_FX_PRESETS = [
++  // Âge
++  fx("age", "vieux", "👴", "Vieux", ["#c9b8a6", "#6b5a4a"], { age: 0.75, eyes: -0.1, mouthWidth: -0.1 }),
++  fx("age", "tres-vieux", "🧓", "Très vieux", ["#d9d4cc", "#554a40"], { age: 1, eyes: -0.2, cheeks: -0.25, jaw: -0.15, smile: -0.2, nose: 0.15 }),
++  fx("age", "mi-age", "🧔", "Quarante ans", ["#d8b89a", "#8a6a52"], { age: 0.35, eyes: -0.05 }),
++  fx("age", "jeune", "🧑", "Rajeunir", ["#ffd9c7", "#e89b86"], { age: -0.8, smooth: 0.3 }),
++  fx("age", "ado", "🧒", "Ado", ["#ffe0cc", "#f4a58f"], { age: -0.9, smooth: 0.4, eyes: 0.15, chin: -0.1 }),
++  fx("age", "bebe", "👶", "Bébé", ["#ffe4d6", "#f9b1a0"], { age: -1, smooth: 0.5, eyes: 0.55, nose: -0.55, forehead: 0.45, chin: -0.45, mouth: -0.3, cheeks: 0.5, faceWidth: 0.15 }),
++  fx("age", "peau-lisse", "✨", "Peau lisse", ["#fde9dd", "#f2b8a6"], { smooth: 0.9 }),
++  // Visage
++  fx("face", "gros-yeux", "👀", "Gros yeux", ["#bfe3ff", "#3b82f6"], { eyes: 0.85 }),
++  fx("face", "petits-yeux", "😑", "Petits yeux", ["#d9d9d9", "#666"], { eyes: -0.8 }),
++  fx("face", "gros-nez", "🤡", "Gros nez", ["#ffb3a7", "#d94a3a"], { nose: 0.9, noseWidth: 0.3 }),
++  fx("face", "petit-nez", "🐽", "Petit nez", ["#ffd9d0", "#e6a090"], { nose: -0.8, noseWidth: -0.3 }),
++  fx("face", "grand-sourire", "😁", "Grand sourire", ["#fff2a8", "#f59e0b"], { smile: 0.85, mouthWidth: 0.6, cheeks: 0.35 }),
++  fx("face", "moue", "😞", "Moue", ["#c7cfe0", "#4b5a7a"], { smile: -0.8, mouthWidth: -0.2 }),
++  fx("face", "bouche-geante", "👄", "Grosse bouche", ["#ffb3c1", "#e11d48"], { mouth: 0.9, mouthWidth: 0.4 }),
++  fx("face", "menton-long", "🗿", "Menton long", ["#e2d6c7", "#8b7355"], { chin: 0.9, jaw: 0.3, faceLength: 0.3 }),
++  fx("face", "visage-large", "🫓", "Visage large", ["#ffe8c2", "#d9922b"], { faceWidth: 0.85, cheeks: 0.4 }),
++  fx("face", "visage-etroit", "🪒", "Visage étroit", ["#e8eef7", "#6a7fa8"], { faceWidth: -0.8, jaw: -0.4, faceLength: 0.25 }),
++  fx("face", "joues-hamster", "🐹", "Joues rondes", ["#ffd7a8", "#e08a3c"], { cheeks: 1, jaw: 0.2, mouth: -0.2 }),
++  fx("face", "front-geant", "🧠", "Grand front", ["#ffe6e6", "#d98a8a"], { forehead: 0.95, chin: -0.3 }),
++  // Corps
++  fx("body", "mince", "🧍", "Mince", ["#cfe8ff", "#4a7fc1"], { waist: -0.85, hips: -0.5, belly: -0.7, arms: -0.4 }),
++  fx("body", "costaud", "💪", "Costaud", ["#ffd1a6", "#c2571a"], { shoulders: 0.8, arms: 0.8, waist: 0.2, head: -0.2 }),
++  fx("body", "grosse-tete", "🎈", "Grosse tête", ["#ffe29a", "#f59e0b"], { head: 0.95 }),
++  fx("body", "petite-tete", "📍", "Petite tête", ["#d8d8f0", "#6366f1"], { head: -0.85 }),
++  fx("body", "longues-jambes", "🦵", "Longues jambes", ["#c9f0d8", "#16a34a"], { legs: 0.9, waist: -0.2 }),
++  fx("body", "mannequin", "💃", "Mannequin", ["#f5d0fe", "#a21caf"], { legs: 0.7, waist: -0.7, shoulders: -0.2, head: -0.35, hips: 0.2 }),
++  fx("body", "hulk", "🟢", "Hulk", ["#86efac", "#15803d"], { shoulders: 1, arms: 1, belly: 0.4, head: -0.45, waist: 0.3 }),
++  fx("body", "ventre-rond", "🎃", "Gros ventre", ["#ffcf8a", "#d97706"], { belly: 1, hips: 0.3 }),
++  // Délire
++  fx("fun", "alien", "👽", "Alien", ["#a7f3a0", "#14532d"], { eyes: 0.95, eyeDist: 0.5, chin: -0.5, faceLength: 0.7, mouth: -0.7, nose: -0.8, forehead: 0.5 }),
++  fx("fun", "caricature", "🎭", "Caricature", ["#ffd0a8", "#b45309"], { forehead: 0.7, nose: 0.8, chin: 0.8, eyes: -0.4, cheeks: 0.4, mouth: 0.4 }),
++  fx("fun", "kawaii", "🥰", "Kawaii", ["#ffd6ec", "#ec4899"], { eyes: 0.7, nose: -0.6, mouth: -0.4, chin: -0.55, cheeks: 0.35, smooth: 0.7, age: -0.5 }),
++  fx("fun", "zombie", "🧟", "Zombie", ["#b8c9a0", "#3f4f2a"], { age: 0.6, eyes: -0.3, cheeks: -0.9, jaw: -0.4, smile: -0.5, nose: -0.2 }),
++  fx("fun", "poisson", "🐟", "Poisson", ["#9be7ff", "#0369a1"], { eyes: 0.6, eyeDist: 0.95, mouth: 0.6, mouthWidth: 0.6, nose: -0.9, faceWidth: 0.4 }),
++  fx("fun", "tout-miniature", "🔬", "Mini visage", ["#e9d5ff", "#7e22ce"], { eyes: -0.5, nose: -0.5, mouth: -0.5, forehead: 0.4, cheeks: 0.5, chin: 0.3 }),
++];
++
++const BY_ID = new Map(FACE_FX_PRESETS.map((p) => [p.id, p]));
++export const getFaceFxPreset = (id) => BY_ID.get(id) || null;
++export const faceFxByCategory = (cat) => FACE_FX_PRESETS.filter((p) => p.cat === cat);
++
++// Un entier → un jeu de déformations unique : il y en a donc une infinité.
++export function generateParams(seed) {
++  const rng = makeRng(seed * 2654435761 || 1);
++  const out = {};
++  const pick = (list, chance, spread) => {
++    list.forEach((p) => {
++      if (rng() < chance) out[p.id] = +((rng() * 2 - 1) * spread).toFixed(2);
++    });
++  };
++  pick(FACE_PARAMS, 0.4, 0.95);
++  if (Object.keys(out).length < 3) {
++    for (let i = 0; i < 3; i += 1) out[FACE_PARAMS[Math.floor(rng() * FACE_PARAMS.length)].id] = +((rng() * 2 - 1) * 0.9).toFixed(2);
++  }
++  if (rng() < 0.3) out.age = +((rng() * 2 - 1) * 0.9).toFixed(2);
++  if (rng() < 0.18) pick(BODY_PARAMS, 0.5, 0.9);
++  return out;
++}
++
++export function describeFaceFx(state) {
++  if (!state || state.id === FX_NONE) return { label: "Aucun effet", emoji: "🚫", sw: ["#3f3f46", "#18181b"] };
++  if (state.id === FX_RANDOM) return { label: `Mutation #${state.seed}`, emoji: "🧬", sw: ["#f0abfc", "#6d28d9"] };
++  const p = getFaceFxPreset(state.id);
++  return p ? { label: p.label, emoji: p.emoji, sw: p.sw } : { label: "Aucun effet", emoji: "🚫", sw: ["#3f3f46", "#18181b"] };
++}
+diff --git a/src/features/videos/faceFx/processor.js b/src/features/videos/faceFx/processor.js
+new file mode 100644
+index 0000000..cac7535
+--- /dev/null
++++ b/src/features/videos/faceFx/processor.js
+@@ -0,0 +1,84 @@
++import { analyzeBody, analyzeFace, smoothLandmarks } from "./geometry.js";
++import { drawMask } from "./masks.js";
++import { buildScene } from "./operators.js";
++import { detect, ensureTracker, trackerReady } from "./tracker.js";
++import { WarpRenderer } from "./warpRenderer.js";
++
++const HOLD_FRAMES = 8; // on garde le dernier visage quelques images si la détection saute
++
++// Applique les déformations à une image vidéo. process() renvoie { source, w, h } :
++// la source d'origine si rien à faire (ou suivi pas prêt), sinon le canvas déformé.
++export class FaceFxProcessor {
++  constructor() {
++    this.renderer = null;
++    this.comp = null;
++    this.failed = false;
++    this.face = null;
++    this.body = null;
++    this.lostFace = 0;
++    this.lostBody = 0;
++  }
++
++  process(source, sw, sh, resolved, { maxSide = 1280 } = {}) {
++    const passthrough = { source, w: sw, h: sh };
++    if (this.failed || !resolved?.active || !sw || !sh) return passthrough;
++    const wantPose = resolved.needsPose;
++    ensureTracker({ pose: wantPose });
++    if (!trackerReady(false)) return passthrough;
++
++    if (!this.renderer) {
++      try {
++        this.renderer = new WarpRenderer();
++      } catch (error) {
++        console.warn("BAARO déformation indisponible:", error);
++        this.failed = true;
++        return passthrough;
++      }
++    }
++
++    const aspect = sw / sh;
++    const found = detect(source, { pose: wantPose && trackerReady(true) });
++    if (found.face) {
++      this.face = smoothLandmarks(this.face, found.face);
++      this.lostFace = 0;
++    } else if (++this.lostFace > HOLD_FRAMES) this.face = null;
++    if (found.pose) {
++      this.body = smoothLandmarks(this.body, found.pose);
++      this.lostBody = 0;
++    } else if (++this.lostBody > HOLD_FRAMES) this.body = null;
++
++    const face = analyzeFace(this.face, aspect);
++    const body = wantPose ? analyzeBody(this.body, aspect) : null;
++    if (!face && !body) return passthrough;
++
++    const scale = Math.min(1, maxSide / Math.max(sw, sh));
++    const w = Math.max(2, Math.round(sw * scale));
++    const h = Math.max(2, Math.round(sh * scale));
++    let out = { source, w: sw, h: sh };
++    if (resolved.hasWarp) {
++      const scene = buildScene(resolved, face, body);
++      this.renderer.render(source, sw, sh, w, h, scene);
++      out = { source: this.renderer.canvas, w, h };
++    }
++    if (resolved.mask && face) {
++      if (!this.comp) this.comp = document.createElement("canvas");
++      if (this.comp.width !== w || this.comp.height !== h) {
++        this.comp.width = w;
++        this.comp.height = h;
++      }
++      const ctx = this.comp.getContext("2d");
++      ctx.clearRect(0, 0, w, h);
++      ctx.drawImage(out.source, 0, 0, w, h);
++      drawMask(ctx, face, resolved.mask, w, h);
++      out = { source: this.comp, w, h };
++    }
++    if (out.source === source) return passthrough;
++    return out;
++  }
++
++  dispose() {
++    this.renderer?.dispose();
++    this.renderer = null;
++    this.comp = null;
++  }
++}
+diff --git a/src/features/videos/faceFx/tracker.js b/src/features/videos/faceFx/tracker.js
+new file mode 100644
+index 0000000..0bda3c0
+--- /dev/null
++++ b/src/features/videos/faceFx/tracker.js
+@@ -0,0 +1,128 @@
++import { FaceLandmarker, FilesetResolver, PoseLandmarker } from "@mediapipe/tasks-vision";
++
++// Suivi du visage et du corps (MediaPipe) — 100 % dans le navigateur.
++// Les fichiers sont servis depuis NOTRE domaine (CSP stricte) :
++//   public/mediapipe/wasm/*        copiés automatiquement (scripts/copy-mediapipe-wasm.mjs)
++//   public/models/face_landmarker.task        à déposer à la main (voir public/models/README.md)
++//   public/models/pose_landmarker_lite.task   idem, seulement pour les effets « corps »
++
++const base = () => `${import.meta.env.BASE_URL || "./"}`;
++const url = (path) => new URL(`${base()}${path}`, document.baseURI).href;
++
++export const MODEL_PATHS = {
++  face: "models/face_landmarker.task",
++  pose: "models/pose_landmarker_lite.task",
++};
++
++const listeners = new Set();
++const state = {
++  status: { face: "idle", pose: "idle" }, // idle | loading | ready | error
++  error: { face: "", pose: "" },
++};
++let vision = null;
++let faceLandmarker = null;
++let poseLandmarker = null;
++let loading = {};
++let lastTs = 0;
++const cache = new WeakMap(); // source → { t, result }
++
++const emit = () => listeners.forEach((fn) => fn({ ...state, status: { ...state.status }, error: { ...state.error } }));
++
++export const subscribeTracker = (fn) => {
++  listeners.add(fn);
++  fn({ ...state, status: { ...state.status }, error: { ...state.error } });
++  return () => listeners.delete(fn);
++};
++
++async function modelExists(path) {
++  try {
++    const res = await fetch(url(path), { method: "HEAD" });
++    const type = res.headers.get("content-type") || "";
++    // Un SPA renvoie index.html (200) quand le fichier manque.
++    return res.ok && !type.includes("text/html");
++  } catch {
++    return false;
++  }
++}
++
++async function create(Klass, kind, path, extra) {
++  if (!vision) vision = await FilesetResolver.forVisionTasks(url("mediapipe/wasm"));
++  if (!(await modelExists(path))) {
++    throw new Error(`Modèle manquant : public/${path}`);
++  }
++  const make = (delegate) =>
++    Klass.createFromOptions(vision, {
++      baseOptions: { modelAssetPath: url(path), delegate },
++      runningMode: "VIDEO",
++      ...extra,
++    });
++  try {
++    return await make("GPU");
++  } catch {
++    return make("CPU");
++  }
++}
++
++// Charge les modèles nécessaires (une seule fois). pose = true pour les effets « corps ».
++export function ensureTracker({ pose = false } = {}) {
++  const jobs = [];
++  const run = (kind, factory, assign) => {
++    if (state.status[kind] === "ready") return;
++    if (!loading[kind]) {
++      state.status[kind] = "loading";
++      state.error[kind] = "";
++      emit();
++      loading[kind] = factory()
++        .then((lm) => {
++          assign(lm);
++          state.status[kind] = "ready";
++        })
++        .catch((error) => {
++          console.warn(`BAARO suivi ${kind}:`, error);
++          state.status[kind] = "error";
++          state.error[kind] = error?.message || "Chargement impossible";
++          loading[kind] = null;
++        })
++        .finally(emit);
++    }
++    jobs.push(loading[kind]);
++  };
++  run("face", () => create(FaceLandmarker, "face", MODEL_PATHS.face, { numFaces: 1 }), (lm) => {
++    faceLandmarker = lm;
++  });
++  if (pose) {
++    run("pose", () => create(PoseLandmarker, "pose", MODEL_PATHS.pose, { numPoses: 1 }), (lm) => {
++      poseLandmarker = lm;
++    });
++  }
++  return Promise.all(jobs);
++}
++
++// Détection sur l'image courante de `source` (<video>). Résultat réutilisé si appelé deux
++// fois dans la même image (aperçu + enregistrement).
++export function detect(source, { pose = false } = {}) {
++  const now = performance.now();
++  const hit = cache.get(source);
++  if (hit && now - hit.t < 12 && (!pose || hit.result.poseTried)) return hit.result;
++
++  const result = { face: null, pose: null, poseTried: pose };
++  lastTs = Math.max(lastTs + 1, now);
++  try {
++    if (faceLandmarker) {
++      const r = faceLandmarker.detectForVideo(source, lastTs);
++      result.face = r?.faceLandmarks?.[0] || null;
++    }
++    if (pose && poseLandmarker) {
++      lastTs += 1;
++      const r = poseLandmarker.detectForVideo(source, lastTs);
++      result.pose = r?.landmarks?.[0] || null;
++    }
++  } catch (error) {
++    console.warn("BAARO détection:", error);
++  }
++  cache.set(source, { t: now, result });
++  return result;
++}
++
++export const trackerReady = (pose = false) =>
++  state.status.face === "ready" && (!pose || state.status.pose === "ready");
+diff --git a/src/features/videos/faceFx/warpRenderer.js b/src/features/videos/faceFx/warpRenderer.js
+new file mode 100644
+index 0000000..8844ccf
+--- /dev/null
++++ b/src/features/videos/faceFx/warpRenderer.js
+@@ -0,0 +1,253 @@
++// Rendu WebGL des déformations (visage / corps) et de l'effet peau (vieux / jeune).
++//
++// Principe : une liste d'« opérateurs » locaux déplace les pixels autour de points
++// (bulge = gonfler/rétrécir, shift = pousser, aniso = étirer par axe). Tout est calculé
++// dans le shader, sur le GPU, donc assez rapide pour la caméra en direct.
++
++export const MAX_OPS = 32;
++
++const VERT = `
++attribute vec2 a;
++varying vec2 v;
++void main() {
++  v = vec2(a.x * 0.5 + 0.5, 0.5 - a.y * 0.5);
++  gl_Position = vec4(a, 0.0, 1.0);
++}`;
++
++const FRAG = `
++precision highp float;
++varying vec2 v;
++uniform sampler2D tex;
++uniform float aspect;
++uniform vec4 opA[${MAX_OPS}];
++uniform vec4 opB[${MAX_OPS}];
++uniform int nOps;
++uniform float hasFace;
++uniform vec4 face;      // cx, cy, rx, ry (espace « aspect »)
++uniform float faceRot;
++uniform vec4 hair;      // cx, cy, rx, ry
++uniform vec2 eyeL;
++uniform vec2 eyeR;
++uniform vec2 noseL;
++uniform vec2 noseR;
++uniform vec2 mouthL;
++uniform vec2 mouthR;
++uniform float age;      // -1 (jeune) .. 1 (vieux)
++uniform float smoothAmt;
++
++float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
++float noise(vec2 p) {
++  vec2 i = floor(p);
++  vec2 f = fract(p);
++  f = f * f * (3.0 - 2.0 * f);
++  return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x),
++             mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
++}
++float fbm(vec2 p) {
++  return 0.5 * noise(p) + 0.25 * noise(p * 2.03) + 0.125 * noise(p * 4.1) + 0.0625 * noise(p * 8.3);
++}
++float segDist(vec2 p, vec2 a, vec2 b) {
++  vec2 pa = p - a;
++  vec2 ba = b - a;
++  float h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-6), 0.0, 1.0);
++  return length(pa - ba * h);
++}
++vec3 sampleAt(vec2 q) {
++  return texture2D(tex, clamp(vec2(q.x / aspect, q.y), 0.001, 0.999)).rgb;
++}
++
++void main() {
++  vec2 p = vec2(v.x * aspect, v.y);
++  vec2 q = p;
++  for (int i = 0; i < ${MAX_OPS}; i++) {
++    if (i >= nOps) break;
++    vec4 A = opA[i];
++    vec4 B = opB[i];
++    vec2 d = p - A.xy;
++    float f = 1.0 - smoothstep(0.0, A.z, length(d));
++    if (A.w < 0.5) q -= d * B.x * f;
++    else if (A.w < 1.5) q -= B.xy * f;
++    else q -= d * B.xy * f;
++  }
++
++  vec3 c = sampleAt(q);
++
++  if (hasFace > 0.5) {
++    float cs = cos(faceRot);
++    float sn = sin(faceRot);
++    vec2 dp = q - face.xy;
++    vec2 r = vec2(cs * dp.x + sn * dp.y, -sn * dp.x + cs * dp.y);
++    vec2 qn = r / face.zw;
++    float m = 1.0 - smoothstep(0.7, 1.0, length(qn));
++    float luma = dot(c, vec3(0.299, 0.587, 0.114));
++    float scale = face.z;
++
++    // Jeune : lissage de la peau qui préserve les contours (yeux, bouche).
++    float young = max(-age, 0.0);
++    float sm = clamp(smoothAmt + young * 0.8, 0.0, 1.0) * m;
++    if (sm > 0.01) {
++      float rad = face.w * 0.018;
++      vec3 acc = c;
++      float ws = 1.0;
++      for (int k = 0; k < 8; k++) {
++        float an = float(k) * 0.785398;
++        vec2 o1 = vec2(cos(an), sin(an)) * rad;
++        vec2 o2 = o1 * 2.2;
++        vec3 s1 = sampleAt(q + o1);
++        vec3 s2 = sampleAt(q + o2);
++        float w1 = exp(-pow(dot(s1, vec3(0.299, 0.587, 0.114)) - luma, 2.0) * 60.0);
++        float w2 = exp(-pow(dot(s2, vec3(0.299, 0.587, 0.114)) - luma, 2.0) * 60.0) * 0.7;
++        acc += s1 * w1 + s2 * w2;
++        ws += w1 + w2;
++      }
++      c = mix(c, acc / ws, sm * 0.9);
++    }
++    if (young > 0.0) {
++      c += vec3(0.05, 0.02, 0.015) * young * m;
++      float cheek = smoothstep(0.55, 0.0, length(qn - vec2(0.55, 0.15))) + smoothstep(0.55, 0.0, length(qn - vec2(-0.55, 0.15)));
++      c = mix(c, c * vec3(1.06, 0.95, 0.95), cheek * young * 0.5);
++    }
++
++    // Vieux : rides, cernes, sillons, teint terne, cheveux gris.
++    float old = max(age, 0.0);
++    if (old > 0.0) {
++      float n = fbm(qn * 7.0);
++      float lines = 0.0;
++      // front
++      float fz = smoothstep(-0.95, -0.7, qn.y) * (1.0 - smoothstep(-0.5, -0.35, qn.y)) * (1.0 - smoothstep(0.45, 0.65, abs(qn.x)));
++      lines += fz * pow(abs(sin(qn.y * 38.0 + n * 3.0)), 6.0);
++      // pattes d'oie
++      vec2 dl = q - eyeL;
++      vec2 dr = q - eyeR;
++      float ce = smoothstep(scale * 0.5, scale * 0.1, length(dl)) + smoothstep(scale * 0.5, scale * 0.1, length(dr));
++      lines += ce * pow(abs(sin(atan(dl.y, dl.x) * 9.0 + n * 2.0)), 5.0) * 0.8;
++      // sillons nasogéniens
++      float nl = min(segDist(q, noseL, mouthL), segDist(q, noseR, mouthR));
++      lines += smoothstep(scale * 0.055, 0.0, nl) * 1.1;
++      // cernes
++      float bag = smoothstep(scale * 0.28, 0.0, length(dl - vec2(0.0, scale * 0.16))) + smoothstep(scale * 0.28, 0.0, length(dr - vec2(0.0, scale * 0.16)));
++      c *= 1.0 - bag * old * 0.16;
++      c *= 1.0 - clamp(lines, 0.0, 1.0) * m * old * 0.38;
++      c *= 1.0 - (n - 0.4) * m * old * 0.22;
++      float g = dot(c, vec3(0.299, 0.587, 0.114));
++      c = mix(c, vec3(g) * vec3(1.04, 1.0, 0.9), old * m * 0.3);
++
++      // cheveux gris : zone au-dessus du front, pixels sombres seulement
++      vec2 hd = (p - hair.xy) / hair.zw;
++      float mh = (1.0 - smoothstep(0.75, 1.0, length(hd))) * step(p.y, face.y - face.w * 0.25);
++      float dark = 1.0 - smoothstep(0.3, 0.62, luma);
++      vec3 grey = vec3(0.72 + 0.12 * noise(q * 90.0));
++      c = mix(c, mix(c, grey, 0.85), mh * dark * old);
++    }
++  }
++  gl_FragColor = vec4(c, 1.0);
++}`;
++
++export class WarpRenderer {
++  constructor() {
++    this.canvas = document.createElement("canvas");
++    const gl = this.canvas.getContext("webgl", {
++      premultipliedAlpha: false,
++      preserveDrawingBuffer: true,
++      antialias: false,
++    });
++    if (!gl) throw new Error("WebGL indisponible");
++    this.gl = gl;
++    const compile = (type, src) => {
++      const s = gl.createShader(type);
++      gl.shaderSource(s, src);
++      gl.compileShader(s);
++      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
++        throw new Error(`Shader : ${gl.getShaderInfoLog(s)}`);
++      }
++      return s;
++    };
++    const prog = gl.createProgram();
++    gl.attachShader(prog, compile(gl.VERTEX_SHADER, VERT));
++    gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, FRAG));
++    gl.linkProgram(prog);
++    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
++      throw new Error(`Programme : ${gl.getProgramInfoLog(prog)}`);
++    }
++    gl.useProgram(prog);
++    this.prog = prog;
++
++    const buf = gl.createBuffer();
++    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
++    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
++    const loc = gl.getAttribLocation(prog, "a");
++    gl.enableVertexAttribArray(loc);
++    gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
++
++    this.tex = gl.createTexture();
++    gl.bindTexture(gl.TEXTURE_2D, this.tex);
++    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
++    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
++    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
++    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
++
++    this.u = {};
++    [
++      "tex", "aspect", "opA", "opB", "nOps", "hasFace", "face", "faceRot", "hair",
++      "eyeL", "eyeR", "noseL", "noseR", "mouthL", "mouthR", "age", "smoothAmt",
++    ].forEach((name) => {
++      this.u[name] = gl.getUniformLocation(prog, name);
++    });
++    this.opA = new Float32Array(MAX_OPS * 4);
++    this.opB = new Float32Array(MAX_OPS * 4);
++  }
++
++  // scene : { ops, face (ou null), age, smooth } — coordonnées en espace « aspect » (x * w/h, y).
++  render(source, sw, sh, outW, outH, scene) {
++    const gl = this.gl;
++    if (this.canvas.width !== outW || this.canvas.height !== outH) {
++      this.canvas.width = outW;
++      this.canvas.height = outH;
++    }
++    gl.viewport(0, 0, outW, outH);
++    gl.bindTexture(gl.TEXTURE_2D, this.tex);
++    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
++    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
++
++    const ops = scene.ops || [];
++    const n = Math.min(ops.length, MAX_OPS);
++    this.opA.fill(0);
++    this.opB.fill(0);
++    for (let i = 0; i < n; i += 1) {
++      const o = ops[i];
++      this.opA.set([o.x, o.y, Math.max(o.r, 1e-4), o.type], i * 4);
++      this.opB.set([o.a || 0, o.b || 0, 0, 0], i * 4);
++    }
++    const u = this.u;
++    gl.uniform1i(u.tex, 0);
++    gl.uniform1f(u.aspect, sw / sh);
++    gl.uniform4fv(u.opA, this.opA);
++    gl.uniform4fv(u.opB, this.opB);
++    gl.uniform1i(u.nOps, n);
++    const f = scene.face;
++    gl.uniform1f(u.hasFace, f ? 1 : 0);
++    if (f) {
++      gl.uniform4f(u.face, f.cx, f.cy, f.rx, f.ry);
++      gl.uniform1f(u.faceRot, f.rot);
++      gl.uniform4f(u.hair, f.hair.cx, f.hair.cy, f.hair.rx, f.hair.ry);
++      gl.uniform2f(u.eyeL, f.eyeL.x, f.eyeL.y);
++      gl.uniform2f(u.eyeR, f.eyeR.x, f.eyeR.y);
++      gl.uniform2f(u.noseL, f.noseL.x, f.noseL.y);
++      gl.uniform2f(u.noseR, f.noseR.x, f.noseR.y);
++      gl.uniform2f(u.mouthL, f.mouthL.x, f.mouthL.y);
++      gl.uniform2f(u.mouthR, f.mouthR.x, f.mouthR.y);
++    }
++    gl.uniform1f(u.age, scene.age || 0);
++    gl.uniform1f(u.smoothAmt, scene.smooth || 0);
++    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
++    return this.canvas;
++  }
++
++  dispose() {
++    try {
++      this.gl.getExtension("WEBGL_lose_context")?.loseContext();
++    } catch {
++      // rien à libérer
++    }
++  }
++}
+diff --git a/src/features/videos/hooks/useCamera.js b/src/features/videos/hooks/useCamera.js
+index b8a64f7..1701f46 100644
+--- a/src/features/videos/hooks/useCamera.js
++++ b/src/features/videos/hooks/useCamera.js
+@@ -21,7 +21,9 @@ export function useCamera({ onOpen, onRecorded, filter = null } = {}) {
+ 
+   // Filtre courant, relu à chaque image du rendu pendant l'enregistrement.
+   const specRef = useRef(null);
+-  specRef.current = filter?.active ? filter.spec : null;
++  specRef.current = filter?.spec || null;
++  const fxRef = useRef(null);
++  fxRef.current = filter?.face?.active ? filter.face.resolved : null;
+ 
+   // Toujours appeler la dernière version du callback, même depuis recorder.onstop.
+   const onRecordedRef = useRef(onRecorded);
+@@ -134,11 +136,12 @@ export function useCamera({ onOpen, onRecorded, filter = null } = {}) {
+     let baked = false;
+     try {
+       // Filtre actif : on enregistre le rendu filtré (canvas) et non le flux brut.
+-      if (specRef.current && cameraVideoRef.current) {
++      if ((specRef.current || fxRef.current) && cameraVideoRef.current) {
+         filteredRef.current = createFilteredCameraStream(
+           cameraVideoRef.current,
+           stream,
+           () => specRef.current,
++          () => fxRef.current,
+         );
+         recordStream = filteredRef.current.stream;
+         baked = true;
+diff --git a/src/features/videos/hooks/useFaceFx.js b/src/features/videos/hooks/useFaceFx.js
+new file mode 100644
+index 0000000..5869595
+--- /dev/null
++++ b/src/features/videos/hooks/useFaceFx.js
+@@ -0,0 +1,62 @@
++import { useCallback, useMemo, useState } from "react";
++import { DEFAULT_FX_STATE, normalizeFxState, resolveFaceFx } from "../faceFx/operators.js";
++import { describeMask, MASK_NONE, MASK_RANDOM } from "../faceFx/masks.js";
++import { describeFaceFx, FX_RANDOM } from "../faceFx/presets.js";
++import { randomSeed } from "../filters/index.js";
++
++// État des déformations visage / corps / âge (en mémoire pour la session).
++export function useFaceFx() {
++  const [state, setState] = useState(DEFAULT_FX_STATE);
++  const resolved = useMemo(() => resolveFaceFx(state), [state]);
++  const info = useMemo(() => describeFaceFx(state), [state]);
++
++  const set = useCallback((fn) => setState((s) => normalizeFxState(fn(s))), []);
++  const pick = useCallback((id) => set((s) => ({ ...s, id, seed: 0, adjust: {} })), [set]);
++  const surprise = useCallback(
++    () => set((s) => ({ ...s, id: FX_RANDOM, seed: randomSeed(), adjust: {} })),
++    [set],
++  );
++  const step = useCallback(
++    (delta) => set((s) => ({ ...s, id: FX_RANDOM, seed: Math.max(1, (s.seed || 0) + delta), adjust: {} })),
++    [set],
++  );
++  const patch = useCallback((values) => set((s) => ({ ...s, ...values })), [set]);
++  const setParam = useCallback(
++    (key, value) => set((s) => ({ ...s, adjust: { ...s.adjust, [key]: value } })),
++    [set],
++  );
++  const resetParams = useCallback(() => set((s) => ({ ...s, adjust: {} })), [set]);
++  const setMask = useCallback((id) => set((s) => ({ ...s, mask: { ...s.mask, id, seed: 0 } })), [set]);
++  const maskSurprise = useCallback(
++    () => set((s) => ({ ...s, mask: { id: MASK_RANDOM, seed: randomSeed(), hue: 0 } })),
++    [set],
++  );
++  const maskStep = useCallback(
++    (delta) => set((s) => ({ ...s, mask: { id: MASK_RANDOM, seed: Math.max(1, (s.mask.seed || 0) + delta), hue: 0 } })),
++    [set],
++  );
++  const setMaskHue = useCallback((hue) => set((s) => ({ ...s, mask: { ...s.mask, hue } })), [set]);
++  const clearMask = useCallback(() => set((s) => ({ ...s, mask: { id: MASK_NONE, seed: 0, hue: 0 } })), [set]);
++  const reset = useCallback(() => setState(DEFAULT_FX_STATE), []);
++  const maskInfo = useMemo(() => describeMask(state.mask), [state.mask]);
++
++  return {
++    state,
++    resolved,
++    info,
++    active: resolved.active,
++    pick,
++    surprise,
++    step,
++    patch,
++    setMask,
++    maskSurprise,
++    maskStep,
++    setMaskHue,
++    clearMask,
++    maskInfo,
++    setParam,
++    resetParams,
++    reset,
++  };
++}
+diff --git a/src/features/videos/hooks/useVideoCreator.js b/src/features/videos/hooks/useVideoCreator.js
+index 7ecac6d..fa0c1d6 100644
+--- a/src/features/videos/hooks/useVideoCreator.js
++++ b/src/features/videos/hooks/useVideoCreator.js
+@@ -186,7 +186,7 @@ export function useVideoCreator({
+       }
+ 
+       const file = await renderToFile({
+-        drawFrame: filter?.active ? withFilter(drawFrame, filter.spec) : drawFrame,
++        drawFrame: filter?.spec ? withFilter(drawFrame, filter.spec) : drawFrame,
+         totalMs,
+         audioUrl: wantSound ? selectedSound.audio_url : null,
+         audioCtx,
+@@ -300,12 +300,13 @@ export function useVideoCreator({
+ 
+         // Filtre choisi sur une vidéo brute : on l'incruste avant l'envoi.
+         let fileToSend = file;
+-        if (filter?.active && !generated && !file._filterBaked) {
++        if (filter?.anyActive && !generated && !file._filterBaked) {
+           setFilterRendering(true);
+           try {
+             fileToSend = await renderVideoWithFilter({
+               file,
+               spec: filter.spec,
++              fx: filter.face?.active ? filter.face.resolved : null,
+               onProgress: (p) =>
+                 setUploadProgress(base + Math.round(p * slice * 0.5)),
+             });
+diff --git a/src/features/videos/utils/filterRender.js b/src/features/videos/utils/filterRender.js
+index 54a98ce..28a228f 100644
+--- a/src/features/videos/utils/filterRender.js
++++ b/src/features/videos/utils/filterRender.js
+@@ -1,4 +1,5 @@
+ import { CANVAS_H, CANVAS_W } from "../constants.js";
++import { FaceFxProcessor } from "../faceFx/processor.js";
+ import { drawFiltered } from "../filters/index.js";
+ import { pickRecorderMime } from "./videoRenderer.js";
+ 
+@@ -46,9 +47,10 @@ const makeRecorder = (stream) => {
+ 
+ // Caméra en direct : renvoie un flux filtré (image) + pistes audio du micro.
+ // getSpec() est relu à chaque image : on peut changer de filtre en filmant.
+-export function createFilteredCameraStream(videoEl, sourceStream, getSpec) {
++export function createFilteredCameraStream(videoEl, sourceStream, getSpec, getFx = () => null) {
+   const canvas = makeCanvas();
+   const ctx = canvas.getContext("2d");
++  const fxProcessor = new FaceFxProcessor();
+   const t0 = performance.now();
+   let raf = 0;
+   let stopped = false;
+@@ -58,7 +60,8 @@ export function createFilteredCameraStream(videoEl, sourceStream, getSpec) {
+     const vw = videoEl.videoWidth;
+     const vh = videoEl.videoHeight;
+     if (vw && vh && videoEl.readyState >= 2) {
+-      drawFiltered(ctx, videoEl, vw, vh, getSpec(), now - t0);
++      const f = fxProcessor.process(videoEl, vw, vh, getFx());
++      drawFiltered(ctx, f.source, f.w, f.h, getSpec(), now - t0);
+     }
+     raf = requestAnimationFrame(draw);
+   };
+@@ -72,6 +75,7 @@ export function createFilteredCameraStream(videoEl, sourceStream, getSpec) {
+     cancelAnimationFrame(raf);
+     // On n'arrête que la piste image : le micro appartient au flux caméra.
+     stream.getVideoTracks().forEach((track) => track.stop());
++    fxProcessor.dispose();
+   };
+   return { stream, stop };
+ }
+@@ -80,6 +84,7 @@ export function createFilteredCameraStream(videoEl, sourceStream, getSpec) {
+ export async function renderVideoWithFilter({
+   file,
+   spec,
++  fx = null,
+   onProgress,
+   signal,
+ }) {
+@@ -96,6 +101,7 @@ export async function renderVideoWithFilter({
+ 
+   let audioCtx = null;
+   let stream = null;
++  const fxProcessor = new FaceFxProcessor();
+   try {
+     await new Promise((resolve, reject) => {
+       video.onloadedmetadata = resolve;
+@@ -137,7 +143,8 @@ export async function renderVideoWithFilter({
+       const tick = (now) => {
+         if (signal?.aborted) return finish(new Error("Filtre annulé."));
+         if (video.videoWidth) {
+-          drawFiltered(ctx, video, video.videoWidth, video.videoHeight, spec, now - t0);
++          const f = fxProcessor.process(video, video.videoWidth, video.videoHeight, fx);
++          drawFiltered(ctx, f.source, f.w, f.h, spec, now - t0);
+         }
+         if (duration) onProgress?.(Math.min(1, video.currentTime / duration));
+         raf = requestAnimationFrame(tick);
+@@ -149,6 +156,7 @@ export async function renderVideoWithFilter({
+     await finished;
+     return toFile("baaro-filtre");
+   } finally {
++    fxProcessor.dispose();
+     video.pause();
+     stream?.getTracks().forEach((track) => track.stop());
+     audioCtx?.close?.().catch(() => {});
