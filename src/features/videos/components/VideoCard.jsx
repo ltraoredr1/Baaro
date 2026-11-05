@@ -3,7 +3,6 @@ import {
   Check,
   Clock3,
   Expand,
-  Gauge,
   Heart,
   MessageCircle,
   Eye,
@@ -74,7 +73,6 @@ export default function VideoCard({
   const handleLike = actions.handleLike || actions.toggleLike;
 
   const [captionOpen, setCaptionOpen] = useState(false);
-  const [playbackRate, setPlaybackRate] = useState(1);
   const [showHeartAnim, setShowHeartAnim] = useState(false);
   const [dragging, setDragging] = useState(false);
 
@@ -130,16 +128,6 @@ export default function VideoCard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isActive]);
 
-  // Vitesse de lecture rétablie quand la vidéo n'est plus active.
-  useEffect(() => {
-    if (!isActive && playbackRate !== 1) {
-      setPlaybackRate(1);
-      const el = videoRefs.current[video.id];
-      if (el) el.playbackRate = 1;
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isActive]);
-
   // --- PLAY / PAUSE direct sur l'élément (indépendant du hook) ---
   const togglePlayPause = () => {
     if (isImage) return;
@@ -175,16 +163,6 @@ export default function VideoCard({
         clickTimeoutRef.current = null;
       }, 300);
     }
-  };
-
-  // --- VITESSE (1x, 1.25x, 1.5x, 2x) ---
-  const toggleSpeed = (e) => {
-    e.stopPropagation();
-    const rates = [1, 1.25, 1.5, 2];
-    const nextRate = rates[(rates.indexOf(playbackRate) + 1) % rates.length];
-    setPlaybackRate(nextRate);
-    const videoEl = videoRefs.current[video.id];
-    if (videoEl) videoEl.playbackRate = nextRate;
   };
 
   // --- SCRUBBING (tap + glisser, souris et tactile) ---
@@ -322,18 +300,6 @@ export default function VideoCard({
             className="text-pink-500 fill-pink-500 drop-shadow-lg"
           />
         </div>
-      )}
-
-      {/* Vitesse de lecture (vidéos uniquement) */}
-      {!isImage && (
-        <button
-          type="button"
-          onClick={toggleSpeed}
-          className="absolute top-16 left-4 z-30 flex items-center gap-1 bg-black/45 backdrop-blur-md text-white px-2.5 py-1.5 rounded-full text-[11px] font-mono border border-white/20 active:scale-95"
-        >
-          <Gauge size={13} />
-          <span>{playbackRate}x</span>
-        </button>
       )}
 
       {!isImage && videoErrors[video.id] && (
