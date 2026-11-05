@@ -1,0 +1,40 @@
+name: BAARO CI — Production Readiness
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  checks:
+    name: Production Checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'npm'
+      - run: npm ci --prefer-offline --no-audit
+      - run: npm run check:lock
+      - run: npm run check:production
+      - run: npm run audit:security
+      - run: npm run check:secrets
+      - run: npm run check:upstash
+        env:
+          UPSTASH_REDIS_REST_URL: ""
+          UPSTASH_REDIS_REST_TOKEN: ""
+      - run: npm run check:e2e
+      - run: npm run check:e2e:smoke
+      - run: npm run check:payout
+      - run: npm run check:performance
+      - run: npm run check:android
+      - run: npm run build
+        env:
+          VITE_APP_ENV: production
+          VITE_SUPABASE_URL: https://example.supabase.co
+          VITE_SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.example

@@ -1,7 +1,7 @@
 {
   "name": "baaro",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "engines": {
     "node": "24.x"
@@ -38,7 +38,7 @@
     "capgo:upload:beta": "npm run build && npx @capgo/cli@latest bundle upload --channel beta",
     "capgo:upload:delta": "npm run build && npx @capgo/cli@latest bundle upload --channel production --delta",
     "capgo:list": "npx @capgo/cli@latest bundle list",
-    "ci": "npm run check:lock && npm run check:production && npm run audit:security && npm run check:e2e && npm run check:e2e:smoke && npm run check:payout && npm run check:performance && npm run check:android && npm run build",
+    "ci": "npm run check:lock && npm run check:production && npm run audit:security && npm run check:secrets && npm run check:upstash && npm run check:e2e && npm run check:e2e:smoke && npm run check:payout && npm run check:performance && npm run check:android && npm run build",
     "test:chat-translate": "node scripts/test-chat-autotranslate.mjs"
   },
   "dependencies": {
