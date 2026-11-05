@@ -284,7 +284,7 @@ export function CreateDebateModal(props) {
 
   var modal = (
     <div
-      className="fixed inset-0 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/80 backdrop-blur-md"
+      className="fixed inset-0 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md"
       style={{ zIndex: 9999 }}
       onClick={close}
     >

@@ -93,7 +93,7 @@ export function EngagementList({ type, targetId, ownerId, viewerId, onClose }) {
 
   return (
     <div
-      className="fixed inset-0 z-[90] bg-black/70 backdrop-blur-sm flex items-end sm:items-center justify-center p-3"
+      className="fixed inset-0 z-[90] bg-black/70 backdrop-blur-sm flex items-center justify-center p-3"
       onClick={onClose}
     >
       <div

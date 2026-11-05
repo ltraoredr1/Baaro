@@ -50,7 +50,7 @@ function Tile({ icon: Icon, label, active = false, badge = 0, onClick, as = 'but
 }
 
 /** `composer` = valeur retournée par useStoryComposer. */
-export function StoryComposer({ composer: c, products, cart }) {
+export function StoryComposer({ composer: c, products, cart, embedded = false }) {
   const scheduled = c.publishAt !== '';
 
   // Musique / programmation : dépliées seulement si demandées ou déjà utilisées
@@ -61,20 +61,25 @@ export function StoryComposer({ composer: c, products, cart }) {
 
   return (
     <div
-      className="rounded-2xl border shadow-xl backdrop-blur-md animate-in fade-in slide-in-from-top-3 duration-200 flex flex-col max-h-[80vh] overflow-hidden"
-      style={{ background: C.surface, borderColor: C.border }}
+      className={
+        embedded
+          ? 'flex flex-col flex-1 min-h-0 overflow-hidden'
+          : 'rounded-2xl border shadow-xl backdrop-blur-md animate-in fade-in slide-in-from-top-3 duration-200 flex flex-col max-h-[80vh] overflow-hidden'
+      }
+      style={embedded ? undefined : { background: C.surface, borderColor: C.border }}
     >
-      {/* En-tête */}
-      <div className="flex items-center justify-between px-3 py-2.5 border-b" style={{ borderColor: C.border }}>
-        <span className="text-sm font-bold" style={{ color: GOLD }}>Nouvelle story</span>
-        <button
-          onClick={() => c.setIsOpen(false)}
-          aria-label="Fermer"
-          className="p-1 rounded-full text-zinc-400 hover:text-white hover:bg-white/10 transition-colors"
-        >
-          <X size={16} />
-        </button>
-      </div>
+      {!embedded && (
+        <div className="flex items-center justify-between px-3 py-2.5 border-b" style={{ borderColor: C.border }}>
+          <span className="text-sm font-bold" style={{ color: GOLD }}>Nouvelle story</span>
+          <button
+            onClick={() => c.setIsOpen(false)}
+            aria-label="Fermer"
+            className="p-1 rounded-full text-zinc-400 hover:text-white hover:bg-white/10 transition-colors"
+          >
+            <X size={16} />
+          </button>
+        </div>
+      )}
 
       {/* Contenu défilant */}
       <div className="flex-1 overflow-y-auto px-3 py-3 space-y-3">

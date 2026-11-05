@@ -1059,7 +1059,7 @@ export default function CommunityTab({ onOpenProfile }) {
 
       {/* ── Modal : Créer un groupe ── */}
       {showCreateGroup && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 p-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
           <form onSubmit={handleCreateGroup} className="w-full max-w-md rounded-2xl border p-5 space-y-3"
             style={{ background: C.surface, borderColor: C.border }}>
             <div className="flex items-center justify-between">
@@ -1093,7 +1093,7 @@ export default function CommunityTab({ onOpenProfile }) {
 
       {/* ── Modal : Créer un canal ── */}
       {showCreateChannel && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 p-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
           <form onSubmit={handleCreateChannel} className="w-full max-w-md rounded-2xl border p-5 space-y-3"
             style={{ background: C.surface, borderColor: C.border }}>
             <div className="flex items-center justify-between">
