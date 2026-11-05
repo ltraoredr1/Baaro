@@ -26,7 +26,7 @@ export function TipButton({ recipientId, postId = null, liveId = null, compact =
         p_live_id: liveId,
       });
       if (rpcError) throw rpcError;
-      const payment = await createPayment({ provider: 'cinetpay', checkoutIntentId: data.id });
+      const payment = await createPayment({ provider: 'paypal', checkoutIntentId: data.id });
       if (!payment?.payment_url) throw new Error('URL de paiement manquante.');
       window.location.href = payment.payment_url;
     } catch (e) {
