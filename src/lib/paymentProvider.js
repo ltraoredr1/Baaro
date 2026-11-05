@@ -60,7 +60,7 @@ export async function createPayment({
   if (!authenticatedUserId &&!user_id) {
     throw new Error("Utilisateur authentifié introuvable.");
   }
-  if (!amount || Number(amount) <= 0) {
+  if (!checkoutIntentId && !paymentRef && (!amount || Number(amount) <= 0)) {
     throw new Error("Montant invalide.");
   }
 
