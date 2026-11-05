@@ -1,0 +1,515 @@
+diff --git a/.env.example b/.env.example
+index b7990f9..9b7e14a 100644
+--- a/.env.example
++++ b/.env.example
+@@ -140,7 +140,7 @@ VERCEL_PROJECT_PRODUCTION_URL=
+ # NEXTGEN VIDEO ENGINES / EXTERNAL MEDIA WORKER
+ # Heavy processing; API stays unchanged.
+ # BAARO_MEDIA_PROCESSOR_URL must be the public Cloud Run /process URL.
+-# BAARO_WORKER_SECRET must match the Cloud Run secret.
++# BAARO_WORKER_SECRET must match the Cloud Run secret; required in production.
+ # ------------------------------------------------------------
+ BAARO_MEDIA_PROCESSOR_URL=
+ BAARO_WORKER_SECRET=
+diff --git a/worker/README.md b/worker/README.md
+index 0883307..3e5aa25 100644
+--- a/worker/README.md
++++ b/worker/README.md
+@@ -26,7 +26,9 @@ npm install
+ npm start
+ ```
+ 
+-Le endpoint `POST /process` est protégé par `x-baaro-worker-secret`.
++Le endpoint `POST /process` exige toujours `x-baaro-worker-secret` : secret absent ou invalide, la requête est rejetée avant lecture/traitement du job. En production, le serveur refuse de démarrer si `BAARO_WORKER_SECRET` est absent ou vide. Les jobs sont validés avant traitement (UUID, type autorisé, payload, références R2 et préfixe de sortie limité au propriétaire).
++
++Créer un secret aléatoire long, le définir dans le gestionnaire de secrets du worker et recopier la même valeur dans Vercel. Ne jamais le committer. Exécuter les tests de sécurité avec `npm test` depuis `worker/`.
+ 
+ ## Uploads vidéo volumineux
+ 
+diff --git a/worker/deploy/README.md b/worker/deploy/README.md
+index 7cb0f55..0f4407a 100644
+--- a/worker/deploy/README.md
++++ b/worker/deploy/README.md
+@@ -10,7 +10,7 @@ Pré-requis : Google Cloud SDK (`gcloud`), un projet GCP, Artifact Registry et S
+ export GCP_PROJECT_ID="votre-projet"
+ export GCP_REGION="europe-west1"
+ export GCP_REPOSITORY="baaro"
+-export WORKER_SECRET="un-secret-long-et-aleatoire"
++export WORKER_SECRET="$(openssl rand -hex 32)"
+ export R2_ACCOUNT_ID="..."
+ export R2_ACCESS_KEY_ID="..."
+ export R2_SECRET_ACCESS_KEY="..."
+@@ -20,6 +20,7 @@ export OPENAI_API_KEY="..."
+ ```
+ 
+ Le script construit l'image, crée/met à jour les secrets, déploie le service avec 4 CPU / 8 Go RAM, concurrence 1, timeout 1 h et autoscaling 0–5 instances.
++`WORKER_SECRET` est obligatoire : le déploiement l’injecte depuis Secret Manager et le worker refuse de démarrer en production s’il est vide.
+ 
+ ## Vercel
+ 
+diff --git a/worker/deploy/cloudrun.env.example b/worker/deploy/cloudrun.env.example
+index d1f3208..08a48c9 100644
+--- a/worker/deploy/cloudrun.env.example
++++ b/worker/deploy/cloudrun.env.example
+@@ -5,6 +5,7 @@ R2_ACCESS_KEY_ID=
+ R2_SECRET_ACCESS_KEY=
+ R2_BUCKET_NAME=baaro-media
+ R2_PUBLIC_BASE_URL=
++# Obligatoire en production; fournir via Secret Manager, jamais committer la valeur.
+ BAARO_WORKER_SECRET=
+ OPENAI_API_KEY=
+ OPENAI_API_BASE=https://api.openai.com/v1
+diff --git a/worker/lib/config.mjs b/worker/lib/config.mjs
+index 4268357..e7f2945 100644
+--- a/worker/lib/config.mjs
++++ b/worker/lib/config.mjs
+@@ -1,6 +1,6 @@
+ export const config = {
+   port: Number(process.env.BAARO_WORKER_PORT || 8787),
+-  secret: process.env.BAARO_WORKER_SECRET || "",
++  secret: String(process.env.BAARO_WORKER_SECRET || "").trim(),
+   tmpDir: process.env.BAARO_WORKER_TMP_DIR || "/tmp/baaro-worker",
+   ffmpeg: process.env.FFMPEG_BIN || "ffmpeg",
+   ffprobe: process.env.FFPROBE_BIN || "ffprobe",
+diff --git a/worker/lib/jobValidation.mjs b/worker/lib/jobValidation.mjs
+new file mode 100644
+index 0000000..ebe27b8
+--- /dev/null
++++ b/worker/lib/jobValidation.mjs
+@@ -0,0 +1,191 @@
++const JOB_TYPES = new Set([
++  "transcode",
++  "thumbnail",
++  "captions",
++  "translate",
++  "dub",
++  "moderate",
++  "features",
++  "highlights",
++  "edit_plan",
++]);
++
++const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
++const MAX_JOB_BYTES = 128 * 1024;
++const MAX_TEXT_LENGTH = 30_000;
++
++function isRecord(value) {
++  return value !== null && typeof value === "object" && !Array.isArray(value);
++}
++
++function invalid(message) {
++  const error = new Error(message);
++  error.status = 400;
++  throw error;
++}
++
++function validateOptionalUuid(value, field) {
++  if (value === undefined || value === null || value === "") return undefined;
++  if (typeof value !== "string" || !UUID_RE.test(value)) {
++    invalid(`${field} doit être un UUID valide`);
++  }
++  return value;
++}
++
++function validateText(payload, field, maxLength, { required = false } = {}) {
++  const value = payload[field];
++  if (value === undefined || value === null) {
++    if (required) invalid(`payload.${field} est requis`);
++    return undefined;
++  }
++  if (typeof value !== "string" || value.length > maxLength) {
++    invalid(`payload.${field} doit être un texte de ${maxLength} caractères maximum`);
++  }
++  if (required && !value.trim()) invalid(`payload.${field} ne peut pas être vide`);
++  return value;
++}
++
++function safeR2Key(value, field) {
++  if (typeof value !== "string" || !value.trim() || value.length > 1024) {
++    invalid(`${field} doit être une clé R2 valide`);
++  }
++  if (
++    value.startsWith("/") ||
++    value.includes("\\") ||
++    /[\u0000-\u001f\u007f]/.test(value) ||
++    value.split("/").some((part) => part === "." || part === "..") ||
++    /^[a-z][a-z0-9+.-]*:\/\//i.test(value)
++  ) {
++    invalid(`${field} contient un chemin interdit`);
++  }
++  return value;
++}
++
++function safeOutputPrefix(value, ownerId) {
++  if (typeof value !== "string" || value.length > 512) {
++    invalid("payload.outputPrefix doit être un préfixe valide");
++  }
++  const ownerPrefix = `processed/${ownerId}/`;
++  if (!value.startsWith(ownerPrefix)) {
++    invalid("payload.outputPrefix doit rester dans le dossier processed de son propriétaire");
++  }
++  const parts = value.slice(ownerPrefix.length).split("/");
++  if (
++    !parts.length ||
++    parts.some((part) => !part || part === "." || part === "..") ||
++    value.includes("\\") ||
++    /[\u0000-\u001f\u007f]/.test(value)
++  ) {
++    invalid("payload.outputPrefix contient un chemin interdit");
++  }
++  return value;
++}
++
++function validateLanguage(payload, field) {
++  const value = validateText(payload, field, 80);
++  if (value !== undefined && (!value.trim() || /[\u0000-\u001f\u007f]/.test(value))) {
++    invalid(`payload.${field} n’est pas valide`);
++  }
++  return value;
++}
++
++/** Retourne une copie réduite au schéma consommé par le processeur. */
++export function validateWorkerJob(input) {
++  if (!isRecord(input)) invalid("Job invalide : objet attendu");
++  if (Buffer.byteLength(JSON.stringify(input), "utf8") > MAX_JOB_BYTES) {
++    invalid("Job trop volumineux");
++  }
++
++  if (typeof input.id !== "string" || !UUID_RE.test(input.id)) {
++    invalid("job.id doit être un UUID valide");
++  }
++  if (typeof input.owner_id !== "string" || !UUID_RE.test(input.owner_id)) {
++    invalid("job.owner_id doit être un UUID valide");
++  }
++  if (typeof input.job_type !== "string" || !JOB_TYPES.has(input.job_type)) {
++    invalid("Type de job non supporté");
++  }
++
++  const videoId = validateOptionalUuid(input.video_id, "job.video_id");
++  const assetId = validateOptionalUuid(input.asset_id, "job.asset_id");
++  const payload = input.payload === undefined || input.payload === null ? {} : input.payload;
++  if (!isRecord(payload)) invalid("job.payload doit être un objet JSON");
++
++  const sourceFields = ["sourceKey", "key", "r2Key"].filter(
++    (field) => payload[field] !== undefined && payload[field] !== null && payload[field] !== "",
++  );
++  if (sourceFields.length > 1) {
++    invalid("Fournir une seule clé source parmi sourceKey, key ou r2Key");
++  }
++  const sourceKey = sourceFields.length
++    ? safeR2Key(payload[sourceFields[0]], `payload.${sourceFields[0]}`)
++    : undefined;
++
++  const normalizedPayload = {};
++  if (sourceKey) normalizedPayload.sourceKey = sourceKey;
++
++  if (payload.outputPrefix !== undefined && payload.outputPrefix !== null) {
++    normalizedPayload.outputPrefix = safeOutputPrefix(payload.outputPrefix, input.owner_id);
++  }
++
++  const profile = validateText(payload, "profile", 16);
++  if (profile !== undefined) {
++    if (!new Set(["mobile", "hd", "source"]).has(profile)) {
++      invalid("payload.profile doit être mobile, hd ou source");
++    }
++    normalizedPayload.profile = profile;
++  }
++
++  if (payload.at !== undefined && payload.at !== null) {
++    if (typeof payload.at !== "number" || !Number.isFinite(payload.at) || payload.at < 0 || payload.at > 86_400) {
++      invalid("payload.at doit être un nombre entre 0 et 86400");
++    }
++    normalizedPayload.at = payload.at;
++  }
++
++  const stringFields = [
++    ["language", 80],
++    ["sourceLanguage", 80],
++    ["targetLanguage", 80],
++    ["whisperModel", 64],
++    ["moderationProvider", 120],
++    ["voice", 120],
++    ["text", MAX_TEXT_LENGTH],
++    ["prompt", MAX_TEXT_LENGTH],
++    ["transcript", MAX_TEXT_LENGTH],
++  ];
++  for (const [field, maxLength] of stringFields) {
++    const value = validateText(payload, field, maxLength);
++    if (value !== undefined) normalizedPayload[field] = value;
++  }
++  for (const field of ["language", "sourceLanguage", "targetLanguage"]) {
++    validateLanguage(normalizedPayload, field);
++  }
++  if (normalizedPayload.whisperModel !== undefined && !/^[a-zA-Z0-9._-]+$/.test(normalizedPayload.whisperModel)) {
++    invalid("payload.whisperModel contient des caractères interdits");
++  }
++  for (const field of ["moderationProvider", "voice"]) {
++    const value = normalizedPayload[field];
++    if (value !== undefined && (!value.trim() || /[\u0000-\u001f\u007f]/.test(value))) {
++      invalid(`payload.${field} n’est pas valide`);
++    }
++  }
++
++  const needsSource = !["edit_plan", "translate"].includes(input.job_type) || Boolean(sourceKey);
++  if (needsSource && !sourceKey) invalid("payload.sourceKey est requis pour ce type de job");
++  if (input.job_type === "translate" && !sourceKey && !normalizedPayload.text?.trim()) {
++    invalid("Le job translate doit fournir payload.sourceKey ou payload.text");
++  }
++  if (input.job_type === "dub" && !normalizedPayload.text?.trim()) {
++    invalid("payload.text est requis pour le job dub");
++  }
++
++  return {
++    id: input.id,
++    owner_id: input.owner_id,
++    job_type: input.job_type,
++    ...(videoId ? { video_id: videoId } : {}),
++    ...(assetId ? { asset_id: assetId } : {}),
++    payload: normalizedPayload,
++  };
++}
+diff --git a/worker/package.json b/worker/package.json
+index 58f0466..0274dfa 100644
+--- a/worker/package.json
++++ b/worker/package.json
+@@ -8,7 +8,8 @@
+   "scripts": {
+     "build": "echo \"Rien à compiler\"",
+     "start": "node server.mjs",
+-    "process": "node processor.mjs"
++    "process": "node processor.mjs",
++    "test": "node --test"
+   },
+   "dependencies": {
+     "@aws-sdk/client-s3": "^3.859.0",
+diff --git a/worker/server.mjs b/worker/server.mjs
+index 3533cb7..eeb260f 100644
+--- a/worker/server.mjs
++++ b/worker/server.mjs
+@@ -1,6 +1,9 @@
+ import http from "node:http";
++import { timingSafeEqual } from "node:crypto";
++import { pathToFileURL } from "node:url";
+ import { config } from "./lib/config.mjs";
+ import { processJob } from "./processor.mjs";
++import { validateWorkerJob } from "./lib/jobValidation.mjs";
+ import { prepareLargeVideo, signLargeVideoParts, completeLargeVideo, abortLargeVideo } from "./upload.mjs";
+ 
+ // Origines autorisees (CORS). "*" par defaut : l'auth se fait par jeton Bearer, pas par cookie.
+@@ -37,6 +40,18 @@ function badRequest(message, status = 400) {
+   return error;
+ }
+ 
++export function workerSecretMatches(provided, expected) {
++  if (typeof expected !== "string" || !expected.trim() || typeof provided !== "string") {
++    return false;
++  }
++  const providedBytes = Buffer.from(provided, "utf8");
++  const expectedBytes = Buffer.from(expected, "utf8");
++  return (
++    providedBytes.length === expectedBytes.length &&
++    timingSafeEqual(providedBytes, expectedBytes)
++  );
++}
++
+ function readBody(req) {
+   return new Promise((resolve, reject) => {
+     let data = "";
+@@ -58,7 +73,8 @@ function readBody(req) {
+   });
+ }
+ 
+-const server = http.createServer(async (req, res) => {
++export function createWorkerServer({ secret = config.secret, jobProcessor = processJob } = {}) {
++  return http.createServer(async (req, res) => {
+   // Preflight CORS : sans cette reponse, le navigateur bloque tous les appels /upload/*
+   if (req.method === "OPTIONS") {
+     res.writeHead(204, corsHeaders(req));
+@@ -86,17 +102,40 @@ const server = http.createServer(async (req, res) => {
+   }
+ 
+   if (req.method !== "POST" || req.url !== "/process") return send(req, res, 404, { error: "Not found" });
+-  if (config.secret && req.headers["x-baaro-worker-secret"] !== config.secret) {
++  if (typeof secret !== "string" || !secret.trim()) {
++    return send(req, res, 503, { error: "Worker authentication is not configured" });
++  }
++  if (!workerSecretMatches(req.headers["x-baaro-worker-secret"], secret)) {
+     return send(req, res, 401, { error: "Unauthorized" });
+   }
+   try {
+-    const { job } = await readBody(req);
+-    if (!job?.id || !job?.job_type) return send(req, res, 400, { error: "Job invalide" });
+-    const result = await processJob(job);
++    const body = await readBody(req);
++    if (!body || typeof body !== "object" || Array.isArray(body) || !("job" in body)) {
++      throw badRequest("Le champ job est requis");
++    }
++    const job = validateWorkerJob(body.job);
++    const result = await jobProcessor(job);
+     return send(req, res, 200, { ok: true, result });
+   } catch (error) {
+     return send(req, res, error.status || 500, { ok: false, error: String(error?.message || error) });
+   }
+-});
++  });
++}
++
++export function startWorker({ secret = config.secret, port = config.port, production = process.env.NODE_ENV === "production" } = {}) {
++  if (production && (typeof secret !== "string" || !secret.trim())) {
++    throw new Error("BAARO_WORKER_SECRET est obligatoire en production");
++  }
++  const server = createWorkerServer({ secret });
++  server.listen(port, "0.0.0.0", () => console.log(`BAARO worker listening on :${port}`));
++  return server;
++}
+ 
+-server.listen(config.port, "0.0.0.0", () => console.log(`BAARO worker listening on :${config.port}`));
++if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
++  try {
++    startWorker();
++  } catch (error) {
++    console.error(`[worker] ${error.message}`);
++    process.exitCode = 1;
++  }
++}
+diff --git a/worker/test/security.test.mjs b/worker/test/security.test.mjs
+new file mode 100644
+index 0000000..4e76031
+--- /dev/null
++++ b/worker/test/security.test.mjs
+@@ -0,0 +1,135 @@
++import assert from "node:assert/strict";
++import test from "node:test";
++import {
++  createWorkerServer,
++  startWorker,
++  workerSecretMatches,
++} from "../server.mjs";
++import { validateWorkerJob } from "../lib/jobValidation.mjs";
++
++const JOB_ID = "11111111-1111-4111-8111-111111111111";
++const OWNER_ID = "22222222-2222-4222-8222-222222222222";
++const VIDEO_ID = "33333333-3333-4333-8333-333333333333";
++const SECRET = "test-worker-secret-value";
++
++async function withServer(server, callback) {
++  await new Promise((resolve, reject) => {
++    server.once("error", reject);
++    server.listen(0, "127.0.0.1", resolve);
++  });
++  const { port } = server.address();
++  try {
++    await callback(`http://127.0.0.1:${port}`);
++  } finally {
++    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
++  }
++}
++
++async function sendJob(baseUrl, { secret, job = {} } = {}) {
++  return fetch(`${baseUrl}/process`, {
++    method: "POST",
++    headers: {
++      "content-type": "application/json",
++      ...(secret ? { "x-baaro-worker-secret": secret } : {}),
++    },
++    body: JSON.stringify({ job }),
++  });
++}
++
++test("production refuse de démarrer sans BAARO_WORKER_SECRET", () => {
++  assert.throws(
++    () => startWorker({ secret: "  ", port: 0, production: true }),
++    /BAARO_WORKER_SECRET est obligatoire en production/,
++  );
++});
++
++test("le secret est comparé exactement et les valeurs absentes échouent", () => {
++  assert.equal(workerSecretMatches(SECRET, SECRET), true);
++  assert.equal(workerSecretMatches(`${SECRET}x`, SECRET), false);
++  assert.equal(workerSecretMatches(undefined, SECRET), false);
++  assert.equal(workerSecretMatches(SECRET, ""), false);
++});
++
++test("un /process sans secret configuré répond 503 et n’appelle jamais le processeur", async () => {
++  let calls = 0;
++  const server = createWorkerServer({ secret: "", jobProcessor: async () => { calls += 1; } });
++  await withServer(server, async (baseUrl) => {
++    const response = await sendJob(baseUrl, { job: { id: JOB_ID } });
++    assert.equal(response.status, 503);
++    assert.equal(calls, 0);
++  });
++});
++
++test("chaque requête /process requiert le secret configuré", async () => {
++  let calls = 0;
++  const server = createWorkerServer({ secret: SECRET, jobProcessor: async () => { calls += 1; } });
++  await withServer(server, async (baseUrl) => {
++    for (const suppliedSecret of [undefined, "wrong-secret"]) {
++      const response = await sendJob(baseUrl, { secret: suppliedSecret, job: { id: JOB_ID } });
++      assert.equal(response.status, 401);
++    }
++    assert.equal(calls, 0);
++  });
++});
++
++test("un job valide est normalisé avant son passage au processeur", async () => {
++  let receivedJob;
++  const server = createWorkerServer({
++    secret: SECRET,
++    jobProcessor: async (job) => {
++      receivedJob = job;
++      return { accepted: true };
++    },
++  });
++  await withServer(server, async (baseUrl) => {
++    const response = await sendJob(baseUrl, {
++      secret: SECRET,
++      job: {
++        id: JOB_ID,
++        owner_id: OWNER_ID,
++        video_id: VIDEO_ID,
++        job_type: "translate",
++        payload: { text: "Bonjour", targetLanguage: "en" },
++        untrusted_extra: "must not reach processor",
++      },
++    });
++    assert.equal(response.status, 200);
++    assert.deepEqual(receivedJob, {
++      id: JOB_ID,
++      owner_id: OWNER_ID,
++      job_type: "translate",
++      video_id: VIDEO_ID,
++      payload: { text: "Bonjour", targetLanguage: "en" },
++    });
++  });
++});
++
++test("un type de job, UUID ou chemin source invalide est rejeté avant traitement", () => {
++  const base = {
++    id: JOB_ID,
++    owner_id: OWNER_ID,
++    job_type: "transcode",
++    payload: { sourceKey: "uploads/video.mp4" },
++  };
++  assert.throws(() => validateWorkerJob({ ...base, job_type: "shell" }), /Type de job non supporté/);
++  assert.throws(() => validateWorkerJob({ ...base, id: "../other" }), /job.id doit être un UUID valide/);
++  assert.throws(() => validateWorkerJob({ ...base, payload: { sourceKey: "uploads/../secret.mp4" } }), /chemin interdit/);
++  assert.throws(() => validateWorkerJob({ ...base, payload: { sourceKey: "uploads/video.mp4", profile: "ultra" } }), /profile/);
++});
++
++test("les préfixes de sortie sont limités à l’espace processed du propriétaire", () => {
++  const base = {
++    id: JOB_ID,
++    owner_id: OWNER_ID,
++    job_type: "transcode",
++    payload: { sourceKey: "uploads/video.mp4" },
++  };
++  assert.throws(
++    () => validateWorkerJob({ ...base, payload: { ...base.payload, outputPrefix: "processed/other-user/video" } }),
++    /dossier processed de son propriétaire/,
++  );
++  assert.throws(
++    () => validateWorkerJob({ ...base, payload: { ...base.payload, outputPrefix: `processed/${OWNER_ID}/../other` } }),
++    /chemin interdit/,
++  );
++});
