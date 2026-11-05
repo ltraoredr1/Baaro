@@ -1,0 +1,2653 @@
+diff --git a/src/features/videos/VideosTab.jsx b/src/features/videos/VideosTab.jsx
+index 1fa25fe..ea5560c 100644
+--- a/src/features/videos/VideosTab.jsx
++++ b/src/features/videos/VideosTab.jsx
+@@ -13,6 +13,7 @@ import UploadModal from "./components/UploadModal.jsx";
+ import VideoCard, { isImageVideo } from "./components/VideoCard.jsx";
+ 
+ import { useCamera } from "./hooks/useCamera.js";
++import { useVideoFilter } from "./hooks/useVideoFilter.js";
+ import { useFeedPlayback } from "./hooks/useFeedPlayback.js";
+ import { usePlaybackSettings, SPEEDS } from "./hooks/usePlaybackSettings.js";
+ import { usePrefersReducedMotion } from "../../hooks/usePrefersReducedMotion.js";
+@@ -78,11 +79,14 @@ export function VideosTab({ onRewardPoints, onExit }) {
+ 
+   const { showToast } = useToast();
+ 
++  const filter = useVideoFilter();
++
+   const creator = useVideoCreator({
+     user,
+     loadVideos,
+     onRewardPoints,
+     soundPicker,
++    filter,
+   });
+ 
+   // Compression avant envoi : tout fichier (galerie ou caméra) passe par ici.
+@@ -121,6 +125,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
+       );
+     }
+ 
++    if (file._filterBaked) result.file._filterBaked = true;
+     creatorRef.current.handleFileSelected(result.file);
+   };
+ 
+@@ -129,6 +134,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
+   const camera = useCamera({
+     onOpen: () => creator.setShowUpload(true),
+     onRecorded: handleFileSelected,
++    filter,
+   });
+ 
+   const videoActions = useVideoActions({
+@@ -885,6 +891,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
+         soundPicker={soundPicker}
+         camera={camera}
+         compression={compression}
++        filter={filter}
+         compressUploads={settings.compressUploads}
+         onCompressChange={(value) =>
+           updateSettings({ compressUploads: value })
+diff --git a/src/features/videos/components/CameraOverlay.jsx b/src/features/videos/components/CameraOverlay.jsx
+index 6b53896..7aba6a7 100644
+--- a/src/features/videos/components/CameraOverlay.jsx
++++ b/src/features/videos/components/CameraOverlay.jsx
+@@ -1,9 +1,14 @@
+-import { X } from "lucide-react";
++import { useState } from "react";
++import { Sparkles, X } from "lucide-react";
+ import { COLORS } from "../../../theme.js";
++import { cssFilterString } from "../filters/index.js";
+ import { formatTime } from "../utils/format.js";
++import FilterOverlayCanvas from "./FilterOverlayCanvas.jsx";
++import FilterPicker from "./FilterPicker.jsx";
+ 
+ // Plein écran caméra ; camera = retour de useCamera.
+-export default function CameraOverlay({ camera }) {
++export default function CameraOverlay({ camera, filter }) {
++  const [showFilters, setShowFilters] = useState(false);
+   const {
+     closeCamera,
+     cameraSeconds,
+@@ -12,6 +17,7 @@ export default function CameraOverlay({ camera }) {
+     cameraVideoRef,
+     cameraFacing,
+     cameraError,
++    cameraFiltered,
+     stopCameraRecording,
+     startCameraRecording,
+     startCamera,
+@@ -53,8 +59,15 @@ export default function CameraOverlay({ camera }) {
+             className="h-full w-full object-cover"
+             style={{
+               transform: cameraFacing === "user" ? "scaleX(-1)" : "none",
++              filter: filter?.active ? cssFilterString(filter.spec, 0.5) : "none",
+             }}
+           />
++          {filter?.active && (
++            <FilterOverlayCanvas
++              spec={filter.spec}
++              className={cameraFacing === "user" ? "-scale-x-100" : ""}
++            />
++          )}
+           {cameraError && (
+             <div className="absolute inset-x-4 bottom-4 rounded-2xl bg-black/75 border border-red-400/30 p-4 text-sm text-center">
+               {cameraError}
+@@ -70,6 +83,19 @@ export default function CameraOverlay({ camera }) {
+       </div>
+ 
+       <div className="p-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] flex flex-col items-center gap-3">
++        {filter && showFilters && (
++          <div className="w-full max-w-md max-h-[34dvh] overflow-y-auto rounded-3xl bg-zinc-900/95 p-3">
++            <FilterPicker
++              filter={filter}
++              disabled={cameraRecording && !cameraFiltered}
++            />
++            {cameraRecording && !cameraFiltered && (
++              <p className="mt-2 text-center text-[11px] text-white/50">
++                Pour changer de filtre, arrête puis relance l'enregistrement.
++              </p>
++            )}
++          </div>
++        )}
+         {!cameraError && (
+           <button
+             onClick={
+@@ -91,6 +117,17 @@ export default function CameraOverlay({ camera }) {
+             />
+           </button>
+         )}
++        {filter && (
++          <button
++            type="button"
++            onClick={() => setShowFilters((v) => !v)}
++            aria-expanded={showFilters}
++            className="flex items-center gap-1.5 rounded-full bg-white/10 px-4 py-2 text-xs font-bold"
++          >
++            <Sparkles size={14} />
++            {filter.active ? `Filtre : ${filter.info?.label || "actif"}` : "Filtres"}
++          </button>
++        )}
+         {cameraError && (
+           <button
+             onClick={startCamera}
+diff --git a/src/features/videos/components/CreatorPanel.jsx b/src/features/videos/components/CreatorPanel.jsx
+index 9eede0c..0e396f8 100644
+--- a/src/features/videos/components/CreatorPanel.jsx
++++ b/src/features/videos/components/CreatorPanel.jsx
+@@ -1,9 +1,10 @@
++import FilterPicker from "./FilterPicker.jsx";
+ import PhotoCreator from "./PhotoCreator.jsx";
+ import TextCreator from "./TextCreator.jsx";
+ import VideoSource from "./VideoSource.jsx";
+ 
+ // Choix du mode de création : vidéo, photos ou texte.
+-export default function CreatorPanel({ creator, camera }) {
++export default function CreatorPanel({ creator, camera, filter }) {
+   const { createMode, setCreateMode } = creator;
+ 
+   return (
+@@ -29,6 +30,9 @@ export default function CreatorPanel({ creator, camera }) {
+       {createMode === "video" && (
+         <VideoSource creator={creator} camera={camera} />
+       )}
++      {filter && createMode !== "video" && (
++        <FilterPicker filter={filter} disabled={creator.generating} />
++      )}
+       {createMode === "photo" && <PhotoCreator creator={creator} />}
+       {createMode === "text" && <TextCreator creator={creator} />}
+     </div>
+diff --git a/src/features/videos/components/FilterOverlayCanvas.jsx b/src/features/videos/components/FilterOverlayCanvas.jsx
+new file mode 100644
+index 0000000..c7fc7b8
+--- /dev/null
++++ b/src/features/videos/components/FilterOverlayCanvas.jsx
+@@ -0,0 +1,41 @@
++import { useEffect, useRef } from "react";
++import { usePrefersReducedMotion } from "../../../hooks/usePrefersReducedMotion.js";
++import { drawOverlays } from "../filters/index.js";
++
++// Calque animé posé sur une vidéo/photo pour prévisualiser un filtre
++// (particules, voile, vignette). Le rendu final est fait à l'enregistrement.
++export default function FilterOverlayCanvas({ spec, className = "" }) {
++  const ref = useRef(null);
++  const reduced = usePrefersReducedMotion();
++
++  useEffect(() => {
++    const canvas = ref.current;
++    if (!spec || !canvas) return undefined;
++    const ctx = canvas.getContext("2d");
++    const draw = (ms) => {
++      ctx.clearRect(0, 0, canvas.width, canvas.height);
++      drawOverlays(ctx, canvas.width, canvas.height, spec, ms, { blend: false });
++    };
++    if (reduced) {
++      draw(4000);
++      return undefined;
++    }
++    const t0 = performance.now();
++    let raf = requestAnimationFrame(function loop(now) {
++      draw(now - t0);
++      raf = requestAnimationFrame(loop);
++    });
++    return () => cancelAnimationFrame(raf);
++  }, [spec, reduced]);
++
++  if (!spec) return null;
++  return (
++    <canvas
++      ref={ref}
++      width={360}
++      height={640}
++      aria-hidden="true"
++      className={`pointer-events-none absolute inset-0 h-full w-full ${className}`}
++    />
++  );
++}
+diff --git a/src/features/videos/components/FilterPicker.jsx b/src/features/videos/components/FilterPicker.jsx
+new file mode 100644
+index 0000000..e751086
+--- /dev/null
++++ b/src/features/videos/components/FilterPicker.jsx
+@@ -0,0 +1,224 @@
++import { useState } from "react";
++import { ChevronLeft, ChevronRight, RotateCcw, Shuffle, SlidersHorizontal } from "lucide-react";
++import { COLORS } from "../../../theme.js";
++import {
++  FILTER_CATEGORIES,
++  FILTER_NONE,
++  FILTER_RANDOM,
++  presetsByCategory,
++} from "../filters/index.js";
++
++const INFINITE = "infinite";
++
++const MIXER = [
++  ["hue", "Teinte", -180, 180, 1, (v) => `${v > 0 ? "+" : ""}${Math.round(v)}°`],
++  ["density", "Densité des effets", 0, 2.5, 0.05, (v) => `${Math.round(v * 100)}%`],
++  ["brightness", "Luminosité", -0.5, 0.5, 0.01, (v) => `${v > 0 ? "+" : ""}${Math.round(v * 100)}`],
++  ["contrast", "Contraste", -0.5, 0.5, 0.01, (v) => `${v > 0 ? "+" : ""}${Math.round(v * 100)}`],
++  ["saturation", "Saturation", -0.5, 0.5, 0.01, (v) => `${v > 0 ? "+" : ""}${Math.round(v * 100)}`],
++];
++
++const swatch = (sw) => `linear-gradient(160deg, ${sw[0]}, ${sw[1]})`;
++
++function Chip({ active, disabled, onClick, sw, emoji, label }) {
++  return (
++    <button
++      type="button"
++      disabled={disabled}
++      aria-pressed={active}
++      onClick={onClick}
++      className="flex w-[60px] shrink-0 flex-col items-center gap-1 disabled:opacity-40"
++    >
++      <span
++        className="flex h-12 w-12 items-center justify-center rounded-2xl text-xl"
++        style={{
++          background: swatch(sw),
++          outline: active ? `2px solid ${COLORS.gold}` : "2px solid transparent",
++          outlineOffset: 2,
++        }}
++      >
++        {emoji}
++      </span>
++      <span className={`w-full truncate text-center text-[10px] ${active ? "font-black text-white" : "text-white/55"}`}>
++        {label}
++      </span>
++    </button>
++  );
++}
++
++// Sélecteur de filtres : catégories, filtres, variantes infinies et réglages.
++// filter = retour de useVideoFilter().
++export default function FilterPicker({ filter, disabled = false, className = "" }) {
++  const { state, info, active, pick, patch, surprise, step, reset } = filter;
++  const initialTab =
++    state.id === FILTER_RANDOM
++      ? INFINITE
++      : FILTER_CATEGORIES.find((c) => presetsByCategory(c.id).some((p) => p.id === state.id))?.id || "ocean";
++  const [tab, setTab] = useState(initialTab);
++  const [mixer, setMixer] = useState(false);
++
++  const tabs = [{ id: INFINITE, emoji: "∞", label: "Infini" }, ...FILTER_CATEGORIES];
++
++  return (
++    <div className={`space-y-3 text-white ${className}`}>
++      <div className="flex gap-1.5 overflow-x-auto pb-1" role="tablist" aria-label="Catégories de filtres">
++        {tabs.map((t) => (
++          <button
++            key={t.id}
++            type="button"
++            role="tab"
++            aria-selected={tab === t.id}
++            onClick={() => setTab(t.id)}
++            className={`shrink-0 rounded-full px-3 py-1.5 text-xs font-bold ${
++              tab === t.id ? "bg-white text-black" : "bg-white/10 text-white/70"
++            }`}
++          >
++            {t.emoji} {t.label}
++          </button>
++        ))}
++      </div>
++
++      {tab === INFINITE ? (
++        <div className="space-y-2 rounded-2xl bg-white/[0.06] p-3">
++          <div className="flex items-center gap-2">
++            <button
++              type="button"
++              disabled={disabled || !active}
++              onClick={() => step(-1)}
++              aria-label="Filtre précédent"
++              className="flex h-9 w-9 items-center justify-center rounded-full bg-white/10 disabled:opacity-40"
++            >
++              <ChevronLeft size={18} />
++            </button>
++            <div className="min-w-0 flex-1 text-center">
++              <div className="truncate text-sm font-black">
++                {state.id === FILTER_RANDOM ? info.label : "Génère un filtre unique"}
++              </div>
++              {state.id === FILTER_RANDOM && (
++                <div className="text-[10px] text-white/45">Filtre n° {state.seed}</div>
++              )}
++            </div>
++            <button
++              type="button"
++              disabled={disabled || !active}
++              onClick={() => step(1)}
++              aria-label="Filtre suivant"
++              className="flex h-9 w-9 items-center justify-center rounded-full bg-white/10 disabled:opacity-40"
++            >
++              <ChevronRight size={18} />
++            </button>
++          </div>
++          <button
++            type="button"
++            disabled={disabled}
++            onClick={surprise}
++            className="flex w-full items-center justify-center gap-2 rounded-xl py-2.5 text-sm font-black disabled:opacity-40"
++            style={{ background: COLORS.gold, color: "#000" }}
++          >
++            <Shuffle size={16} /> Surprends-moi
++          </button>
++          <p className="text-center text-[10px] text-white/40">
++            Chaque numéro est un filtre différent : couleurs, effets et ambiance. Fais défiler avec ◀ ▶.
++          </p>
++        </div>
++      ) : (
++        <div className="flex gap-2.5 overflow-x-auto pb-1">
++          <Chip
++            active={state.id === FILTER_NONE}
++            disabled={disabled}
++            onClick={reset}
++            sw={["#3f3f46", "#18181b"]}
++            emoji="🚫"
++            label="Aucun"
++          />
++          {presetsByCategory(tab).map((p) => (
++            <Chip
++              key={p.id}
++              active={state.id === p.id}
++              disabled={disabled}
++              onClick={() => pick(p.id)}
++              sw={p.sw}
++              emoji={p.emoji}
++              label={p.label}
++            />
++          ))}
++        </div>
++      )}
++
++      {active && (
++        <div className="space-y-2 rounded-2xl bg-white/[0.06] p-3">
++          <div className="flex items-center justify-between text-xs">
++            <span className="font-bold">
++              {info.emoji} {info.label}
++            </span>
++            <div className="flex gap-1.5">
++              {state.id !== FILTER_RANDOM && (
++                <button
++                  type="button"
++                  disabled={disabled}
++                  onClick={() => step(1)}
++                  className="rounded-full bg-white/10 px-2.5 py-1 text-[11px] font-bold disabled:opacity-40"
++                >
++                  Variante {state.seed + 1}
++                </button>
++              )}
++              <button
++                type="button"
++                aria-label="Réglages"
++                aria-pressed={mixer}
++                onClick={() => setMixer((v) => !v)}
++                className={`flex h-7 w-7 items-center justify-center rounded-full ${mixer ? "bg-yellow-400 text-black" : "bg-white/10"}`}
++              >
++                <SlidersHorizontal size={14} />
++              </button>
++              <button
++                type="button"
++                aria-label="Retirer le filtre"
++                disabled={disabled}
++                onClick={reset}
++                className="flex h-7 w-7 items-center justify-center rounded-full bg-white/10 disabled:opacity-40"
++              >
++                <RotateCcw size={14} />
++              </button>
++            </div>
++          </div>
++
++          <label className="block text-[11px] text-white/60">
++            <span className="flex justify-between">
++              Intensité <span>{Math.round(state.intensity * 100)}%</span>
++            </span>
++            <input
++              type="range"
++              min={0}
++              max={1.5}
++              step={0.01}
++              value={state.intensity}
++              disabled={disabled}
++              onChange={(e) => patch({ intensity: Number(e.target.value) })}
++              className="w-full accent-yellow-400"
++            />
++          </label>
++
++          {mixer &&
++            MIXER.map(([key, label, min, max, stepSize, fmt]) => (
++              <label key={key} className="block text-[11px] text-white/60">
++                <span className="flex justify-between">
++                  {label} <span>{fmt(state[key])}</span>
++                </span>
++                <input
++                  type="range"
++                  min={min}
++                  max={max}
++                  step={stepSize}
++                  value={state[key]}
++                  disabled={disabled}
++                  onChange={(e) => patch({ [key]: Number(e.target.value) })}
++                  className="w-full accent-yellow-400"
++                />
++              </label>
++            ))}
++        </div>
++      )}
++    </div>
++  );
++}
+diff --git a/src/features/videos/components/UploadModal.jsx b/src/features/videos/components/UploadModal.jsx
+index 2fc5940..8197913 100644
+--- a/src/features/videos/components/UploadModal.jsx
++++ b/src/features/videos/components/UploadModal.jsx
+@@ -12,6 +12,7 @@ export default function UploadModal({
+   soundPicker,
+   camera,
+   compression,
++  filter = null,
+   compressUploads = false,
+   onCompressChange,
+ }) {
+@@ -44,6 +45,7 @@ export default function UploadModal({
+ 
+     // Fermer pendant l'optimisation : on abandonne aussi le fichier.
+     compression?.abort?.();
++    filter?.reset();
+     closeCamera();
+     setShowUpload(false);
+     resetUpload();
+@@ -51,7 +53,7 @@ export default function UploadModal({
+ 
+   return (
+     <div className="fixed inset-0 z-[80] bg-black/80 backdrop-blur-md flex items-end sm:items-center justify-center p-0 sm:p-4">
+-      {cameraOpen && <CameraOverlay camera={camera} />}
++      {cameraOpen && <CameraOverlay camera={camera} filter={filter} />}
+       <div className="w-full max-w-xl max-h-[92dvh] overflow-y-auto bg-zinc-950 rounded-t-3xl sm:rounded-3xl border border-white/10">
+         <div className="sticky top-0 z-10 flex items-center justify-between p-4 bg-zinc-950/95 backdrop-blur border-b border-white/10">
+           <div>
+@@ -102,9 +104,9 @@ export default function UploadModal({
+           )}
+ 
+           {!selectedFile ? (
+-            <CreatorPanel creator={creator} camera={camera} />
++            <CreatorPanel creator={creator} camera={camera} filter={filter} />
+           ) : (
+-            <UploadPreview creator={creator} soundPicker={soundPicker} />
++            <UploadPreview creator={creator} soundPicker={soundPicker} filter={filter} />
+           )}
+ 
+           <input
+@@ -177,7 +179,7 @@ export default function UploadModal({
+           {uploading && (
+             <div>
+               <div className="flex justify-between text-xs mb-2">
+-                <span>Publication…</span>
++                <span>{creator.filterRendering ? "Application du filtre…" : "Publication…"}</span>
+                 <span>{uploadProgress}%</span>
+               </div>
+               <div className="h-2 rounded-full bg-white/10 overflow-hidden">
+@@ -205,6 +207,8 @@ export default function UploadModal({
+               ? "Optimisation en cours…"
+               : selectedFiles?.length > 1
+               ? `Publier ${selectedFiles.length} vidéos`
++              : filter?.active && !creator.generated && !selectedFile?._filterBaked
++              ? "Appliquer le filtre et publier"
+               : "Publier la vidéo"}
+           </button>
+         </div>
+diff --git a/src/features/videos/components/UploadPreview.jsx b/src/features/videos/components/UploadPreview.jsx
+index 451bb4e..0c22ca1 100644
+--- a/src/features/videos/components/UploadPreview.jsx
++++ b/src/features/videos/components/UploadPreview.jsx
+@@ -1,5 +1,11 @@
++import { cssFilterString } from "../filters/index.js";
++import FilterOverlayCanvas from "./FilterOverlayCanvas.jsx";
++import FilterPicker from "./FilterPicker.jsx";
++
+ // Aperçu de la vidéo choisie ou générée, avant publication.
+-export default function UploadPreview({ creator, soundPicker }) {
++// Le filtre n'est appliqué qu'aux vidéos « brutes » (galerie) : une vidéo générée
++// ou filmée avec un filtre le contient déjà.
++export default function UploadPreview({ creator, soundPicker, filter }) {
+   const {
+     previewVideoRef,
+     previewAudioRef,
+@@ -10,10 +16,14 @@ export default function UploadPreview({ creator, soundPicker }) {
+     backToCreator,
+     resetUpload,
+     fileInputRef,
++    selectedFile,
+   } = creator;
++  const filterable = !!filter && !generated && !selectedFile?._filterBaked;
++  const showFilter = filterable && filter.active;
+   const { muteOriginal, selectedSound, stopSoundPreview } = soundPicker;
+ 
+   return (
++    <div className="space-y-3">
+     <div className="relative rounded-3xl overflow-hidden bg-black aspect-[9/14] max-h-[52dvh]">
+       <video
+         ref={previewVideoRef}
+@@ -22,6 +32,7 @@ export default function UploadPreview({ creator, soundPicker }) {
+         playsInline
+         muted={muteOriginal && !!selectedSound?.audio_url && !bakedAudio}
+         className="h-full w-full object-contain"
++        style={{ filter: showFilter ? cssFilterString(filter.spec, 0.5) : "none" }}
+         onPlay={() => {
+           const a = previewAudioRef.current;
+           if (!a) return;
+@@ -36,6 +47,7 @@ export default function UploadPreview({ creator, soundPicker }) {
+           if (a) a.currentTime = previewVideoRef.current?.currentTime || 0;
+         }}
+       />
++      {showFilter && <FilterOverlayCanvas spec={filter.spec} />}
+       {selectedSound?.audio_url && !bakedAudio && (
+         <audio
+           ref={previewAudioRef}
+@@ -59,5 +71,7 @@ export default function UploadPreview({ creator, soundPicker }) {
+         {generated ? "Modifier" : "Changer"}
+       </button>
+     </div>
++    {filterable && <FilterPicker filter={filter} disabled={uploading} />}
++    </div>
+   );
+ }
+diff --git a/src/features/videos/filters/effects.js b/src/features/videos/filters/effects.js
+new file mode 100644
+index 0000000..cbaf2a8
+--- /dev/null
++++ b/src/features/videos/filters/effects.js
+@@ -0,0 +1,651 @@
++import { TAU, frac, hash01, lerp, rgba, rotateHue } from "./utils.js";
++
++// Effets animés dessinés par-dessus l'image (bulles, étoiles, esprits…).
++// Chaque effet est une fonction pure de (temps, graine) : pas d'état, donc le
++// même rendu en aperçu et à l'enregistrement. Les tailles sont relatives à la
++// largeur du canevas pour s'adapter à toutes les résolutions.
++
++export const FX_DEFAULTS = {
++  bubbles: { count: 18, size: [0.012, 0.04], speed: 1, alpha: 0.7, color: "#d6f6ff" },
++  rays: { count: 5, speed: 1, alpha: 0.35, color: "#e6fbff" },
++  waves: { count: 3, speed: 1, alpha: 0.35, color: "#0a8fbf", blend: "source-over" },
++  ripples: { count: 7, speed: 1, alpha: 0.25, color: "#bff3ff" },
++  fish: { count: 7, size: [0.03, 0.07], speed: 1, alpha: 0.55, color: "#021a2b", blend: "source-over" },
++  stars: { count: 90, size: [0.002, 0.0055], speed: 1, alpha: 0.9, color: "#ffffff" },
++  shooting: { count: 3, speed: 1, alpha: 0.9, color: "#ffffff" },
++  nebula: { count: 5, size: [0.35, 0.8], speed: 1, alpha: 0.35, color: "#a855f7", color2: "#38bdf8" },
++  planet: { count: 1, size: [0.3, 0.3], speed: 1, alpha: 0.95, color: "#e9c98a", color2: "#7a5a2a", blend: "source-over" },
++  spirits: { count: 14, size: [0.03, 0.09], speed: 1, alpha: 0.55, color: "#bfe9ff" },
++  halo: { count: 1, size: [0.7, 0.7], speed: 1, alpha: 0.5, color: "#fff3c4" },
++  portal: { count: 7, size: [0.1, 0.55], speed: 1, alpha: 0.7, color: "#c084fc", color2: "#22d3ee" },
++  fireflies: { count: 26, size: [0.012, 0.03], speed: 1, alpha: 0.9, color: "#d9ff6a" },
++  snow: { count: 90, size: [0.003, 0.01], speed: 1, alpha: 0.85, color: "#ffffff" },
++  rain: { count: 110, speed: 1, alpha: 0.4, color: "#cfe4ff" },
++  embers: { count: 45, size: [0.003, 0.01], speed: 1, alpha: 0.9, color: "#ff8a1f", color2: "#ffd24a" },
++  flames: { count: 12, speed: 1, alpha: 0.6, color: "#ff6a00", color2: "#ffd24a" },
++  sparkles: { count: 40, size: [0.008, 0.024], speed: 1, alpha: 0.9, color: "#fff6c8" },
++  petals: { count: 28, size: [0.012, 0.026], speed: 1, alpha: 0.85, color: "#ffb7d5" },
++  leaves: { count: 22, size: [0.018, 0.04], speed: 1, alpha: 0.9, color: "#d9822b", color2: "#a3a13b" },
++  dust: { count: 60, size: [0.002, 0.005], speed: 1, alpha: 0.5, color: "#ffe7b0" },
++  lightning: { count: 1, speed: 1, alpha: 0.85, color: "#dfe9ff" },
++  aurora: { count: 3, speed: 1, alpha: 0.5, color: "#4ade80", color2: "#a78bfa" },
++  fog: { count: 6, size: [0.5, 0.9], speed: 1, alpha: 0.14, color: "#ffffff", blend: "source-over" },
++  glitch: { count: 3, speed: 1, alpha: 0.8, color: "#00fff0", color2: "#ff2bd6", blend: "source-over" },
++  scanlines: { count: 1, speed: 1, alpha: 0.18, color: "#000000", blend: "source-over" },
++  hearts: { count: 16, size: [0.02, 0.05], speed: 1, alpha: 0.8, color: "#ff5c8a" },
++  confetti: { count: 50, size: [0.01, 0.022], speed: 1, alpha: 0.95, color: "#ffcc00", color2: "#00c2ff" },
++  bokeh: { count: 16, size: [0.05, 0.16], speed: 1, alpha: 0.28, color: "#ffd27a", color2: "#ffd27a" },
++  synthgrid: { count: 14, speed: 1, alpha: 0.7, color: "#ff2bd6", color2: "#22d3ee", blend: "source-over" },
++  code: { count: 26, size: [0.03, 0.03], speed: 1, alpha: 0.7, color: "#22ff88" },
++};
++
++export const FX_TYPES = Object.keys(FX_DEFAULTS);
++
++// Effets qui recopient une partie de l'image : inutilisables sur un calque transparent.
++export const FX_NEEDS_BACKDROP = new Set(["glitch"]);
++
++const makeCanvas = (w, h) => {
++  if (typeof document !== "undefined") {
++    const c = document.createElement("canvas");
++    c.width = w;
++    c.height = h;
++    return c;
++  }
++  return new OffscreenCanvas(w, h);
++};
++
++// Sprite de halo lumineux mis en cache : bien plus rapide qu'un dégradé radial par particule.
++const spriteCache = new Map();
++const glowSprite = (rgb) => {
++  const key = rgb.join(",");
++  let sprite = spriteCache.get(key);
++  if (!sprite) {
++    if (spriteCache.size > 80) spriteCache.clear();
++    sprite = makeCanvas(64, 64);
++    const g = sprite.getContext("2d");
++    const grad = g.createRadialGradient(32, 32, 0, 32, 32, 32);
++    grad.addColorStop(0, rgba(rgb, 1));
++    grad.addColorStop(0.28, rgba(rgb, 0.5));
++    grad.addColorStop(1, rgba(rgb, 0));
++    g.fillStyle = grad;
++    g.fillRect(0, 0, 64, 64);
++    spriteCache.set(key, sprite);
++  }
++  return sprite;
++};
++
++const glow = (ctx, rgb, x, y, r, alpha) => {
++  if (alpha <= 0.003 || r <= 0.5) return;
++  ctx.globalAlpha = Math.min(1, alpha);
++  ctx.drawImage(glowSprite(rgb), x - r, y - r, r * 2, r * 2);
++};
++
++const sizeOf = (e, s, i, W, k = 11) =>
++  lerp(e.size[0], e.size[1], hash01(s, i, k)) * W;
++
++const heartPath = (ctx, x, y, s) => {
++  ctx.beginPath();
++  ctx.moveTo(x, y + s * 0.35);
++  ctx.bezierCurveTo(x - s * 0.95, y - s * 0.1, x - s * 0.55, y - s * 0.85, x, y - s * 0.3);
++  ctx.bezierCurveTo(x + s * 0.55, y - s * 0.85, x + s * 0.95, y - s * 0.1, x, y + s * 0.35);
++  ctx.closePath();
++};
++
++// Pétales / feuilles / confettis : chute oscillante avec rotation.
++const falling = (shape) => (ctx, W, H, t, e, s) => {
++  for (let i = 0; i < e.count; i += 1) {
++    const r = sizeOf(e, s, i, W);
++    const p = frac(hash01(s, i, 1) + t * (0.04 + 0.05 * hash01(s, i, 2)) * e.speed);
++    const x = (hash01(s, i, 3) + 0.08 * Math.sin(t * 0.6 * e.speed + i * 1.7)) * W;
++    const y = p * (H + r * 4) - r * 2;
++    const rot = t * (0.8 + hash01(s, i, 4)) * e.speed + i;
++    ctx.save();
++    ctx.translate(x, y);
++    ctx.rotate(rot);
++    ctx.globalAlpha = e.alpha * Math.min(1, p * 8, (1 - p) * 8);
++    if (shape === "confetti") {
++      const pal = (e.pal ||= [0, 60, 120, 180, 240, 300].map((deg) =>
++        rgba(rotateHue(e.c, deg), 1),
++      ));
++      ctx.fillStyle = pal[i % pal.length];
++      ctx.scale(1, Math.abs(Math.sin(rot * 2)) * 0.8 + 0.2);
++      ctx.fillRect(-r, -r * 0.5, r * 2, r);
++    } else {
++      ctx.fillStyle = rgba(i % 2 ? e.c : e.c2, 1);
++      ctx.beginPath();
++      if (shape === "leaf") {
++        ctx.moveTo(-r, 0);
++        ctx.quadraticCurveTo(0, -r * 0.9, r, 0);
++        ctx.quadraticCurveTo(0, r * 0.9, -r, 0);
++      } else {
++        ctx.scale(1, 0.55);
++        ctx.ellipse(0, 0, r, r * 0.75, 0, 0, TAU);
++      }
++      ctx.fill();
++    }
++    ctx.restore();
++  }
++};
++
++export const EFFECTS = {
++  bubbles(ctx, W, H, t, e, s) {
++    ctx.strokeStyle = rgba(e.c, 1);
++    ctx.fillStyle = "#ffffff";
++    for (let i = 0; i < e.count; i += 1) {
++      const r = sizeOf(e, s, i, W);
++      const p = frac(hash01(s, i, 3) + t * e.speed * lerp(0.6, 1.4, hash01(s, i, 2)) * 0.08);
++      const x = (hash01(s, i, 4) + Math.sin(t * 0.9 + i * 1.7) * 0.02) * W;
++      const y = H + r - p * (H + r * 2);
++      const a = e.alpha * Math.min(1, p * 6, (1 - p) * 3);
++      ctx.globalAlpha = a;
++      ctx.lineWidth = Math.max(1.5, r * 0.09);
++      ctx.beginPath();
++      ctx.arc(x, y, r, 0, TAU);
++      ctx.stroke();
++      ctx.globalAlpha = a * 0.7;
++      ctx.beginPath();
++      ctx.arc(x - r * 0.35, y - r * 0.35, r * 0.2, 0, TAU);
++      ctx.fill();
++    }
++  },
++
++  rays(ctx, W, H, t, e, s) {
++    for (let i = 0; i < e.count; i += 1) {
++      const x0 = (hash01(s, i, 1) * 1.2 - 0.1) * W;
++      const angle = 0.28 + (hash01(s, i, 2) - 0.5) * 0.25 + Math.sin(t * 0.3 * e.speed + i) * 0.05;
++      const w = lerp(0.05, 0.18, hash01(s, i, 3)) * W;
++      const grad = ctx.createLinearGradient(0, 0, 0, H * 1.25);
++      grad.addColorStop(0, rgba(e.c, e.alpha));
++      grad.addColorStop(1, rgba(e.c, 0));
++      ctx.save();
++      ctx.translate(x0, -H * 0.05);
++      ctx.rotate(angle);
++      ctx.globalAlpha = 0.55 + 0.45 * Math.sin(t * 0.8 * e.speed + i * 2);
++      ctx.fillStyle = grad;
++      ctx.fillRect(-w / 2, 0, w, H * 1.3);
++      ctx.restore();
++    }
++  },
++
++  waves(ctx, W, H, t, e, s) {
++    for (let i = 0; i < e.count; i += 1) {
++      const baseY = H * (0.74 + i * 0.07);
++      const amp = H * 0.012 * (1 + i * 0.4);
++      const k = TAU / (W * (0.7 + i * 0.25));
++      const phase = t * e.speed * (0.8 + 0.3 * i) * (i % 2 ? -1 : 1) + hash01(s, i, 1) * TAU;
++      ctx.beginPath();
++      ctx.moveTo(0, H);
++      for (let x = 0; x <= W + 18; x += 18) {
++        ctx.lineTo(x, baseY + Math.sin(x * k + phase) * amp + Math.sin(x * k * 2.1 + phase * 1.3) * amp * 0.4);
++      }
++      ctx.lineTo(W + 18, H);
++      ctx.closePath();
++      ctx.globalAlpha = e.alpha * (0.5 + 0.25 * i);
++      ctx.fillStyle = rgba(e.c, 1);
++      ctx.fill();
++    }
++  },
++
++  ripples(ctx, W, H, t, e) {
++    ctx.strokeStyle = rgba(e.c, 1);
++    ctx.lineWidth = Math.max(1, W * 0.004);
++    for (let i = 0; i < e.count; i += 1) {
++      const y0 = ((i + 0.5) / e.count) * H;
++      ctx.globalAlpha = e.alpha * (0.5 + 0.5 * Math.sin(t * 0.8 + i * 1.9));
++      ctx.beginPath();
++      for (let x = 0; x <= W + 16; x += 16) {
++        const y =
++          y0 +
++          Math.sin(x * 0.012 + t * e.speed * 1.2 + i * 2) * H * 0.012 +
++          Math.sin(x * 0.031 - t * e.speed * 0.9 + i) * H * 0.006;
++        if (x === 0) ctx.moveTo(x, y);
++        else ctx.lineTo(x, y);
++      }
++      ctx.stroke();
++    }
++  },
++
++  fish(ctx, W, H, t, e, s) {
++    ctx.fillStyle = rgba(e.c, 1);
++    for (let i = 0; i < e.count; i += 1) {
++      const sz = sizeOf(e, s, i, W);
++      const dir = hash01(s, i, 5) > 0.5 ? 1 : -1;
++      const p = frac(hash01(s, i, 3) + t * (0.03 + 0.05 * hash01(s, i, 2)) * e.speed);
++      const x = dir > 0 ? lerp(-0.15 * W, 1.15 * W, p) : lerp(1.15 * W, -0.15 * W, p);
++      const y = (0.15 + 0.65 * hash01(s, i, 4)) * H + Math.sin(t * 1.5 + i) * H * 0.01;
++      const flap = 1 + 0.3 * Math.sin(t * 8 + i);
++      ctx.save();
++      ctx.translate(x, y);
++      ctx.scale(dir, 1);
++      ctx.globalAlpha = e.alpha;
++      ctx.beginPath();
++      ctx.ellipse(0, 0, sz, sz * 0.38, 0, 0, TAU);
++      ctx.moveTo(-sz * 0.8, 0);
++      ctx.lineTo(-sz * 1.45, -sz * 0.42 * flap);
++      ctx.lineTo(-sz * 1.45, sz * 0.42 * flap);
++      ctx.closePath();
++      ctx.fill();
++      ctx.restore();
++    }
++  },
++
++  stars(ctx, W, H, t, e, s) {
++    ctx.fillStyle = rgba(e.c, 1);
++    ctx.strokeStyle = rgba(e.c, 1);
++    for (let i = 0; i < e.count; i += 1) {
++      const x = hash01(s, i, 1) * W;
++      const y = hash01(s, i, 2) * H;
++      const r = sizeOf(e, s, i, W);
++      const tw = 0.5 + 0.5 * Math.sin(t * (1 + 2 * hash01(s, i, 3)) * e.speed + i * 5);
++      ctx.globalAlpha = e.alpha * tw;
++      if (r > W * 0.0036) {
++        ctx.lineWidth = Math.max(1, r * 0.35);
++        ctx.beginPath();
++        ctx.moveTo(x - r * 2.2, y);
++        ctx.lineTo(x + r * 2.2, y);
++        ctx.moveTo(x, y - r * 2.2);
++        ctx.lineTo(x, y + r * 2.2);
++        ctx.stroke();
++      }
++      ctx.fillRect(x - r, y - r, r * 2, r * 2);
++    }
++  },
++
++  shooting(ctx, W, H, t, e, s) {
++    ctx.lineCap = "round";
++    for (let i = 0; i < e.count; i += 1) {
++      const period = (4 + hash01(s, i, 1) * 5) / e.speed;
++      const shifted = t + hash01(s, i, 2) * period;
++      const cycle = Math.floor(shifted / period);
++      const local = shifted - cycle * period;
++      const dur = 0.9;
++      if (local > dur) continue;
++      const p = local / dur;
++      const id = i + cycle * 31;
++      const x0 = (0.3 + 0.7 * hash01(s, id, 3)) * W;
++      const y0 = hash01(s, id, 4) * H * 0.5;
++      const len = W * (0.25 + 0.25 * hash01(s, id, 5));
++      const dx = -Math.cos(0.5);
++      const dy = Math.sin(0.5);
++      const hx = x0 + dx * len * p * 2;
++      const hy = y0 + dy * len * p * 2;
++      const tx = hx - dx * len * 0.45;
++      const ty = hy - dy * len * 0.45;
++      const grad = ctx.createLinearGradient(hx, hy, tx, ty);
++      grad.addColorStop(0, rgba(e.c, 1));
++      grad.addColorStop(1, rgba(e.c, 0));
++      ctx.globalAlpha = e.alpha * Math.sin(Math.PI * p);
++      ctx.strokeStyle = grad;
++      ctx.lineWidth = Math.max(2, W * 0.004);
++      ctx.beginPath();
++      ctx.moveTo(hx, hy);
++      ctx.lineTo(tx, ty);
++      ctx.stroke();
++    }
++  },
++
++  nebula(ctx, W, H, t, e, s) {
++    for (let i = 0; i < e.count; i += 1) {
++      const r = sizeOf(e, s, i, W);
++      const x = (hash01(s, i, 1) + Math.sin(t * 0.07 * e.speed + i * 2) * 0.08) * W;
++      const y = (hash01(s, i, 2) + Math.cos(t * 0.06 * e.speed + i * 3) * 0.06) * H;
++      glow(ctx, i % 2 ? e.c2 : e.c, x, y, r, e.alpha * (0.7 + 0.3 * Math.sin(t * 0.3 + i)));
++    }
++  },
++
++  planet(ctx, W, H, t, e) {
++    const r = e.size[0] * W;
++    const cx = W * 0.76;
++    const cy = H * 0.22 + Math.sin(t * 0.1 * e.speed) * H * 0.006;
++    ctx.globalAlpha = e.alpha;
++    const ring = (from, to) => {
++      ctx.save();
++      ctx.translate(cx, cy);
++      ctx.rotate(-0.35);
++      ctx.scale(1, 0.28);
++      ctx.strokeStyle = rgba(e.c, 0.6);
++      ctx.lineWidth = r * 0.2;
++      ctx.beginPath();
++      ctx.arc(0, 0, r * 1.65, from, to);
++      ctx.stroke();
++      ctx.restore();
++    };
++    ring(Math.PI, TAU);
++    const grad = ctx.createRadialGradient(cx - r * 0.35, cy - r * 0.35, r * 0.1, cx, cy, r);
++    grad.addColorStop(0, rgba(e.c, 1));
++    grad.addColorStop(1, rgba(e.c2, 1));
++    ctx.fillStyle = grad;
++    ctx.beginPath();
++    ctx.arc(cx, cy, r, 0, TAU);
++    ctx.fill();
++    ring(0, Math.PI);
++  },
++
++  spirits(ctx, W, H, t, e, s) {
++    for (let i = 0; i < e.count; i += 1) {
++      const r = sizeOf(e, s, i, W);
++      const p = frac(hash01(s, i, 3) + t * (0.04 + 0.05 * hash01(s, i, 2)) * e.speed);
++      const x = (hash01(s, i, 4) + Math.sin(t * 0.7 * e.speed + i * 1.3) * 0.05) * W;
++      const y = H * (1.05 - p * 1.2);
++      const a = e.alpha * Math.sin(Math.PI * p);
++      for (let k = 0; k < 4; k += 1) {
++        glow(ctx, e.c, x + Math.sin(t * 1.4 + i + k * 0.6) * r * 0.3, y + k * r * 0.9, r * (1 - k * 0.18), a * (1 - k * 0.25));
++      }
++    }
++  },
++
++  halo(ctx, W, H, t, e) {
++    glow(ctx, e.c, W * 0.5, H * 0.12, e.size[0] * W * (1 + 0.04 * Math.sin(t * 0.9 * e.speed)), e.alpha);
++  },
++
++  portal(ctx, W, H, t, e) {
++    const cx = W * 0.5;
++    const cy = H * 0.45;
++    glow(ctx, e.c2, cx, cy, e.size[1] * W * 0.9, e.alpha * 0.35);
++    ctx.lineWidth = Math.max(2, W * 0.006);
++    for (let i = 0; i < e.count; i += 1) {
++      const base = lerp(e.size[0], e.size[1], i / e.count) * W * (1 + 0.05 * Math.sin(t * e.speed * 1.2 + i));
++      ctx.save();
++      ctx.translate(cx, cy);
++      ctx.rotate(t * e.speed * (0.4 + 0.1 * i) * (i % 2 ? -1 : 1));
++      ctx.scale(1, 1.25);
++      ctx.strokeStyle = rgba(i % 2 ? e.c2 : e.c, 1);
++      ctx.globalAlpha = e.alpha * (0.35 + 0.65 * (1 - i / e.count));
++      ctx.setLineDash([base * 0.6, base * 0.35]);
++      ctx.beginPath();
++      ctx.arc(0, 0, base, 0, TAU);
++      ctx.stroke();
++      ctx.restore();
++    }
++    ctx.setLineDash([]);
++  },
++
++  fireflies(ctx, W, H, t, e, s) {
++    for (let i = 0; i < e.count; i += 1) {
++      const r = sizeOf(e, s, i, W);
++      const x = frac(hash01(s, i, 1) + 0.06 * Math.sin(t * 0.5 * e.speed + i * 3.1) + 0.03 * Math.sin(t * 1.3 + i)) * W;
++      const y = frac(hash01(s, i, 2) + 0.05 * Math.cos(t * 0.4 * e.speed + i * 2.3) + 0.03 * Math.sin(t * 1.1 + i * 2)) * H;
++      const blink = 0.5 + 0.5 * Math.sin(t * (1.2 + hash01(s, i, 3)) * 2 + i * 7);
++      glow(ctx, e.c, x, y, r * (1 + blink), e.alpha * blink);
++    }
++  },
++
++  snow(ctx, W, H, t, e, s) {
++    ctx.fillStyle = rgba(e.c, 1);
++    ctx.globalAlpha = e.alpha;
++    for (let i = 0; i < e.count; i += 1) {
++      const r = sizeOf(e, s, i, W);
++      const p = frac(hash01(s, i, 1) + t * (0.05 + 0.08 * hash01(s, i, 2)) * e.speed * (r / (e.size[1] * W) + 0.4));
++      const x = (hash01(s, i, 3) + 0.03 * Math.sin(t * 0.8 + i * 2)) * W;
++      ctx.beginPath();
++      ctx.arc(x, p * (H + r * 2) - r, r, 0, TAU);
++      ctx.fill();
++    }
++  },
++
++  rain(ctx, W, H, t, e, s) {
++    ctx.strokeStyle = rgba(e.c, 1);
++    ctx.lineWidth = Math.max(1, W * 0.0025);
++    ctx.globalAlpha = e.alpha;
++    ctx.beginPath();
++    for (let i = 0; i < e.count; i += 1) {
++      const len = H * (0.03 + 0.04 * hash01(s, i, 4));
++      const p = frac(hash01(s, i, 1) + t * (0.9 + 0.6 * hash01(s, i, 2)) * e.speed);
++      const x = hash01(s, i, 3) * W * 1.2 - W * 0.1;
++      const y = p * (H + len) - len;
++      ctx.moveTo(x, y);
++      ctx.lineTo(x - len * 0.25, y + len);
++    }
++    ctx.stroke();
++  },
++
++  embers(ctx, W, H, t, e, s) {
++    for (let i = 0; i < e.count; i += 1) {
++      const r = sizeOf(e, s, i, W);
++      const p = frac(hash01(s, i, 1) + t * (0.06 + 0.1 * hash01(s, i, 2)) * e.speed);
++      const x = (hash01(s, i, 3) + 0.04 * Math.sin(t * 1.5 + i * 2.3)) * W;
++      const y = H * (1.02 - p * 1.1);
++      const flick = 0.6 + 0.4 * Math.sin(t * 9 + i * 3);
++      const col = i % 3 ? e.c : e.c2;
++      glow(ctx, col, x, y, r * 4, e.alpha * flick * (1 - p));
++      ctx.globalAlpha = e.alpha * flick * (1 - p);
++      ctx.fillStyle = "#fff3c0";
++      ctx.fillRect(x - r * 0.5, y - r * 0.5, r, r);
++    }
++  },
++
++  flames(ctx, W, H, t, e, s) {
++    for (let i = 0; i < e.count; i += 1) {
++      const bx = ((i + 0.5) / e.count) * W + Math.sin(t * 2 + i) * W * 0.02;
++      const hgt = H * (0.12 + 0.16 * hash01(s, i, 1)) * (0.8 + 0.3 * Math.sin(t * 7 * e.speed + i * 2.1));
++      const wid = (W / e.count) * 1.7;
++      const grad = ctx.createLinearGradient(0, H, 0, H - hgt);
++      grad.addColorStop(0, rgba(e.c2, e.alpha));
++      grad.addColorStop(0.5, rgba(e.c, e.alpha * 0.6));
++      grad.addColorStop(1, rgba(e.c, 0));
++      ctx.fillStyle = grad;
++      ctx.globalAlpha = 1;
++      ctx.beginPath();
++      ctx.moveTo(bx - wid / 2, H);
++      ctx.quadraticCurveTo(bx - wid * 0.15, H - hgt * 0.5, bx + Math.sin(t * 3 + i) * wid * 0.2, H - hgt);
++      ctx.quadraticCurveTo(bx + wid * 0.15, H - hgt * 0.5, bx + wid / 2, H);
++      ctx.fill();
++    }
++  },
++
++  sparkles(ctx, W, H, t, e, s) {
++    ctx.strokeStyle = rgba(e.c, 1);
++    ctx.lineWidth = Math.max(1, W * 0.0018);
++    for (let i = 0; i < e.count; i += 1) {
++      const x = hash01(s, i, 1) * W;
++      const y = hash01(s, i, 2) * H;
++      const ph = frac(t * (0.3 + 0.5 * hash01(s, i, 3)) * e.speed + hash01(s, i, 4));
++      const tw = Math.sin(Math.PI * ph) ** 2;
++      const r = sizeOf(e, s, i, W) * tw;
++      if (r < 0.5) continue;
++      glow(ctx, e.c, x, y, r * 1.8, e.alpha * 0.6 * tw);
++      ctx.globalAlpha = e.alpha * tw;
++      ctx.beginPath();
++      ctx.moveTo(x - r * 1.6, y);
++      ctx.lineTo(x + r * 1.6, y);
++      ctx.moveTo(x, y - r * 1.6);
++      ctx.lineTo(x, y + r * 1.6);
++      ctx.stroke();
++    }
++  },
++
++  petals: falling("petal"),
++  leaves: falling("leaf"),
++  confetti: falling("confetti"),
++
++  dust(ctx, W, H, t, e, s) {
++    ctx.fillStyle = rgba(e.c, 1);
++    for (let i = 0; i < e.count; i += 1) {
++      const r = sizeOf(e, s, i, W);
++      const x = frac(hash01(s, i, 1) + t * 0.01 * e.speed * (hash01(s, i, 2) - 0.3) + 0.02 * Math.sin(t * 0.4 + i)) * W;
++      const y = frac(hash01(s, i, 3) - t * 0.012 * e.speed * (0.4 + hash01(s, i, 4)) + 0.02 * Math.cos(t * 0.5 + i)) * H;
++      ctx.globalAlpha = e.alpha * (0.4 + 0.6 * Math.abs(Math.sin(t * 0.6 + i * 3)));
++      ctx.beginPath();
++      ctx.arc(x, y, r, 0, TAU);
++      ctx.fill();
++    }
++  },
++
++  lightning(ctx, W, H, t, e, s) {
++    const period = 5 / e.speed;
++    const cycle = Math.floor(t / period);
++    const d = t - cycle * period - hash01(s, cycle, 1) * (period - 1.2);
++    if (d < 0 || d > 0.5) return;
++    const flash = d < 0.08 ? 1 : d < 0.14 ? 0.2 : d < 0.2 ? 0.8 : Math.max(0, 1 - (d - 0.2) / 0.3) * 0.5;
++    ctx.globalAlpha = flash * 0.35 * e.alpha;
++    ctx.fillStyle = rgba(e.c, 1);
++    ctx.fillRect(0, 0, W, H);
++    if (d > 0.2) return;
++    let x = (0.2 + 0.6 * hash01(s, cycle, 2)) * W;
++    const steps = 14;
++    const bolt = [[x, 0]];
++    for (let i = 1; i <= steps; i += 1) {
++      x += (hash01(s, cycle * 40 + i, 7) - 0.5) * W * 0.12;
++      bolt.push([x, (H * 0.75 * i) / steps]);
++    }
++    ctx.lineJoin = "round";
++    ctx.strokeStyle = rgba(e.c, 1);
++    for (const [width, alpha] of [[W * 0.02, 0.25], [W * 0.006, 1]]) {
++      ctx.lineWidth = width;
++      ctx.globalAlpha = alpha * e.alpha;
++      ctx.beginPath();
++      bolt.forEach(([bx, by], idx) => (idx ? ctx.lineTo(bx, by) : ctx.moveTo(bx, by)));
++      ctx.stroke();
++    }
++  },
++
++  aurora(ctx, W, H, t, e) {
++    for (let i = 0; i < e.count; i += 1) {
++      const baseY = H * (0.12 + 0.1 * i);
++      const amp = H * 0.05;
++      const grad = ctx.createLinearGradient(0, baseY - amp, 0, baseY + H * 0.4);
++      grad.addColorStop(0, rgba(i % 2 ? e.c2 : e.c, e.alpha));
++      grad.addColorStop(1, rgba(i % 2 ? e.c2 : e.c, 0));
++      ctx.fillStyle = grad;
++      ctx.globalAlpha = 0.7 + 0.3 * Math.sin(t * 0.5 + i);
++      ctx.beginPath();
++      ctx.moveTo(0, baseY + H * 0.4);
++      for (let x = 0; x <= W + 24; x += 24) {
++        ctx.lineTo(x, baseY + Math.sin(x * 0.006 + t * 0.4 * e.speed + i * 2) * amp + Math.sin(x * 0.013 - t * 0.3 * e.speed + i) * amp * 0.5);
++      }
++      ctx.lineTo(W + 24, baseY + H * 0.4);
++      ctx.closePath();
++      ctx.fill();
++    }
++  },
++
++  fog(ctx, W, H, t, e, s) {
++    for (let i = 0; i < e.count; i += 1) {
++      const r = sizeOf(e, s, i, W);
++      const x = frac(hash01(s, i, 1) + t * 0.012 * e.speed * (1 + hash01(s, i, 5))) * W * 1.6 - W * 0.3;
++      const y = H * (0.45 + 0.55 * hash01(s, i, 2));
++      glow(ctx, e.c, x, y, r, e.alpha);
++    }
++  },
++
++  glitch(ctx, W, H, t, e, s) {
++    for (let i = 0; i < e.count; i += 1) {
++      const period = 1.3 + hash01(s, i, 1) * 2.2;
++      const shifted = t * e.speed + hash01(s, i, 2) * period;
++      const cycle = Math.floor(shifted / period);
++      if (shifted - cycle * period > 0.14) continue;
++      const id = cycle * 7 + i;
++      const y = hash01(s, id, 3) * H;
++      const h = (0.01 + 0.05 * hash01(s, id, 4)) * H;
++      const dx = (hash01(s, id, 5) - 0.5) * W * 0.12;
++      ctx.globalAlpha = 1;
++      ctx.drawImage(ctx.canvas, 0, y, W, h, dx, y, W, h);
++      ctx.globalAlpha = e.alpha * 0.5;
++      ctx.fillStyle = rgba(i % 2 ? e.c : e.c2, 1);
++      ctx.fillRect(0, y, W, Math.max(2, h * 0.12));
++    }
++  },
++
++  scanlines(ctx, W, H, t, e) {
++    ctx.fillStyle = rgba(e.c, 1);
++    ctx.globalAlpha = e.alpha;
++    const step = Math.max(3, Math.round(H / 300) * 2);
++    for (let y = 0; y < H; y += step) ctx.fillRect(0, y, W, step / 2);
++    ctx.globalAlpha = 0.05;
++    ctx.fillStyle = "#ffffff";
++    ctx.fillRect(0, frac(t * 0.1 * e.speed) * H, W, H * 0.06);
++  },
++
++  hearts(ctx, W, H, t, e, s) {
++    for (let i = 0; i < e.count; i += 1) {
++      const r = sizeOf(e, s, i, W);
++      const p = frac(hash01(s, i, 1) + t * (0.05 + 0.06 * hash01(s, i, 2)) * e.speed);
++      const x = (hash01(s, i, 3) + 0.05 * Math.sin(t * 0.9 + i * 1.9)) * W;
++      const y = H * (1.05 - p * 1.15);
++      ctx.globalAlpha = e.alpha * Math.sin(Math.PI * p);
++      ctx.fillStyle = rgba(e.c, 1);
++      heartPath(ctx, x, y, r);
++      ctx.fill();
++    }
++  },
++
++  bokeh(ctx, W, H, t, e, s) {
++    for (let i = 0; i < e.count; i += 1) {
++      const r = sizeOf(e, s, i, W);
++      const x = frac(hash01(s, i, 1) + t * 0.01 * e.speed * (hash01(s, i, 2) - 0.5) * 4) * W;
++      const y = frac(hash01(s, i, 3) - t * 0.015 * e.speed * (0.3 + hash01(s, i, 4))) * H;
++      const col = i % 2 ? e.c : e.c2;
++      const a = e.alpha * (0.6 + 0.4 * Math.sin(t * 0.7 + i * 2.1));
++      ctx.globalAlpha = a;
++      ctx.fillStyle = rgba(col, 0.55);
++      ctx.beginPath();
++      ctx.arc(x, y, r, 0, TAU);
++      ctx.fill();
++      ctx.globalAlpha = a * 0.8;
++      ctx.strokeStyle = rgba(col, 1);
++      ctx.lineWidth = Math.max(1, r * 0.04);
++      ctx.stroke();
++    }
++  },
++
++  synthgrid(ctx, W, H, t, e) {
++    const horizon = H * 0.62;
++    const R = W * 0.28;
++    const cy = horizon - R * 0.1;
++    // Soleil rétro à bandes.
++    ctx.save();
++    ctx.beginPath();
++    ctx.arc(W / 2, cy, R, 0, TAU);
++    ctx.clip();
++    const sun = ctx.createLinearGradient(0, cy - R, 0, cy + R);
++    sun.addColorStop(0, rgba(e.c2, e.alpha));
++    sun.addColorStop(1, rgba(e.c, e.alpha));
++    ctx.fillStyle = sun;
++    const rows = 12;
++    for (let j = 0; j < rows; j += 1) {
++      const y = cy - R + (j * 2 * R) / rows;
++      const h = ((2 * R) / rows) * (j < rows / 2 ? 1 : 1 - (j - rows / 2) / rows * 1.6);
++      ctx.fillRect(W / 2 - R, y, R * 2, Math.max(1, h * 0.85));
++    }
++    ctx.restore();
++    // Sol sombre + grille en perspective.
++    ctx.globalAlpha = 0.35;
++    ctx.fillStyle = "#000";
++    ctx.fillRect(0, horizon, W, H - horizon);
++    ctx.globalAlpha = e.alpha;
++    ctx.strokeStyle = rgba(e.c, 1);
++    ctx.lineWidth = Math.max(1.5, W * 0.003);
++    ctx.beginPath();
++    for (let k = -9; k <= 9; k += 1) {
++      ctx.moveTo(W / 2 + k * W * 0.02, horizon);
++      ctx.lineTo(W / 2 + k * W * 0.22, H);
++    }
++    for (let j = 0; j < e.count; j += 1) {
++      const z = frac(j / e.count + t * 0.15 * e.speed);
++      const y = horizon + (H - horizon) * z * z;
++      ctx.moveTo(0, y);
++      ctx.lineTo(W, y);
++    }
++    ctx.stroke();
++  },
++
++  code(ctx, W, H, t, e, s) {
++    const fs = Math.round(e.size[0] * W);
++    const chars = "01アイウエオカキクケコサシスセソ<>{}=+*";
++    ctx.font = `${fs}px monospace`;
++    ctx.textAlign = "center";
++    ctx.textBaseline = "top";
++    const tail = 9;
++    for (let i = 0; i < e.count; i += 1) {
++      const x = ((i + 0.5) / e.count) * W;
++      const head = frac(t * (0.2 + 0.4 * hash01(s, i, 1)) * e.speed * 0.5 + hash01(s, i, 2)) * (H * 1.4) - H * 0.2;
++      for (let k = 0; k < tail; k += 1) {
++        const y = head - k * fs;
++        if (y < -fs || y > H) continue;
++        ctx.globalAlpha = e.alpha * (1 - k / tail);
++        ctx.fillStyle = k === 0 ? "#eafff2" : rgba(e.c, 1);
++        ctx.fillText(chars[(Math.floor(t * 10) + i * 7 + k * 3) % chars.length], x, y);
++      }
++    }
++  },
++};
+diff --git a/src/features/videos/filters/filterEngine.js b/src/features/videos/filters/filterEngine.js
+new file mode 100644
+index 0000000..376ebaa
+--- /dev/null
++++ b/src/features/videos/filters/filterEngine.js
+@@ -0,0 +1,441 @@
++import { EFFECTS, FX_DEFAULTS, FX_NEEDS_BACKDROP, FX_TYPES } from "./effects.js";
++import { getPreset } from "./presets.js";
++import {
++  clamp,
++  hash01,
++  hslToRgb,
++  makeRng,
++  rgbToHex,
++  rgbToHsl,
++  rgba,
++  rotateHue,
++  toRgb,
++} from "./utils.js";
++
++// ───────────────────────────────────────────────────────────────────────────
++// Moteur de filtres BAARO — 100 % navigateur, sans dépendance.
++//
++// État d'un filtre (petit, sérialisable)   →  resolveFilter()  →  « spec »
++// { id, seed, intensity, hue, density,         (réglages d'image, voile,
++//   brightness, contrast, saturation }          dégradé, effets prêts à dessiner)
++//
++// Une même recette donne une infinité de rendus : la graine (seed) change la
++// position des particules et décale légèrement la palette, la teinte/densité/
++// intensité sont réglables, et l'id « random » génère une recette complète à
++// partir d'un simple nombre (des milliards de filtres uniques).
++// ───────────────────────────────────────────────────────────────────────────
++
++export const FILTER_NONE = "none";
++export const FILTER_RANDOM = "random";
++
++export const DEFAULT_FILTER_STATE = Object.freeze({
++  id: FILTER_NONE,
++  seed: 0,
++  intensity: 1,
++  hue: 0,
++  density: 1,
++  brightness: 0,
++  contrast: 0,
++  saturation: 0,
++});
++
++const MAX_SEED = 2147483646;
++
++export const randomSeed = () => 1 + Math.floor(Math.random() * MAX_SEED);
++
++export function normalizeFilterState(raw = {}) {
++  const num = (value, min, max, fallback) => {
++    const n = Number(value);
++    return Number.isFinite(n) ? clamp(n, min, max) : fallback;
++  };
++  return {
++    id: typeof raw.id === "string" && raw.id ? raw.id : FILTER_NONE,
++    seed: Math.floor(num(raw.seed, 0, MAX_SEED, 0)),
++    intensity: num(raw.intensity, 0, 1.5, 1),
++    hue: num(raw.hue, -180, 180, 0),
++    density: num(raw.density, 0, 2.5, 1),
++    brightness: num(raw.brightness, -0.5, 0.5, 0),
++    contrast: num(raw.contrast, -0.5, 0.5, 0),
++    saturation: num(raw.saturation, -0.5, 0.5, 0),
++  };
++}
++
++// Appareils modestes : moins de particules pour garder une caméra fluide.
++export function detectQuality() {
++  if (typeof navigator === "undefined") return 1;
++  const cores = navigator.hardwareConcurrency || 4;
++  const memory = navigator.deviceMemory || 4;
++  if (cores <= 4 || memory <= 2) return 0.55;
++  if (cores <= 6) return 0.8;
++  return 1;
++}
++
++// ───────────────────────────── Générateur infini ─────────────────────────────
++
++const NOUNS = [
++  ["Aube", 1], ["Brume", 1], ["Lagune", 1], ["Cosmos", 0], ["Éclat", 0], ["Mirage", 0],
++  ["Aurore", 1], ["Nébuleuse", 1], ["Abysse", 0], ["Oasis", 1], ["Spectre", 0], ["Horizon", 0],
++  ["Cascade", 1], ["Éclipse", 1], ["Vertige", 0], ["Orage", 0], ["Zénith", 0], ["Rêverie", 1],
++  ["Onde", 1], ["Braise", 1], ["Cristal", 0], ["Crépuscule", 0], ["Sillage", 0], ["Halo", 0],
++];
++
++const ADJECTIVES = [
++  ["céleste", "céleste"], ["abyssal", "abyssale"], ["doré", "dorée"], ["spectral", "spectrale"],
++  ["irisé", "irisée"], ["glacé", "glacée"], ["mystique", "mystique"], ["incandescent", "incandescente"],
++  ["onirique", "onirique"], ["sauvage", "sauvage"], ["cosmique", "cosmique"], ["lunaire", "lunaire"],
++  ["écarlate", "écarlate"], ["émeraude", "émeraude"], ["velouté", "veloutée"], ["électrique", "électrique"],
++  ["brumeux", "brumeuse"], ["solaire", "solaire"], ["sacré", "sacrée"], ["étrange", "étrange"],
++  ["nocturne", "nocturne"], ["vibrant", "vibrante"], ["limpide", "limpide"], ["infini", "infinie"],
++];
++
++// Effets dont la couleur peut suivre la palette générée.
++const PALETTE_FX = new Set([
++  "bubbles", "rays", "ripples", "stars", "shooting", "nebula", "spirits", "halo", "portal",
++  "fireflies", "snow", "embers", "flames", "sparkles", "petals", "leaves", "dust", "aurora",
++  "hearts", "confetti", "bokeh", "synthgrid", "lightning", "glitch", "code",
++]);
++
++const TINT_MODES = ["soft-light", "overlay", "soft-light", "screen", "multiply"];
++const GRADIENT_MODES = ["soft-light", "overlay", "screen", "soft-light"];
++
++const seedToRng = (seed) => makeRng((Math.imul(seed | 0, 2654435761) + 1) >>> 0);
++
++export function generateRecipe(seed) {
++  const rng = seedToRng(seed);
++  const pick = (list) => list[Math.floor(rng() * list.length)];
++
++  const hue = rng() * 360;
++  const sat = 0.65 + rng() * 0.3;
++  const c1 = hslToRgb(hue, sat, 0.45 + rng() * 0.15);
++  const c2 = hslToRgb(hue + 40 + rng() * 140, 0.65 + rng() * 0.3, 0.4 + rng() * 0.2);
++  const light1 = hslToRgb(hue, 0.9, 0.78);
++  const light2 = hslToRgb(rgbToHsl(c2)[0], 0.9, 0.78);
++
++  const tintMode = pick(TINT_MODES);
++  const tintColor = tintMode === "multiply" ? hslToRgb(hue, sat, 0.22) : c1;
++
++  const effects = [];
++  const wanted = 1 + Math.floor(rng() * 3);
++  let guard = 0;
++  while (effects.length < wanted && guard < 20) {
++    guard += 1;
++    const type = pick(FX_TYPES);
++    if (effects.some((e) => e.type === type)) continue;
++    const base = FX_DEFAULTS[type];
++    const over = { type, count: Math.max(1, Math.round(base.count * (0.6 + rng() * 0.9))) };
++    if (PALETTE_FX.has(type)) {
++      over.color = rgbToHex(rng() < 0.5 ? light1 : light2);
++      over.color2 = rgbToHex(rng() < 0.5 ? light2 : light1);
++    }
++    effects.push(over);
++  }
++
++  const noun = pick(NOUNS);
++  const adjective = pick(ADJECTIVES);
++
++  return {
++    id: FILTER_RANDOM,
++    cat: "infinite",
++    emoji: "∞",
++    label: `${noun[0]} ${adjective[noun[1]]}`,
++    sw: [rgbToHex(c1), rgbToHex(c2)],
++    adjust: {
++      brightness: 0.82 + rng() * 0.34,
++      contrast: 1 + rng() * 0.3,
++      saturate: 0.9 + rng() * 0.8,
++      hue: (rng() - 0.5) * 50,
++      sepia: rng() < 0.2 ? rng() * 0.5 : 0,
++      blur: rng() < 0.15 ? 0.5 : 0,
++    },
++    tint: { color: tintColor, alpha: tintMode === "multiply" ? 0.25 + rng() * 0.2 : 0.12 + rng() * 0.28, mode: tintMode },
++    gradient: rng() < 0.7 ? { top: c1, bottom: c2, alpha: 0.15 + rng() * 0.25, mode: pick(GRADIENT_MODES) } : null,
++    vignette: rng() * 0.65,
++    grain: rng() < 0.35 ? rng() * 0.35 : 0,
++    effects,
++  };
++}
++
++// Nom + pastilles pour l'interface, sans résoudre tout le filtre.
++export function describeFilter(rawState) {
++  const state = normalizeFilterState(rawState);
++  if (state.id === FILTER_NONE) return { label: "Aucun filtre", emoji: "🚫", sw: ["#3f3f46", "#18181b"] };
++  const recipe = state.id === FILTER_RANDOM ? generateRecipe(state.seed) : getPreset(state.id);
++  if (!recipe) return { label: "Aucun filtre", emoji: "🚫", sw: ["#3f3f46", "#18181b"] };
++  return { label: recipe.label, emoji: recipe.emoji, sw: recipe.sw };
++}
++
++// ───────────────────────────── Résolution ─────────────────────────────
++
++const NEUTRAL = { brightness: 1, contrast: 1, saturate: 1, hue: 0, sepia: 0, grayscale: 0, blur: 0 };
++const LIMITS = {
++  brightness: [0.3, 2],
++  contrast: [0.3, 2.2],
++  saturate: [0, 3],
++  hue: [-360, 360],
++  sepia: [0, 1],
++  grayscale: [0, 1],
++  blur: [0, 6],
++};
++
++// Effets « uniques » : le nombre d'éléments n'a pas de sens à multiplier.
++const SINGLE_FX = new Set(["planet", "halo", "lightning", "scanlines"]);
++
++export function resolveFilter(rawState, { quality = 1 } = {}) {
++  const state = normalizeFilterState(rawState);
++  if (state.id === FILTER_NONE) return null;
++
++  const recipe = state.id === FILTER_RANDOM ? generateRecipe(state.seed) : getPreset(state.id);
++  if (!recipe) return null;
++
++  // Variantes : la graine d'un filtre prédéfini change sa palette et la dispersion des particules.
++  let jitterHue = 0;
++  let jitterDensity = 1;
++  if (state.id !== FILTER_RANDOM && state.seed > 0) {
++    const rng = seedToRng(state.seed);
++    jitterHue = (rng() * 2 - 1) * 40;
++    jitterDensity = 0.8 + rng() * 0.5;
++  }
++  const shift = state.hue + jitterHue;
++  const intensity = state.intensity;
++  const level = clamp(intensity, 0, 1);
++  const recolor = (color) => rotateHue(toRgb(color), shift);
++
++  const adjust = {};
++  for (const key of Object.keys(NEUTRAL)) {
++    const target = recipe.adjust?.[key] ?? NEUTRAL[key];
++    adjust[key] = NEUTRAL[key] + (target - NEUTRAL[key]) * intensity;
++  }
++  adjust.brightness += state.brightness;
++  adjust.contrast += state.contrast;
++  adjust.saturate += state.saturation;
++  adjust.hue += shift;
++  for (const key of Object.keys(LIMITS)) adjust[key] = clamp(adjust[key], ...LIMITS[key]);
++
++  const tint = recipe.tint
++    ? { rgb: recolor(recipe.tint.color), alpha: clamp(recipe.tint.alpha * intensity, 0, 1), mode: recipe.tint.mode }
++    : null;
++
++  let gradient = null;
++  if (recipe.gradient) {
++    const colors = recipe.gradient.stops || [recipe.gradient.top, recipe.gradient.bottom];
++    gradient = {
++      stops: colors.map(recolor),
++      alpha: clamp(recipe.gradient.alpha * intensity, 0, 1),
++      mode: recipe.gradient.mode,
++    };
++  }
++
++  const countScale = state.density * jitterDensity * quality * (0.3 + 0.7 * level);
++  const alphaScale = clamp(intensity, 0, 1.2);
++  const effects = [];
++  (recipe.effects || []).forEach((fx, index) => {
++    const base = FX_DEFAULTS[fx.type];
++    if (!base || !EFFECTS[fx.type]) return;
++    const merged = { ...base, ...fx };
++    const count = SINGLE_FX.has(fx.type)
++      ? state.density > 0.05 && level > 0.05 ? merged.count : 0
++      : Math.round(merged.count * countScale);
++    if (count <= 0) return;
++    effects.push({
++      ...merged,
++      count,
++      alpha: clamp(merged.alpha * alphaScale, 0, 1),
++      c: recolor(merged.color),
++      c2: recolor(merged.color2 ?? merged.color),
++      seed: (Math.imul(state.seed + 1, 2654435761) + Math.imul(index + 1, 40503) + 17) >>> 0,
++    });
++  });
++
++  return {
++    id: state.id,
++    label: recipe.label,
++    adjust,
++    tint,
++    gradient,
++    vignette: clamp((recipe.vignette || 0) * intensity, 0, 0.95),
++    grain: clamp((recipe.grain || 0) * intensity, 0, 1),
++    effects,
++    needsBackdrop: effects.some((e) => FX_NEEDS_BACKDROP.has(e.type)),
++  };
++}
++
++// Équivalent CSS des réglages d'image (aperçu <video> et ctx.filter).
++// scale : taille de rendu / 720 px, pour que le flou garde la même finesse.
++export function cssFilterString(spec, scale = 1) {
++  if (!spec) return "none";
++  const a = spec.adjust;
++  const parts = [];
++  const push = (name, value, neutral, unit = "") => {
++    if (Math.abs(value - neutral) > 0.004) parts.push(`${name}(${+value.toFixed(3)}${unit})`);
++  };
++  push("brightness", a.brightness, 1);
++  push("contrast", a.contrast, 1);
++  push("saturate", a.saturate, 1);
++  push("hue-rotate", a.hue, 0, "deg");
++  push("sepia", a.sepia, 0);
++  push("grayscale", a.grayscale, 0);
++  if (a.blur > 0.05) parts.push(`blur(${+(a.blur * scale).toFixed(2)}px)`);
++  return parts.length ? parts.join(" ") : "none";
++}
++
++// ───────────────────────────── Rendu canvas ─────────────────────────────
++
++let grainTile = null;
++const grainPatterns = new WeakMap();
++
++const getGrain = (ctx) => {
++  if (typeof document === "undefined") return null;
++  if (!grainTile) {
++    grainTile = document.createElement("canvas");
++    grainTile.width = 160;
++    grainTile.height = 160;
++    const g = grainTile.getContext("2d");
++    const img = g.createImageData(160, 160);
++    for (let i = 0; i < img.data.length; i += 4) {
++      const v = Math.floor(Math.random() * 255);
++      img.data[i] = img.data[i + 1] = img.data[i + 2] = v;
++      img.data[i + 3] = 255;
++    }
++    g.putImageData(img, 0, 0);
++  }
++  let pattern = grainPatterns.get(ctx);
++  if (!pattern) {
++    pattern = ctx.createPattern(grainTile, "repeat");
++    grainPatterns.set(ctx, pattern);
++  }
++  return pattern;
++};
++
++// Calques par-dessus l'image : dégradé, voile, effets, vignette, grain.
++// blend:false → calque transparent posé sur un <video> (aperçu), sans fusion avec l'image.
++export function drawOverlays(ctx, W, H, spec, ms, { blend = true } = {}) {
++  if (!spec) return;
++  const t = ms / 1000;
++  ctx.save();
++  ctx.globalAlpha = 1;
++  ctx.globalCompositeOperation = "source-over";
++
++  const { gradient, tint } = spec;
++  if (gradient && gradient.alpha > 0.002) {
++    const g = ctx.createLinearGradient(0, 0, 0, H);
++    const n = gradient.stops.length;
++    gradient.stops.forEach((rgb, i) => g.addColorStop(n === 1 ? 0 : i / (n - 1), rgba(rgb, 1)));
++    ctx.globalCompositeOperation = blend ? gradient.mode : "source-over";
++    ctx.globalAlpha = blend ? gradient.alpha : gradient.alpha * 0.5;
++    ctx.fillStyle = g;
++    ctx.fillRect(0, 0, W, H);
++  }
++
++  if (tint && tint.alpha > 0.002) {
++    ctx.globalCompositeOperation = blend ? tint.mode : "source-over";
++    ctx.globalAlpha = blend ? tint.alpha : tint.alpha * 0.45;
++    ctx.fillStyle = rgba(tint.rgb, 1);
++    ctx.fillRect(0, 0, W, H);
++  }
++
++  for (const effect of spec.effects) {
++    if (!blend && FX_NEEDS_BACKDROP.has(effect.type)) continue;
++    ctx.save();
++    ctx.globalAlpha = 1;
++    ctx.globalCompositeOperation = blend ? effect.blend || "screen" : "source-over";
++    EFFECTS[effect.type](ctx, W, H, t, effect, effect.seed);
++    ctx.restore();
++  }
++
++  if (spec.vignette > 0.01) {
++    const r = Math.hypot(W, H) / 2;
++    const v = ctx.createRadialGradient(W / 2, H / 2, r * 0.3, W / 2, H / 2, r);
++    v.addColorStop(0, "rgba(0,0,0,0)");
++    v.addColorStop(1, `rgba(0,0,0,${spec.vignette})`);
++    ctx.globalCompositeOperation = "source-over";
++    ctx.globalAlpha = 1;
++    ctx.fillStyle = v;
++    ctx.fillRect(0, 0, W, H);
++  }
++
++  if (spec.grain > 0.01) {
++    const pattern = getGrain(ctx);
++    if (pattern) {
++      const ox = Math.floor(hash01(1, Math.floor(t * 24), 1) * 160);
++      const oy = Math.floor(hash01(2, Math.floor(t * 24), 2) * 160);
++      ctx.globalCompositeOperation = blend ? "overlay" : "source-over";
++      ctx.globalAlpha = blend ? spec.grain * 0.5 : spec.grain * 0.12;
++      ctx.translate(-ox, -oy);
++      ctx.fillStyle = pattern;
++      ctx.fillRect(ox, oy, W, H);
++    }
++  }
++
++  ctx.restore();
++}
++
++// Navigateurs sans ctx.filter (Safari) : approximation par fusion de calques.
++function approximateAdjust(ctx, W, H, a) {
++  ctx.save();
++  const desaturate = clamp(1 - a.saturate + a.grayscale, 0, 1);
++  if (desaturate > 0.02) {
++    ctx.globalCompositeOperation = "saturation";
++    ctx.globalAlpha = desaturate;
++    ctx.fillStyle = "#808080";
++    ctx.fillRect(0, 0, W, H);
++  }
++  if (a.sepia > 0.02) {
++    ctx.globalCompositeOperation = "color";
++    ctx.globalAlpha = a.sepia * 0.7;
++    ctx.fillStyle = "#704214";
++    ctx.fillRect(0, 0, W, H);
++  }
++  ctx.globalCompositeOperation = "source-over";
++  if (a.brightness < 0.98) {
++    ctx.globalAlpha = 1 - a.brightness;
++    ctx.fillStyle = "#000";
++    ctx.fillRect(0, 0, W, H);
++  } else if (a.brightness > 1.02) {
++    ctx.globalAlpha = (a.brightness - 1) * 0.5;
++    ctx.fillStyle = "#fff";
++    ctx.fillRect(0, 0, W, H);
++  }
++  if (a.contrast > 1.02) {
++    ctx.globalCompositeOperation = "overlay";
++    ctx.globalAlpha = clamp((a.contrast - 1) * 0.8, 0, 1);
++    ctx.drawImage(ctx.canvas, 0, 0);
++  }
++  ctx.restore();
++}
++
++// Dessine `source` (vidéo, image ou canvas) en « cover » sur tout le canevas, filtre appliqué.
++export function drawFiltered(ctx, source, sw, sh, spec, ms) {
++  const W = ctx.canvas.width;
++  const H = ctx.canvas.height;
++  const scale = Math.max(W / sw, H / sh);
++  const w = sw * scale;
++  const h = sh * scale;
++  const native = !!spec && "filter" in ctx;
++
++  ctx.globalAlpha = 1;
++  ctx.globalCompositeOperation = "source-over";
++  if (native) ctx.filter = cssFilterString(spec, W / 720);
++  ctx.drawImage(source, (W - w) / 2, (H - h) / 2, w, h);
++  if (native) ctx.filter = "none";
++  else if (spec) approximateAdjust(ctx, W, H, spec.adjust);
++
++  drawOverlays(ctx, W, H, spec, ms);
++}
++
++// Enveloppe un dessinateur de frames (photos / texte) pour y appliquer le filtre.
++export function withFilter(drawFrame, spec) {
++  if (!spec) return drawFrame;
++  let off = null;
++  let offCtx = null;
++  return (ctx, ms) => {
++    const { width: W, height: H } = ctx.canvas;
++    if (!off || off.width !== W || off.height !== H) {
++      off = document.createElement("canvas");
++      off.width = W;
++      off.height = H;
++      offCtx = off.getContext("2d");
++    }
++    drawFrame(offCtx, ms);
++    drawFiltered(ctx, off, W, H, spec, ms);
++  };
++}
+diff --git a/src/features/videos/filters/index.js b/src/features/videos/filters/index.js
+new file mode 100644
+index 0000000..da9ece4
+--- /dev/null
++++ b/src/features/videos/filters/index.js
+@@ -0,0 +1,15 @@
++export {
++  DEFAULT_FILTER_STATE,
++  FILTER_NONE,
++  FILTER_RANDOM,
++  cssFilterString,
++  describeFilter,
++  detectQuality,
++  drawFiltered,
++  drawOverlays,
++  normalizeFilterState,
++  randomSeed,
++  resolveFilter,
++  withFilter,
++} from "./filterEngine.js";
++export { FILTER_CATEGORIES, FILTER_PRESETS, presetsByCategory } from "./presets.js";
+diff --git a/src/features/videos/filters/presets.js b/src/features/videos/filters/presets.js
+new file mode 100644
+index 0000000..5d05965
+--- /dev/null
++++ b/src/features/videos/filters/presets.js
+@@ -0,0 +1,460 @@
++// Catalogue des filtres BAARO. Chaque filtre est une « recette » (réglages d'image,
++// teinte, dégradé, vignette, grain, effets animés). Le moteur en tire une infinité
++// de variantes (graine, teinte, intensité, densité) : voir filterEngine.js.
++//
++// adjust   : réglages de couleur de l'image (équivalent CSS filter)
++// tint     : voile de couleur uniforme   { color, alpha, mode }
++// gradient : dégradé vertical            { top, bottom | stops, alpha, mode }
++// effects  : particules / ambiances animées (voir effects.js)
++
++export const FILTER_CATEGORIES = [
++  { id: "ocean", emoji: "🌊", label: "Océan" },
++  { id: "space", emoji: "🚀", label: "Espace" },
++  { id: "beyond", emoji: "👻", label: "Au-delà" },
++  { id: "sky", emoji: "🌅", label: "Ciel & Feu" },
++  { id: "nature", emoji: "🌿", label: "Nature" },
++  { id: "neon", emoji: "⚡", label: "Néon" },
++  { id: "retro", emoji: "🎞️", label: "Rétro" },
++  { id: "dream", emoji: "✨", label: "Rêve & Fête" },
++  { id: "winter", emoji: "❄️", label: "Hiver" },
++];
++
++const fx = (type, over = {}) => ({ type, ...over });
++
++const preset = (cat, id, emoji, label, sw, recipe) => ({
++  id,
++  cat,
++  emoji,
++  label,
++  sw,
++  ...recipe,
++});
++
++export const FILTER_PRESETS = [
++  // ───────────────────────── Océan ─────────────────────────
++  preset("ocean", "lagon", "🏝️", "Lagon", ["#00e5ff", "#0077b6"], {
++    adjust: { brightness: 1.06, saturate: 1.4, hue: -6 },
++    tint: { color: "#00cfff", alpha: 0.2, mode: "soft-light" },
++    gradient: { top: "#c8fbff", bottom: "#0090c8", alpha: 0.22, mode: "soft-light" },
++    vignette: 0.15,
++    effects: [fx("rays", { count: 5, alpha: 0.3 }), fx("bubbles", { count: 14 }), fx("ripples", { count: 6, alpha: 0.18 })],
++  }),
++  preset("ocean", "abysses", "🌑", "Abysses", ["#0b3d91", "#00040f"], {
++    adjust: { brightness: 0.82, contrast: 1.18, saturate: 1.15, hue: 8 },
++    tint: { color: "#001b4d", alpha: 0.5, mode: "multiply" },
++    gradient: { top: "#0b3d91", bottom: "#00040f", alpha: 0.5, mode: "multiply" },
++    vignette: 0.65,
++    effects: [fx("bubbles", { count: 26, alpha: 0.5, color: "#8fd6ff" }), fx("fish", { count: 6 }), fx("dust", { count: 60, color: "#8fd6ff", alpha: 0.35 })],
++  }),
++  preset("ocean", "recif", "🐠", "Récif corail", ["#ff7a59", "#0b6fa8"], {
++    adjust: { brightness: 1.04, contrast: 1.08, saturate: 1.65 },
++    tint: { color: "#ff7a59", alpha: 0.12, mode: "overlay" },
++    gradient: { top: "#7ef3ff", bottom: "#0b6fa8", alpha: 0.2, mode: "soft-light" },
++    effects: [fx("rays", { count: 4, alpha: 0.25 }), fx("bubbles"), fx("fish", { count: 9, color: "#ff7a00", alpha: 0.85 })],
++  }),
++  preset("ocean", "surface", "💧", "Sous la surface", ["#2bb8d8", "#06577a"], {
++    adjust: { brightness: 1.02, saturate: 1.25, hue: -10 },
++    tint: { color: "#2bb8d8", alpha: 0.25, mode: "soft-light" },
++    vignette: 0.2,
++    effects: [fx("ripples", { count: 9, alpha: 0.3 }), fx("rays", { count: 7, alpha: 0.4 }), fx("waves", { count: 2, alpha: 0.2 })],
++  }),
++  preset("ocean", "vague", "🏄", "Grande vague", ["#4de1ff", "#0a4d8c"], {
++    adjust: { brightness: 1.04, contrast: 1.1, saturate: 1.35 },
++    tint: { color: "#0aa4d8", alpha: 0.18, mode: "soft-light" },
++    effects: [fx("waves", { count: 4, alpha: 0.45 }), fx("bubbles", { count: 12 }), fx("fog", { count: 4, alpha: 0.1 })],
++  }),
++  preset("ocean", "bioluminescence", "🪼", "Bioluminescence", ["#3ff3ff", "#001a3a"], {
++    adjust: { brightness: 0.8, contrast: 1.25, saturate: 1.4, hue: 6 },
++    tint: { color: "#002a5c", alpha: 0.45, mode: "multiply" },
++    vignette: 0.55,
++    effects: [fx("fireflies", { count: 34, color: "#3ff3ff", size: [0.01, 0.035] }), fx("spirits", { count: 8, color: "#5ad7ff", alpha: 0.35 }), fx("bubbles", { count: 10, color: "#7fe9ff", alpha: 0.4 })],
++  }),
++  preset("ocean", "sirene", "🧜", "Sirène", ["#7cf5e0", "#7a4cff"], {
++    adjust: { brightness: 1.05, saturate: 1.35, hue: 24 },
++    tint: { color: "#9b6bff", alpha: 0.18, mode: "soft-light" },
++    gradient: { top: "#7cf5e0", bottom: "#7a4cff", alpha: 0.25, mode: "soft-light" },
++    effects: [fx("bubbles", { color: "#e0d4ff" }), fx("sparkles", { count: 30, color: "#eafffb" }), fx("rays", { count: 4, color: "#d9fff5", alpha: 0.25 })],
++  }),
++  preset("ocean", "tempete-mer", "⛈️", "Tempête en mer", ["#1d3557", "#0b1320"], {
++    adjust: { brightness: 0.85, contrast: 1.2, saturate: 0.85, hue: -5 },
++    tint: { color: "#1d3557", alpha: 0.35, mode: "multiply" },
++    vignette: 0.5,
++    effects: [fx("rain", { count: 130, alpha: 0.45 }), fx("waves", { count: 3, alpha: 0.4, color: "#0f4c75" }), fx("lightning")],
++  }),
++
++  // ───────────────────────── Espace ─────────────────────────
++  preset("space", "nebuleuse", "🌌", "Nébuleuse", ["#a855f7", "#0ea5e9"], {
++    adjust: { brightness: 0.92, contrast: 1.15, saturate: 1.4 },
++    tint: { color: "#4c1d95", alpha: 0.3, mode: "overlay" },
++    vignette: 0.4,
++    effects: [fx("nebula", { count: 6 }), fx("stars", { count: 110 })],
++  }),
++  preset("space", "galaxie", "🌠", "Galaxie", ["#60a5fa", "#0b1d5e"], {
++    adjust: { brightness: 0.88, contrast: 1.2, saturate: 1.3, hue: -12 },
++    tint: { color: "#0b1d5e", alpha: 0.4, mode: "multiply" },
++    effects: [fx("nebula", { count: 4, color: "#60a5fa", color2: "#f472b6", alpha: 0.3 }), fx("stars", { count: 160, size: [0.0015, 0.005] }), fx("shooting", { count: 3 })],
++  }),
++  preset("space", "saturne", "🪐", "Saturne", ["#e9c98a", "#1b1035"], {
++    adjust: { brightness: 0.9, contrast: 1.15, saturate: 1.2 },
++    tint: { color: "#1b1035", alpha: 0.35, mode: "multiply" },
++    effects: [fx("stars", { count: 100 }), fx("planet"), fx("nebula", { count: 2, alpha: 0.2 })],
++  }),
++  preset("space", "aurore", "💚", "Aurore boréale", ["#4ade80", "#a78bfa"], {
++    adjust: { brightness: 0.9, contrast: 1.15, saturate: 1.35 },
++    tint: { color: "#042a2b", alpha: 0.35, mode: "multiply" },
++    effects: [fx("aurora", { count: 3 }), fx("stars", { count: 90 })],
++  }),
++  preset("space", "trou-noir", "⚫", "Trou noir", ["#ffb347", "#000000"], {
++    adjust: { brightness: 0.75, contrast: 1.35, saturate: 1.2 },
++    tint: { color: "#000000", alpha: 0.35, mode: "multiply" },
++    vignette: 0.8,
++    effects: [fx("portal", { count: 8, color: "#ffb347", color2: "#ff4e50", size: [0.08, 0.5], alpha: 0.8 }), fx("stars", { count: 70 })],
++  }),
++  preset("space", "supernova", "💥", "Supernova", ["#ff7849", "#ffd166"], {
++    adjust: { brightness: 1.1, contrast: 1.25, saturate: 1.5 },
++    tint: { color: "#ff5a1f", alpha: 0.3, mode: "overlay" },
++    effects: [fx("nebula", { count: 5, color: "#ff7849", color2: "#ffd166", alpha: 0.38 }), fx("sparkles", { count: 50 }), fx("shooting", { count: 5, color: "#ffe6b3" })],
++  }),
++  preset("space", "mars", "🔴", "Mars", ["#ffb88c", "#7b2d12"], {
++    adjust: { sepia: 0.4, saturate: 1.5, hue: -18, contrast: 1.1 },
++    tint: { color: "#c1440e", alpha: 0.3, mode: "soft-light" },
++    gradient: { top: "#ffb88c", bottom: "#7b2d12", alpha: 0.25, mode: "soft-light" },
++    vignette: 0.3,
++    effects: [fx("dust", { count: 120, color: "#ffb88c", alpha: 0.45 }), fx("fog", { count: 5, color: "#d0643a", alpha: 0.12 })],
++  }),
++  preset("space", "voie-lactee", "✨", "Voie lactée", ["#c4b5fd", "#0a1642"], {
++    adjust: { brightness: 0.9, contrast: 1.25, saturate: 1.2 },
++    tint: { color: "#0a1642", alpha: 0.4, mode: "multiply" },
++    effects: [fx("nebula", { count: 3, color: "#c4b5fd", color2: "#fda4af", alpha: 0.22, size: [0.5, 0.9] }), fx("stars", { count: 220, size: [0.0012, 0.004] }), fx("shooting", { count: 2 })],
++  }),
++
++  // ───────────────────────── Au-delà ─────────────────────────
++  preset("beyond", "paradis", "😇", "Paradis", ["#fff7d6", "#ffd98a"], {
++    adjust: { brightness: 1.12, contrast: 0.95, saturate: 0.95, blur: 0.4 },
++    tint: { color: "#fff1c1", alpha: 0.3, mode: "soft-light" },
++    gradient: { top: "#ffffff", bottom: "#ffe9a8", alpha: 0.25, mode: "screen" },
++    effects: [fx("rays", { count: 7, color: "#fff7d6", alpha: 0.5 }), fx("halo", { color: "#fff4c9" }), fx("sparkles", { count: 36, color: "#fffbe6" }), fx("petals", { count: 16, color: "#ffffff", color2: "#fff2cc", alpha: 0.7 })],
++  }),
++  preset("beyond", "esprits", "👻", "Esprits", ["#bfe9ff", "#3a5f7a"], {
++    adjust: { brightness: 0.9, contrast: 1.1, saturate: 0.55, hue: -14 },
++    tint: { color: "#3a5f7a", alpha: 0.35, mode: "soft-light" },
++    vignette: 0.5,
++    effects: [fx("spirits", { count: 16 }), fx("fog", { count: 6, alpha: 0.14 }), fx("dust", { count: 40, color: "#cfeaff" })],
++  }),
++  preset("beyond", "purgatoire", "🌫️", "Purgatoire", ["#d6d6e0", "#4a4a56"], {
++    adjust: { brightness: 0.88, contrast: 1.12, saturate: 0.3, sepia: 0.2 },
++    tint: { color: "#6b6b78", alpha: 0.35, mode: "overlay" },
++    vignette: 0.7,
++    effects: [fx("fog", { count: 9, alpha: 0.2 }), fx("spirits", { count: 8, color: "#d6d6e0", alpha: 0.35 }), fx("dust", { count: 50, color: "#cfcfd8", alpha: 0.4 })],
++  }),
++  preset("beyond", "enfer", "🔥", "Enfer", ["#ff4500", "#1a0000"], {
++    adjust: { brightness: 0.9, contrast: 1.3, saturate: 1.4, hue: -8 },
++    tint: { color: "#c1121f", alpha: 0.35, mode: "overlay" },
++    gradient: { top: "#1a0000", bottom: "#ff4500", alpha: 0.35, mode: "soft-light" },
++    vignette: 0.7,
++    effects: [fx("flames", { count: 14 }), fx("embers", { count: 55 }), fx("fog", { count: 4, color: "#ff3b1f", alpha: 0.12 })],
++  }),
++  preset("beyond", "portail", "🌀", "Portail mystique", ["#c084fc", "#3b0764"], {
++    adjust: { brightness: 0.9, contrast: 1.2, saturate: 1.4, hue: 10 },
++    tint: { color: "#3b0764", alpha: 0.35, mode: "overlay" },
++    vignette: 0.55,
++    effects: [fx("portal", { count: 8 }), fx("sparkles", { count: 34, color: "#e9d5ff" }), fx("spirits", { count: 8, color: "#c084fc", alpha: 0.35 })],
++  }),
++  preset("beyond", "hante", "🏚️", "Maison hantée", ["#e2fff4", "#1b2a2a"], {
++    adjust: { brightness: 0.78, contrast: 1.3, saturate: 0.4, blur: 0.3 },
++    tint: { color: "#1b2a2a", alpha: 0.4, mode: "multiply" },
++    vignette: 0.75,
++    grain: 0.35,
++    effects: [fx("glitch", { count: 2, alpha: 0.5 }), fx("spirits", { count: 6, color: "#e2fff4", alpha: 0.4 }), fx("fog", { count: 7, alpha: 0.18 })],
++  }),
++  preset("beyond", "ange", "👼", "Ange gardien", ["#ffffff", "#bcd7ff"], {
++    adjust: { brightness: 1.1, saturate: 1.05, blur: 0.5 },
++    tint: { color: "#e8f1ff", alpha: 0.2, mode: "screen" },
++    effects: [fx("halo", { size: [0.8, 0.8], alpha: 0.6, color: "#ffffff" }), fx("petals", { count: 22, color: "#ffffff", color2: "#e8f1ff", alpha: 0.75 }), fx("sparkles", { count: 24, color: "#ffffff" })],
++  }),
++  preset("beyond", "ancetres", "🕯️", "Ancêtres", ["#ffd27a", "#5a3a10"], {
++    adjust: { sepia: 0.45, brightness: 0.92, contrast: 1.15, saturate: 1.2 },
++    tint: { color: "#c98a1b", alpha: 0.3, mode: "soft-light" },
++    vignette: 0.6,
++    grain: 0.25,
++    effects: [fx("spirits", { count: 12, color: "#ffd27a", alpha: 0.5 }), fx("dust", { count: 80, color: "#ffe2a6", alpha: 0.5 }), fx("embers", { count: 20, alpha: 0.6 })],
++  }),
++  preset("beyond", "lune-mystique", "🌙", "Lune mystique", ["#dbeafe", "#1e3a8a"], {
++    adjust: { brightness: 0.88, contrast: 1.15, saturate: 0.8, hue: -18 },
++    tint: { color: "#1e3a8a", alpha: 0.3, mode: "multiply" },
++    vignette: 0.5,
++    effects: [fx("halo", { color: "#dbeafe", size: [0.6, 0.6] }), fx("fog", { count: 6, alpha: 0.14 }), fx("fireflies", { count: 12, color: "#bfdbfe" })],
++  }),
++
++  // ───────────────────────── Ciel & Feu ─────────────────────────
++  preset("sky", "couchant", "🌇", "Coucher de soleil", ["#ff8a00", "#7a2cff"], {
++    adjust: { brightness: 1.05, saturate: 1.4, contrast: 1.05, hue: -6 },
++    tint: { color: "#ff7a18", alpha: 0.3, mode: "soft-light" },
++    gradient: { top: "#7a2cff", bottom: "#ff8a00", alpha: 0.3, mode: "soft-light" },
++    vignette: 0.3,
++    effects: [fx("dust", { count: 40, color: "#ffd9a0" }), fx("bokeh", { count: 8, color: "#ffb347", alpha: 0.2 })],
++  }),
++  preset("sky", "aube", "🌅", "Aube dorée", ["#ffe6a8", "#ff9d5c"], {
++    adjust: { brightness: 1.08, saturate: 1.2, sepia: 0.12 },
++    tint: { color: "#ffd27a", alpha: 0.25, mode: "soft-light" },
++    gradient: { top: "#ffe6a8", bottom: "#ff9d5c", alpha: 0.25, mode: "soft-light" },
++    effects: [fx("rays", { count: 6, color: "#fff0c0", alpha: 0.38 }), fx("dust", { count: 60, color: "#fff1c9" })],
++  }),
++  preset("sky", "orage", "⛈️", "Orage", ["#1c2b4a", "#0a1020"], {
++    adjust: { brightness: 0.85, contrast: 1.25, saturate: 0.8 },
++    tint: { color: "#1c2b4a", alpha: 0.4, mode: "multiply" },
++    vignette: 0.5,
++    effects: [fx("rain", { count: 140 }), fx("lightning"), fx("fog", { count: 5, alpha: 0.15, color: "#9fb0cc" })],
++  }),
++  preset("sky", "volcan", "🌋", "Volcan", ["#ff6a00", "#2b0a0a"], {
++    adjust: { brightness: 0.92, contrast: 1.3, saturate: 1.5, hue: -10 },
++    tint: { color: "#d62828", alpha: 0.3, mode: "overlay" },
++    gradient: { top: "#2b0a0a", bottom: "#ff6a00", alpha: 0.35, mode: "soft-light" },
++    vignette: 0.6,
++    effects: [fx("embers", { count: 70 }), fx("flames", { count: 10, alpha: 0.5 }), fx("fog", { count: 4, color: "#5a2a1a", alpha: 0.2 })],
++  }),
++  preset("sky", "feu-camp", "🏕️", "Feu de camp", ["#ff8a3c", "#2a1305"], {
++    adjust: { sepia: 0.25, brightness: 0.95, contrast: 1.15, saturate: 1.3 },
++    tint: { color: "#ff8a3c", alpha: 0.28, mode: "soft-light" },
++    vignette: 0.65,
++    effects: [fx("embers", { count: 40 }), fx("dust", { count: 40, color: "#ffcf9a" })],
++  }),
++  preset("sky", "arc-en-ciel", "🌈", "Arc-en-ciel", ["#ff4d4d", "#8a4dff"], {
++    adjust: { saturate: 1.5, brightness: 1.05 },
++    gradient: { stops: ["#ff4d4d", "#ffd24d", "#4dff88", "#4dc3ff", "#8a4dff"], alpha: 0.3, mode: "soft-light" },
++    effects: [fx("sparkles", { count: 24 }), fx("bokeh", { count: 8, alpha: 0.2 })],
++  }),
++  preset("sky", "plein-soleil", "☀️", "Plein soleil", ["#fff3b0", "#ffb300"], {
++    adjust: { brightness: 1.12, contrast: 1.12, saturate: 1.35 },
++    tint: { color: "#fff3b0", alpha: 0.2, mode: "soft-light" },
++    effects: [fx("rays", { count: 5, color: "#fffbe0" }), fx("bokeh", { count: 8, color: "#fff0a8", alpha: 0.22 })],
++  }),
++  preset("sky", "nuit-etoilee", "🌃", "Nuit étoilée", ["#0c1a4b", "#3b4ea8"], {
++    adjust: { brightness: 0.82, contrast: 1.2, saturate: 0.9, hue: -12 },
++    tint: { color: "#0c1a4b", alpha: 0.4, mode: "multiply" },
++    vignette: 0.4,
++    effects: [fx("stars", { count: 130 }), fx("shooting", { count: 2 })],
++  }),
++
++  // ───────────────────────── Nature ─────────────────────────
++  preset("nature", "foret", "🌲", "Forêt enchantée", ["#1f7a3a", "#d9ff6a"], {
++    adjust: { saturate: 1.3, brightness: 0.95, hue: 6 },
++    tint: { color: "#1f7a3a", alpha: 0.25, mode: "soft-light" },
++    vignette: 0.45,
++    effects: [fx("rays", { count: 5, color: "#e8ffd0", alpha: 0.3 }), fx("fireflies", { count: 30 }), fx("dust", { count: 40, color: "#e8ffd0" })],
++  }),
++  preset("nature", "jungle", "🦜", "Jungle", ["#0b7a2a", "#8bd05a"], {
++    adjust: { saturate: 1.5, contrast: 1.12, brightness: 0.95 },
++    tint: { color: "#0b7a2a", alpha: 0.3, mode: "overlay" },
++    vignette: 0.4,
++    effects: [fx("fog", { count: 5, color: "#c8ffd0", alpha: 0.1 }), fx("leaves", { count: 16, color: "#2fa84f", color2: "#8bd05a" }), fx("rays", { count: 4, color: "#f0ffd0", alpha: 0.25 })],
++  }),
++  preset("nature", "sahel", "🌾", "Sahel doré", ["#ffd98a", "#d97a1f"], {
++    adjust: { sepia: 0.3, saturate: 1.35, brightness: 1.06, contrast: 1.08 },
++    tint: { color: "#e0a030", alpha: 0.28, mode: "soft-light" },
++    gradient: { top: "#ffe2a0", bottom: "#d97a1f", alpha: 0.22, mode: "soft-light" },
++    effects: [fx("dust", { count: 90, color: "#ffd98a", alpha: 0.55 }), fx("bokeh", { count: 6, color: "#ffcf70", alpha: 0.18 })],
++  }),
++  preset("nature", "desert", "🏜️", "Désert", ["#f1d29c", "#b5762c"], {
++    adjust: { sepia: 0.45, brightness: 1.08, contrast: 1.12, saturate: 1.2 },
++    tint: { color: "#e0b070", alpha: 0.3, mode: "soft-light" },
++    effects: [fx("dust", { count: 140, color: "#f1d29c", alpha: 0.6, speed: 2 }), fx("fog", { count: 4, color: "#e8c38f", alpha: 0.14 })],
++  }),
++  preset("nature", "sakura", "🌸", "Cerisiers", ["#ffb7d5", "#ff7eb6"], {
++    adjust: { brightness: 1.07, saturate: 1.2, contrast: 0.98 },
++    tint: { color: "#ff9ecb", alpha: 0.2, mode: "soft-light" },
++    effects: [fx("petals", { count: 34 }), fx("bokeh", { count: 8, color: "#ffc4de", alpha: 0.22 })],
++  }),
++  preset("nature", "automne", "🍂", "Automne", ["#d2691e", "#7a3b0c"], {
++    adjust: { sepia: 0.2, saturate: 1.4, contrast: 1.08, hue: -8 },
++    tint: { color: "#d2691e", alpha: 0.25, mode: "soft-light" },
++    vignette: 0.35,
++    effects: [fx("leaves", { count: 26 }), fx("dust", { count: 30, color: "#ffcf9a" })],
++  }),
++  preset("nature", "pluie", "🌧️", "Pluie douce", ["#3a5a7a", "#cfe0f0"], {
++    adjust: { brightness: 0.92, saturate: 0.8, contrast: 1.1 },
++    tint: { color: "#3a5a7a", alpha: 0.3, mode: "multiply" },
++    effects: [fx("rain", { count: 120 }), fx("fog", { count: 4, alpha: 0.1, color: "#cfe0f0" })],
++  }),
++  preset("nature", "brume", "☁️", "Brume matinale", ["#e6eef5", "#9fb8c8"], {
++    adjust: { brightness: 1.05, contrast: 0.92, saturate: 0.85, blur: 0.5 },
++    tint: { color: "#e6eef5", alpha: 0.18, mode: "screen" },
++    effects: [fx("fog", { count: 9, alpha: 0.2 }), fx("rays", { count: 4, alpha: 0.25, color: "#fffbe6" })],
++  }),
++
++  // ───────────────────────── Néon ─────────────────────────
++  preset("neon", "cyberpunk", "🤖", "Cyberpunk", ["#00e5ff", "#ff2bd6"], {
++    adjust: { contrast: 1.25, saturate: 1.6, brightness: 0.95, hue: 6 },
++    tint: { color: "#ff2bd6", alpha: 0.22, mode: "soft-light" },
++    gradient: { top: "#00e5ff", bottom: "#ff2bd6", alpha: 0.3, mode: "overlay" },
++    vignette: 0.4,
++    effects: [fx("scanlines", { alpha: 0.16 }), fx("glitch"), fx("rain", { count: 60, color: "#8be9ff", alpha: 0.3 })],
++  }),
++  preset("neon", "synthwave", "🌆", "Synthwave", ["#ff2bd6", "#2a0a5e"], {
++    adjust: { contrast: 1.2, saturate: 1.6, brightness: 0.95 },
++    gradient: { top: "#2a0a5e", bottom: "#ff2bd6", alpha: 0.4, mode: "overlay" },
++    vignette: 0.4,
++    effects: [fx("synthgrid"), fx("stars", { count: 70 })],
++  }),
++  preset("neon", "matrix", "🟩", "Matrix", ["#22ff88", "#001a0a"], {
++    adjust: { contrast: 1.3, saturate: 0.7, brightness: 0.85, hue: 80 },
++    tint: { color: "#00ff6a", alpha: 0.3, mode: "overlay" },
++    vignette: 0.5,
++    effects: [fx("code", { count: 28 }), fx("scanlines", { alpha: 0.12 })],
++  }),
++  preset("neon", "neon-violet", "💜", "Néon violet", ["#c77dff", "#3b0764"], {
++    adjust: { contrast: 1.2, saturate: 1.5, brightness: 0.92, hue: 20 },
++    tint: { color: "#8a2be2", alpha: 0.3, mode: "overlay" },
++    vignette: 0.5,
++    effects: [fx("bokeh", { count: 12, color: "#c77dff", alpha: 0.3 }), fx("sparkles", { count: 24, color: "#e9c8ff" })],
++  }),
++  preset("neon", "hologramme", "🔷", "Hologramme", ["#00f0ff", "#7a5cff"], {
++    adjust: { saturate: 1.4, contrast: 1.15, brightness: 1.05, hue: -30 },
++    tint: { color: "#00f0ff", alpha: 0.25, mode: "soft-light" },
++    effects: [fx("scanlines", { color: "#00302f", alpha: 0.2 }), fx("glitch", { color: "#00fff0", color2: "#7a5cff" }), fx("sparkles", { color: "#aaffff", count: 18 })],
++  }),
++  preset("neon", "glitch", "📺", "Glitch", ["#ff0055", "#00fff0"], {
++    adjust: { contrast: 1.25, saturate: 1.3 },
++    tint: { color: "#ff0055", alpha: 0.08, mode: "overlay" },
++    effects: [fx("glitch", { count: 6, alpha: 0.9 }), fx("scanlines", { alpha: 0.1 })],
++  }),
++  preset("neon", "electrique", "⚡", "Électrique", ["#3a7bff", "#e0f0ff"], {
++    adjust: { contrast: 1.3, saturate: 1.4, brightness: 1.05, hue: -10 },
++    tint: { color: "#3a7bff", alpha: 0.25, mode: "overlay" },
++    vignette: 0.4,
++    effects: [fx("lightning", { color: "#e0f0ff", alpha: 0.9 }), fx("sparkles", { count: 30, color: "#9fd0ff" }), fx("fireflies", { count: 14, color: "#8ec5ff" })],
++  }),
++
++  // ───────────────────────── Rétro ─────────────────────────
++  preset("retro", "vintage70", "📻", "Vintage 70s", ["#ff9f40", "#6b3a10"], {
++    adjust: { sepia: 0.35, saturate: 1.25, contrast: 1.05, brightness: 1.02, hue: -8 },
++    tint: { color: "#ff9f40", alpha: 0.2, mode: "soft-light" },
++    vignette: 0.5,
++    grain: 0.35,
++    effects: [fx("dust", { count: 30, color: "#fff0d0", alpha: 0.4 })],
++  }),
++  preset("retro", "noir-blanc", "🎬", "Noir & blanc", ["#f5f5f5", "#111111"], {
++    adjust: { grayscale: 1, contrast: 1.25 },
++    vignette: 0.5,
++    grain: 0.35,
++    effects: [],
++  }),
++  preset("retro", "polaroid", "📷", "Polaroid", ["#ffe7c2", "#c79a6b"], {
++    adjust: { saturate: 0.9, contrast: 1.05, brightness: 1.08, sepia: 0.15, hue: -5 },
++    tint: { color: "#ffe7c2", alpha: 0.2, mode: "soft-light" },
++    vignette: 0.35,
++    grain: 0.15,
++    effects: [],
++  }),
++  preset("retro", "cine", "🎥", "Ciné", ["#0e7c86", "#ff8a3c"], {
++    adjust: { contrast: 1.18, saturate: 1.2, brightness: 0.96 },
++    gradient: { top: "#0e7c86", bottom: "#ff8a3c", alpha: 0.32, mode: "soft-light" },
++    vignette: 0.5,
++    grain: 0.12,
++    effects: [],
++  }),
++  preset("retro", "vhs", "📼", "VHS 90s", ["#6a5acd", "#ff6ec7"], {
++    adjust: { contrast: 1.1, saturate: 1.4, brightness: 1.05, hue: -4, blur: 0.4 },
++    tint: { color: "#6a5acd", alpha: 0.12, mode: "overlay" },
++    grain: 0.3,
++    effects: [fx("scanlines", { alpha: 0.14 }), fx("glitch", { count: 2, alpha: 0.7 })],
++  }),
++  preset("retro", "super8", "🎞️", "Super 8", ["#d98c3a", "#3a1f08"], {
++    adjust: { sepia: 0.3, saturate: 1.3, contrast: 1.12, brightness: 1.02 },
++    tint: { color: "#d98c3a", alpha: 0.2, mode: "soft-light" },
++    vignette: 0.55,
++    grain: 0.45,
++    effects: [fx("dust", { count: 50, color: "#fff6e0", alpha: 0.5 })],
++  }),
++  preset("retro", "sepia", "🟤", "Sépia ancien", ["#c9a06a", "#3a2410"], {
++    adjust: { sepia: 0.9, contrast: 1.1, brightness: 0.98 },
++    vignette: 0.6,
++    grain: 0.3,
++    effects: [],
++  }),
++
++  // ───────────────────────── Rêve & Fête ─────────────────────────
++  preset("dream", "reve-rose", "💗", "Rêve rose", ["#ff8fc2", "#ffd1e6"], {
++    adjust: { brightness: 1.08, saturate: 1.2, contrast: 0.95, blur: 0.4 },
++    tint: { color: "#ff8fc2", alpha: 0.25, mode: "soft-light" },
++    effects: [fx("hearts", { count: 16 }), fx("bokeh", { count: 10, color: "#ffc2dd", alpha: 0.25 }), fx("sparkles", { count: 24, color: "#fff0f7" })],
++  }),
++  preset("dream", "paillettes", "✨", "Paillettes", ["#ffd700", "#ff9a3c"], {
++    adjust: { brightness: 1.05, saturate: 1.25, contrast: 1.05 },
++    tint: { color: "#ffd700", alpha: 0.15, mode: "soft-light" },
++    effects: [fx("sparkles", { count: 70, size: [0.006, 0.022] }), fx("bokeh", { count: 8, color: "#ffe08a", alpha: 0.2 })],
++  }),
++  preset("dream", "bokeh-or", "🌟", "Bokeh doré", ["#ffb347", "#6b3a10"], {
++    adjust: { brightness: 1.05, saturate: 1.2 },
++    tint: { color: "#ffb347", alpha: 0.2, mode: "soft-light" },
++    effects: [fx("bokeh", { count: 20, alpha: 0.32 }), fx("dust", { count: 40 })],
++  }),
++  preset("dream", "fete", "🎉", "Fête", ["#ff4df0", "#ffd24d"], {
++    adjust: { saturate: 1.4, brightness: 1.05, contrast: 1.05 },
++    effects: [fx("confetti", { count: 70 }), fx("sparkles", { count: 24 }), fx("bokeh", { count: 8, color: "#ff7ad9", alpha: 0.2 })],
++  }),
++  preset("dream", "licorne", "🦄", "Licorne", ["#ff9ad5", "#8fd3ff"], {
++    adjust: { saturate: 1.35, brightness: 1.08, contrast: 0.97 },
++    gradient: { stops: ["#ff9ad5", "#c9a0ff", "#8fd3ff", "#a0ffd6"], alpha: 0.32, mode: "soft-light" },
++    effects: [fx("sparkles", { count: 40, color: "#ffffff" }), fx("bokeh", { count: 10, color: "#ffd1f0", alpha: 0.22 })],
++  }),
++  preset("dream", "amour", "❤️", "Amour", ["#ff2d55", "#6b0f2a"], {
++    adjust: { saturate: 1.3, brightness: 1.04, contrast: 1.05 },
++    tint: { color: "#ff2d55", alpha: 0.2, mode: "soft-light" },
++    vignette: 0.4,
++    effects: [fx("hearts", { count: 22, color: "#ff4d73" }), fx("bokeh", { count: 8, color: "#ff7a9c", alpha: 0.22 })],
++  }),
++  preset("dream", "cristal", "💎", "Cristal", ["#a5f3fc", "#fbcfe8"], {
++    adjust: { saturate: 1.2, brightness: 1.1, contrast: 1.12 },
++    gradient: { stops: ["#a5f3fc", "#e0e7ff", "#fbcfe8"], alpha: 0.3, mode: "soft-light" },
++    effects: [fx("sparkles", { count: 60, color: "#ffffff", alpha: 1 }), fx("rays", { count: 5, alpha: 0.28, color: "#ffffff" })],
++  }),
++  preset("dream", "disco", "🪩", "Disco", ["#ff4df0", "#4de1ff"], {
++    adjust: { saturate: 1.5, contrast: 1.15, brightness: 0.95 },
++    vignette: 0.45,
++    effects: [fx("bokeh", { count: 18, color: "#ff4df0", color2: "#4de1ff", alpha: 0.35, speed: 2 }), fx("sparkles", { count: 40, color: "#ffffff" })],
++  }),
++
++  // ───────────────────────── Hiver ─────────────────────────
++  preset("winter", "blizzard", "🌨️", "Blizzard", ["#cfe6ff", "#6b8cae"], {
++    adjust: { brightness: 1.05, saturate: 0.75, contrast: 1.05 },
++    tint: { color: "#cfe6ff", alpha: 0.25, mode: "soft-light" },
++    effects: [fx("snow", { count: 160, speed: 2.2 }), fx("fog", { count: 5, color: "#ffffff", alpha: 0.14 })],
++  }),
++  preset("winter", "neige", "❄️", "Neige douce", ["#dcecff", "#9fc3ea"], {
++    adjust: { brightness: 1.06, saturate: 0.9 },
++    tint: { color: "#dcecff", alpha: 0.2, mode: "soft-light" },
++    effects: [fx("snow", { count: 90 }), fx("sparkles", { count: 14, color: "#ffffff" })],
++  }),
++  preset("winter", "glace", "🧊", "Glace", ["#e6f9ff", "#6fb7ff"], {
++    adjust: { brightness: 1.08, contrast: 1.12, saturate: 0.9, hue: -12 },
++    tint: { color: "#6fd3ff", alpha: 0.3, mode: "soft-light" },
++    gradient: { top: "#e6f9ff", bottom: "#6fb7ff", alpha: 0.25, mode: "soft-light" },
++    vignette: 0.3,
++    effects: [fx("sparkles", { count: 40, color: "#e8fbff" }), fx("rays", { count: 4, alpha: 0.22, color: "#e8fbff" })],
++  }),
++  preset("winter", "noel", "🎄", "Noël", ["#e02424", "#2ecc71"], {
++    adjust: { saturate: 1.3, brightness: 1.02 },
++    tint: { color: "#e02424", alpha: 0.12, mode: "overlay" },
++    vignette: 0.35,
++    effects: [fx("snow", { count: 70 }), fx("bokeh", { count: 14, color: "#ffd23f", color2: "#2ecc71", alpha: 0.3 }), fx("sparkles")],
++  }),
++  preset("winter", "nuit-polaire", "🐧", "Nuit polaire", ["#0a2a5a", "#4ade80"], {
++    adjust: { brightness: 0.88, contrast: 1.15, saturate: 1.1, hue: -14 },
++    tint: { color: "#0a2a5a", alpha: 0.35, mode: "multiply" },
++    effects: [fx("aurora", { count: 3 }), fx("snow", { count: 50 }), fx("stars", { count: 70 })],
++  }),
++  preset("winter", "givre", "🥶", "Givre", ["#b9e4ff", "#3a6a8a"], {
++    adjust: { saturate: 0.6, brightness: 1.05, contrast: 1.1, hue: -18 },
++    tint: { color: "#b9e4ff", alpha: 0.3, mode: "overlay" },
++    vignette: 0.5,
++    effects: [fx("fog", { count: 6, alpha: 0.16 }), fx("snow", { count: 40 })],
++  }),
++];
++
++const BY_ID = new Map(FILTER_PRESETS.map((p) => [p.id, p]));
++
++export const getPreset = (id) => BY_ID.get(id) || null;
++
++export const presetsByCategory = (cat) =>
++  FILTER_PRESETS.filter((p) => p.cat === cat);
+diff --git a/src/features/videos/filters/utils.js b/src/features/videos/filters/utils.js
+new file mode 100644
+index 0000000..ec483a2
+--- /dev/null
++++ b/src/features/videos/filters/utils.js
+@@ -0,0 +1,95 @@
++// Petits utilitaires partagés par le moteur de filtres vidéo.
++
++export const TAU = Math.PI * 2;
++export const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
++export const lerp = (a, b, t) => a + (b - a) * t;
++export const frac = (v) => v - Math.floor(v);
++
++// Hachage déterministe (seed, i, k) → [0, 1[.
++// Les particules sont des fonctions pures du temps : aucune mémoire d'état,
++// donc l'aperçu et l'enregistrement donnent exactement le même rendu.
++export const hash01 = (seed, i, k = 0) => {
++  let h =
++    (seed ^ Math.imul(i + 1, 0x9e3779b1) ^ Math.imul(k + 1, 0x85ebca6b)) >>> 0;
++  h = Math.imul(h ^ (h >>> 16), 0x7feb352d);
++  h = Math.imul(h ^ (h >>> 15), 0x846ca68b);
++  h ^= h >>> 16;
++  return (h >>> 0) / 4294967296;
++};
++
++// Générateur pseudo-aléatoire à graine (mulberry32).
++export const makeRng = (seed) => {
++  let a = seed >>> 0;
++  return () => {
++    a = (a + 0x6d2b79f5) | 0;
++    let t = Math.imul(a ^ (a >>> 15), 1 | a);
++    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
++    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
++  };
++};
++
++export const hexToRgb = (hex) => {
++  let h = String(hex).replace("#", "");
++  if (h.length === 3) {
++    h = h
++      .split("")
++      .map((c) => c + c)
++      .join("");
++  }
++  const n = parseInt(h, 16) || 0;
++  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
++};
++
++export const toRgb = (color) =>
++  Array.isArray(color) ? color : hexToRgb(color || "#ffffff");
++
++export const rgba = (rgb, a) => `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${a})`;
++
++export const rgbToHsl = ([r, g, b]) => {
++  r /= 255;
++  g /= 255;
++  b /= 255;
++  const max = Math.max(r, g, b);
++  const min = Math.min(r, g, b);
++  const l = (max + min) / 2;
++  const d = max - min;
++  if (d === 0) return [0, 0, l];
++  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
++  let h;
++  if (max === r) h = (g - b) / d + (g < b ? 6 : 0);
++  else if (max === g) h = (b - r) / d + 2;
++  else h = (r - g) / d + 4;
++  return [h * 60, s, l];
++};
++
++export const hslToRgb = (h, s, l) => {
++  const hue = (((h % 360) + 360) % 360) / 360;
++  if (s === 0) {
++    const v = Math.round(l * 255);
++    return [v, v, v];
++  }
++  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
++  const p = 2 * l - q;
++  const channel = (t) => {
++    if (t < 0) t += 1;
++    if (t > 1) t -= 1;
++    if (t < 1 / 6) return p + (q - p) * 6 * t;
++    if (t < 1 / 2) return q;
++    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
++    return p;
++  };
++  return [
++    Math.round(channel(hue + 1 / 3) * 255),
++    Math.round(channel(hue) * 255),
++    Math.round(channel(hue - 1 / 3) * 255),
++  ];
++};
++
++export const rotateHue = (rgb, degrees) => {
++  if (!degrees) return rgb;
++  const [h, s, l] = rgbToHsl(rgb);
++  return hslToRgb(h + degrees, s, l);
++};
++
++export const rgbToHex = ([r, g, b]) =>
++  `#${[r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("")}`;
+diff --git a/src/features/videos/hooks/useCamera.js b/src/features/videos/hooks/useCamera.js
+index 5de42f4..b8a64f7 100644
+--- a/src/features/videos/hooks/useCamera.js
++++ b/src/features/videos/hooks/useCamera.js
+@@ -1,20 +1,27 @@
+ import { useCallback, useEffect, useRef, useState } from "react";
++import { createFilteredCameraStream } from "../utils/filterRender.js";
+ import { pickRecorderMime } from "../utils/videoRenderer.js";
+ 
+ // Créateur caméra : aucun plafond de durée imposé par BAARO.
+ // onOpen : appelé à l'ouverture (ex. afficher la fenêtre de publication).
+ // onRecorded(file) : appelé avec le fichier vidéo une fois l'enregistrement terminé.
+-export function useCamera({ onOpen, onRecorded } = {}) {
++export function useCamera({ onOpen, onRecorded, filter = null } = {}) {
+   const [cameraOpen, setCameraOpen] = useState(false);
+   const [cameraFacing, setCameraFacing] = useState("user");
+   const [cameraRecording, setCameraRecording] = useState(false);
+   const [cameraSeconds, setCameraSeconds] = useState(0);
+   const [cameraError, setCameraError] = useState("");
++  const [cameraFiltered, setCameraFiltered] = useState(false);
+   const cameraVideoRef = useRef(null);
+   const cameraStreamRef = useRef(null);
+   const mediaRecorderRef = useRef(null);
+   const cameraChunksRef = useRef([]);
+   const cameraTimerRef = useRef(null);
++  const filteredRef = useRef(null);
++
++  // Filtre courant, relu à chaque image du rendu pendant l'enregistrement.
++  const specRef = useRef(null);
++  specRef.current = filter?.active ? filter.spec : null;
+ 
+   // Toujours appeler la dernière version du callback, même depuis recorder.onstop.
+   const onRecordedRef = useRef(onRecorded);
+@@ -33,6 +40,9 @@ export function useCamera({ onOpen, onRecorded } = {}) {
+       } catch {}
+     }
+     mediaRecorderRef.current = null;
++    filteredRef.current?.stop();
++    filteredRef.current = null;
++    setCameraFiltered(false);
+     if (cameraStreamRef.current) {
+       cameraStreamRef.current.getTracks().forEach((track) => track.stop());
+       cameraStreamRef.current = null;
+@@ -76,10 +86,10 @@ export function useCamera({ onOpen, onRecorded } = {}) {
+     }
+   }, [cameraFacing, stopCameraStream]);
+ 
+-  const openCamera = async () => {
++  // L'effet ci-dessous démarre la caméra dès que cameraOpen passe à true.
++  const openCamera = () => {
+     onOpen?.();
+     setCameraOpen(true);
+-    await startCamera();
+   };
+ 
+   const closeCamera = () => {
+@@ -120,10 +130,29 @@ export function useCamera({ onOpen, onRecorded } = {}) {
+ 
+     cameraChunksRef.current = [];
+     let recorder;
++    let recordStream = stream;
++    let baked = false;
+     try {
+-      recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
++      // Filtre actif : on enregistre le rendu filtré (canvas) et non le flux brut.
++      if (specRef.current && cameraVideoRef.current) {
++        filteredRef.current = createFilteredCameraStream(
++          cameraVideoRef.current,
++          stream,
++          () => specRef.current,
++        );
++        recordStream = filteredRef.current.stream;
++        baked = true;
++        setCameraFiltered(true);
++      }
++      recorder = new MediaRecorder(
++        recordStream,
++        mimeType ? { mimeType } : undefined,
++      );
+     } catch (error) {
+       console.error(error);
++      filteredRef.current?.stop();
++      filteredRef.current = null;
++      setCameraFiltered(false);
+       setCameraError("Impossible de démarrer l'enregistrement.");
+       return;
+     }
+@@ -151,6 +180,8 @@ export function useCamera({ onOpen, onRecorded } = {}) {
+         type,
+         lastModified: Date.now(),
+       });
++      // Le filtre est déjà incrusté : l'aperçu ne doit pas le réappliquer.
++      if (baked) file._filterBaked = true;
+       onRecordedRef.current?.(file);
+       setCameraOpen(false);
+       setCameraSeconds(0);
+@@ -182,6 +213,7 @@ export function useCamera({ onOpen, onRecorded } = {}) {
+     cameraRecording,
+     cameraSeconds,
+     cameraError,
++    cameraFiltered,
+     cameraVideoRef,
+     openCamera,
+     closeCamera,
+diff --git a/src/features/videos/hooks/useVideoCreator.js b/src/features/videos/hooks/useVideoCreator.js
+index f94b42a..7ecac6d 100644
+--- a/src/features/videos/hooks/useVideoCreator.js
++++ b/src/features/videos/hooks/useVideoCreator.js
+@@ -12,8 +12,10 @@ import {
+   registerVideoHashtags,
+ } from "../../../lib/videoEngagement.js";
+ import { MAX_PHOTOS } from "../constants.js";
++import { withFilter } from "../filters/index.js";
+ import { formatTime } from "../utils/format.js";
+ import { insertVideo } from "../utils/videosApi.js";
++import { renderVideoWithFilter } from "../utils/filterRender.js";
+ import {
+   loadImage,
+   makePhotoDrawer,
+@@ -45,6 +47,7 @@ export function useVideoCreator({
+   soundPicker,
+   collab = null,
+   onCollabConsumed,
++  filter = null,
+ }) {
+   const { showToast, showPointsReward } = useToast();
+   const { selectedSound, muteOriginal, stopSoundPreview, resetSound } =
+@@ -68,6 +71,7 @@ export function useVideoCreator({
+   const [generatedSeconds, setGeneratedSeconds] = useState(0);
+   const [uploading, setUploading] = useState(false);
+   const [uploadProgress, setUploadProgress] = useState(0);
++  const [filterRendering, setFilterRendering] = useState(false);
+ 
+   const photoInputRef = useRef(null);
+   const previewVideoRef = useRef(null);
+@@ -182,7 +186,7 @@ export function useVideoCreator({
+       }
+ 
+       const file = await renderToFile({
+-        drawFrame,
++        drawFrame: filter?.active ? withFilter(drawFrame, filter.spec) : drawFrame,
+         totalMs,
+         audioUrl: wantSound ? selectedSound.audio_url : null,
+         audioCtx,
+@@ -294,7 +298,29 @@ export function useVideoCreator({
+             ? Promise.resolve(formatTime(generatedSeconds))
+             : readDuration(file).catch(() => "00:00");
+ 
+-        const uploaded = await uploadLargeVideo(file, {
++        // Filtre choisi sur une vidéo brute : on l'incruste avant l'envoi.
++        let fileToSend = file;
++        if (filter?.active && !generated && !file._filterBaked) {
++          setFilterRendering(true);
++          try {
++            fileToSend = await renderVideoWithFilter({
++              file,
++              spec: filter.spec,
++              onProgress: (p) =>
++                setUploadProgress(base + Math.round(p * slice * 0.5)),
++            });
++          } catch (error) {
++            console.error("BAARO filtre:", error);
++            showToast(
++              "Le filtre n'a pas pu être appliqué : vidéo publiée sans filtre.",
++              "info",
++            );
++          } finally {
++            setFilterRendering(false);
++          }
++        }
++
++        const uploaded = await uploadLargeVideo(fileToSend, {
+           user_id: user.id,
+           onProgress: (pct) =>
+             setUploadProgress(base + Math.round((pct / 100) * slice * 0.7)),
+@@ -324,7 +350,7 @@ export function useVideoCreator({
+             title:
+               uploadTitle.trim() ||
+               (total > 1
+-                ? `Vidéo BAARO (\( {done + 1}/ \){total})`
++                ? `Vidéo BAARO (${done + 1}/${total})`
+                 : "Vidéo BAARO"),
+             description: uploadDescription.trim() || null,
+             duration,
+@@ -377,6 +403,7 @@ export function useVideoCreator({
+ 
+       setShowUpload(false);
+       resetUpload();
++      filter?.reset();
+       await loadVideos();
+     } catch (error) {
+       console.error(error);
+@@ -415,6 +442,7 @@ export function useVideoCreator({
+     bakedAudio,
+     uploading,
+     uploadProgress,
++    filterRendering,
+     fileInputRef,
+     photoInputRef,
+     previewVideoRef,
+diff --git a/src/features/videos/hooks/useVideoFilter.js b/src/features/videos/hooks/useVideoFilter.js
+new file mode 100644
+index 0000000..67d7283
+--- /dev/null
++++ b/src/features/videos/hooks/useVideoFilter.js
+@@ -0,0 +1,40 @@
++import { useCallback, useMemo, useState } from "react";
++import {
++  DEFAULT_FILTER_STATE,
++  FILTER_NONE,
++  FILTER_RANDOM,
++  describeFilter,
++  detectQuality,
++  normalizeFilterState,
++  randomSeed,
++  resolveFilter,
++} from "../filters/index.js";
++
++// État du filtre vidéo (caméra, photos/texte, vidéo importée). Gardé en mémoire
++// pour la session : un filtre oublié ne revient pas à la prochaine ouverture.
++export function useVideoFilter() {
++  const [state, setState] = useState(DEFAULT_FILTER_STATE);
++  const quality = useMemo(() => detectQuality(), []);
++  const spec = useMemo(() => resolveFilter(state, { quality }), [state, quality]);
++  const info = useMemo(() => describeFilter(state), [state]);
++
++  const patch = useCallback(
++    (values) => setState((s) => normalizeFilterState({ ...s, ...values })),
++    [],
++  );
++  const pick = useCallback(
++    (id) => setState((s) => normalizeFilterState({ ...s, id, seed: 0 })),
++    [],
++  );
++  const surprise = useCallback(
++    () => setState((s) => normalizeFilterState({ ...s, id: FILTER_RANDOM, seed: randomSeed() })),
++    [],
++  );
++  const step = useCallback(
++    (delta) => setState((s) => normalizeFilterState({ ...s, seed: Math.max(0, s.seed + delta) })),
++    [],
++  );
++  const reset = useCallback(() => setState(DEFAULT_FILTER_STATE), []);
++
++  return { state, spec, info, active: state.id !== FILTER_NONE && !!spec, patch, pick, surprise, step, reset };
++}
+diff --git a/src/features/videos/utils/filterRender.js b/src/features/videos/utils/filterRender.js
+new file mode 100644
+index 0000000..54a98ce
+--- /dev/null
++++ b/src/features/videos/utils/filterRender.js
+@@ -0,0 +1,157 @@
++import { CANVAS_H, CANVAS_W } from "../constants.js";
++import { drawFiltered } from "../filters/index.js";
++import { pickRecorderMime } from "./videoRenderer.js";
++
++// Application des filtres BAARO à une vidéo réelle (caméra ou fichier importé).
++// Tout se fait dans le navigateur : la vidéo est redessinée image par image sur un
++// canvas 9:16 (filtre + calques animés) puis réenregistrée avec son son d'origine.
++
++const makeCanvas = () => {
++  const canvas = document.createElement("canvas");
++  canvas.width = CANVAS_W;
++  canvas.height = CANVAS_H;
++  if (!canvas.captureStream) {
++    throw new Error("Ce navigateur ne peut pas appliquer de filtre à la vidéo.");
++  }
++  return canvas;
++};
++
++const makeRecorder = (stream) => {
++  const mimeType = pickRecorderMime();
++  const recorder = new MediaRecorder(
++    stream,
++    mimeType ? { mimeType, videoBitsPerSecond: 3500000 } : undefined,
++  );
++  const chunks = [];
++  recorder.ondataavailable = (event) => {
++    if (event.data?.size) chunks.push(event.data);
++  };
++  const finished = new Promise((resolve, reject) => {
++    recorder.onstop = () => resolve();
++    recorder.onerror = (event) =>
++      reject(event.error || new Error("Erreur d'enregistrement."));
++  });
++  const toFile = (prefix) => {
++    const type = (recorder.mimeType || mimeType || "video/webm").split(";")[0];
++    const blob = new Blob(chunks, { type });
++    if (!blob.size) throw new Error("Aucune vidéo n'a été créée.");
++    const ext = type.includes("mp4") ? "mp4" : "webm";
++    return new File([blob], `${prefix}-${Date.now()}.${ext}`, {
++      type,
++      lastModified: Date.now(),
++    });
++  };
++  return { recorder, finished, toFile };
++};
++
++// Caméra en direct : renvoie un flux filtré (image) + pistes audio du micro.
++// getSpec() est relu à chaque image : on peut changer de filtre en filmant.
++export function createFilteredCameraStream(videoEl, sourceStream, getSpec) {
++  const canvas = makeCanvas();
++  const ctx = canvas.getContext("2d");
++  const t0 = performance.now();
++  let raf = 0;
++  let stopped = false;
++
++  const draw = (now) => {
++    if (stopped) return;
++    const vw = videoEl.videoWidth;
++    const vh = videoEl.videoHeight;
++    if (vw && vh && videoEl.readyState >= 2) {
++      drawFiltered(ctx, videoEl, vw, vh, getSpec(), now - t0);
++    }
++    raf = requestAnimationFrame(draw);
++  };
++  draw(performance.now());
++
++  const stream = canvas.captureStream(30);
++  sourceStream.getAudioTracks().forEach((track) => stream.addTrack(track));
++
++  const stop = () => {
++    stopped = true;
++    cancelAnimationFrame(raf);
++    // On n'arrête que la piste image : le micro appartient au flux caméra.
++    stream.getVideoTracks().forEach((track) => track.stop());
++  };
++  return { stream, stop };
++}
++
++// Fichier vidéo importé : relit la vidéo en temps réel à travers le filtre.
++export async function renderVideoWithFilter({
++  file,
++  spec,
++  onProgress,
++  signal,
++}) {
++  if (!window.MediaRecorder) {
++    throw new Error("L'enregistrement vidéo n'est pas supporté par ce navigateur.");
++  }
++  const canvas = makeCanvas();
++  const ctx = canvas.getContext("2d");
++  const url = URL.createObjectURL(file);
++  const video = document.createElement("video");
++  video.playsInline = true;
++  video.preload = "auto";
++  video.src = url;
++
++  let audioCtx = null;
++  let stream = null;
++  try {
++    await new Promise((resolve, reject) => {
++      video.onloadedmetadata = resolve;
++      video.onerror = () => reject(new Error("Vidéo illisible."));
++    });
++    const duration = Number.isFinite(video.duration) ? video.duration : 0;
++
++    stream = canvas.captureStream(30);
++
++    // Son d'origine : branché sur un flux d'enregistrement, jamais sur les haut-parleurs.
++    const AC = window.AudioContext || window.webkitAudioContext;
++    if (AC) {
++      try {
++        audioCtx = new AC();
++        await audioCtx.resume?.();
++        const dest = audioCtx.createMediaStreamDestination();
++        audioCtx.createMediaElementSource(video).connect(dest);
++        dest.stream.getAudioTracks().forEach((track) => stream.addTrack(track));
++      } catch {
++        // Pas de son récupérable : on garde l'image filtrée seule.
++      }
++    }
++
++    const { recorder, finished, toFile } = makeRecorder(stream);
++    ctx.fillStyle = "#000";
++    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
++    recorder.start(500);
++
++    await video.play();
++    const t0 = performance.now();
++    await new Promise((resolve, reject) => {
++      let raf = 0;
++      const finish = (error) => {
++        cancelAnimationFrame(raf);
++        error ? reject(error) : resolve();
++      };
++      video.onended = () => finish();
++      video.onerror = () => finish(new Error("Lecture de la vidéo interrompue."));
++      const tick = (now) => {
++        if (signal?.aborted) return finish(new Error("Filtre annulé."));
++        if (video.videoWidth) {
++          drawFiltered(ctx, video, video.videoWidth, video.videoHeight, spec, now - t0);
++        }
++        if (duration) onProgress?.(Math.min(1, video.currentTime / duration));
++        raf = requestAnimationFrame(tick);
++      };
++      raf = requestAnimationFrame(tick);
++    });
++
++    if (recorder.state !== "inactive") recorder.stop();
++    await finished;
++    return toFile("baaro-filtre");
++  } finally {
++    video.pause();
++    stream?.getTracks().forEach((track) => track.stop());
++    audioCtx?.close?.().catch(() => {});
++    URL.revokeObjectURL(url);
++  }
++}
