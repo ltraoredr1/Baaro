@@ -28,6 +28,7 @@ android/local.properties
 *.apk
 *.aab
 public/ort/
+public/mediapipe/
 public/onnx/
 coverage/
 tmp/

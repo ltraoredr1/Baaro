@@ -186,7 +186,7 @@ export function useVideoCreator({
       }
 
       const file = await renderToFile({
-        drawFrame: filter?.active ? withFilter(drawFrame, filter.spec) : drawFrame,
+        drawFrame: filter?.spec ? withFilter(drawFrame, filter.spec) : drawFrame,
         totalMs,
         audioUrl: wantSound ? selectedSound.audio_url : null,
         audioCtx,
@@ -300,12 +300,13 @@ export function useVideoCreator({
 
         // Filtre choisi sur une vidéo brute : on l'incruste avant l'envoi.
         let fileToSend = file;
-        if (filter?.active && !generated && !file._filterBaked) {
+        if (filter?.anyActive && !generated && !file._filterBaked) {
           setFilterRendering(true);
           try {
             fileToSend = await renderVideoWithFilter({
               file,
               spec: filter.spec,
+              fx: filter.face?.active ? filter.face.resolved : null,
               onProgress: (p) =>
                 setUploadProgress(base + Math.round(p * slice * 0.5)),
             });

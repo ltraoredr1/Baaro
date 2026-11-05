@@ -7,9 +7,9 @@
     "node": "24.x"
   },
   "scripts": {
-    "predev": "node scripts/copy-ort-wasm.mjs",
+    "predev": "node scripts/copy-ort-wasm.mjs && node scripts/copy-mediapipe-wasm.mjs",
     "dev": "vite",
-    "prebuild": "node scripts/copy-ort-wasm.mjs",
+    "prebuild": "node scripts/copy-ort-wasm.mjs && node scripts/copy-mediapipe-wasm.mjs",
     "build": "vite build",
     "preview": "vite preview",
     "check:production": "node scripts/check-production.mjs",

@@ -1,6 +1,7 @@
 import { cssFilterString } from "../filters/index.js";
 import FilterOverlayCanvas from "./FilterOverlayCanvas.jsx";
-import FilterPicker from "./FilterPicker.jsx";
+import EffectsPanel from "./EffectsPanel.jsx";
+import FaceFxCanvas from "./FaceFxCanvas.jsx";
 
 // Aperçu de la vidéo choisie ou générée, avant publication.
 // Le filtre n'est appliqué qu'aux vidéos « brutes » (galerie) : une vidéo générée
@@ -19,7 +20,7 @@ export default function UploadPreview({ creator, soundPicker, filter }) {
     selectedFile,
   } = creator;
   const filterable = !!filter && !generated && !selectedFile?._filterBaked;
-  const showFilter = filterable && filter.active;
+  const showFilter = filterable && !!filter.spec;
   const { muteOriginal, selectedSound, stopSoundPreview } = soundPicker;
 
   return (
@@ -48,6 +49,7 @@ export default function UploadPreview({ creator, soundPicker, filter }) {
         }}
       />
       {showFilter && <FilterOverlayCanvas spec={filter.spec} />}
+      {filterable && <FaceFxCanvas videoRef={previewVideoRef} fx={filter.face} cssFilter={showFilter ? cssFilterString(filter.spec, 0.5) : "none"} />}
       {selectedSound?.audio_url && !bakedAudio && (
         <audio
           ref={previewAudioRef}
@@ -71,7 +73,7 @@ export default function UploadPreview({ creator, soundPicker, filter }) {
         {generated ? "Modifier" : "Changer"}
       </button>
     </div>
-    {filterable && <FilterPicker filter={filter} disabled={uploading} />}
+    {filterable && <EffectsPanel filter={filter} disabled={uploading} />}
     </div>
   );
 }

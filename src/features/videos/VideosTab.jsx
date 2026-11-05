@@ -13,6 +13,7 @@ import UploadModal from "./components/UploadModal.jsx";
 import VideoCard, { isImageVideo } from "./components/VideoCard.jsx";
 
 import { useCamera } from "./hooks/useCamera.js";
+import { useFaceFx } from "./hooks/useFaceFx.js";
 import { useVideoFilter } from "./hooks/useVideoFilter.js";
 import { useFeedPlayback } from "./hooks/useFeedPlayback.js";
 import { usePlaybackSettings, SPEEDS } from "./hooks/usePlaybackSettings.js";
@@ -79,7 +80,18 @@ export function VideosTab({ onRewardPoints, onExit }) {
 
   const { showToast } = useToast();
 
-  const filter = useVideoFilter();
+  const baseFilter = useVideoFilter();
+  const faceFx = useFaceFx();
+  // Objet unique passé à la caméra, à l'aperçu et à la publication.
+  const filter = {
+    ...baseFilter,
+    face: faceFx,
+    anyActive: baseFilter.active || faceFx.active,
+    reset: () => {
+      baseFilter.reset();
+      faceFx.reset();
+    },
+  };
 
   const creator = useVideoCreator({
     user,

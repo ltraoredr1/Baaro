@@ -1,4 +1,4 @@
-import FilterPicker from "./FilterPicker.jsx";
+import EffectsPanel from "./EffectsPanel.jsx";
 import PhotoCreator from "./PhotoCreator.jsx";
 import TextCreator from "./TextCreator.jsx";
 import VideoSource from "./VideoSource.jsx";
@@ -31,7 +31,7 @@ export default function CreatorPanel({ creator, camera, filter }) {
         <VideoSource creator={creator} camera={camera} />
       )}
       {filter && createMode !== "video" && (
-        <FilterPicker filter={filter} disabled={creator.generating} />
+        <EffectsPanel filter={filter} disabled={creator.generating} faceEnabled={false} />
       )}
       {createMode === "photo" && <PhotoCreator creator={creator} />}
       {createMode === "text" && <TextCreator creator={creator} />}

@@ -4,7 +4,8 @@ import { COLORS } from "../../../theme.js";
 import { cssFilterString } from "../filters/index.js";
 import { formatTime } from "../utils/format.js";
 import FilterOverlayCanvas from "./FilterOverlayCanvas.jsx";
-import FilterPicker from "./FilterPicker.jsx";
+import EffectsPanel from "./EffectsPanel.jsx";
+import FaceFxCanvas from "./FaceFxCanvas.jsx";
 
 // Plein écran caméra ; camera = retour de useCamera.
 export default function CameraOverlay({ camera, filter }) {
@@ -62,6 +63,9 @@ export default function CameraOverlay({ camera, filter }) {
               filter: filter?.active ? cssFilterString(filter.spec, 0.5) : "none",
             }}
           />
+          {filter?.face?.active && (
+            <FaceFxCanvas videoRef={cameraVideoRef} fx={filter.face} mirror={cameraFacing === "user"} fit="cover" cssFilter={cssFilterString(filter.spec, 0.5)} />
+          )}
           {filter?.active && (
             <FilterOverlayCanvas
               spec={filter.spec}
@@ -85,7 +89,7 @@ export default function CameraOverlay({ camera, filter }) {
       <div className="p-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] flex flex-col items-center gap-3">
         {filter && showFilters && (
           <div className="w-full max-w-md max-h-[34dvh] overflow-y-auto rounded-3xl bg-zinc-900/95 p-3">
-            <FilterPicker
+            <EffectsPanel
               filter={filter}
               disabled={cameraRecording && !cameraFiltered}
             />
@@ -125,7 +129,7 @@ export default function CameraOverlay({ camera, filter }) {
             className="flex items-center gap-1.5 rounded-full bg-white/10 px-4 py-2 text-xs font-bold"
           >
             <Sparkles size={14} />
-            {filter.active ? `Filtre : ${filter.info?.label || "actif"}` : "Filtres"}
+            {filter.anyActive ? "Effets actifs" : "Filtres & effets"}
           </button>
         )}
         {cameraError && (

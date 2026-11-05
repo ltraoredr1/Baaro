@@ -1,4 +1,5 @@
 import { CANVAS_H, CANVAS_W } from "../constants.js";
+import { FaceFxProcessor } from "../faceFx/processor.js";
 import { drawFiltered } from "../filters/index.js";
 import { pickRecorderMime } from "./videoRenderer.js";
 
@@ -46,9 +47,10 @@ const makeRecorder = (stream) => {
 
 // Caméra en direct : renvoie un flux filtré (image) + pistes audio du micro.
 // getSpec() est relu à chaque image : on peut changer de filtre en filmant.
-export function createFilteredCameraStream(videoEl, sourceStream, getSpec) {
+export function createFilteredCameraStream(videoEl, sourceStream, getSpec, getFx = () => null) {
   const canvas = makeCanvas();
   const ctx = canvas.getContext("2d");
+  const fxProcessor = new FaceFxProcessor();
   const t0 = performance.now();
   let raf = 0;
   let stopped = false;
@@ -58,7 +60,8 @@ export function createFilteredCameraStream(videoEl, sourceStream, getSpec) {
     const vw = videoEl.videoWidth;
     const vh = videoEl.videoHeight;
     if (vw && vh && videoEl.readyState >= 2) {
-      drawFiltered(ctx, videoEl, vw, vh, getSpec(), now - t0);
+      const f = fxProcessor.process(videoEl, vw, vh, getFx());
+      drawFiltered(ctx, f.source, f.w, f.h, getSpec(), now - t0);
     }
     raf = requestAnimationFrame(draw);
   };
@@ -72,6 +75,7 @@ export function createFilteredCameraStream(videoEl, sourceStream, getSpec) {
     cancelAnimationFrame(raf);
     // On n'arrête que la piste image : le micro appartient au flux caméra.
     stream.getVideoTracks().forEach((track) => track.stop());
+    fxProcessor.dispose();
   };
   return { stream, stop };
 }
@@ -80,6 +84,7 @@ export function createFilteredCameraStream(videoEl, sourceStream, getSpec) {
 export async function renderVideoWithFilter({
   file,
   spec,
+  fx = null,
   onProgress,
   signal,
 }) {
@@ -96,6 +101,7 @@ export async function renderVideoWithFilter({
 
   let audioCtx = null;
   let stream = null;
+  const fxProcessor = new FaceFxProcessor();
   try {
     await new Promise((resolve, reject) => {
       video.onloadedmetadata = resolve;
@@ -137,7 +143,8 @@ export async function renderVideoWithFilter({
       const tick = (now) => {
         if (signal?.aborted) return finish(new Error("Filtre annulé."));
         if (video.videoWidth) {
-          drawFiltered(ctx, video, video.videoWidth, video.videoHeight, spec, now - t0);
+          const f = fxProcessor.process(video, video.videoWidth, video.videoHeight, fx);
+          drawFiltered(ctx, f.source, f.w, f.h, spec, now - t0);
         }
         if (duration) onProgress?.(Math.min(1, video.currentTime / duration));
         raf = requestAnimationFrame(tick);
@@ -149,6 +156,7 @@ export async function renderVideoWithFilter({
     await finished;
     return toFile("baaro-filtre");
   } finally {
+    fxProcessor.dispose();
     video.pause();
     stream?.getTracks().forEach((track) => track.stop());
     audioCtx?.close?.().catch(() => {});

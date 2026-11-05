@@ -21,7 +21,9 @@ export function useCamera({ onOpen, onRecorded, filter = null } = {}) {
 
   // Filtre courant, relu à chaque image du rendu pendant l'enregistrement.
   const specRef = useRef(null);
-  specRef.current = filter?.active ? filter.spec : null;
+  specRef.current = filter?.spec || null;
+  const fxRef = useRef(null);
+  fxRef.current = filter?.face?.active ? filter.face.resolved : null;
 
   // Toujours appeler la dernière version du callback, même depuis recorder.onstop.
   const onRecordedRef = useRef(onRecorded);
@@ -134,11 +136,12 @@ export function useCamera({ onOpen, onRecorded, filter = null } = {}) {
     let baked = false;
     try {
       // Filtre actif : on enregistre le rendu filtré (canvas) et non le flux brut.
-      if (specRef.current && cameraVideoRef.current) {
+      if ((specRef.current || fxRef.current) && cameraVideoRef.current) {
         filteredRef.current = createFilteredCameraStream(
           cameraVideoRef.current,
           stream,
           () => specRef.current,
+          () => fxRef.current,
         );
         recordStream = filteredRef.current.stream;
         baked = true;

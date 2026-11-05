@@ -207,7 +207,7 @@ export default function UploadModal({
               ? "Optimisation en cours…"
               : selectedFiles?.length > 1
               ? `Publier ${selectedFiles.length} vidéos`
-              : filter?.active && !creator.generated && !selectedFile?._filterBaked
+              : filter?.anyActive && !creator.generated && !selectedFile?._filterBaked
               ? "Appliquer le filtre et publier"
               : "Publier la vidéo"}
           </button>
