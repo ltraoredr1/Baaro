@@ -355,6 +355,10 @@ export function MainShell() {
   /* =========================================================
      NATIVE : BOUTON RETOUR (enregistré UNE seule fois)
      ========================================================= */
+  const showToastRef = useRef(showToast);
+  showToastRef.current = showToast;
+  const lastBackRef = useRef(0);
+
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) return undefined;
     let backListener = null;
@@ -400,7 +404,14 @@ export function MainShell() {
             return;
           }
 
-          CapApp.exitApp();
+          // Sur l'accueil : il faut appuyer deux fois sur Retour (en moins de 2 s) pour quitter.
+          const now = Date.now();
+          if (now - lastBackRef.current < 2000) {
+            CapApp.exitApp();
+            return;
+          }
+          lastBackRef.current = now;
+          showToastRef.current?.("Appuie encore une fois sur Retour pour quitter", "info");
         });
 
         // Démonté pendant l'await : on retire tout de suite l'écouteur.

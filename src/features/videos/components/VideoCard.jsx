@@ -18,7 +18,7 @@ import { COLORS } from "../../../theme.js";
 import { VideoTranslateControls } from "../../../components/VideoTranslateControls.jsx";
 import { TipButton } from "../../../components/TipButton.jsx";
 import { baaroLogo } from "../constants.js";
-import { formatCount } from "../utils/format.js";
+import { formatCount, formatPublished, formatPublishedFull } from "../utils/format.js";
 
 const IMAGE_EXT = /\.(jpe?g|png|webp|gif|avif)(\?|#|$)/i;
 
@@ -585,7 +585,12 @@ export default function VideoCard({
         )}
 
         <div className="flex items-center gap-2">
-          <span>{formatCount(video.views)} vues</span>
+          <span>
+            {formatCount(video.views)} vues
+            {video.created_at && (
+              <span title={formatPublishedFull(video.created_at)}> · {formatPublished(video.created_at)}</span>
+            )}
+          </span>
           {!hideVolumeControl && !isImage && (
             <button
               type="button"
