@@ -180,7 +180,7 @@ function makeWelcome(name, isGriot) {
     return {
       id: "welcome",
       role: "assistant",
-      text: `I ko, mon enfant ${name || "de BAARO"}... 👋\nQuand la tortue est sur le muret, c'est qu'on l'a posée là. Tu es venue me voir, c'est que ton cœur a une question.\nJe suis Fa-Baaro, la Griotte de BAARO. Assieds-toi, parle-moi.`,
+      text: `I ko, ${name || "ami·e de BAARO"}... 👋\nJe suis Fa-Baaro, la voix numérique de BAARO, inspirée par l'écoute et la parole transmises de génération en génération. Je ne suis pas une personne réelle et je ne remplacerai jamais un proche ou un professionnel.\nAssieds-toi, parle-moi : je t'aiderai à réfléchir avec douceur et clarté.`,
     };
   }
   return {

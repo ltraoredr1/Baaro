@@ -223,7 +223,7 @@ export function providerConfig(provider) {
  * Les noms invalides et les doublons sont ignorés.
  * Si aucune valeur valide n'est fournie, l'ordre par défaut est utilisé.
  */
-function getProviderOrder() {
+export function getProviderOrder() {
   const configured = String(
     process.env.BAARO_AI_PROVIDER_ORDER || ""
   )
