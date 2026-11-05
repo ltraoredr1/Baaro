@@ -16,7 +16,7 @@ export function HighlightPicker({ story, highlights, onClose }) {
   };
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center bg-black/70" onClick={onClose}>
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70" onClick={onClose}>
       <div className="w-full sm:w-[380px] rounded-t-2xl sm:rounded-2xl p-4 space-y-3 border" style={{ background: C.surface, borderColor: C.border, color: C.ivory }} onClick={(e) => e.stopPropagation()}>
         <div className="flex justify-between items-center">
           <b className="text-sm">⭐ Ajouter aux highlights</b>

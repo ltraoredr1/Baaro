@@ -15,6 +15,7 @@ import {
   ChevronUp,
   Mic,
   Square,
+  Shield,
   ChevronLeft,
   ChevronRight,
 } from "lucide-react";
@@ -39,6 +40,11 @@ import { TranslateButton } from "@/components/TranslateButton.jsx";
 import { GuestBanner } from "@/components/GuestBanner.jsx";
 import { FloatingCreateButton } from "@/components/FloatingCreateButton.jsx";
 import { LazyImage, LazyVideo } from "@/components/LazyMedia.jsx";
+import CreateHub from "@/features/create/CreateHub.jsx";
+import { StoryComposer } from "@/features/stories/components/StoryComposer.jsx";
+import { useStoryComposer } from "@/features/stories/hooks/useStoryComposer.js";
+import { useMyProducts } from "@/features/stories/hooks/useMyProducts.js";
+import { useCartQuantities } from "@/features/stories/hooks/useCartQuantities.js";
 
 const MAX_MEDIA_BYTES = 50 * 1024 * 1024;
 const MAX_MEDIA_COUNT = 10;
@@ -118,6 +124,8 @@ function formatPost(post) {
   return {
     id: post.id,
     author_id: post.author_id,
+    is_shadow: post.is_shadow === true,
+    shadow_village: post.shadow_village || "",
     text: post.text,
     media_url: post.media_url,
     media_type: post.media_type,
@@ -526,6 +534,8 @@ export function FeedTab({
   const loadPosts = useCallback((opts) => reload(opts), [reload]);
 
   const [newText, setNewText] = useState("");
+  const [isShadow, setIsShadow] = useState(false);
+  const [shadowVillage, setShadowVillage] = useState("");
   const [pollData, setPollData] = useState(null);
   const [mood, setMood] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -570,6 +580,18 @@ export function FeedTab({
   const autoLoadsRef = useRef(0);
 
   const activeUserId = currentUserId || propUserId || null;
+
+  const storyComposer = useStoryComposer({
+    userId: activeUserId,
+    setError: (m) => m && showToast(m, "error"),
+    onCreated: ({ scheduledAt } = {}) => {
+      setIsCreateOpen?.(false);
+      showToast(scheduledAt ? "Story programmée" : "Story publiée", "success");
+      if (!scheduledAt) callSocial("story_published").catch(() => {});
+    },
+  });
+  const storyProducts = useMyProducts(activeUserId);
+  const storyCart = useCartQuantities();
 
   /* ---------- Onglets « Pour toi / Abonnés » ---------- */
   const [feedTab, setFeedTab] = useState("foryou");
@@ -1243,6 +1265,8 @@ export function FeedTab({
 
   const resetComposer = () => {
     setNewText("");
+    setIsShadow(false);
+    setShadowVillage("");
     setMood("");
     setPollData(null);
     clearAllMedia();
@@ -1255,6 +1279,12 @@ export function FeedTab({
   const openCreate = () => setIsCreateOpen?.(true);
 
   const publishPost = async () => {
+    const village = shadowVillage.trim().slice(0, 80);
+
+    if (isShadow && village.length < 2) {
+      throw new Error("Indique ton village ou ta ville pour publier en Ombre.");
+    }
+
     const uploads = mediaItems.map((item) =>
       uploadExternalMedia(item.file, {
         folder: "posts",
@@ -1404,33 +1434,13 @@ export function FeedTab({
         <FloatingCreateButton onCreatePost={openCreate} />
       )}
 
-      {activeUserId && isCreateOpen && (
-        <div
-          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200"
-          onClick={() => setIsCreateOpen?.(false)}
-        >
-          <div
-            className="w-full max-w-lg rounded-t-3xl sm:rounded-2xl border shadow-2xl flex flex-col max-h-[70vh] sm:max-h-[85vh] mb-20 sm:mb-0 overflow-hidden"
-            style={{ borderColor: COLORS.borderGold, background: COLORS.surface }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div
-              className="flex items-center justify-between border-b p-4 text-xs font-semibold shrink-0"
-              style={{ borderColor: COLORS.border, color: COLORS.gold }}
-            >
-              <div className="flex items-center gap-2">
-                <Sparkles size={14} />
-                <span>Créer une publication à fort impact</span>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsCreateOpen?.(false)}
-                className="p-1 rounded-full text-slate-400 hover:text-white hover:bg-white/10 transition-colors"
-              >
-                <X size={16} />
-              </button>
-            </div>
-
+      {activeUserId && (
+        <CreateHub
+          open={Boolean(isCreateOpen)}
+          onClose={() => setIsCreateOpen?.(false)}
+          panels={{
+            post: (
+              <>
             <div className="p-4 flex-1 overflow-y-auto flex flex-col gap-3">
               <div className="flex items-center justify-between gap-2">
                 <button
@@ -1645,8 +1655,18 @@ export function FeedTab({
                 {submitting ? "Publication..." : "Publier"} <Send size={13} />
               </button>
             </div>
-          </div>
-        </div>
+              </>
+            ),
+            story: (
+              <StoryComposer
+                composer={storyComposer}
+                products={storyProducts}
+                cart={storyCart}
+                embedded
+              />
+            ),
+          }}
+        />
       )}
 
       <GuestBanner
