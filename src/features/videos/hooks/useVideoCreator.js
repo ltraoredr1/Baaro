@@ -12,8 +12,10 @@ import {
   registerVideoHashtags,
 } from "../../../lib/videoEngagement.js";
 import { MAX_PHOTOS } from "../constants.js";
+import { withFilter } from "../filters/index.js";
 import { formatTime } from "../utils/format.js";
 import { insertVideo } from "../utils/videosApi.js";
+import { renderVideoWithFilter } from "../utils/filterRender.js";
 import {
   loadImage,
   makePhotoDrawer,
@@ -45,6 +47,7 @@ export function useVideoCreator({
   soundPicker,
   collab = null,
   onCollabConsumed,
+  filter = null,
 }) {
   const { showToast, showPointsReward } = useToast();
   const { selectedSound, muteOriginal, stopSoundPreview, resetSound } =
@@ -68,6 +71,7 @@ export function useVideoCreator({
   const [generatedSeconds, setGeneratedSeconds] = useState(0);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [filterRendering, setFilterRendering] = useState(false);
 
   const photoInputRef = useRef(null);
   const previewVideoRef = useRef(null);
@@ -182,7 +186,7 @@ export function useVideoCreator({
       }
 
       const file = await renderToFile({
-        drawFrame,
+        drawFrame: filter?.active ? withFilter(drawFrame, filter.spec) : drawFrame,
         totalMs,
         audioUrl: wantSound ? selectedSound.audio_url : null,
         audioCtx,
@@ -294,7 +298,29 @@ export function useVideoCreator({
             ? Promise.resolve(formatTime(generatedSeconds))
             : readDuration(file).catch(() => "00:00");
 
-        const uploaded = await uploadLargeVideo(file, {
+        // Filtre choisi sur une vidéo brute : on l'incruste avant l'envoi.
+        let fileToSend = file;
+        if (filter?.active && !generated && !file._filterBaked) {
+          setFilterRendering(true);
+          try {
+            fileToSend = await renderVideoWithFilter({
+              file,
+              spec: filter.spec,
+              onProgress: (p) =>
+                setUploadProgress(base + Math.round(p * slice * 0.5)),
+            });
+          } catch (error) {
+            console.error("BAARO filtre:", error);
+            showToast(
+              "Le filtre n'a pas pu être appliqué : vidéo publiée sans filtre.",
+              "info",
+            );
+          } finally {
+            setFilterRendering(false);
+          }
+        }
+
+        const uploaded = await uploadLargeVideo(fileToSend, {
           user_id: user.id,
           onProgress: (pct) =>
             setUploadProgress(base + Math.round((pct / 100) * slice * 0.7)),
@@ -324,7 +350,7 @@ export function useVideoCreator({
             title:
               uploadTitle.trim() ||
               (total > 1
-                ? `Vidéo BAARO (\( {done + 1}/ \){total})`
+                ? `Vidéo BAARO (${done + 1}/${total})`
                 : "Vidéo BAARO"),
             description: uploadDescription.trim() || null,
             duration,
@@ -377,6 +403,7 @@ export function useVideoCreator({
 
       setShowUpload(false);
       resetUpload();
+      filter?.reset();
       await loadVideos();
     } catch (error) {
       console.error(error);
@@ -415,6 +442,7 @@ export function useVideoCreator({
     bakedAudio,
     uploading,
     uploadProgress,
+    filterRendering,
     fileInputRef,
     photoInputRef,
     previewVideoRef,

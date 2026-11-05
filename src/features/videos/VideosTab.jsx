@@ -13,6 +13,7 @@ import UploadModal from "./components/UploadModal.jsx";
 import VideoCard, { isImageVideo } from "./components/VideoCard.jsx";
 
 import { useCamera } from "./hooks/useCamera.js";
+import { useVideoFilter } from "./hooks/useVideoFilter.js";
 import { useFeedPlayback } from "./hooks/useFeedPlayback.js";
 import { usePlaybackSettings, SPEEDS } from "./hooks/usePlaybackSettings.js";
 import { usePrefersReducedMotion } from "../../hooks/usePrefersReducedMotion.js";
@@ -78,11 +79,14 @@ export function VideosTab({ onRewardPoints, onExit }) {
 
   const { showToast } = useToast();
 
+  const filter = useVideoFilter();
+
   const creator = useVideoCreator({
     user,
     loadVideos,
     onRewardPoints,
     soundPicker,
+    filter,
   });
 
   // Compression avant envoi : tout fichier (galerie ou caméra) passe par ici.
@@ -121,6 +125,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
       );
     }
 
+    if (file._filterBaked) result.file._filterBaked = true;
     creatorRef.current.handleFileSelected(result.file);
   };
 
@@ -129,6 +134,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
   const camera = useCamera({
     onOpen: () => creator.setShowUpload(true),
     onRecorded: handleFileSelected,
+    filter,
   });
 
   const videoActions = useVideoActions({
@@ -885,6 +891,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
         soundPicker={soundPicker}
         camera={camera}
         compression={compression}
+        filter={filter}
         compressUploads={settings.compressUploads}
         onCompressChange={(value) =>
           updateSettings({ compressUploads: value })

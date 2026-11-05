@@ -12,6 +12,7 @@ export default function UploadModal({
   soundPicker,
   camera,
   compression,
+  filter = null,
   compressUploads = false,
   onCompressChange,
 }) {
@@ -44,6 +45,7 @@ export default function UploadModal({
 
     // Fermer pendant l'optimisation : on abandonne aussi le fichier.
     compression?.abort?.();
+    filter?.reset();
     closeCamera();
     setShowUpload(false);
     resetUpload();
@@ -51,7 +53,7 @@ export default function UploadModal({
 
   return (
     <div className="fixed inset-0 z-[80] bg-black/80 backdrop-blur-md flex items-end sm:items-center justify-center p-0 sm:p-4">
-      {cameraOpen && <CameraOverlay camera={camera} />}
+      {cameraOpen && <CameraOverlay camera={camera} filter={filter} />}
       <div className="w-full max-w-xl max-h-[92dvh] overflow-y-auto bg-zinc-950 rounded-t-3xl sm:rounded-3xl border border-white/10">
         <div className="sticky top-0 z-10 flex items-center justify-between p-4 bg-zinc-950/95 backdrop-blur border-b border-white/10">
           <div>
@@ -102,9 +104,9 @@ export default function UploadModal({
           )}
 
           {!selectedFile ? (
-            <CreatorPanel creator={creator} camera={camera} />
+            <CreatorPanel creator={creator} camera={camera} filter={filter} />
           ) : (
-            <UploadPreview creator={creator} soundPicker={soundPicker} />
+            <UploadPreview creator={creator} soundPicker={soundPicker} filter={filter} />
           )}
 
           <input
@@ -177,7 +179,7 @@ export default function UploadModal({
           {uploading && (
             <div>
               <div className="flex justify-between text-xs mb-2">
-                <span>Publication…</span>
+                <span>{creator.filterRendering ? "Application du filtre…" : "Publication…"}</span>
                 <span>{uploadProgress}%</span>
               </div>
               <div className="h-2 rounded-full bg-white/10 overflow-hidden">
@@ -205,6 +207,8 @@ export default function UploadModal({
               ? "Optimisation en cours…"
               : selectedFiles?.length > 1
               ? `Publier ${selectedFiles.length} vidéos`
+              : filter?.active && !creator.generated && !selectedFile?._filterBaked
+              ? "Appliquer le filtre et publier"
               : "Publier la vidéo"}
           </button>
         </div>

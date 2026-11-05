@@ -1,9 +1,14 @@
-import { X } from "lucide-react";
+import { useState } from "react";
+import { Sparkles, X } from "lucide-react";
 import { COLORS } from "../../../theme.js";
+import { cssFilterString } from "../filters/index.js";
 import { formatTime } from "../utils/format.js";
+import FilterOverlayCanvas from "./FilterOverlayCanvas.jsx";
+import FilterPicker from "./FilterPicker.jsx";
 
 // Plein écran caméra ; camera = retour de useCamera.
-export default function CameraOverlay({ camera }) {
+export default function CameraOverlay({ camera, filter }) {
+  const [showFilters, setShowFilters] = useState(false);
   const {
     closeCamera,
     cameraSeconds,
@@ -12,6 +17,7 @@ export default function CameraOverlay({ camera }) {
     cameraVideoRef,
     cameraFacing,
     cameraError,
+    cameraFiltered,
     stopCameraRecording,
     startCameraRecording,
     startCamera,
@@ -53,8 +59,15 @@ export default function CameraOverlay({ camera }) {
             className="h-full w-full object-cover"
             style={{
               transform: cameraFacing === "user" ? "scaleX(-1)" : "none",
+              filter: filter?.active ? cssFilterString(filter.spec, 0.5) : "none",
             }}
           />
+          {filter?.active && (
+            <FilterOverlayCanvas
+              spec={filter.spec}
+              className={cameraFacing === "user" ? "-scale-x-100" : ""}
+            />
+          )}
           {cameraError && (
             <div className="absolute inset-x-4 bottom-4 rounded-2xl bg-black/75 border border-red-400/30 p-4 text-sm text-center">
               {cameraError}
@@ -70,6 +83,19 @@ export default function CameraOverlay({ camera }) {
       </div>
 
       <div className="p-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] flex flex-col items-center gap-3">
+        {filter && showFilters && (
+          <div className="w-full max-w-md max-h-[34dvh] overflow-y-auto rounded-3xl bg-zinc-900/95 p-3">
+            <FilterPicker
+              filter={filter}
+              disabled={cameraRecording && !cameraFiltered}
+            />
+            {cameraRecording && !cameraFiltered && (
+              <p className="mt-2 text-center text-[11px] text-white/50">
+                Pour changer de filtre, arrête puis relance l'enregistrement.
+              </p>
+            )}
+          </div>
+        )}
         {!cameraError && (
           <button
             onClick={
@@ -89,6 +115,17 @@ export default function CameraOverlay({ camera }) {
                   : "h-16 w-16 rounded-full bg-red-500"
               }
             />
+          </button>
+        )}
+        {filter && (
+          <button
+            type="button"
+            onClick={() => setShowFilters((v) => !v)}
+            aria-expanded={showFilters}
+            className="flex items-center gap-1.5 rounded-full bg-white/10 px-4 py-2 text-xs font-bold"
+          >
+            <Sparkles size={14} />
+            {filter.active ? `Filtre : ${filter.info?.label || "actif"}` : "Filtres"}
           </button>
         )}
         {cameraError && (

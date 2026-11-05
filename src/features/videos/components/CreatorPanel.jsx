@@ -1,9 +1,10 @@
+import FilterPicker from "./FilterPicker.jsx";
 import PhotoCreator from "./PhotoCreator.jsx";
 import TextCreator from "./TextCreator.jsx";
 import VideoSource from "./VideoSource.jsx";
 
 // Choix du mode de création : vidéo, photos ou texte.
-export default function CreatorPanel({ creator, camera }) {
+export default function CreatorPanel({ creator, camera, filter }) {
   const { createMode, setCreateMode } = creator;
 
   return (
@@ -28,6 +29,9 @@ export default function CreatorPanel({ creator, camera }) {
 
       {createMode === "video" && (
         <VideoSource creator={creator} camera={camera} />
+      )}
+      {filter && createMode !== "video" && (
+        <FilterPicker filter={filter} disabled={creator.generating} />
       )}
       {createMode === "photo" && <PhotoCreator creator={creator} />}
       {createMode === "text" && <TextCreator creator={creator} />}

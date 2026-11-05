@@ -1,20 +1,27 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createFilteredCameraStream } from "../utils/filterRender.js";
 import { pickRecorderMime } from "../utils/videoRenderer.js";
 
 // Créateur caméra : aucun plafond de durée imposé par BAARO.
 // onOpen : appelé à l'ouverture (ex. afficher la fenêtre de publication).
 // onRecorded(file) : appelé avec le fichier vidéo une fois l'enregistrement terminé.
-export function useCamera({ onOpen, onRecorded } = {}) {
+export function useCamera({ onOpen, onRecorded, filter = null } = {}) {
   const [cameraOpen, setCameraOpen] = useState(false);
   const [cameraFacing, setCameraFacing] = useState("user");
   const [cameraRecording, setCameraRecording] = useState(false);
   const [cameraSeconds, setCameraSeconds] = useState(0);
   const [cameraError, setCameraError] = useState("");
+  const [cameraFiltered, setCameraFiltered] = useState(false);
   const cameraVideoRef = useRef(null);
   const cameraStreamRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const cameraChunksRef = useRef([]);
   const cameraTimerRef = useRef(null);
+  const filteredRef = useRef(null);
+
+  // Filtre courant, relu à chaque image du rendu pendant l'enregistrement.
+  const specRef = useRef(null);
+  specRef.current = filter?.active ? filter.spec : null;
 
   // Toujours appeler la dernière version du callback, même depuis recorder.onstop.
   const onRecordedRef = useRef(onRecorded);
@@ -33,6 +40,9 @@ export function useCamera({ onOpen, onRecorded } = {}) {
       } catch {}
     }
     mediaRecorderRef.current = null;
+    filteredRef.current?.stop();
+    filteredRef.current = null;
+    setCameraFiltered(false);
     if (cameraStreamRef.current) {
       cameraStreamRef.current.getTracks().forEach((track) => track.stop());
       cameraStreamRef.current = null;
@@ -76,10 +86,10 @@ export function useCamera({ onOpen, onRecorded } = {}) {
     }
   }, [cameraFacing, stopCameraStream]);
 
-  const openCamera = async () => {
+  // L'effet ci-dessous démarre la caméra dès que cameraOpen passe à true.
+  const openCamera = () => {
     onOpen?.();
     setCameraOpen(true);
-    await startCamera();
   };
 
   const closeCamera = () => {
@@ -120,10 +130,29 @@ export function useCamera({ onOpen, onRecorded } = {}) {
 
     cameraChunksRef.current = [];
     let recorder;
+    let recordStream = stream;
+    let baked = false;
     try {
-      recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+      // Filtre actif : on enregistre le rendu filtré (canvas) et non le flux brut.
+      if (specRef.current && cameraVideoRef.current) {
+        filteredRef.current = createFilteredCameraStream(
+          cameraVideoRef.current,
+          stream,
+          () => specRef.current,
+        );
+        recordStream = filteredRef.current.stream;
+        baked = true;
+        setCameraFiltered(true);
+      }
+      recorder = new MediaRecorder(
+        recordStream,
+        mimeType ? { mimeType } : undefined,
+      );
     } catch (error) {
       console.error(error);
+      filteredRef.current?.stop();
+      filteredRef.current = null;
+      setCameraFiltered(false);
       setCameraError("Impossible de démarrer l'enregistrement.");
       return;
     }
@@ -151,6 +180,8 @@ export function useCamera({ onOpen, onRecorded } = {}) {
         type,
         lastModified: Date.now(),
       });
+      // Le filtre est déjà incrusté : l'aperçu ne doit pas le réappliquer.
+      if (baked) file._filterBaked = true;
       onRecordedRef.current?.(file);
       setCameraOpen(false);
       setCameraSeconds(0);
@@ -182,6 +213,7 @@ export function useCamera({ onOpen, onRecorded } = {}) {
     cameraRecording,
     cameraSeconds,
     cameraError,
+    cameraFiltered,
     cameraVideoRef,
     openCamera,
     closeCamera,
