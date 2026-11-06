@@ -82,7 +82,7 @@ export default async function handler(req, res) {
   let data;
   try {
     const verify = await fetch(
-      `\( {CHECK_BASE}?token= \){encodeURIComponent(TOKEN)}&lang=fr&${queryKey}`,
+      `${CHECK_BASE}?token=${encodeURIComponent(TOKEN)}&lang=fr&${queryKey}`,
       { headers: { Accept: "application/json" } }
     );
     data = await verify.json().catch(() => ({}));

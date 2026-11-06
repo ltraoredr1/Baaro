@@ -120,7 +120,7 @@ async function startCinetPayTransfer({ payout, destination }) {
   ]);
 
   // Token en GET : contrainte API CinetPay (ne pas logger cette URL).
-  const url = `\( {CINETPAY_TRANSFER_BASE}?token= \){encodeURIComponent(
+  const url = `${CINETPAY_TRANSFER_BASE}?token=${encodeURIComponent(
     CINETPAY_TRANSFER_TOKEN
   )}&lang=fr`;
 

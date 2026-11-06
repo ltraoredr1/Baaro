@@ -171,6 +171,12 @@ export default async function handler(req, res) {
 // Gestionnaire InfiniReach (Authentification par téléphone)
 // ---------------------------------------------------------
 async function handleInfiniReachWebhook(req, res, authHeader) {
+  if (!SEND_SMS_HOOK_SECRET) {
+    console.error('[webhook] SEND_SMS_HOOK_SECRET non configuré');
+    return res.status(503).json({
+      error: 'Webhook temporairement indisponible',
+    });
+  }
   const expectedAuth = `Bearer ${SEND_SMS_HOOK_SECRET}`;
   if (authHeader !== expectedAuth) {
     console.error('[webhook] InfiniReach unauthorized: invalid token');
