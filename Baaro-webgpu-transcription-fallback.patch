@@ -1,0 +1,78 @@
+diff --git a/src/lib/whisperTranscribe.js b/src/lib/whisperTranscribe.js
+index 144f79b..2203ff3 100644
+--- a/src/lib/whisperTranscribe.js
++++ b/src/lib/whisperTranscribe.js
+@@ -190,6 +190,7 @@ async function decodeTo16kMono(blob) {
+ 
+ let transformersPromise = null;
+ const pipelines = new Map(); // code langue -> Promise<pipeline>
++const pipelineDevices = new Map(); // code langue -> "webgpu" | "wasm"
+ let queue = Promise.resolve(); // une seule transcription à la fois
+ 
+ async function loadTransformers() {
+@@ -234,7 +235,7 @@ function createProgressReporter(onProgress) {
+   };
+ }
+ 
+-async function getPipeline(langCfg, onProgress) {
++async function getPipeline(langCfg, onProgress, forceWasm = false) {
+   if (!pipelines.has(langCfg.code)) {
+     const promise = (async () => {
+       const { pipeline } = await loadTransformers();
+@@ -244,14 +245,18 @@ async function getPipeline(langCfg, onProgress) {
+         pipeline("automatic-speech-recognition", langCfg.model, { device, dtype, progress_callback });
+ 
+       // Carte graphique (WebGPU) si possible, sinon processeur (WASM) : plus lent mais universel.
+-      if (typeof navigator !== "undefined" && navigator.gpu) {
++      if (!forceWasm && typeof navigator !== "undefined" && navigator.gpu) {
+         try {
+-          return await build("webgpu", { encoder_model: "fp32", decoder_model_merged: "q4" });
++          const webgpuPipeline = await build("webgpu", { encoder_model: "fp32", decoder_model_merged: "q4" });
++          pipelineDevices.set(langCfg.code, "webgpu");
++          return webgpuPipeline;
+         } catch {
+           /* repli sur WASM */
+         }
+       }
+-      return build("wasm", "q8");
++      const wasmPipeline = await build("wasm", "q8");
++      pipelineDevices.set(langCfg.code, "wasm");
++      return wasmPipeline;
+     })();
+     pipelines.set(langCfg.code, promise);
+     promise.catch(() => pipelines.delete(langCfg.code));
+@@ -288,7 +293,7 @@ export function transcribeVoice(src, lang = "fr", opts = {}) {
+     const audio = await decodeTo16kMono(blob);
+     if (!audio.length || audio.length < TARGET_SR * 0.3) return "";
+ 
+-    const asr = await getPipeline(langCfg, onProgress);
++    let asr = await getPipeline(langCfg, onProgress);
+     markModelReady(lang);
+ 
+     onProgress?.({ stage: "transcribe", percent: null });
+@@ -300,7 +305,24 @@ export function transcribeVoice(src, lang = "fr", opts = {}) {
+     };
+     if (langCfg.whisperLang) options.language = langCfg.whisperLang;
+ 
+-    const out = await asr(audio, options);
++    let out;
++    try {
++      out = await asr(audio, options);
++    } catch (webgpuError) {
++      // Certains navigateurs acceptent WebGPU à l'initialisation, puis échouent
++      // pendant l'inférence ou le nettoyage des buffers GPU. Basculer une fois
++      // sur WASM évite de laisser l'erreur GPU bloquer la transcription.
++      if (pipelineDevices.get(lang) !== "webgpu") throw webgpuError;
++      pipelines.delete(lang);
++      pipelineDevices.delete(lang);
++      try {
++        await asr?.dispose?.();
++      } catch {
++        /* le nettoyage du pipeline GPU ne doit pas bloquer le repli */
++      }
++      asr = await getPipeline(langCfg, onProgress, true);
++      out = await asr(audio, options);
++    }
+     const text = String(Array.isArray(out) ? out.map((o) => o.text).join(" ") : out?.text || "").trim();
+     setCachedTranscript(src, lang, text);
+     return text;
