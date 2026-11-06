@@ -86,7 +86,18 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method !== "POST" || req.url !== "/process") return send(req, res, 404, { error: "Not found" });
-  if (config.secret && req.headers["x-baaro-worker-secret"] !== config.secret) {
+  const workerSecret = String(config.secret || "").trim();
+  const providedWorkerSecret = String(
+    req.headers["x-baaro-worker-secret"] || ""
+  ).trim();
+
+  // Fail closed : un secret absent ne doit jamais ouvrir /process.
+  if (!workerSecret) {
+    console.error("[worker] BAARO_WORKER_SECRET is not configured");
+    return send(req, res, 503, { error: "Worker authentication unavailable" });
+  }
+
+  if (providedWorkerSecret !== workerSecret) {
     return send(req, res, 401, { error: "Unauthorized" });
   }
   try {
