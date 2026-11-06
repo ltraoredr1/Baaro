@@ -38,9 +38,15 @@ function json(res, status, body) {
 
 /** Montant XOF attendu (même règle que /api/payouts : multiple de 5). */
 function expectedXofFromMinor(amountMinor) {
-  let xof = Math.round(Number(amountMinor) / 100);
-  if (!Number.isFinite(xof) || xof <= 0) return null;
-  return Math.floor(xof / 5) * 5;
+  const minor = Number(amountMinor);
+  if (
+    !Number.isSafeInteger(minor) ||
+    minor <= 0 ||
+    minor % 500 !== 0
+  ) {
+    return null;
+  }
+  return minor / 100;
 }
 
 export default async function handler(req, res) {

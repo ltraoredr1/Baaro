@@ -66,10 +66,15 @@ function parseDestination(raw) {
 
 /** CinetPay : montant XOF multiple de 5. */
 function toCinetPayAmountXof(amountMinor) {
-  let xof = Math.round(Number(amountMinor) / 100);
-  if (!Number.isFinite(xof) || xof <= 0) return 0;
-  xof = Math.floor(xof / 5) * 5;
-  return xof;
+  const minor = Number(amountMinor);
+  if (
+    !Number.isSafeInteger(minor) ||
+    minor <= 0 ||
+    minor % 500 !== 0
+  ) {
+    return 0;
+  }
+  return minor / 100;
 }
 
 function mapPayoutRpcError(message) {
@@ -232,6 +237,20 @@ export default async function handler(req, res) {
     });
 
     const amountMinor = Math.round(amount * 100);
+
+    // CinetPay exige un montant entier en XOF, multiple de 5.
+    // 1 XOF = 100 unités internes, donc 500 unités internes minimum.
+    if (
+      !Number.isSafeInteger(amountMinor) ||
+      amountMinor <= 0 ||
+      amountMinor % 500 !== 0
+    ) {
+      return json(res, 400, {
+        ok: false,
+        error: "Le montant doit être un multiple de 5 XOF.",
+      });
+    }
+
     const destinationToken =
       method === "mobile_money" ? JSON.stringify(destination) : "{}";
 
