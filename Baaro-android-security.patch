@@ -1,0 +1,53 @@
+diff --git a/android/app/src/main/AndroidManifest.xml b/android/app/src/main/AndroidManifest.xml
+index 200919c..413023a 100644
+--- a/android/app/src/main/AndroidManifest.xml
++++ b/android/app/src/main/AndroidManifest.xml
+@@ -56,6 +56,7 @@
+ 
+     <application
+         android:allowBackup="true"
++        android:usesCleartextTraffic="false"
+         android:icon="@mipmap/ic_launcher"
+         android:label="@string/app_name"
+         android:roundIcon="@mipmap/ic_launcher_round"
+diff --git a/capacitor.config.json b/capacitor.config.json
+index 7f47949..dc49797 100644
+--- a/capacitor.config.json
++++ b/capacitor.config.json
+@@ -52,6 +52,6 @@
+   },
+   "android": {
+     "backgroundColor": "#0b1220",
+-    "allowMixedContent": true
++    "allowMixedContent": false
+   }
+ }
+diff --git a/scripts/check-android.mjs b/scripts/check-android.mjs
+index ecfd6c3..394aa44 100644
+--- a/scripts/check-android.mjs
++++ b/scripts/check-android.mjs
+@@ -60,6 +60,24 @@ if (cap.appId !== "com.baaro.app") {
+   process.exit(1);
+ }
+ 
++if (cap.android?.allowMixedContent !== false) {
++  console.error(
++    "Le contenu mixte Android doit rester désactivé : android.allowMixedContent=false."
++  );
++  process.exit(1);
++}
++
++const manifest = fs.readFileSync(
++  path.join(root, "android/app/src/main/AndroidManifest.xml"),
++  "utf8"
++);
++if (!/android:usesCleartextTraffic\s*=\s*"false"/.test(manifest)) {
++  console.error(
++    "Le trafic HTTP clair Android doit être explicitement désactivé dans AndroidManifest.xml."
++  );
++  process.exit(1);
++}
++
+ const bootstrap = fs.readFileSync(
+   path.join(root, "src/lib/nativeBootstrap.js"),
+   "utf8"
