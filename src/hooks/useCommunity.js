@@ -412,6 +412,8 @@ export function useChannelMessages(channelId) {
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [error, setError] = useState(null);
+  const [clock, setClock] = useState(() => Date.now());
+  const [clock, setClock] = useState(() => Date.now());
 
   const ensureProfiles = useCallback(async (list) => {
     const missing = [
