@@ -1,0 +1,285 @@
+diff --git a/.env.example b/.env.example
+index b7990f9..4a3630f 100644
+--- a/.env.example
++++ b/.env.example
+@@ -49,6 +49,9 @@ SEND_SMS_HOOK_SECRET=
+ # Web Push (VAPID) — la clé privée reste côté serveur uniquement
+ VAPID_PRIVATE_KEY=
+ VAPID_SUBJECT=mailto:support@baaro.app
++# Push natif Android/iOS : JSON du compte de service Firebase, serveur uniquement.
++# À configurer comme secret Vercel, sans préfixe VITE_.
++FIREBASE_SERVICE_ACCOUNT=
+ 
+ # ------------------------------------------------------------
+ # CLOUDFLARE R2 — MEDIA STORAGE / SERVER ONLY
+diff --git a/.github/workflows/android-build.yml b/.github/workflows/android-build.yml
+index 5ea9172..8be514e 100644
+--- a/.github/workflows/android-build.yml
++++ b/.github/workflows/android-build.yml
+@@ -82,7 +82,8 @@ jobs:
+         run: npm ci
+ 
+       - name: Build web application
+-        run: npx vite build
++        # npm run build exécute prebuild, qui copie ONNX Runtime dans public/ort.
++        run: npm run build
+         env:
+           VITE_APP_ENV: production
+           VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
+@@ -93,6 +94,13 @@ jobs:
+           VITE_VAPID_PUBLIC_KEY: ${{ secrets.VITE_VAPID_PUBLIC_KEY }}
+           VITE_BAARO_MEDIA_WORKER_URL: ${{ secrets.VITE_BAARO_MEDIA_WORKER_URL }}
+ 
++      - name: Verify Whisper runtime assets
++        shell: bash
++        run: |
++          set -euo pipefail
++          test -s dist/ort/ort-wasm-simd-threaded.asyncify.mjs
++          test -s dist/ort/ort-wasm-simd-threaded.asyncify.wasm
++
+       - name: Sync Capacitor
+         run: npx cap sync android
+ 
+diff --git a/README.md b/README.md
+index c15639a..beaee87 100644
+--- a/README.md
++++ b/README.md
+@@ -642,9 +642,12 @@ Les secrets tels que :
+ - secrets worker ;
+ - clés IA privées ;
+ - secrets webhook ;
++- `FIREBASE_SERVICE_ACCOUNT` (JSON du compte de service Firebase pour les push Android/iOS) ;
+ 
+ **ne doivent jamais être exposés avec `VITE_`.**
+ 
++Pour recevoir les notifications de nouveaux messages lorsque BAARO est en arrière-plan ou fermé, l’application Android doit aussi être associée au projet Firebase correspondant (`android/app/google-services.json`) et le secret `FIREBASE_SERVICE_ACCOUNT` doit être défini côté serveur, par exemple dans les variables d’environnement Vercel. Les permissions de notification doivent être autorisées sur le téléphone. Le texte des messages chiffrés n’est jamais inclus dans la notification.
++
+ ---
+ 
+ # 23. Organisation du dépôt
+diff --git a/api/social.js b/api/social.js
+index a0ecf64..ba1178f 100644
+--- a/api/social.js
++++ b/api/social.js
+@@ -10,6 +10,8 @@
+  *   (RPC upsert_push_token / table push_tokens), toujours pour l'utilisateur du JWT.
+  * + action "story_published" : notifie (liste + push) les abonnés et amis de l'auteur
+  *   qu'il vient de publier une story. Identité = JWT.
++ * + action "message_sent" : vérifie un message persistant et notifie son destinataire
++ *   (liste + push), sans jamais transmettre son contenu chiffré.
+  * + action "publish_due" : balayage des stories programmées dont l'heure est passée
+  *   (déclenché par l'appli des utilisateurs connectés, sans cron ; idempotent).
+  * Les simples abonnements sont notifiés par le trigger SQL on_follow_created : pas géré ici.
+@@ -287,6 +289,93 @@ async function handleNotifyInteraction(admin, user, body) {
+   return { status: 200, body: { ok: true, notified: true } };
+ }
+ 
++async function handleMessageSent(admin, user, body) {
++  const messageId = String(body.message_id || "");
++  if (!isUuid(messageId)) {
++    return { status: 400, body: { ok: false, error: "Message invalide" } };
++  }
++
++  // Le destinataire et la conversation sont toujours relus en base : aucune
++  // identité fournie par le client n'est utilisée pour cibler une notification.
++  const { data: message, error: messageError } = await admin
++    .from("messages")
++    .select("id, sender_id, recipient_id, conversation_id")
++    .eq("id", messageId)
++    .maybeSingle();
++  if (messageError) throw messageError;
++  if (!message || message.sender_id !== user.id || !message.recipient_id) {
++    return { status: 404, body: { ok: false, error: "Message introuvable" } };
++  }
++  if (message.recipient_id === user.id) {
++    return { status: 200, body: { ok: true, notified: false, reason: "self" } };
++  }
++
++  const { data: conversation, error: conversationError } = await admin
++    .from("conversations")
++    .select("user1_id, user2_id")
++    .eq("id", message.conversation_id)
++    .maybeSingle();
++  if (conversationError) throw conversationError;
++  const participants = [conversation?.user1_id, conversation?.user2_id];
++  if (
++    !conversation ||
++    !participants.includes(user.id) ||
++    !participants.includes(message.recipient_id)
++  ) {
++    return { status: 403, body: { ok: false, error: "Conversation invalide" } };
++  }
++
++  // Le message_id est une clé idempotente pour éviter les pushes en double
++  // lorsque le client réessaie une requête après une coupure réseau.
++  const { data: existing } = await admin
++    .from("notifications")
++    .select("notification_id")
++    .eq("user_id", message.recipient_id)
++    .eq("actor_id", user.id)
++    .eq("type", "message")
++    .eq("source_id", message.id)
++    .limit(1);
++  if (existing?.length) {
++    return { status: 200, body: { ok: true, notified: false, reason: "duplicate" } };
++  }
++
++  const { data: actor } = await admin
++    .from("profiles")
++    .select("display_name, handle")
++    .eq("id", user.id)
++    .maybeSingle();
++  const actorName =
++    clip(actor?.display_name, 40) ||
++    (actor?.handle ? `@${String(actor.handle).replace(/^@/, "")}` : "Quelqu'un");
++
++  const { error: notificationError } = await admin.from("notifications").insert({
++    user_id: message.recipient_id,
++    actor_id: user.id,
++    type: "message",
++    source_id: message.id,
++    message: `${actorName} vous a envoyé un message`,
++  });
++  if (notificationError) throw notificationError;
++
++  await sendPushToUsers(admin, {
++    userIds: [message.recipient_id],
++    title: actorName,
++    body: "Vous avez reçu un nouveau message",
++    url: "/?open_message=1",
++    category: "message",
++    tag: `message-${message.conversation_id}`,
++    sound: "baaro_pulse.mp3",
++    data: {
++      type: "message",
++      message_id: message.id,
++      conversation_id: message.conversation_id,
++      actor_id: user.id,
++    },
++  });
++
++  return { status: 200, body: { ok: true, notified: true } };
++}
++
+ async function handleComment(admin, user, body) {
+   const text = sanitizeComment(body.text);
+   if (!text) {
+@@ -846,6 +935,11 @@ export default async function handler(req, res) {
+       return res.status(result.status).json(result.body);
+     }
+ 
++    if (action === "message_sent") {
++      const result = await handleMessageSent(admin, user, body);
++      return res.status(result.status).json(result.body);
++    }
++
+     if (action === "comment") {
+       const result = await handleComment(admin, user, body);
+       return res.status(result.status).json(result.body);
+diff --git a/src/features/messaging/components/ChatInput.jsx b/src/features/messaging/components/ChatInput.jsx
+index c169ae1..cf95d8b 100644
+--- a/src/features/messaging/components/ChatInput.jsx
++++ b/src/features/messaging/components/ChatInput.jsx
+@@ -5,7 +5,7 @@
+  * L'enregistrement vocal est géré ICI uniquement (MessagesTab reçoit le résultat via onSendVoice).
+  */
+ import React, { useState, useRef, useEffect, useCallback } from "react";
+-import { Mic, Send, Paperclip, Square, Trash2, Reply, X } from "lucide-react";
++import { Mic, Send, Paperclip, Square, Trash2, Reply, X, Phone, Video } from "lucide-react";
+ 
+ export const MAX_FILE_MB = 25;
+ const MIN_VOICE_MS = 800;
+@@ -36,6 +36,9 @@ export function ChatInput({
+   onSend,
+   onSendMedia,
+   onSendVoice,
++  onStartVoiceCall,
++  onStartVideoCall,
++  callDisabled = false,
+   onTyping,
+   onError,
+   replyTo, // { name, text } | null
+@@ -244,6 +247,31 @@ export function ChatInput({
+           </div>
+         ) : (
+           <>
++            {onStartVoiceCall && (
++              <button
++                type="button"
++                onClick={onStartVoiceCall}
++                disabled={disabled || callDisabled}
++                className="w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-full hover:bg-white/10 text-[#2DBFA6] disabled:opacity-40"
++                title="Appel audio"
++                aria-label="Appel audio"
++              >
++                <Phone size={18} />
++              </button>
++            )}
++            {onStartVideoCall && (
++              <button
++                type="button"
++                onClick={onStartVideoCall}
++                disabled={disabled || callDisabled}
++                className="w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-full hover:bg-white/10 text-[#D9AE52] disabled:opacity-40"
++                title="Appel vidéo"
++                aria-label="Appel vidéo"
++              >
++                <Video size={18} />
++              </button>
++            )}
++
+             {onSendMedia && (
+               <>
+                 <button
+diff --git a/src/features/messaging/components/MessagesTab.jsx b/src/features/messaging/components/MessagesTab.jsx
+index 128beb5..71c0fe6 100644
+--- a/src/features/messaging/components/MessagesTab.jsx
++++ b/src/features/messaging/components/MessagesTab.jsx
+@@ -7,7 +7,7 @@ import { useMessageExtras } from "../hooks/useMessageExtras.js";
+ import { Fragment, useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from "react";
+ import {
+   ArrowLeft, MessageCircle, Plus, X, Search,
+-  Phone, Video, Loader2, ChevronDown, Pin
++  Loader2, ChevronDown, Pin
+ } from "lucide-react";
+ import { COLORS as THEME_COLORS } from "../../../theme.js";
+ import { supabase } from "../../../supabaseClient.js";
+@@ -792,27 +792,7 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
+               </div>
+             </button>
+ 
+-            <div className="flex items-center gap-0.5">
+-              <AutoTranslateToggle color={C.gold} />
+-              <button
+-                onClick={() => startCall("voice")}
+-                disabled={callStarting}
+-                className="p-2.5 rounded-full hover:bg-white/10 disabled:opacity-40"
+-                style={{ color: C.teal }}
+-                aria-label="Appel vocal"
+-              >
+-                <Phone size={18} />
+-              </button>
+-              <button
+-                onClick={() => startCall("video")}
+-                disabled={callStarting}
+-                className="p-2.5 rounded-full hover:bg-white/10 disabled:opacity-40"
+-                style={{ color: C.gold }}
+-                aria-label="Appel vidéo"
+-              >
+-                <Video size={18} />
+-              </button>
+-            </div>
++            <AutoTranslateToggle color={C.gold} />
+           </div>
+ 
+           {messaging.keysError && (
+@@ -937,6 +917,9 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
+             onSend={handleSendText}
+             onSendMedia={handleSendMedia}
+             onSendVoice={handleSendVoice}
++            onStartVoiceCall={() => startCall("voice")}
++            onStartVideoCall={() => startCall("video")}
++            callDisabled={callStarting}
+             onTyping={messaging.notifyTyping}
+             onError={notify}
+             replyTo={replyBar}
