@@ -10,6 +10,8 @@
  *   (RPC upsert_push_token / table push_tokens), toujours pour l'utilisateur du JWT.
  * + action "story_published" : notifie (liste + push) les abonnés et amis de l'auteur
  *   qu'il vient de publier une story. Identité = JWT.
+ * + action "message_sent" : vérifie un message persistant et notifie son destinataire
+ *   (liste + push), sans jamais transmettre son contenu chiffré.
  * + action "publish_due" : balayage des stories programmées dont l'heure est passée
  *   (déclenché par l'appli des utilisateurs connectés, sans cron ; idempotent).
  * Les simples abonnements sont notifiés par le trigger SQL on_follow_created : pas géré ici.
@@ -282,6 +284,93 @@ async function handleNotifyInteraction(admin, user, body) {
     preview,
     contentType,
     targetId,
+  });
+
+  return { status: 200, body: { ok: true, notified: true } };
+}
+
+async function handleMessageSent(admin, user, body) {
+  const messageId = String(body.message_id || "");
+  if (!isUuid(messageId)) {
+    return { status: 400, body: { ok: false, error: "Message invalide" } };
+  }
+
+  // Le destinataire et la conversation sont toujours relus en base : aucune
+  // identité fournie par le client n'est utilisée pour cibler une notification.
+  const { data: message, error: messageError } = await admin
+    .from("messages")
+    .select("id, sender_id, recipient_id, conversation_id")
+    .eq("id", messageId)
+    .maybeSingle();
+  if (messageError) throw messageError;
+  if (!message || message.sender_id !== user.id || !message.recipient_id) {
+    return { status: 404, body: { ok: false, error: "Message introuvable" } };
+  }
+  if (message.recipient_id === user.id) {
+    return { status: 200, body: { ok: true, notified: false, reason: "self" } };
+  }
+
+  const { data: conversation, error: conversationError } = await admin
+    .from("conversations")
+    .select("user1_id, user2_id")
+    .eq("id", message.conversation_id)
+    .maybeSingle();
+  if (conversationError) throw conversationError;
+  const participants = [conversation?.user1_id, conversation?.user2_id];
+  if (
+    !conversation ||
+    !participants.includes(user.id) ||
+    !participants.includes(message.recipient_id)
+  ) {
+    return { status: 403, body: { ok: false, error: "Conversation invalide" } };
+  }
+
+  // Le message_id est une clé idempotente pour éviter les pushes en double
+  // lorsque le client réessaie une requête après une coupure réseau.
+  const { data: existing } = await admin
+    .from("notifications")
+    .select("notification_id")
+    .eq("user_id", message.recipient_id)
+    .eq("actor_id", user.id)
+    .eq("type", "message")
+    .eq("source_id", message.id)
+    .limit(1);
+  if (existing?.length) {
+    return { status: 200, body: { ok: true, notified: false, reason: "duplicate" } };
+  }
+
+  const { data: actor } = await admin
+    .from("profiles")
+    .select("display_name, handle")
+    .eq("id", user.id)
+    .maybeSingle();
+  const actorName =
+    clip(actor?.display_name, 40) ||
+    (actor?.handle ? `@${String(actor.handle).replace(/^@/, "")}` : "Quelqu'un");
+
+  const { error: notificationError } = await admin.from("notifications").insert({
+    user_id: message.recipient_id,
+    actor_id: user.id,
+    type: "message",
+    source_id: message.id,
+    message: `${actorName} vous a envoyé un message`,
+  });
+  if (notificationError) throw notificationError;
+
+  await sendPushToUsers(admin, {
+    userIds: [message.recipient_id],
+    title: actorName,
+    body: "Vous avez reçu un nouveau message",
+    url: "/?open_message=1",
+    category: "message",
+    tag: `message-${message.conversation_id}`,
+    sound: "baaro_pulse.mp3",
+    data: {
+      type: "message",
+      message_id: message.id,
+      conversation_id: message.conversation_id,
+      actor_id: user.id,
+    },
   });
 
   return { status: 200, body: { ok: true, notified: true } };
@@ -843,6 +932,11 @@ export default async function handler(req, res) {
   try {
     if (action === "notify_interaction") {
       const result = await handleNotifyInteraction(admin, user, body);
+      return res.status(result.status).json(result.body);
+    }
+
+    if (action === "message_sent") {
+      const result = await handleMessageSent(admin, user, body);
       return res.status(result.status).json(result.body);
     }
 

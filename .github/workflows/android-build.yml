@@ -82,7 +82,8 @@ jobs:
         run: npm ci
 
       - name: Build web application
-        run: npx vite build
+        # npm run build exécute prebuild, qui copie ONNX Runtime dans public/ort.
+        run: npm run build
         env:
           VITE_APP_ENV: production
           VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
@@ -92,6 +93,13 @@ jobs:
           VITE_DAILY_DOMAIN: ${{ secrets.VITE_DAILY_DOMAIN }}
           VITE_VAPID_PUBLIC_KEY: ${{ secrets.VITE_VAPID_PUBLIC_KEY }}
           VITE_BAARO_MEDIA_WORKER_URL: ${{ secrets.VITE_BAARO_MEDIA_WORKER_URL }}
+
+      - name: Verify Whisper runtime assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s dist/ort/ort-wasm-simd-threaded.asyncify.mjs
+          test -s dist/ort/ort-wasm-simd-threaded.asyncify.wasm
 
       - name: Sync Capacitor
         run: npx cap sync android

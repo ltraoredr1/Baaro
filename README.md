@@ -642,8 +642,11 @@ Les secrets tels que :
 - secrets worker ;
 - clés IA privées ;
 - secrets webhook ;
+- `FIREBASE_SERVICE_ACCOUNT` (JSON du compte de service Firebase pour les push Android/iOS) ;
 
 **ne doivent jamais être exposés avec `VITE_`.**
+
+Pour recevoir les notifications de nouveaux messages lorsque BAARO est en arrière-plan ou fermé, l’application Android doit aussi être associée au projet Firebase correspondant (`android/app/google-services.json`) et le secret `FIREBASE_SERVICE_ACCOUNT` doit être défini côté serveur, par exemple dans les variables d’environnement Vercel. Les permissions de notification doivent être autorisées sur le téléphone. Le texte des messages chiffrés n’est jamais inclus dans la notification.
 
 ---
 

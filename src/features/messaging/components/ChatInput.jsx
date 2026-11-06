@@ -5,7 +5,7 @@
  * L'enregistrement vocal est géré ICI uniquement (MessagesTab reçoit le résultat via onSendVoice).
  */
 import React, { useState, useRef, useEffect, useCallback } from "react";
-import { Mic, Send, Paperclip, Square, Trash2, Reply, X } from "lucide-react";
+import { Mic, Send, Paperclip, Square, Trash2, Reply, X, Phone, Video } from "lucide-react";
 
 export const MAX_FILE_MB = 25;
 const MIN_VOICE_MS = 800;
@@ -36,6 +36,9 @@ export function ChatInput({
   onSend,
   onSendMedia,
   onSendVoice,
+  onStartVoiceCall,
+  onStartVideoCall,
+  callDisabled = false,
   onTyping,
   onError,
   replyTo, // { name, text } | null
@@ -244,6 +247,31 @@ export function ChatInput({
           </div>
         ) : (
           <>
+            {onStartVoiceCall && (
+              <button
+                type="button"
+                onClick={onStartVoiceCall}
+                disabled={disabled || callDisabled}
+                className="w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-full hover:bg-white/10 text-[#2DBFA6] disabled:opacity-40"
+                title="Appel audio"
+                aria-label="Appel audio"
+              >
+                <Phone size={18} />
+              </button>
+            )}
+            {onStartVideoCall && (
+              <button
+                type="button"
+                onClick={onStartVideoCall}
+                disabled={disabled || callDisabled}
+                className="w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-full hover:bg-white/10 text-[#D9AE52] disabled:opacity-40"
+                title="Appel vidéo"
+                aria-label="Appel vidéo"
+              >
+                <Video size={18} />
+              </button>
+            )}
+
             {onSendMedia && (
               <>
                 <button

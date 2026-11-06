@@ -7,7 +7,7 @@ import { useMessageExtras } from "../hooks/useMessageExtras.js";
 import { Fragment, useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from "react";
 import {
   ArrowLeft, MessageCircle, Plus, X, Search,
-  Phone, Video, Loader2, ChevronDown, Pin
+  Loader2, ChevronDown, Pin
 } from "lucide-react";
 import { COLORS as THEME_COLORS } from "../../../theme.js";
 import { supabase } from "../../../supabaseClient.js";
@@ -792,27 +792,7 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
               </div>
             </button>
 
-            <div className="flex items-center gap-0.5">
-              <AutoTranslateToggle color={C.gold} />
-              <button
-                onClick={() => startCall("voice")}
-                disabled={callStarting}
-                className="p-2.5 rounded-full hover:bg-white/10 disabled:opacity-40"
-                style={{ color: C.teal }}
-                aria-label="Appel vocal"
-              >
-                <Phone size={18} />
-              </button>
-              <button
-                onClick={() => startCall("video")}
-                disabled={callStarting}
-                className="p-2.5 rounded-full hover:bg-white/10 disabled:opacity-40"
-                style={{ color: C.gold }}
-                aria-label="Appel vidéo"
-              >
-                <Video size={18} />
-              </button>
-            </div>
+            <AutoTranslateToggle color={C.gold} />
           </div>
 
           {messaging.keysError && (
@@ -937,6 +917,9 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
             onSend={handleSendText}
             onSendMedia={handleSendMedia}
             onSendVoice={handleSendVoice}
+            onStartVoiceCall={() => startCall("voice")}
+            onStartVideoCall={() => startCall("video")}
+            callDisabled={callStarting}
             onTyping={messaging.notifyTyping}
             onError={notify}
             replyTo={replyBar}
