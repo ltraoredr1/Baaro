@@ -1,4 +1,3 @@
-
 /**
  * BAARO — Chiffrement de bout en bout (E2E)
  *
@@ -11,10 +10,12 @@
  * - Format v2 : keys[user_id]
  *
  * Sécurité :
- * - Clé privée importée comme non extractible.
- * - Migration des anciennes clés privées JWK.
- * - Validation des clés et des payloads.
- * - IV aléatoire de 96 bits pour AES-GCM.
+ * - Clé privée stockée non extractible dans IndexedDB.
+ * - Sauvegarde de la clé privée chiffrée par une phrase secrète
+ *   (PBKDF2 600 000 itérations + AES-GCM). Le serveur ne voit jamais
+ *   la clé en clair : le E2E est conservé.
+ * - Une clé n'est JAMAIS créée automatiquement si le compte en possède
+ *   déjà une côté serveur (voir useCryptoKeys).
  */
 
 const RSA_ALGORITHM = {
@@ -37,6 +38,10 @@ const KEY_ID = "private-key";
 const AES_IV_LENGTH = 12;
 const MAX_MESSAGE_BYTES = 10 * 1024 * 1024;
 const MAX_RECIPIENTS = 100;
+
+const BACKUP_VERSION = 1;
+const BACKUP_PBKDF2_ITERATIONS = 600000;
+const BACKUP_MIN_PASSPHRASE = 8;
 
 let keyPairPromise = null;
 
@@ -92,9 +97,7 @@ function bufToBase64(buffer) {
   const chunkSize = 0x8000;
 
   for (let i = 0; i < bytes.length; i += chunkSize) {
-    binary += String.fromCharCode(
-      ...bytes.subarray(i, i + chunkSize)
-    );
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
   }
 
   return btoa(binary);
@@ -216,11 +219,36 @@ async function idbSet(key, value) {
   });
 }
 
+async function idbDelete(key) {
+  const db = await openDB();
+
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, "readwrite");
+
+    tx.objectStore(STORE_NAME).delete(key);
+
+    tx.oncomplete = () => {
+      db.close();
+      resolve();
+    };
+
+    tx.onerror = () => {
+      db.close();
+      reject(tx.error || new Error("Suppression IndexedDB impossible."));
+    };
+
+    tx.onabort = () => {
+      db.close();
+      reject(tx.error || new Error("Suppression IndexedDB annulée."));
+    };
+  });
+}
+
 // ─── Import des clés ────────────────────────────────────────────────────────
 
 async function importPrivateKey(jwk) {
   if (!jwk || typeof jwk !== "object" || jwk.kty !== "RSA") {
-    throw new Error("Ancienne clé privée invalide.");
+    throw new Error("Clé privée invalide.");
   }
 
   const key = await getCrypto().subtle.importKey(
@@ -237,51 +265,152 @@ async function importPrivateKey(jwk) {
 export async function importPublicKey(jwk) {
   validatePublicKeyJwk(jwk);
 
-  return getCrypto().subtle.importKey(
-    "jwk",
-    jwk,
-    RSA_ALGORITHM,
+  return getCrypto().subtle.importKey("jwk", jwk, RSA_ALGORITHM, false, [
+    "encrypt",
+  ]);
+}
+
+// ─── Sauvegarde protégée par phrase secrète ─────────────────────────────────
+
+async function deriveWrapKey(passphrase, salt, iterations) {
+  const subtle = getCrypto().subtle;
+
+  const base = await subtle.importKey(
+    "raw",
+    new TextEncoder().encode(passphrase),
+    "PBKDF2",
     false,
-    ["encrypt"]
+    ["deriveKey"]
   );
+
+  return subtle.deriveKey(
+    { name: "PBKDF2", salt, iterations, hash: "SHA-256" },
+    base,
+    AES_ALGORITHM,
+    false,
+    ["encrypt", "decrypt"]
+  );
+}
+
+function assertPassphrase(passphrase) {
+  if (
+    typeof passphrase !== "string" ||
+    passphrase.length < BACKUP_MIN_PASSPHRASE
+  ) {
+    throw new Error(
+      `Phrase secrète trop courte (${BACKUP_MIN_PASSPHRASE} caractères minimum).`
+    );
+  }
+}
+
+async function buildBackup(privateKeyJwk, publicKeyJwk, passphrase) {
+  assertPassphrase(passphrase);
+
+  const c = getCrypto();
+  const salt = c.getRandomValues(new Uint8Array(16));
+  const iv = c.getRandomValues(new Uint8Array(AES_IV_LENGTH));
+
+  const wrapKey = await deriveWrapKey(
+    passphrase,
+    salt,
+    BACKUP_PBKDF2_ITERATIONS
+  );
+
+  const ciphertext = await c.subtle.encrypt(
+    { name: "AES-GCM", iv, tagLength: 128 },
+    wrapKey,
+    new TextEncoder().encode(JSON.stringify(privateKeyJwk))
+  );
+
+  return {
+    v: BACKUP_VERSION,
+    iter: BACKUP_PBKDF2_ITERATIONS,
+    publicKeyJwk,
+    salt: bufToBase64(salt),
+    iv: bufToBase64(iv),
+    ct: bufToBase64(ciphertext),
+  };
+}
+
+/**
+ * Restaure la paire de clés locale depuis une sauvegarde.
+ * Lève "Phrase secrète incorrecte." si la phrase ne convient pas.
+ */
+export async function restoreFromBackup(backup, passphrase) {
+  if (
+    !backup ||
+    backup.v !== BACKUP_VERSION ||
+    !Number.isInteger(backup.iter) ||
+    backup.iter < 100000 ||
+    backup.iter > 5000000
+  ) {
+    throw new Error("Sauvegarde de clé invalide.");
+  }
+
+  if (typeof passphrase !== "string" || !passphrase) {
+    throw new Error("Phrase secrète incorrecte.");
+  }
+
+  let privateKeyJwk;
+
+  try {
+    const wrapKey = await deriveWrapKey(
+      passphrase,
+      new Uint8Array(base64ToBuf(backup.salt)),
+      backup.iter
+    );
+
+    const plaintext = await getCrypto().subtle.decrypt(
+      {
+        name: "AES-GCM",
+        iv: new Uint8Array(base64ToBuf(backup.iv)),
+        tagLength: 128,
+      },
+      wrapKey,
+      base64ToBuf(backup.ct)
+    );
+
+    privateKeyJwk = JSON.parse(new TextDecoder().decode(plaintext));
+  } catch {
+    throw new Error("Phrase secrète incorrecte.");
+  }
+
+  const publicKeyJwk = validatePublicKeyJwk(backup.publicKeyJwk);
+  const privateKey = await importPrivateKey(privateKeyJwk);
+
+  await idbSet(KEY_ID, { publicKeyJwk, privateKey, version: 2 });
+
+  return { publicKeyJwk, privateKey };
 }
 
 // ─── Génération / récupération des clés ─────────────────────────────────────
 
-async function createKeyPair() {
+/**
+ * Crée une nouvelle paire et sa sauvegarde chiffrée.
+ * La sauvegarde est construite AVANT tout stockage local.
+ */
+async function createKeyPair(passphrase) {
+  assertPassphrase(passphrase);
+
   const subtle = getCrypto().subtle;
 
   // Génération temporairement extractible pour exporter les clés.
-  const generated = await subtle.generateKey(
-    RSA_ALGORITHM,
-    true,
-    ["encrypt", "decrypt"]
-  );
+  const generated = await subtle.generateKey(RSA_ALGORITHM, true, [
+    "encrypt",
+    "decrypt",
+  ]);
 
-  const publicKeyJwk = await subtle.exportKey(
-    "jwk",
-    generated.publicKey
-  );
+  const publicKeyJwk = await subtle.exportKey("jwk", generated.publicKey);
+  const privateKeyJwk = await subtle.exportKey("jwk", generated.privateKey);
 
-  const privateKeyJwk = await subtle.exportKey(
-    "jwk",
-    generated.privateKey
-  );
+  const backup = await buildBackup(privateKeyJwk, publicKeyJwk, passphrase);
 
   // Réimportation non extractible de la clé privée.
   const privateKey = await importPrivateKey(privateKeyJwk);
 
-  // On ne conserve plus le JWK privé en clair dans IndexedDB.
-  await idbSet(KEY_ID, {
-    publicKeyJwk,
-    privateKey,
-    version: 2,
-  });
+  await idbSet(KEY_ID, { publicKeyJwk, privateKey, version: 2 });
 
-  return {
-    publicKeyJwk,
-    privateKey,
-  };
+  return { publicKeyJwk, privateKey, backup };
 }
 
 async function loadStoredKeyPair(stored) {
@@ -290,97 +419,67 @@ async function loadStoredKeyPair(stored) {
   // Nouveau format : CryptoKey non extractible.
   if (stored.privateKey) {
     const privateKey = validatePrivateCryptoKey(stored.privateKey);
+    const publicKeyJwk = validatePublicKeyJwk(stored.publicKeyJwk);
 
-    const publicKeyJwk = validatePublicKeyJwk(
-      stored.publicKeyJwk
-    );
-
-    return {
-      publicKeyJwk,
-      privateKey,
-    };
+    return { publicKeyJwk, privateKey };
   }
 
   // Migration de l'ancien format JWK.
   if (stored.privateKeyJwk && stored.publicKeyJwk) {
-    const publicKeyJwk = validatePublicKeyJwk(
-      stored.publicKeyJwk
-    );
+    const publicKeyJwk = validatePublicKeyJwk(stored.publicKeyJwk);
+    const privateKey = await importPrivateKey(stored.privateKeyJwk);
 
-    const privateKey = await importPrivateKey(
-      stored.privateKeyJwk
-    );
+    await idbSet(KEY_ID, { publicKeyJwk, privateKey, version: 2 });
 
-    // Remplacement de l'ancien stockage par le nouveau.
-    await idbSet(KEY_ID, {
-      publicKeyJwk,
-      privateKey,
-      version: 2,
-    });
-
-    return {
-      publicKeyJwk,
-      privateKey,
-    };
+    return { publicKeyJwk, privateKey };
   }
 
   return null;
 }
 
+/** Lit la paire locale. Ne crée JAMAIS de clé. */
+export async function getLocalKeyPair() {
+  return loadStoredKeyPair(await idbGet(KEY_ID));
+}
+
+/** Supprime la paire locale (utilisé après un échec de configuration). */
+export async function clearLocalKeyPair() {
+  await idbDelete(KEY_ID);
+}
+
 /**
- * Récupère ou crée la paire RSA locale.
+ * Retourne la paire locale si elle existe.
+ * Si elle n'existe pas :
+ *  - allowCreate = false (défaut) → null
+ *  - allowCreate = true → création avec sauvegarde (phrase secrète requise)
  *
- * Retourne :
- * {
- *   publicKeyJwk,
- *   privateKey
- * }
+ * La paire créée contient en plus `backup` à enregistrer côté compte.
  */
-export async function ensureKeyPair({ allowCreate = true } = {}) {
-  if (keyPairPromise) {
-    return keyPairPromise;
+export async function ensureKeyPair({ allowCreate = false, passphrase } = {}) {
+  const existing = await getLocalKeyPair();
+
+  if (existing) return existing;
+  if (!allowCreate) return null;
+
+  if (!keyPairPromise) {
+    keyPairPromise = createKeyPair(passphrase).finally(() => {
+      keyPairPromise = null;
+    });
   }
 
-  keyPairPromise = (async () => {
-    const stored = await idbGet(KEY_ID);
-
-    const existing = await loadStoredKeyPair(stored);
-
-    if (existing) {
-      return existing;
-    }
-
-    if (!allowCreate) {
-      throw new Error(
-        "CLÉ_PRIVÉE_LOCALE_ABSENTE: la clé privée locale est absente. " +
-        "Une récupération est nécessaire avant de continuer."
-      );
-    }
-
-    return createKeyPair();
-  })();
-
-  try {
-    return await keyPairPromise;
-  } finally {
-    keyPairPromise = null;
-  }
+  return keyPairPromise;
 }
 
 export async function getLocalPrivateKey() {
-  const stored = await idbGet(KEY_ID);
-
-  if (!stored) return null;
-
-  const pair = await loadStoredKeyPair(stored);
+  const pair = await getLocalKeyPair();
 
   return pair?.privateKey || null;
 }
 
 export async function getLocalPublicKeyJwk() {
-  const { publicKeyJwk } = await ensureKeyPair();
+  const pair = await getLocalKeyPair();
 
-  return publicKeyJwk;
+  return pair?.publicKeyJwk || null;
 }
 
 // ─── Chiffrement ────────────────────────────────────────────────────────────
@@ -418,22 +517,15 @@ export async function encryptMessage(plaintext, recipients) {
   }
 
   // Une clé AES unique par message.
-  const aesKey = await subtle.generateKey(
-    AES_ALGORITHM,
-    true,
-    ["encrypt", "decrypt"]
-  );
+  const aesKey = await subtle.generateKey(AES_ALGORITHM, true, [
+    "encrypt",
+    "decrypt",
+  ]);
 
-  const iv = getCrypto().getRandomValues(
-    new Uint8Array(AES_IV_LENGTH)
-  );
+  const iv = getCrypto().getRandomValues(new Uint8Array(AES_IV_LENGTH));
 
   const ciphertext = await subtle.encrypt(
-    {
-      name: "AES-GCM",
-      iv,
-      tagLength: 128,
-    },
+    { name: "AES-GCM", iv, tagLength: 128 },
     aesKey,
     encoded
   );
@@ -446,11 +538,7 @@ export async function encryptMessage(plaintext, recipients) {
     const userId = recipient?.user_id;
     const publicKeyJwk = recipient?.publicKeyJwk;
 
-    if (
-      typeof userId !== "string" ||
-      !userId ||
-      !publicKeyJwk
-    ) {
+    if (typeof userId !== "string" || !userId || !publicKeyJwk) {
       continue;
     }
 
@@ -483,16 +571,8 @@ export async function encryptMessage(plaintext, recipients) {
 /**
  * Déchiffre un payload v1 ou v2.
  */
-export async function decryptMessage(
-  payload,
-  privateKey,
-  my_user_id = null
-) {
-  if (
-    !payload ||
-    payload.alg !== "RSA-OAEP+AES-GCM" ||
-    !privateKey
-  ) {
+export async function decryptMessage(payload, privateKey, my_user_id = null) {
+  if (!payload || payload.alg !== "RSA-OAEP+AES-GCM" || !privateKey) {
     return null;
   }
 
@@ -508,10 +588,7 @@ export async function decryptMessage(
         !payload.keys ||
         typeof payload.keys !== "object" ||
         !my_user_id ||
-        !Object.prototype.hasOwnProperty.call(
-          payload.keys,
-          my_user_id
-        )
+        !Object.prototype.hasOwnProperty.call(payload.keys, my_user_id)
       ) {
         return null;
       }
@@ -548,32 +625,20 @@ export async function decryptMessage(
       return null;
     }
 
-    const aesKey = await subtle.importKey(
-      "raw",
-      rawAes,
-      AES_ALGORITHM,
-      false,
-      ["decrypt"]
-    );
+    const aesKey = await subtle.importKey("raw", rawAes, AES_ALGORITHM, false, [
+      "decrypt",
+    ]);
 
     const plaintextBuf = await subtle.decrypt(
-      {
-        name: "AES-GCM",
-        iv,
-        tagLength: 128,
-      },
+      { name: "AES-GCM", iv, tagLength: 128 },
       aesKey,
       ciphertext
     );
 
-    return new TextDecoder("utf-8", {
-      fatal: true,
-    }).decode(plaintextBuf);
-  } catch (err) {
+    return new TextDecoder("utf-8", { fatal: true }).decode(plaintextBuf);
+  } catch {
     // Ne jamais exposer le contenu du message ou les clés dans les logs.
-    console.warn(
-      "[BAARO crypto] Déchiffrement impossible."
-    );
+    console.warn("[BAARO crypto] Déchiffrement impossible.");
 
     return null;
   }
@@ -594,11 +659,7 @@ export function serializePayload(payload) {
 }
 
 export function deserializePayload(raw) {
-  if (
-    typeof raw !== "string" ||
-    !raw ||
-    raw.length > MAX_MESSAGE_BYTES * 2
-  ) {
+  if (typeof raw !== "string" || !raw || raw.length > MAX_MESSAGE_BYTES * 2) {
     return null;
   }
 
@@ -622,11 +683,9 @@ export function deserializePayload(raw) {
 
     if (
       payload.v === 2 &&
-      (
-        !payload.keys ||
+      (!payload.keys ||
         typeof payload.keys !== "object" ||
-        Array.isArray(payload.keys)
-      )
+        Array.isArray(payload.keys))
     ) {
       return null;
     }
