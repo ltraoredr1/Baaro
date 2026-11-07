@@ -270,6 +270,43 @@ export async function importPublicKey(jwk) {
   ]);
 }
 
+// ─── Fonctions utilitaires manquantes (Exports demandés) ─────────────────────
+
+/**
+ * Génère un code de récupération aléatoire et sécurisé.
+ */
+export function generateRecoveryCode() {
+  const array = new Uint8Array(16);
+  getCrypto().getRandomValues(array);
+  return Array.from(array, (byte) => byte.toString(16).padStart(2, "0"))
+    .join("")
+    .toUpperCase()
+    .match(/.{1,4}/g)
+    .join("-");
+}
+
+/**
+ * Normalise l'entrée utilisateur pour la phrase de récupération ou le code.
+ */
+export function normalizeRecoveryInput(input) {
+  if (typeof input !== "string") return "";
+  return input.trim().replace(/[\s-]+/g, "").toUpperCase();
+}
+
+/**
+ * Permet d'adopter ou de migrer une ancienne paire de clés.
+ */
+export async function adoptLegacyKeyPair(legacyKeyPair) {
+  if (!legacyKeyPair || !legacyKeyPair.publicKeyJwk) {
+    throw new Error("Ancienne paire de clés invalide.");
+  }
+  const privateKey = await importPrivateKey(legacyKeyPair.privateKeyJwk || legacyKeyPair.privateKey);
+  const publicKeyJwk = validatePublicKeyJwk(legacyKeyPair.publicKeyJwk);
+
+  await idbSet(KEY_ID, { publicKeyJwk, privateKey, version: 2 });
+  return { publicKeyJwk, privateKey };
+}
+
 // ─── Sauvegarde protégée par phrase secrète ─────────────────────────────────
 
 async function deriveWrapKey(passphrase, salt, iterations) {
@@ -385,16 +422,11 @@ export async function restoreFromBackup(backup, passphrase) {
 
 // ─── Génération / récupération des clés ─────────────────────────────────────
 
-/**
- * Crée une nouvelle paire et sa sauvegarde chiffrée.
- * La sauvegarde est construite AVANT tout stockage local.
- */
 async function createKeyPair(passphrase) {
   assertPassphrase(passphrase);
 
   const subtle = getCrypto().subtle;
 
-  // Génération temporairement extractible pour exporter les clés.
   const generated = await subtle.generateKey(RSA_ALGORITHM, true, [
     "encrypt",
     "decrypt",
@@ -405,7 +437,6 @@ async function createKeyPair(passphrase) {
 
   const backup = await buildBackup(privateKeyJwk, publicKeyJwk, passphrase);
 
-  // Réimportation non extractible de la clé privée.
   const privateKey = await importPrivateKey(privateKeyJwk);
 
   await idbSet(KEY_ID, { publicKeyJwk, privateKey, version: 2 });
@@ -416,7 +447,6 @@ async function createKeyPair(passphrase) {
 async function loadStoredKeyPair(stored) {
   if (!stored) return null;
 
-  // Nouveau format : CryptoKey non extractible.
   if (stored.privateKey) {
     const privateKey = validatePrivateCryptoKey(stored.privateKey);
     const publicKeyJwk = validatePublicKeyJwk(stored.publicKeyJwk);
@@ -424,7 +454,6 @@ async function loadStoredKeyPair(stored) {
     return { publicKeyJwk, privateKey };
   }
 
-  // Migration de l'ancien format JWK.
   if (stored.privateKeyJwk && stored.publicKeyJwk) {
     const publicKeyJwk = validatePublicKeyJwk(stored.publicKeyJwk);
     const privateKey = await importPrivateKey(stored.privateKeyJwk);
@@ -437,24 +466,14 @@ async function loadStoredKeyPair(stored) {
   return null;
 }
 
-/** Lit la paire locale. Ne crée JAMAIS de clé. */
 export async function getLocalKeyPair() {
   return loadStoredKeyPair(await idbGet(KEY_ID));
 }
 
-/** Supprime la paire locale (utilisé après un échec de configuration). */
 export async function clearLocalKeyPair() {
   await idbDelete(KEY_ID);
 }
 
-/**
- * Retourne la paire locale si elle existe.
- * Si elle n'existe pas :
- *  - allowCreate = false (défaut) → null
- *  - allowCreate = true → création avec sauvegarde (phrase secrète requise)
- *
- * La paire créée contient en plus `backup` à enregistrer côté compte.
- */
 export async function ensureKeyPair({ allowCreate = false, passphrase } = {}) {
   const existing = await getLocalKeyPair();
 
@@ -484,18 +503,6 @@ export async function getLocalPublicKeyJwk() {
 
 // ─── Chiffrement ────────────────────────────────────────────────────────────
 
-/**
- * Chiffre un message pour un ou plusieurs destinataires.
- *
- * Format v2 :
- * {
- *   v: 2,
- *   alg: "RSA-OAEP+AES-GCM",
- *   keys: { user_id: encryptedAESKey },
- *   iv: "...",
- *   ct: "..."
- * }
- */
 export async function encryptMessage(plaintext, recipients) {
   if (typeof plaintext !== "string" || !plaintext.length) {
     throw new Error("Message vide ou invalide.");
@@ -516,7 +523,6 @@ export async function encryptMessage(plaintext, recipients) {
     throw new Error("Message trop volumineux pour le chiffrement.");
   }
 
-  // Une clé AES unique par message.
   const aesKey = await subtle.generateKey(AES_ALGORITHM, true, [
     "encrypt",
     "decrypt",
@@ -568,9 +574,6 @@ export async function encryptMessage(plaintext, recipients) {
 
 // ─── Déchiffrement ──────────────────────────────────────────────────────────
 
-/**
- * Déchiffre un payload v1 ou v2.
- */
 export async function decryptMessage(payload, privateKey, my_user_id = null) {
   if (!payload || payload.alg !== "RSA-OAEP+AES-GCM" || !privateKey) {
     return null;
@@ -637,9 +640,7 @@ export async function decryptMessage(payload, privateKey, my_user_id = null) {
 
     return new TextDecoder("utf-8", { fatal: true }).decode(plaintextBuf);
   } catch {
-    // Ne jamais exposer le contenu du message ou les clés dans les logs.
     console.warn("[BAARO crypto] Déchiffrement impossible.");
-
     return null;
   }
 }
@@ -692,7 +693,6 @@ export function deserializePayload(raw) {
 
     return payload;
   } catch {
-    // Ancien message en clair ou JSON invalide.
     return null;
   }
 }
