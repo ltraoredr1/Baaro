@@ -7,6 +7,7 @@
  * - Réponse à un message (reply_to_id), suppression (deleted_at), indicateur "écrit…" (broadcast, sans table)
  * - Filtrage expires_at côté client
  * - Médias : pas de gros fichiers dans Supabase, media_url pointe vers R2
+ * - Récupération des clés E2E : keysMode / setupKeys / unlockKeys / resetKeys (voir useCryptoKeys)
  */
 import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "../../../supabaseClient.js";
@@ -84,6 +85,10 @@ export function useMessaging(conversation_id, current_user_id, recipient_id) {
     publicKeyJwk: myPublicKeyJwk,
     ready: keysReady,
     error: keysError,
+    mode: keysMode,
+    setupKeys,
+    unlockKeys,
+    resetKeys,
     fetchRecipientPublicKey,
   } = useCryptoKeys(current_user_id);
 
@@ -659,7 +664,8 @@ export function useMessaging(conversation_id, current_user_id, recipient_id) {
     messages,
     flushOutbox,
     // Plus de spinner infini si les clés échouent : l'erreur est exposée via keysError
-    loading: loading || (!keysReady && !keysError),
+    // (et le mode de récupération via keysMode)
+    loading: loading || (!keysReady && !keysError && !keysMode),
     sendMessage,
     sendMediaMessage,
     deleteMessage,
@@ -672,6 +678,10 @@ export function useMessaging(conversation_id, current_user_id, recipient_id) {
     loadError,
     keysReady,
     keysError,
+    keysMode,
+    setupKeys,
+    unlockKeys,
+    resetKeys,
     privateKey,
   };
 }
