@@ -10,7 +10,10 @@
  * - Format v2 : keys[user_id]
  *
  * Sécurité :
- * - Clé privée stockée non extractible dans IndexedDB.
+ * - Clé privée stockée non extractible dans IndexedDB, UNE entrée PAR COMPTE
+ *   ("private-key:<userId>"). L'ancienne entrée unique "private-key" est
+ *   conservée comme clé « héritée » (legacy) et reprise uniquement si sa
+ *   clé publique correspond à celle du compte (voir adoptLegacyKeyPair).
  * - Sauvegarde de la clé privée chiffrée par une phrase secrète
  *   (PBKDF2 600 000 itérations + AES-GCM). Le serveur ne voit jamais
  *   la clé en clair : le E2E est conservé.
@@ -33,7 +36,14 @@ const AES_ALGORITHM = {
 const DB_NAME = "baaro-crypto";
 const DB_VERSION = 1;
 const STORE_NAME = "keys";
-const KEY_ID = "private-key";
+
+// Ancienne clé unique (avant les clés par compte).
+const LEGACY_KEY_ID = "private-key";
+
+// Entrée IndexedDB d'un compte. Sans userId : ancienne entrée unique.
+function keyIdFor(userId) {
+  return userId ? `${LEGACY_KEY_ID}:${userId}` : LEGACY_KEY_ID;
+}
 
 const AES_IV_LENGTH = 12;
 const MAX_MESSAGE_BYTES = 10 * 1024 * 1024;
@@ -43,7 +53,8 @@ const BACKUP_VERSION = 1;
 const BACKUP_PBKDF2_ITERATIONS = 600000;
 const BACKUP_MIN_PASSPHRASE = 8;
 
-let keyPairPromise = null;
+// Créations en cours, par entrée (évite deux générations simultanées).
+const keyPairPromises = new Map();
 
 // ─── Vérifications ──────────────────────────────────────────────────────────
 
@@ -270,7 +281,7 @@ export async function importPublicKey(jwk) {
   ]);
 }
 
-// ─── Fonctions utilitaires manquantes (Exports demandés) ─────────────────────
+// ─── Code de récupération ───────────────────────────────────────────────────
 
 /**
  * Génère un code de récupération aléatoire et sécurisé.
@@ -291,20 +302,6 @@ export function generateRecoveryCode() {
 export function normalizeRecoveryInput(input) {
   if (typeof input !== "string") return "";
   return input.trim().replace(/[\s-]+/g, "").toUpperCase();
-}
-
-/**
- * Permet d'adopter ou de migrer une ancienne paire de clés.
- */
-export async function adoptLegacyKeyPair(legacyKeyPair) {
-  if (!legacyKeyPair || !legacyKeyPair.publicKeyJwk) {
-    throw new Error("Ancienne paire de clés invalide.");
-  }
-  const privateKey = await importPrivateKey(legacyKeyPair.privateKeyJwk || legacyKeyPair.privateKey);
-  const publicKeyJwk = validatePublicKeyJwk(legacyKeyPair.publicKeyJwk);
-
-  await idbSet(KEY_ID, { publicKeyJwk, privateKey, version: 2 });
-  return { publicKeyJwk, privateKey };
 }
 
 // ─── Sauvegarde protégée par phrase secrète ─────────────────────────────────
@@ -370,10 +367,10 @@ async function buildBackup(privateKeyJwk, publicKeyJwk, passphrase) {
 }
 
 /**
- * Restaure la paire de clés locale depuis une sauvegarde.
+ * Restaure la paire de clés locale du compte depuis une sauvegarde.
  * Lève "Phrase secrète incorrecte." si la phrase ne convient pas.
  */
-export async function restoreFromBackup(backup, passphrase) {
+export async function restoreFromBackup(backup, passphrase, userId = null) {
   if (
     !backup ||
     backup.v !== BACKUP_VERSION ||
@@ -415,14 +412,14 @@ export async function restoreFromBackup(backup, passphrase) {
   const publicKeyJwk = validatePublicKeyJwk(backup.publicKeyJwk);
   const privateKey = await importPrivateKey(privateKeyJwk);
 
-  await idbSet(KEY_ID, { publicKeyJwk, privateKey, version: 2 });
+  await idbSet(keyIdFor(userId), { publicKeyJwk, privateKey, version: 2 });
 
   return { publicKeyJwk, privateKey };
 }
 
 // ─── Génération / récupération des clés ─────────────────────────────────────
 
-async function createKeyPair(passphrase) {
+async function createKeyPair(passphrase, userId) {
   assertPassphrase(passphrase);
 
   const subtle = getCrypto().subtle;
@@ -439,12 +436,12 @@ async function createKeyPair(passphrase) {
 
   const privateKey = await importPrivateKey(privateKeyJwk);
 
-  await idbSet(KEY_ID, { publicKeyJwk, privateKey, version: 2 });
+  await idbSet(keyIdFor(userId), { publicKeyJwk, privateKey, version: 2 });
 
   return { publicKeyJwk, privateKey, backup };
 }
 
-async function loadStoredKeyPair(stored) {
+async function loadStoredKeyPair(stored, keyId) {
   if (!stored) return null;
 
   if (stored.privateKey) {
@@ -458,7 +455,8 @@ async function loadStoredKeyPair(stored) {
     const publicKeyJwk = validatePublicKeyJwk(stored.publicKeyJwk);
     const privateKey = await importPrivateKey(stored.privateKeyJwk);
 
-    await idbSet(KEY_ID, { publicKeyJwk, privateKey, version: 2 });
+    // Migration : on remplace le JWK extractible par une clé non extractible.
+    await idbSet(keyId, { publicKeyJwk, privateKey, version: 2 });
 
     return { publicKeyJwk, privateKey };
   }
@@ -466,37 +464,100 @@ async function loadStoredKeyPair(stored) {
   return null;
 }
 
-export async function getLocalKeyPair() {
-  return loadStoredKeyPair(await idbGet(KEY_ID));
+export async function getLocalKeyPair(userId = null) {
+  const keyId = keyIdFor(userId);
+
+  return loadStoredKeyPair(await idbGet(keyId), keyId);
 }
 
-export async function clearLocalKeyPair() {
-  await idbDelete(KEY_ID);
+export async function clearLocalKeyPair(userId = null) {
+  await idbDelete(keyIdFor(userId));
 }
 
-export async function ensureKeyPair({ allowCreate = false, passphrase } = {}) {
-  const existing = await getLocalKeyPair();
+// Compare deux clés publiques RSA (module + exposant).
+function sameRsaPublicKey(a, b) {
+  if (!a || !b) return false;
+
+  const parse = (v) => {
+    try {
+      return typeof v === "string" ? JSON.parse(v) : v;
+    } catch {
+      return null;
+    }
+  };
+
+  const keyA = parse(a);
+  const keyB = parse(b);
+
+  return !!(
+    keyA &&
+    keyB &&
+    keyA.kty === "RSA" &&
+    keyB.kty === "RSA" &&
+    keyA.n === keyB.n &&
+    keyA.e === keyB.e
+  );
+}
+
+/**
+ * Reprise de l'ancienne clé unique (avant les clés par compte).
+ * Elle n'est adoptée QUE si sa clé publique est celle du compte (serverPublicKey).
+ * Retourne la paire adoptée, ou null (jamais d'exception pour une absence
+ * ou une non-correspondance : l'appelant bascule alors en récupération).
+ */
+export async function adoptLegacyKeyPair(userId, serverPublicKey) {
+  if (!userId || !serverPublicKey) return null;
+
+  let legacy = null;
+
+  try {
+    legacy = await getLocalKeyPair(null);
+  } catch {
+    return null;
+  }
+
+  if (!legacy) return null;
+
+  if (!sameRsaPublicKey(legacy.publicKeyJwk, serverPublicKey)) {
+    return null;
+  }
+
+  await idbSet(keyIdFor(userId), {
+    publicKeyJwk: legacy.publicKeyJwk,
+    privateKey: legacy.privateKey,
+    version: 2,
+  });
+
+  return { publicKeyJwk: legacy.publicKeyJwk, privateKey: legacy.privateKey };
+}
+
+export async function ensureKeyPair({ userId = null, allowCreate = false, passphrase } = {}) {
+  const existing = await getLocalKeyPair(userId);
 
   if (existing) return existing;
   if (!allowCreate) return null;
 
-  if (!keyPairPromise) {
-    keyPairPromise = createKeyPair(passphrase).finally(() => {
-      keyPairPromise = null;
+  const keyId = keyIdFor(userId);
+
+  if (!keyPairPromises.has(keyId)) {
+    const task = createKeyPair(passphrase, userId).finally(() => {
+      keyPairPromises.delete(keyId);
     });
+
+    keyPairPromises.set(keyId, task);
   }
 
-  return keyPairPromise;
+  return keyPairPromises.get(keyId);
 }
 
-export async function getLocalPrivateKey() {
-  const pair = await getLocalKeyPair();
+export async function getLocalPrivateKey(userId = null) {
+  const pair = await getLocalKeyPair(userId);
 
   return pair?.privateKey || null;
 }
 
-export async function getLocalPublicKeyJwk() {
-  const pair = await getLocalKeyPair();
+export async function getLocalPublicKeyJwk(userId = null) {
+  const pair = await getLocalKeyPair(userId);
 
   return pair?.publicKeyJwk || null;
 }
