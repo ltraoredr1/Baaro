@@ -5,7 +5,7 @@
  * l'API CinetPay (token GET obligatoire côté provider).
  * Ne jamais logger l'URL contenant le token.
  */
-import { applyCors, getAdminClient } from "./_shared.js";
+import { applyCors, getAdminClient, rateLimitAsync } from "./_shared.js";
 
 const TOKEN = process.env.CINETPAY_TRANSFER_TOKEN || "";
 const CHECK_BASE = "https://client.cinetpay.com/v1/transfer/check/money";
@@ -58,6 +58,19 @@ export default async function handler(req, res) {
   }
   if (req.method !== "POST") {
     return json(res, 405, { ok: false });
+  }
+
+  const limit = await rateLimitAsync(req, {
+    key: "payout-webhook",
+    max: 30,
+    windowMs: 60_000,
+  });
+
+  if (!limit.ok) {
+    Object.entries(limit.headers || {}).forEach(([key, value]) => {
+      res.setHeader(key, value);
+    });
+    return res.status(limit.status).json(limit.body);
   }
 
   if (!TOKEN) {

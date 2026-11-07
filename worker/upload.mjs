@@ -5,6 +5,7 @@ import {
   UploadPartCommand,
   CompleteMultipartUploadCommand,
   AbortMultipartUploadCommand,
+  ListMultipartUploadsCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { config, assertR2 } from './lib/config.mjs';
@@ -137,4 +138,67 @@ export async function abortLargeVideo(req, body) {
   assertOwnKey(user, key);
   await r2().send(new AbortMultipartUploadCommand({ Bucket: config.r2.bucket, Key: key, UploadId: uploadId }));
   return { ok: true };
+}
+
+
+export async function cleanupAbandonedMultipartUploads({
+  olderThanHours = 24,
+} = {}) {
+  const hours = Number(olderThanHours);
+
+  if (!Number.isFinite(hours) || hours <= 0) {
+    throw httpError("Délai de nettoyage invalide");
+  }
+
+  const cutoff = Date.now() - hours * 60 * 60 * 1000;
+  const client = r2();
+
+  let keyMarker;
+  let uploadIdMarker;
+  let scanned = 0;
+  let aborted = 0;
+
+  do {
+    const page = await client.send(
+      new ListMultipartUploadsCommand({
+        Bucket: config.r2.bucket,
+        KeyMarker: keyMarker,
+        UploadIdMarker: uploadIdMarker,
+      })
+    );
+
+    for (const upload of page.Uploads || []) {
+      scanned += 1;
+
+      const initiated = upload.Initiated
+        ? new Date(upload.Initiated).getTime()
+        : 0;
+
+      if (
+        !upload.Key ||
+        !upload.UploadId ||
+        !initiated ||
+        initiated > cutoff
+      ) {
+        continue;
+      }
+
+      await client.send(
+        new AbortMultipartUploadCommand({
+          Bucket: config.r2.bucket,
+          Key: upload.Key,
+          UploadId: upload.UploadId,
+        })
+      );
+
+      aborted += 1;
+    }
+
+    keyMarker = page.IsTruncated ? page.NextKeyMarker : undefined;
+    uploadIdMarker = page.IsTruncated
+      ? page.NextUploadIdMarker
+      : undefined;
+  } while (keyMarker || uploadIdMarker);
+
+  return { scanned, aborted, olderThanHours: hours };
 }

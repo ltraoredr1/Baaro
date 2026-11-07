@@ -6,12 +6,13 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "echo \"Rien à compiler\"",
+    "build": "echo \"Rien \u00e0 compiler\"",
     "start": "node server.mjs",
-    "process": "node processor.mjs"
+    "process": "node processor.mjs",
+    "cleanup:multipart": "node cleanup-multipart.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.859.0",
     "@aws-sdk/s3-request-presigner": "^3.859.0"
   }
-}
+}\n
