@@ -350,6 +350,13 @@ export async function ensureKeyPair({ allowCreate = true } = {}) {
       return existing;
     }
 
+    if (!allowCreate) {
+      throw new Error(
+        "CLÉ_PRIVÉE_LOCALE_ABSENTE: la clé privée locale est absente. " +
+        "Une récupération est nécessaire avant de continuer."
+      );
+    }
+
     return createKeyPair();
   })();
 
