@@ -255,6 +255,10 @@ function autoSetup(userId) {
   return autoSetups.get(userId);
 }
 
+// Erreurs liées à la clé locale : on propose la récupération au lieu de bloquer.
+const KEY_ERROR_RE =
+  /autre clé publique|paire de clés|clé privée (cryptographique )?invalide|clé publique rsa invalide/i;
+
 export function useCryptoKeys(userId) {
   const [privateKey, setPrivateKey] = useState(null);
   const [publicKeyJwk, setPublicKeyJwk] = useState(null);
@@ -301,11 +305,25 @@ export function useCryptoKeys(userId) {
         const serverPublicKey = await getProfilePublicKey(userId);
 
         // La clé est propre à CE compte. Elle n'est créée automatiquement que si le compte n'en a encore aucune.
-        let pair = await ensureKeyPair({ userId, allowCreate: false });
+        let pair = null;
+
+        try {
+          pair = await ensureKeyPair({ userId, allowCreate: false });
+        } catch (err) {
+          // Clé locale illisible / corrompue : on passe en récupération.
+          console.warn("[useCryptoKeys] Clé locale illisible :", err);
+          pair = null;
+        }
 
         // Ancienne clé unique d'avant les clés par compte : reprise seulement si elle est bien la nôtre.
+        // Ne bloque jamais : en cas d'échec, on bascule simplement en récupération.
         if (!pair && serverPublicKey) {
-          pair = await adoptLegacyKeyPair(userId, serverPublicKey);
+          try {
+            pair = await adoptLegacyKeyPair(userId, serverPublicKey);
+          } catch (err) {
+            console.warn("[useCryptoKeys] Reprise de l'ancienne clé impossible :", err);
+            pair = null;
+          }
         }
 
         // Premier usage (ni clé sur le serveur, ni sauvegarde) : activation automatique, sans question.
@@ -353,7 +371,7 @@ export function useCryptoKeys(userId) {
         console.error("[useCryptoKeys]", err);
 
         if (!cancelled) {
-          if (/autre clé publique/i.test(err?.message || "")) {
+          if (KEY_ERROR_RE.test(err?.message || "")) {
             setMode(hasBackup ? "unlock" : "reset");
           }
 
