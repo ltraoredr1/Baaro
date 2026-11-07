@@ -189,11 +189,15 @@ export function useCryptoKeys(userId) {
           throw new Error("Utilisateur non authentifié ou compte incorrect.");
         }
 
+        // Une clé distante existante interdit la création silencieuse
+        // d'une nouvelle clé locale après perte du stockage.
+        const serverPublicKey = await getProfilePublicKey(userId);
+
         // Récupération ou création de la paire de clés locale.
         const {
           publicKeyJwk: localPublicKey,
           privateKey: localPrivateKey,
-        } = await ensureKeyPair();
+        } = await ensureKeyPair({ allowCreate: !serverPublicKey });
 
         if (cancelled) return;
 

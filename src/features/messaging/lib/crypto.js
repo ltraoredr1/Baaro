@@ -336,7 +336,7 @@ async function loadStoredKeyPair(stored) {
  *   privateKey
  * }
  */
-export async function ensureKeyPair() {
+export async function ensureKeyPair({ allowCreate = true } = {}) {
   if (keyPairPromise) {
     return keyPairPromise;
   }
