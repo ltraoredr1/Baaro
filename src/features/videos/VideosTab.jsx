@@ -242,6 +242,9 @@ export function VideosTab({ onRewardPoints, onExit }) {
 
   // --------------------------------------------------
   // FLUX VIDÉO ET DÉTECTION DE LA VIDÉO ACTIVE
+  // Gestionnaire de lecture UNIQUE : l'observateur ci-dessous décide
+  // quelle publication est active ; aucun autre code ne lance de lecture
+  // de sa propre initiative.
   // --------------------------------------------------
 
   const rootRef = useRef(null);
@@ -260,6 +263,9 @@ export function VideosTab({ onRewardPoints, onExit }) {
 
   const toggleMuteRef = useRef(playback.toggleMute);
   toggleMuteRef.current = playback.toggleMute;
+
+  const registerViewRef = useRef(playback.registerView);
+  registerViewRef.current = playback.registerView;
 
   const showToastRef = useRef(showToast);
   showToastRef.current = showToast;
@@ -492,6 +498,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
 
   // Identifier la publication visible à au moins 60 %
   // et couper immédiatement celles qui sortent de l'écran.
+  // C'est le SEUL observateur qui décide de la vidéo active.
   useEffect(() => {
     const root = scrollRef.current;
 
@@ -512,6 +519,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
             : 0;
 
           // Presque sortie de l'écran : on coupe tout de suite.
+          // (Pause seulement : la source est gérée par loadMode dans VideoCard.)
           if (entry.intersectionRatio < 0.3) {
             playback.videoRefs?.current?.[id]?.pause();
           }
@@ -579,7 +587,11 @@ export function VideosTab({ onRewardPoints, onExit }) {
 
     // On ne mémorise la vidéo qu'une fois son élément réellement trouvé :
     // sinon une carte montée en retard ne démarrerait jamais.
-    if (foundActive) lastAutoplayRef.current = String(activeId);
+    if (foundActive) {
+      // Une vue est enregistrée (une seule fois par vidéo) par le gestionnaire central.
+      if (changed) registerViewRef.current?.(activeId);
+      lastAutoplayRef.current = String(activeId);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeId, feedKey]);
 
@@ -770,31 +782,30 @@ export function VideosTab({ onRewardPoints, onExit }) {
         showModeSwitcher={false}
         extraActions={(
           <>
-        <button
-          type="button"
-          onClick={cycleSpeed}
-          className="flex h-9 items-center gap-1 rounded-full border border-white/20 bg-black/40 px-2.5 text-xs font-bold text-white shadow-lg backdrop-blur-xl transition-all hover:bg-black/60 active:scale-95"
-          aria-label={`Vitesse de lecture ×${settings.speed}`}
-          title="Vitesse de lecture"
-        >
-          <Gauge size={14} />
-          <span>×{settings.speed}</span>
-        </button>
+            <button
+              type="button"
+              onClick={cycleSpeed}
+              className="flex h-9 items-center gap-1 rounded-full border border-white/20 bg-black/40 px-2.5 text-xs font-bold text-white shadow-lg backdrop-blur-xl transition-all hover:bg-black/60 active:scale-95"
+              aria-label={`Vitesse de lecture ×${settings.speed}`}
+              title="Vitesse de lecture"
+            >
+              <Gauge size={14} />
+              <span>×{settings.speed}</span>
+            </button>
 
-        <button
-          type="button"
-          onClick={cycleDataSaver}
-          className={`flex h-9 w-9 items-center justify-center rounded-full border bg-black/40 shadow-lg backdrop-blur-xl transition-all hover:bg-black/60 active:scale-95 ${saverActiveStyle}`}
-          aria-label={`Économie de données : ${
-            SAVER_LABEL[settings.dataSaver]
-          }`}
-          title={`Économie de données : ${
-            SAVER_LABEL[settings.dataSaver]
-          }${dataSaverActive ? " (active)" : ""}`}
-        >
-          <Leaf size={16} />
-        </button>
-
+            <button
+              type="button"
+              onClick={cycleDataSaver}
+              className={`flex h-9 w-9 items-center justify-center rounded-full border bg-black/40 shadow-lg backdrop-blur-xl transition-all hover:bg-black/60 active:scale-95 ${saverActiveStyle}`}
+              aria-label={`Économie de données : ${
+                SAVER_LABEL[settings.dataSaver]
+              }`}
+              title={`Économie de données : ${
+                SAVER_LABEL[settings.dataSaver]
+              }${dataSaverActive ? " (active)" : ""}`}
+            >
+              <Leaf size={16} />
+            </button>
           </>
         )}
       />
