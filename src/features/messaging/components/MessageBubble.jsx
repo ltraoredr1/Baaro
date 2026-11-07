@@ -5,11 +5,12 @@
  */
 import React, { useEffect, useRef, useState } from "react";
 import {
-  Play, Pause, FileText, X, MoreHorizontal, Reply, Copy, Trash2, Star, Pin,
+  Play, Pause, FileText, X, MoreHorizontal, Reply, Copy, Trash2, Star, Pin, Wrench,
 } from "lucide-react";
 import { CHAT_REACTIONS } from "../lib/chatFeatures.js";
 import { VoiceTranscript } from "./VoiceTranscript.jsx";
 import { ChatTranslate } from "./ChatTranslate.jsx";
+import { useAutoTranslate } from "../lib/autoTranslate.js";
 
 /** Texte court décrivant un message (aperçu dans les citations et la barre de réponse) */
 export function messagePreviewText(m) {
@@ -174,7 +175,9 @@ export function MessageBubble({
 }) {
   const [lightbox, setLightbox] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [toolsOpen, setToolsOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  const autoTranslate = useAutoTranslate();
 
   const isExpired = message.expired;
   const isDeleted = !!message.deleted_at;
@@ -194,6 +197,14 @@ export function MessageBubble({
   const canAct = !pending && !message.failed && !isDeleted && !isTmpId;
   const canCopy = !isMedia && !isDeleted && !!body;
   const hasMenu = onReply || onDelete || onReact || onStar || onPin || canCopy;
+  const hasTools =
+    !isDeleted &&
+    !isExpired &&
+    !pending &&
+    !message.failed &&
+    !isTmpId &&
+    ((message.type === "voice" && message.media_url) ||
+      (!isMe && !isMedia && body && String(body).trim().length > 1));
 
   const copyText = async () => {
     try {
@@ -268,8 +279,18 @@ export function MessageBubble({
             ) : message.type === "voice" ? (
               <>
                 <VoicePlayer src={message.media_url} duration={message.media_duration} isMe={isMe} />
-                {!pending && !message.failed && !isTmpId && (
+                {toolsOpen && !pending && !message.failed && !isTmpId && (
                   <VoiceTranscript src={message.media_url} isMe={isMe} />
+                )}
+                {hasTools && (
+                  <button
+                    type="button"
+                    onClick={() => setToolsOpen((open) => !open)}
+                    aria-expanded={toolsOpen}
+                    className={`mt-1.5 flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full ${isMe ? "bg-white/20 hover:bg-white/30" : "bg-white/10 hover:bg-white/15"}`}
+                  >
+                    <Wrench size={12} /> Outils
+                  </button>
                 )}
               </>
             ) : (
@@ -291,8 +312,24 @@ export function MessageBubble({
           ) : (
             <>
               <p className="whitespace-pre-wrap break-words">{textToShow}</p>
-              {!isMe && !isDeleted && !isExpired && !message.decryptFailed && body && String(body).trim().length > 1 && (
-                <ChatTranslate text={String(body)} isMe={isMe} />
+              {!isMe &&
+                !isDeleted &&
+                !isExpired &&
+                !message.decryptFailed &&
+                body &&
+                String(body).trim().length > 1 &&
+                (toolsOpen || autoTranslate) && (
+                  <ChatTranslate text={String(body)} isMe={isMe} />
+                )}
+              {hasTools && (
+                <button
+                  type="button"
+                  onClick={() => setToolsOpen((open) => !open)}
+                  aria-expanded={toolsOpen}
+                  className={`mt-1.5 flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full ${isMe ? "bg-white/20 hover:bg-white/30" : "bg-white/10 hover:bg-white/15"}`}
+                >
+                  <Wrench size={12} /> Outils
+                </button>
               )}
             </>
           )}

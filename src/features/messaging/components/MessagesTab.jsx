@@ -7,7 +7,7 @@ import { useMessageExtras } from "../hooks/useMessageExtras.js";
 import { Fragment, useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from "react";
 import {
   ArrowLeft, MessageCircle, Plus, X, Search,
-  Loader2, ChevronDown, Pin
+  Loader2, ChevronDown, Pin, Wrench
 } from "lucide-react";
 import { COLORS as THEME_COLORS } from "../../../theme.js";
 import { supabase } from "../../../supabaseClient.js";
@@ -116,6 +116,7 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
   const [visTick, setVisTick] = useState(0);
   const [loading, setLoading] = useState(true);
   const [showNewChat, setShowNewChat] = useState(false);
+  const [chatToolsOpen, setChatToolsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState([]);
   const [searchLoading, setSearchLoading] = useState(false);
@@ -792,7 +793,38 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
               </div>
             </button>
 
-            <AutoTranslateToggle color={C.gold} />
+            <div className="relative flex-shrink-0">
+              <button
+                type="button"
+                onClick={() => setChatToolsOpen((open) => !open)}
+                aria-expanded={chatToolsOpen}
+                aria-label="Outils de messagerie"
+                className="flex items-center gap-1.5 px-2.5 py-2 rounded-full text-xs font-semibold hover:bg-white/10"
+                style={{ color: C.gold }}
+              >
+                <Wrench size={16} /> Outils
+              </button>
+
+              {chatToolsOpen && (
+                <div
+                  role="dialog"
+                  aria-label="Outils de messagerie"
+                  className="absolute right-0 top-full mt-2 z-30 w-72 rounded-2xl border p-3 shadow-2xl"
+                  style={{ background: C.surface, borderColor: C.borderGold, color: C.ivory }}
+                >
+                  <p className="text-sm font-bold mb-1">Outils de messagerie</p>
+                  <p className="text-xs leading-snug mb-2" style={{ color: C.muted }}>
+                    La traduction automatique est désactivée par défaut. Active-la uniquement si tu en as besoin.
+                  </p>
+                  <div className="flex items-center justify-between rounded-xl bg-white/5 px-2">
+                    <span className="text-xs" style={{ color: C.muted }}>
+                      Traduction automatique
+                    </span>
+                    <AutoTranslateToggle color={C.gold} />
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
 
           {messaging.keysError && (
