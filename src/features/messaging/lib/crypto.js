@@ -385,27 +385,40 @@ export async function restoreFromBackup(backup, passphrase, userId = null) {
     throw new Error("Phrase secrète incorrecte.");
   }
 
-  let privateKeyJwk;
+  // Le code de récupération est créé avec des tirets (XXXX-XXXX-…) mais l'écran de
+  // déverrouillage le normalise (sans tirets, majuscules). On essaie donc la saisie
+  // telle quelle, puis sa forme avec tirets, pour que les deux formats fonctionnent.
+  const candidates = [passphrase];
+  const compact = passphrase.trim().replace(/[\s-]+/g, "").toUpperCase();
+  if (/^[0-9A-F]{32}$/.test(compact)) {
+    const dashed = compact.match(/.{1,4}/g).join("-");
+    if (!candidates.includes(dashed)) candidates.push(dashed);
+  }
 
-  try {
-    const wrapKey = await deriveWrapKey(
-      passphrase,
-      new Uint8Array(base64ToBuf(backup.salt)),
-      backup.iter
-    );
+  const salt = new Uint8Array(base64ToBuf(backup.salt));
+  const iv = new Uint8Array(base64ToBuf(backup.iv));
+  const ct = base64ToBuf(backup.ct);
 
-    const plaintext = await getCrypto().subtle.decrypt(
-      {
-        name: "AES-GCM",
-        iv: new Uint8Array(base64ToBuf(backup.iv)),
-        tagLength: 128,
-      },
-      wrapKey,
-      base64ToBuf(backup.ct)
-    );
+  let privateKeyJwk = null;
 
-    privateKeyJwk = JSON.parse(new TextDecoder().decode(plaintext));
-  } catch {
+  for (const candidate of candidates) {
+    try {
+      const wrapKey = await deriveWrapKey(candidate, salt, backup.iter);
+
+      const plaintext = await getCrypto().subtle.decrypt(
+        { name: "AES-GCM", iv, tagLength: 128 },
+        wrapKey,
+        ct
+      );
+
+      privateKeyJwk = JSON.parse(new TextDecoder().decode(plaintext));
+      break;
+    } catch {
+      // Mauvaise phrase : on essaie la suivante.
+    }
+  }
+
+  if (!privateKeyJwk) {
     throw new Error("Phrase secrète incorrecte.");
   }
 
