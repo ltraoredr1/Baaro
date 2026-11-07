@@ -18,6 +18,7 @@ import { makeClientMessageId, markMessageRead } from "../lib/chatFeatures.js";
 import { ChatInput, MAX_FILE_MB } from "./ChatInput.jsx";
 import { MessageBubble, messagePreviewText } from "./MessageBubble.jsx";
 import { AutoTranslateToggle } from "./AutoTranslateToggle.jsx";
+import { KeyRecoveryPanel } from "./KeyRecoveryPanel.jsx";
 import { messageService } from "../lib/messageService.js";
 import { isValidAuthUserId } from "../../../lib/currentUserId.js";
 
@@ -826,17 +827,31 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
             </div>
           </div>
 
-          {messaging.keysError && (
-            <div
-              role="status"
-              className="px-4 py-2 text-xs border-b"
-              style={{ background: "rgba(239,68,68,0.1)", borderColor: C.border, color: "#fca5a5" }}
-            >
-              Messagerie sécurisée indisponible : {messaging.keysError}
+          {/* Clés E2E : écran de configuration / récupération, sinon bandeau d'erreur simple */}
+          {messaging.keysMode ? (
+            <div className="flex-1 min-h-0 overflow-y-auto">
+              <KeyRecoveryPanel
+                key={messaging.keysMode}
+                mode={messaging.keysMode}
+                C={C}
+                onSetup={messaging.setupKeys}
+                onUnlock={messaging.unlockKeys}
+                onReset={messaging.resetKeys}
+              />
             </div>
+          ) : (
+            messaging.keysError && (
+              <div
+                role="status"
+                className="px-4 py-2 text-xs border-b"
+                style={{ background: "rgba(239,68,68,0.1)", borderColor: C.border, color: "#fca5a5" }}
+              >
+                Messagerie sécurisée indisponible : {messaging.keysError}
+              </div>
+            )
           )}
 
-          {lastPinned && (
+          {!messaging.keysMode && lastPinned && (
             <button
               type="button"
               onClick={() => jumpToMessage(lastPinned.id)}
@@ -851,89 +866,91 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
             </button>
           )}
 
-          <div className="relative flex-1 min-h-0">
-            <div ref={scrollRef} onScroll={handleScroll} className="h-full overflow-y-auto px-3 py-4 space-y-1">
-              {messaging.hasMore && (
-                <div className="flex justify-center pb-2">
-                  <button
-                    type="button"
-                    onClick={handleLoadOlder}
-                    disabled={messaging.loadingOlder}
-                    className="flex items-center gap-2 text-xs px-4 py-2 rounded-full border disabled:opacity-60"
-                    style={{ borderColor: C.borderGold, color: C.gold, background: C.surface }}
-                  >
-                    {messaging.loadingOlder && <Loader2 size={14} className="animate-spin" />}
-                    Messages précédents
-                  </button>
-                </div>
-              )}
+          {!messaging.keysMode && (
+            <div className="relative flex-1 min-h-0">
+              <div ref={scrollRef} onScroll={handleScroll} className="h-full overflow-y-auto px-3 py-4 space-y-1">
+                {messaging.hasMore && (
+                  <div className="flex justify-center pb-2">
+                    <button
+                      type="button"
+                      onClick={handleLoadOlder}
+                      disabled={messaging.loadingOlder}
+                      className="flex items-center gap-2 text-xs px-4 py-2 rounded-full border disabled:opacity-60"
+                      style={{ borderColor: C.borderGold, color: C.gold, background: C.surface }}
+                    >
+                      {messaging.loadingOlder && <Loader2 size={14} className="animate-spin" />}
+                      Messages précédents
+                    </button>
+                  </div>
+                )}
 
-              {messaging.loading && messages.length === 0 && (
-                <div className="flex justify-center py-16" style={{ color: C.muted }}>
-                  <Loader2 size={24} className="animate-spin" />
-                </div>
-              )}
+                {messaging.loading && messages.length === 0 && (
+                  <div className="flex justify-center py-16" style={{ color: C.muted }}>
+                    <Loader2 size={24} className="animate-spin" />
+                  </div>
+                )}
 
-              {messaging.loadError && messages.length === 0 && (
-                <p className="text-center text-sm py-16" style={{ color: C.muted }}>
-                  Impossible de charger les messages ({messaging.loadError})
-                </p>
-              )}
+                {messaging.loadError && messages.length === 0 && (
+                  <p className="text-center text-sm py-16" style={{ color: C.muted }}>
+                    Impossible de charger les messages ({messaging.loadError})
+                  </p>
+                )}
 
-              {!messaging.loading && !messaging.loadError && !messaging.keysError && messages.length === 0 && (
-                <p className="text-center text-sm py-16" style={{ color: C.muted }}>
-                  Dites bonjour à {activeChat.otherUserName} 👋
-                </p>
-              )}
+                {!messaging.loading && !messaging.loadError && !messaging.keysError && messages.length === 0 && (
+                  <p className="text-center text-sm py-16" style={{ color: C.muted }}>
+                    Dites bonjour à {activeChat.otherUserName} 👋
+                  </p>
+                )}
 
-              {messages.map((m, i) => {
-                const prev = messages[i - 1];
-                const showDay = !prev || dayKey(prev.created_at) !== dayKey(m.created_at);
-                return (
-                  <Fragment key={msgKey(m) || i}>
-                    {showDay && (
-                      <div className="flex justify-center py-2">
-                        <span
-                          className="text-[11px] px-3 py-1 rounded-full capitalize"
-                          style={{ background: C.surface2, color: C.muted }}
-                        >
-                          {dayLabel(m.created_at)}
-                        </span>
-                      </div>
-                    )}
-                    <MessageBubble
-                      message={m}
-                      isMe={m.sender_id === id}
-                      domId={m.id ? `msg-${m.id}` : undefined}
-                      reply={quoteFor(m)}
-                      reactions={extras.reactionsByMessage.get(m.id) || []}
-                      starred={extras.starred.has(m.id)}
-                      pinned={extras.pins.has(m.id)}
-                      onRetry={handleRetry}
-                      onReply={setReplyTo}
-                      onDelete={handleDelete}
-                      onReact={handleReact}
-                      onStar={handleStar}
-                      onPin={handlePin}
-                    />
-                  </Fragment>
-                );
-              })}
-              <div ref={messagesEndRef} />
+                {messages.map((m, i) => {
+                  const prev = messages[i - 1];
+                  const showDay = !prev || dayKey(prev.created_at) !== dayKey(m.created_at);
+                  return (
+                    <Fragment key={msgKey(m) || i}>
+                      {showDay && (
+                        <div className="flex justify-center py-2">
+                          <span
+                            className="text-[11px] px-3 py-1 rounded-full capitalize"
+                            style={{ background: C.surface2, color: C.muted }}
+                          >
+                            {dayLabel(m.created_at)}
+                          </span>
+                        </div>
+                      )}
+                      <MessageBubble
+                        message={m}
+                        isMe={m.sender_id === id}
+                        domId={m.id ? `msg-${m.id}` : undefined}
+                        reply={quoteFor(m)}
+                        reactions={extras.reactionsByMessage.get(m.id) || []}
+                        starred={extras.starred.has(m.id)}
+                        pinned={extras.pins.has(m.id)}
+                        onRetry={handleRetry}
+                        onReply={setReplyTo}
+                        onDelete={handleDelete}
+                        onReact={handleReact}
+                        onStar={handleStar}
+                        onPin={handlePin}
+                      />
+                    </Fragment>
+                  );
+                })}
+                <div ref={messagesEndRef} />
+              </div>
+
+              {!atBottom && messages.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })}
+                  className="absolute bottom-3 right-4 p-2.5 rounded-full shadow-lg border"
+                  style={{ background: C.surface, borderColor: C.borderGold, color: C.gold }}
+                  aria-label="Aller au dernier message"
+                >
+                  <ChevronDown size={18} />
+                </button>
+              )}
             </div>
-
-            {!atBottom && messages.length > 0 && (
-              <button
-                type="button"
-                onClick={() => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })}
-                className="absolute bottom-3 right-4 p-2.5 rounded-full shadow-lg border"
-                style={{ background: C.surface, borderColor: C.borderGold, color: C.gold }}
-                aria-label="Aller au dernier message"
-              >
-                <ChevronDown size={18} />
-              </button>
-            )}
-          </div>
+          )}
 
           {uploading && (
             <div className="flex items-center gap-2 px-4 py-1.5 text-xs" style={{ color: C.muted }}>
@@ -942,20 +959,22 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
             </div>
           )}
 
-          <ChatInput
-            disabled={uploading}
-            placeholder="Écrire un message…"
-            onSend={handleSendText}
-            onSendMedia={handleSendMedia}
-            onSendVoice={handleSendVoice}
-            onStartVoiceCall={() => startCall("voice")}
-            onStartVideoCall={() => startCall("video")}
-            callDisabled={callStarting}
-            onTyping={messaging.notifyTyping}
-            onError={notify}
-            replyTo={replyBar}
-            onCancelReply={() => setReplyTo(null)}
-          />
+          {!messaging.keysMode && (
+            <ChatInput
+              disabled={uploading}
+              placeholder="Écrire un message…"
+              onSend={handleSendText}
+              onSendMedia={handleSendMedia}
+              onSendVoice={handleSendVoice}
+              onStartVoiceCall={() => startCall("voice")}
+              onStartVideoCall={() => startCall("video")}
+              callDisabled={callStarting}
+              onTyping={messaging.notifyTyping}
+              onError={notify}
+              replyTo={replyBar}
+              onCancelReply={() => setReplyTo(null)}
+            />
+          )}
         </div>
       </>
     );
