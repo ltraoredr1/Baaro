@@ -1,8 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { supabase } from "../../../supabaseClient.js";
 
-// Lecture du flux : vidéo visible, son, progression, gestion éco-données et arrêt automatique.
-export function useFeedPlayback({ visibleVideos }) {
+// Lecture du flux : état (son, progression, erreurs) et actions sur les éléments.
+// IMPORTANT : ce hook ne décide JAMAIS quelle vidéo joue. Le seul observateur
+// (IntersectionObserver de VideosTab) choisit la vidéo active et lance/coupe la lecture.
+export function useFeedPlayback({ visibleVideos } = {}) { // eslint-disable-line no-unused-vars
   const [playingId, setPlayingId] = useState(null);
   const [muted, setMuted] = useState(() => {
     try {
@@ -17,59 +19,21 @@ export function useFeedPlayback({ visibleVideos }) {
   const videoRefs = useRef({});
   const audioRefs = useRef({});
   const mutedRef = useRef(false);
-  // synchroniser au premier rendu
   mutedRef.current = muted;
   const playingIdRef = useRef(null);
   playingIdRef.current = playingId;
   const viewedRef = useRef(new Set());
 
-  useEffect(() => {
-    if (!visibleVideos.length) return undefined;
-    const observer = new IntersectionObserver((entries) => {
-      entries.forEach((entry) => {
-        const video = entry.target;
-        const id = video.dataset.id;
-        if (!entry.isIntersecting || entry.intersectionRatio < 0.6) {
-          video.pause();
-          if (video.src) {
-            video.dataset.savedSrc = video.src;
-            video.removeAttribute("src");
-            video.load();
-          }
-          if (playingIdRef.current === id) setPlayingId(null);
-        }
-      });
-
-      const visible = entries
-        .filter((entry) => entry.isIntersecting && entry.intersectionRatio >= 0.6)
-        .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
-      if (!visible) return;
-
-      const video = visible.target;
-      const id = video.dataset.id;
-      if (!video.src && video.dataset.savedSrc) {
-        video.src = video.dataset.savedSrc;
-        video.load();
-      }
-      setPlayingId(id);
-      if (id && !viewedRef.current.has(id)) {
-        viewedRef.current.add(id);
-        supabase.rpc("register_video_view", { p_video_id: id }).then(({ error }) => {
-          if (error) console.debug("view registration:", error.message);
-        });
-      }
-      video.muted = mutedRef.current || video.dataset.muteOriginal === "1";
-      video.play().catch(() => {
-        video.muted = true;
-        mutedRef.current = true;
-        setMuted(true);
-        video.play().catch(() => {});
-      });
-    }, { threshold: [0.3, 0.6, 0.9] });
-
-    Object.values(videoRefs.current).forEach((el) => { if (el) observer.observe(el); });
-    return () => observer.disconnect();
-  }, [visibleVideos]);
+  // Enregistre une vue, une seule fois par vidéo. Appelée par le gestionnaire central.
+  const registerView = (id) => {
+    if (id == null) return;
+    const key = String(id);
+    if (viewedRef.current.has(key)) return;
+    viewedRef.current.add(key);
+    supabase.rpc("register_video_view", { p_video_id: key }).then(({ error }) => {
+      if (error) console.debug("view registration:", error.message);
+    });
+  };
 
   const syncAudioTime = (videoEl, audio) => {
     if (!videoEl || !audio) return;
@@ -95,7 +59,7 @@ export function useFeedPlayback({ visibleVideos }) {
     if (!video) return;
     video.pause();
     audioRefs.current[key]?.pause();
-    setPlayingId((current) => String(current) === key ? null : current);
+    setPlayingId((current) => (String(current) === key ? null : current));
   };
 
   const resume = (id) => {
@@ -161,5 +125,6 @@ export function useFeedPlayback({ visibleVideos }) {
     videoRefs, audioRefs, playingId, setPlayingId, muted, setMutedExplicit,
     progress, videoErrors, setVideoErrors, syncAudioTime, playAudioFor,
     pause, resume, togglePlay, toggleMute, toggleFullscreen, handleTimeUpdate,
+    registerView,
   };
 }
