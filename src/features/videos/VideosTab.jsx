@@ -16,6 +16,11 @@ import { useCamera } from "./hooks/useCamera.js";
 import { useFaceFx } from "./hooks/useFaceFx.js";
 import { useVideoFilter } from "./hooks/useVideoFilter.js";
 import { useFeedPlayback } from "./hooks/useFeedPlayback.js";
+import {
+  clearResumePosition,
+  getResumePosition,
+  saveResumePosition,
+} from "./hooks/useResumePosition.js";
 import { usePlaybackSettings, SPEEDS } from "./hooks/usePlaybackSettings.js";
 import { usePrefersReducedMotion } from "../../hooks/usePrefersReducedMotion.js";
 import { useVideoCompression } from "./hooks/useVideoCompression.js";
@@ -577,6 +582,18 @@ export function VideosTab({ onRewardPoints, onExit }) {
 
         if (element.ended) {
           element.currentTime = 0;
+        } else {
+          // Reprise de lecture : on repart là où l'utilisateur s'était arrêté.
+          const resumeAt = () => {
+            const time = getResumePosition(id, element.duration);
+            if (time > 0) element.currentTime = time;
+          };
+
+          if (element.readyState >= 1) resumeAt();
+          else
+            element.addEventListener("loadedmetadata", resumeAt, {
+              once: true,
+            });
         }
 
         safePlay(element);
@@ -592,6 +609,48 @@ export function VideosTab({ onRewardPoints, onExit }) {
       if (changed) registerViewRef.current?.(activeId);
       lastAutoplayRef.current = String(activeId);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeId, feedKey]);
+
+  // Reprise de lecture : mémorise la position de la vidéo active
+  // (toutes les 2 s, à la pause, au changement de vidéo, et la supprime à la fin).
+  useEffect(() => {
+    if (activeId == null) return undefined;
+    if (activeVideo && isImageVideo(activeVideo)) return undefined;
+
+    const element = getElement(activeId);
+
+    if (!element) return undefined;
+
+    let lastSave = 0;
+
+    const save = () => {
+      // Métadonnées pas encore chargées : la position serait fausse (0).
+      if (element.readyState < 1) return;
+      saveResumePosition(activeId, element.currentTime, element.duration);
+    };
+
+    const handleTime = () => {
+      const now = Date.now();
+
+      if (now - lastSave >= 2000) {
+        lastSave = now;
+        save();
+      }
+    };
+
+    const handleEnded = () => clearResumePosition(activeId);
+
+    element.addEventListener("timeupdate", handleTime);
+    element.addEventListener("pause", save);
+    element.addEventListener("ended", handleEnded);
+
+    return () => {
+      element.removeEventListener("timeupdate", handleTime);
+      element.removeEventListener("pause", save);
+      element.removeEventListener("ended", handleEnded);
+      save();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeId, feedKey]);
 
