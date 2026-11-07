@@ -672,5 +672,6 @@ export function useMessaging(conversation_id, current_user_id, recipient_id) {
     loadError,
     keysReady,
     keysError,
+    privateKey,
   };
 }

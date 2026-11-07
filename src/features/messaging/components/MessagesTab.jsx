@@ -2,7 +2,6 @@
  * BAARO MessagesTab — messagerie (texte E2E, médias, vocal via Cloudflare R2, appels)
  */
 import { useMessaging } from "../hooks/useMessaging.js";
-import { useCryptoKeys } from "../hooks/useCryptoKeys.js";
 import { useMessageExtras } from "../hooks/useMessageExtras.js";
 import { Fragment, useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from "react";
 import {
@@ -107,9 +106,9 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
   const [conversations, setConversations] = useState([]);
   const [activeChat, setActiveChat] = useState(null);
   const messaging = useMessaging(activeChat?.id, id, activeChat?.otherUserId);
+  const { privateKey } = messaging;
   const messages = messaging.messages || [];
   const extras = useMessageExtras(activeChat?.id, id, messages);
-  const { privateKey } = useCryptoKeys(id);
   const [previews, setPreviews] = useState({}); // id du dernier message -> texte déchiffré
   const previewsRef = useRef({});
   const readMarkedRef = useRef(new Set());

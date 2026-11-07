@@ -16,7 +16,6 @@ import { FutureModulePanel } from "../components/FutureModulePanel.jsx";
 import { saveLastTab, loadLastTab } from "../lib/perf.js";
 import { supabase } from "../supabaseClient.js";
 // Chemin corrigé vers useCryptoKeys.js
-import { useCryptoKeys } from "../features/messaging/hooks/useCryptoKeys.js";
 import { useIncomingCalls } from "../features/messaging/hooks/useIncomingCalls.js";
 import { useIncomingCallFromPush } from "../features/messaging/hooks/useIncomingCallFromPush.js";
 import { messageService } from "../features/messaging/lib/messageService.js";
@@ -118,7 +117,6 @@ export function MainShell() {
 
   const { showToast } = useToast();
   const id = user?.id;
-  useCryptoKeys(isAnonymous ? null : id);
   const { incoming: realtimeIncoming, clear: clearRealtimeIncoming } = useIncomingCalls(isAnonymous ? null : id);
   const { incoming: pushIncoming, clear: clearPushIncoming } = useIncomingCallFromPush(isAnonymous ? null : id);
   const incoming = pushIncoming || realtimeIncoming;
