@@ -1,6 +1,19 @@
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "../../../supabaseClient.js";
-import { ensureKeyPair } from "../lib/crypto";
+import {
+  ensureKeyPair,
+  clearLocalKeyPair,
+  restoreFromBackup,
+} from "../lib/crypto";
+
+/**
+ * Modes de récupération exposés à l'interface :
+ *  - "setup"  : compte sans clé → créer une phrase secrète
+ *  - "unlock" : clé du compte absente de cet appareil, sauvegarde disponible
+ *               → saisir la phrase secrète pour retrouver les conversations
+ *  - "reset"  : clé du compte absente et aucune sauvegarde
+ *               → nouvelle clé (anciens messages illisibles sur cet appareil)
+ */
 
 // Évite de republier inutilement une clé déjà vérifiée.
 const published = new Map();
@@ -31,7 +44,6 @@ function parsePublicKey(value) {
 }
 
 // Compare les paramètres cryptographiques essentiels.
-// Comparer uniquement n ne suffit pas.
 function samePublicKey(a, b) {
   const keyA = parsePublicKey(a);
   const keyB = parsePublicKey(b);
@@ -64,9 +76,7 @@ async function getProfilePublicKey(userId) {
     .maybeSingle();
 
   if (error) {
-    throw new Error(
-      "Impossible de vérifier la clé publique : " + error.message
-    );
+    throw new Error("Impossible de vérifier la clé publique : " + error.message);
   }
 
   if (!data) {
@@ -107,7 +117,7 @@ async function publishPublicKey(userId, publicKeyJwk) {
       if (!samePublicKey(serverKey, publicKeyJwk)) {
         throw new Error(
           "Une autre clé publique est déjà enregistrée pour ce compte. " +
-          "Une vérification ou une procédure de récupération est nécessaire."
+            "Une vérification ou une procédure de récupération est nécessaire."
         );
       }
 
@@ -116,7 +126,6 @@ async function publishPublicKey(userId, publicKeyJwk) {
     }
 
     // Publication uniquement si la colonne est encore vide.
-    // Cela évite d'écraser une clé ajoutée simultanément.
     const { data, error } = await supabase
       .from("profiles")
       .update({ public_key: publicKeyJwk })
@@ -157,11 +166,37 @@ async function publishPublicKey(userId, publicKeyJwk) {
   }
 }
 
+// Demande au navigateur de ne pas purger IndexedDB (cause fréquente de perte).
+async function requestPersistentStorage() {
+  try {
+    if (
+      navigator.storage?.persist &&
+      !(await navigator.storage.persisted())
+    ) {
+      await navigator.storage.persist();
+    }
+  } catch {
+    // Non bloquant.
+  }
+}
+
+async function saveBackupToAccount(backup) {
+  const { error } = await supabase.auth.updateUser({
+    data: { e2e_backup: backup },
+  });
+
+  if (error) {
+    throw new Error("Sauvegarde de la clé impossible : " + error.message);
+  }
+}
+
 export function useCryptoKeys(userId) {
   const [privateKey, setPrivateKey] = useState(null);
   const [publicKeyJwk, setPublicKeyJwk] = useState(null);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState(null);
+  const [mode, setMode] = useState(null); // "setup" | "unlock" | "reset" | null
+  const [retry, setRetry] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -170,10 +205,13 @@ export function useCryptoKeys(userId) {
     setPublicKeyJwk(null);
     setReady(false);
     setError(null);
+    setMode(null);
 
     if (!userId) return undefined;
 
     async function initialize() {
+      let hasBackup = false;
+
       try {
         // Vérifie que le compte connecté correspond au profil demandé.
         const {
@@ -189,36 +227,58 @@ export function useCryptoKeys(userId) {
           throw new Error("Utilisateur non authentifié ou compte incorrect.");
         }
 
-        // Une clé distante existante interdit la création silencieuse
-        // d'une nouvelle clé locale après perte du stockage.
+        hasBackup = !!user.user_metadata?.e2e_backup;
+
+        await requestPersistentStorage();
+
         const serverPublicKey = await getProfilePublicKey(userId);
 
-        // Récupération ou création de la paire de clés locale.
-        const {
-          publicKeyJwk: localPublicKey,
-          privateKey: localPrivateKey,
-        } = await ensureKeyPair({ allowCreate: !serverPublicKey });
+        // Ne crée JAMAIS de clé automatiquement.
+        const pair = await ensureKeyPair({ allowCreate: false });
 
         if (cancelled) return;
 
-        const validPublicKey = parsePublicKey(localPublicKey);
+        // Aucune clé locale sur cet appareil.
+        if (!pair) {
+          if (hasBackup) setMode("unlock");
+          else if (serverPublicKey) setMode("reset");
+          else setMode("setup");
 
-        if (!validPublicKey || !localPrivateKey) {
+          setError("Clé de chiffrement introuvable sur cet appareil.");
+          return;
+        }
+
+        const validPublicKey = parsePublicKey(pair.publicKeyJwk);
+
+        if (!validPublicKey || !pair.privateKey) {
           throw new Error("Paire de clés cryptographiques invalide.");
         }
 
-        // Publication sécurisée sans remplacement silencieux.
+        // La clé locale diffère de celle du compte.
+        if (serverPublicKey && !samePublicKey(serverPublicKey, validPublicKey)) {
+          setMode(hasBackup ? "unlock" : "reset");
+          setError(
+            "La clé de cet appareil ne correspond pas à celle du compte."
+          );
+          return;
+        }
+
+        // Publication sans remplacement silencieux.
         await publishPublicKey(userId, validPublicKey);
 
         if (cancelled) return;
 
-        setPrivateKey(localPrivateKey);
+        setPrivateKey(pair.privateKey);
         setPublicKeyJwk(validPublicKey);
         setReady(true);
       } catch (err) {
         console.error("[useCryptoKeys]", err);
 
         if (!cancelled) {
+          if (/autre clé publique/i.test(err?.message || "")) {
+            setMode(hasBackup ? "unlock" : "reset");
+          }
+
           setPrivateKey(null);
           setPublicKeyJwk(null);
           setReady(false);
@@ -232,7 +292,100 @@ export function useCryptoKeys(userId) {
     return () => {
       cancelled = true;
     };
-  }, [userId]);
+  }, [userId, retry]);
+
+  // ─── Actions de récupération ──────────────────────────────────────────────
+
+  // Première configuration : crée la clé + la sauvegarde protégée.
+  const setupKeys = useCallback(async (passphrase) => {
+    const pair = await ensureKeyPair({ allowCreate: true, passphrase });
+
+    if (!pair?.backup) {
+      throw new Error("Une clé existe déjà sur cet appareil.");
+    }
+
+    try {
+      await saveBackupToAccount(pair.backup);
+    } catch (err) {
+      await clearLocalKeyPair();
+      throw err;
+    }
+
+    setRetry((n) => n + 1);
+  }, []);
+
+  // Nouvel appareil / stockage vidé : restaure la clé depuis la sauvegarde.
+  const unlockKeys = useCallback(
+    async (passphrase) => {
+      const {
+        data: { user },
+        error: authError,
+      } = await supabase.auth.getUser();
+
+      if (authError || !user) {
+        throw new Error("Vérification de session impossible.");
+      }
+
+      const backup = user.user_metadata?.e2e_backup;
+
+      if (!backup) {
+        throw new Error("Aucune sauvegarde de clé trouvée pour ce compte.");
+      }
+
+      const restored = await restoreFromBackup(backup, passphrase);
+      const serverKey = await getProfilePublicKey(userId);
+
+      if (serverKey && !samePublicKey(serverKey, restored.publicKeyJwk)) {
+        await clearLocalKeyPair();
+        throw new Error(
+          "Cette sauvegarde ne correspond plus à la clé du compte. " +
+            "Utilisez la réinitialisation."
+        );
+      }
+
+      setRetry((n) => n + 1);
+    },
+    [userId]
+  );
+
+  // Aucune sauvegarde (ou phrase oubliée) : nouvelle clé.
+  // Les anciens messages ne seront plus lisibles avec cette nouvelle clé.
+  const resetKeys = useCallback(
+    async (passphrase) => {
+      const pair = await ensureKeyPair({ allowCreate: true, passphrase });
+
+      if (!pair?.backup) {
+        throw new Error(
+          "Une clé existe déjà sur cet appareil : supprimez-la avant de réinitialiser."
+        );
+      }
+
+      const { data, error: updateError } = await supabase
+        .from("profiles")
+        .update({ public_key: pair.publicKeyJwk })
+        .eq("id", userId)
+        .select("id");
+
+      if (updateError || !data?.length) {
+        await clearLocalKeyPair();
+        throw new Error(
+          updateError?.message || "Remplacement de la clé refusé par le serveur."
+        );
+      }
+
+      try {
+        await saveBackupToAccount(pair.backup);
+      } catch (err) {
+        // La clé est remplacée sur le serveur ; on garde la clé locale.
+        console.warn("[useCryptoKeys] Sauvegarde non enregistrée.");
+        throw err;
+      }
+
+      published.delete(userId);
+      setRetry((n) => n + 1);
+    },
+    [userId]
+  );
 
   // Récupération et validation de la clé publique d'un destinataire.
   const fetchRecipientPublicKey = useCallback(async (recipientId) => {
@@ -241,16 +394,16 @@ export function useCryptoKeys(userId) {
     }
 
     try {
-      const { data, error } = await supabase
+      const { data, error: fetchError } = await supabase
         .from("profiles")
         .select("public_key")
         .eq("id", recipientId)
         .maybeSingle();
 
-      if (error) {
+      if (fetchError) {
         console.warn(
           "[useCryptoKeys] Lecture de la clé destinataire impossible:",
-          error.message
+          fetchError.message
         );
         return null;
       }
@@ -269,6 +422,10 @@ export function useCryptoKeys(userId) {
     publicKeyJwk,
     ready,
     error,
+    mode,
+    setupKeys,
+    unlockKeys,
+    resetKeys,
     fetchRecipientPublicKey,
   };
 }
