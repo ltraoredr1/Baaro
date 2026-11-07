@@ -6,19 +6,23 @@ import { useMessageExtras } from "../hooks/useMessageExtras.js";
 import { Fragment, useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from "react";
 import {
   ArrowLeft, MessageCircle, Plus, X, Search,
-  Loader2, ChevronDown, Pin, Wrench
+  Loader2, ChevronDown, Pin, Wrench, Lock, Copy, Check
 } from "lucide-react";
 import { COLORS as THEME_COLORS } from "../../../theme.js";
 import { supabase } from "../../../supabaseClient.js";
 import { uploadChatFile, uploadVoiceBlob, mimeToMessageType } from "../../../lib/chatMedia.js";
 import { createCallRoom, getCallToken, createCallRecord } from "../lib/chatCalls.js";
 import { ChatCallModal } from "./ChatCallModal.jsx";
-import { deserializePayload, decryptMessage } from "../lib/crypto.js";
+import {
+  deserializePayload,
+  decryptMessage,
+  generateRecoveryCode,
+  normalizeRecoveryInput,
+} from "../lib/crypto.js";
 import { makeClientMessageId, markMessageRead } from "../lib/chatFeatures.js";
 import { ChatInput, MAX_FILE_MB } from "./ChatInput.jsx";
 import { MessageBubble, messagePreviewText } from "./MessageBubble.jsx";
 import { AutoTranslateToggle } from "./AutoTranslateToggle.jsx";
-import { KeyRecoveryPanel } from "./KeyRecoveryPanel.jsx";
 import { messageService } from "../lib/messageService.js";
 import { isValidAuthUserId } from "../../../lib/currentUserId.js";
 
@@ -93,6 +97,233 @@ function Avatar({ src, flag, size = 44, bg }) {
       ) : (
         <div className="w-full h-full flex items-center justify-center text-lg">{flag || "🌍"}</div>
       )}
+    </div>
+  );
+}
+
+// Configuration / récupération des clés de chiffrement (code de récupération).
+// setup : nouveau code · unlock : saisir le code sur un nouvel appareil · reset : nouvelle clé
+function KeyRecoveryPanel({ mode, C, onSetup, onUnlock, onReset }) {
+  const [view, setView] = useState(mode); // permet de passer de "unlock" à "reset"
+  const [code] = useState(generateRecoveryCode); // généré une seule fois
+  const [input, setInput] = useState("");
+  const [saved, setSaved] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const generating = view === "setup" || view === "reset";
+
+  const texts = {
+    setup: {
+      title: "Protège tes messages",
+      body: "Voici ton code de récupération. Il te permettra de retrouver tes conversations sur un nouvel appareil. Il ne peut pas être récupéré : conserve-le en lieu sûr.",
+      button: "Activer la messagerie sécurisée",
+    },
+    unlock: {
+      title: "Retrouve tes conversations",
+      body: "Saisis ton code de récupération pour déverrouiller tes messages sur cet appareil.",
+      button: "Déverrouiller",
+    },
+    reset: {
+      title: "Nouvelle clé de chiffrement",
+      body: "Aucune sauvegarde n'est utilisable. Une nouvelle clé sera créée : les anciens messages ne seront pas lisibles sur cet appareil. Note bien ton nouveau code de récupération.",
+      button: "Créer une nouvelle clé",
+    },
+  }[view];
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(code);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setErr("Copie impossible : recopie le code à la main.");
+    }
+  };
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setErr("");
+
+    if (generating && !saved) {
+      setErr("Confirme que tu as noté ton code de récupération.");
+      return;
+    }
+    if (!generating && !input.trim()) {
+      setErr("Saisis ton code de récupération.");
+      return;
+    }
+
+    setBusy(true);
+    try {
+      if (view === "setup") await onSetup(code);
+      else if (view === "reset") await onReset(code);
+      else await onUnlock(normalizeRecoveryInput(input));
+    } catch (error) {
+      setErr(
+        /incorrecte/i.test(error?.message || "")
+          ? "Code de récupération incorrect."
+          : error?.message || "Opération impossible."
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-col items-center px-6 py-12 max-w-md mx-auto w-full">
+      <div
+        className="w-14 h-14 rounded-full flex items-center justify-center mb-4"
+        style={{ background: C.surface2 }}
+      >
+        <Lock size={24} style={{ color: C.gold }} />
+      </div>
+
+      <h3 className="text-lg font-bold mb-2 text-center" style={{ color: C.ivory }}>
+        {texts.title}
+      </h3>
+      <p className="text-sm text-center mb-6" style={{ color: C.muted }}>
+        {texts.body}
+      </p>
+
+      <form onSubmit={submit} className="w-full space-y-3">
+        {generating ? (
+          <>
+            <div
+              className="rounded-2xl border px-3 py-4 text-center"
+              style={{ background: C.surface, borderColor: C.borderGold }}
+            >
+              <p
+                className="font-mono text-base font-semibold tracking-wider break-all select-all"
+                style={{ color: C.gold }}
+              >
+                {code}
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={copy}
+              className="w-full py-2.5 rounded-2xl text-xs font-semibold flex items-center justify-center gap-2 border"
+              style={{ borderColor: C.border, color: C.ivory, background: C.surface }}
+            >
+              {copied ? <Check size={14} /> : <Copy size={14} />}
+              {copied ? "Copié" : "Copier le code"}
+            </button>
+
+            <label className="flex items-start gap-2 text-xs pt-1" style={{ color: C.muted }}>
+              <input
+                type="checkbox"
+                checked={saved}
+                onChange={(e) => setSaved(e.target.checked)}
+                className="mt-0.5"
+              />
+              J'ai noté mon code de récupération (gestionnaire de mots de passe, papier…).
+            </label>
+          </>
+        ) : (
+          <input
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder="XXXX-XXXX-XXXX-XXXX-XXXX"
+            autoComplete="off"
+            autoCapitalize="characters"
+            spellCheck={false}
+            className="w-full px-4 py-3 rounded-2xl border text-sm font-mono outline-none"
+            style={{ background: C.surface, borderColor: C.borderGold, color: C.ivory }}
+          />
+        )}
+
+        {err && (
+          <p role="alert" className="text-xs" style={{ color: "#fca5a5" }}>
+            {err}
+          </p>
+        )}
+
+        <button
+          type="submit"
+          disabled={busy}
+          className="w-full py-3 rounded-2xl text-sm font-semibold flex items-center justify-center gap-2 disabled:opacity-60"
+          style={{
+            background: `linear-gradient(135deg, ${C.gold}, #C49A3C)`,
+            color: "#0B1220",
+          }}
+        >
+          {busy && <Loader2 size={16} className="animate-spin" />}
+          {texts.button}
+        </button>
+
+        {view === "unlock" && (
+          <button
+            type="button"
+            onClick={() => {
+              setErr("");
+              setView("reset");
+            }}
+            className="w-full text-xs py-2"
+            style={{ color: C.muted }}
+          >
+            Code perdu ? Créer une nouvelle clé
+          </button>
+        )}
+      </form>
+    </div>
+  );
+}
+
+// Bandeau affiché une seule fois après l'activation automatique de la messagerie sécurisée.
+function RecoveryCodeNotice({ code, C, onDone }) {
+  const [copied, setCopied] = useState(false);
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(code);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      /* copie impossible : l'utilisateur peut recopier à la main */
+    }
+  };
+
+  return (
+    <div
+      role="status"
+      className="rounded-2xl border p-3 mb-3"
+      style={{ background: C.surface, borderColor: C.borderGold }}
+    >
+      <p className="text-sm font-semibold mb-1" style={{ color: C.ivory }}>
+        🔒 Messagerie sécurisée activée
+      </p>
+      <p className="text-xs mb-2" style={{ color: C.muted }}>
+        Note ce code de récupération : il te permettra de retrouver tes conversations sur un
+        nouvel appareil. Il ne sera plus affiché ensuite.
+      </p>
+      <p
+        className="font-mono text-sm font-semibold tracking-wider break-all select-all text-center py-2"
+        style={{ color: C.gold }}
+      >
+        {code}
+      </p>
+      <div className="flex gap-2">
+        <button
+          type="button"
+          onClick={copy}
+          className="flex-1 py-2 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 border"
+          style={{ borderColor: C.border, color: C.ivory, background: C.surface2 }}
+        >
+          {copied ? <Check size={14} /> : <Copy size={14} />}
+          {copied ? "Copié" : "Copier"}
+        </button>
+        <button
+          type="button"
+          onClick={onDone}
+          className="flex-1 py-2 rounded-xl text-xs font-semibold"
+          style={{ background: `linear-gradient(135deg, ${C.gold}, #C49A3C)`, color: "#0B1220" }}
+        >
+          J'ai noté mon code
+        </button>
+      </div>
     </div>
   );
 }
@@ -827,6 +1058,16 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
             </div>
           </div>
 
+          {messaging.recoveryCode && !messaging.keysMode && (
+            <div className="px-3 pt-3">
+              <RecoveryCodeNotice
+                code={messaging.recoveryCode}
+                C={C}
+                onDone={messaging.acknowledgeRecoveryCode}
+              />
+            </div>
+          )}
+
           {/* Clés E2E : écran de configuration / récupération, sinon bandeau d'erreur simple */}
           {messaging.keysMode ? (
             <div className="flex-1 min-h-0 overflow-y-auto">
@@ -963,7 +1204,6 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
             <ChatInput
               disabled={uploading}
               placeholder="Écrire un message…"
-              draftKey={`baaro:draft:${id}:${activeChat.id}`}
               onSend={handleSendText}
               onSendMedia={handleSendMedia}
               onSendVoice={handleSendVoice}
@@ -996,6 +1236,14 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
           <Plus size={16} /> Nouveau
         </button>
       </div>
+
+      {messaging.recoveryCode && !messaging.keysMode && (
+        <RecoveryCodeNotice
+          code={messaging.recoveryCode}
+          C={C}
+          onDone={messaging.acknowledgeRecoveryCode}
+        />
+      )}
 
       {conversations.length > 4 && (
         <div className="relative mb-4">
