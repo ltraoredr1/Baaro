@@ -9,6 +9,8 @@ import {
   enableBiometric,
   verifyBiometric,
 } from "../../lib/biometric.js";
+import { wipeSecureStorage } from "../../lib/messageOutbox.js";
+import { clearSmsNumbers } from "../../lib/smsFallback.js";
 
 const OK_KEY = "baaro_bio_ok";
 const FRESH_KEY = "baaro_bio_fresh";
@@ -111,6 +113,10 @@ export default function BiometricGate({ children }) {
 
   const usePassword = async () => {
     ss.del(OK_KEY);
+    try {
+      await wipeSecureStorage();
+    } catch {}
+    clearSmsNumbers();
     await supabase.auth.signOut();
     window.location.reload();
   };

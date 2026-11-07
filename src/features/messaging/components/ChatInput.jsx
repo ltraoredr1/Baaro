@@ -2,10 +2,12 @@
  * src/features/messaging/components/ChatInput.jsx
  * Barre de saisie : texte, pièces jointes, collage d'image, vocal (enregistrer / annuler / envoyer),
  * bandeau "réponse à…", signal de saisie (onTyping) et BROUILLON conservé (prop draftKey).
+ * Le brouillon est stocké CHIFFRÉ (jamais en clair dans localStorage).
  * L'enregistrement vocal est géré ICI uniquement (MessagesTab reçoit le résultat via onSendVoice).
  */
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import { Mic, Send, Paperclip, Square, Trash2, Reply, X, Phone, Video } from "lucide-react";
+import { getSecureItem, setSecureItem } from "../../../lib/messageOutbox.js";
 
 export const MAX_FILE_MB = 25;
 const MIN_VOICE_MS = 800;
@@ -23,15 +25,6 @@ function formatTime(seconds) {
   return `${m}:${s < 10 ? "0" : ""}${s}`;
 }
 
-function loadDraft(key) {
-  if (!key) return "";
-  try {
-    return localStorage.getItem(key) || "";
-  } catch {
-    return "";
-  }
-}
-
 export function ChatInput({
   onSend,
   onSendMedia,
@@ -47,7 +40,8 @@ export function ChatInput({
   disabled,
   placeholder = "Message...",
 }) {
-  const [text, setText] = useState(() => loadDraft(draftKey));
+  const [text, setText] = useState("");
+  const [draftReady, setDraftReady] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
 
@@ -68,16 +62,49 @@ export function ChatInput({
     [onError]
   );
 
-  // Brouillon : enregistré à chaque modification, effacé quand le champ est vide (après envoi)
+  // Chargement du brouillon chiffré (+ migration d'un ancien brouillon en clair)
   useEffect(() => {
-    if (!draftKey) return;
-    try {
-      if (text) localStorage.setItem(draftKey, text);
-      else localStorage.removeItem(draftKey);
-    } catch {
-      /* stockage indisponible */
+    let alive = true;
+    setDraftReady(false);
+    setText("");
+    if (!draftKey) {
+      setDraftReady(true);
+      return undefined;
     }
-  }, [text, draftKey]);
+    (async () => {
+      let saved = await getSecureItem(draftKey);
+      if (saved == null) {
+        let legacy = null;
+        try {
+          legacy = localStorage.getItem(draftKey);
+        } catch {
+          /* stockage indisponible */
+        }
+        if (legacy && !legacy.startsWith("v1.")) {
+          saved = legacy;
+          try {
+            localStorage.removeItem(draftKey); // le clair disparaît d'abord
+          } catch {
+            /* ignore */
+          }
+          await setSecureItem(draftKey, legacy);
+        }
+      }
+      if (!alive) return;
+      if (saved) setText((cur) => cur || saved);
+      setDraftReady(true);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [draftKey]);
+
+  // Sauvegarde chiffrée (anti-rebond) ; suppression quand le champ est vide
+  useEffect(() => {
+    if (!draftKey || !draftReady) return undefined;
+    const t = setTimeout(() => setSecureItem(draftKey, text), text ? 400 : 0);
+    return () => clearTimeout(t);
+  }, [text, draftKey, draftReady]);
 
   // Hauteur auto du textarea
   useEffect(() => {
@@ -117,6 +144,7 @@ export function ChatInput({
     if (!t || disabled) return;
     onSend?.(t);
     setText("");
+    if (draftKey) setSecureItem(draftKey, "");
   };
 
   const sendFile = (file) => {

@@ -8,6 +8,7 @@
  * - Filtrage expires_at côté client
  * - Médias : pas de gros fichiers dans Supabase, media_url pointe vers R2
  * - Récupération des clés E2E : keysMode / setupKeys / unlockKeys / resetKeys (voir useCryptoKeys)
+ * - Boîte d'envoi hors ligne CHIFFRÉE au repos (voir lib/messageOutbox.js, initOutbox à attendre)
  */
 import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "../../../supabaseClient.js";
@@ -21,6 +22,7 @@ import { useCryptoKeys } from "./useCryptoKeys.js";
 import { messageService } from "../lib/messageService.js";
 import { sendSmsFallback, cacheSmsNumberFromProfile } from "../../../lib/smsFallback.js";
 import {
+  initOutbox,
   enqueueOutbox,
   removeFromOutbox,
   updateOutbox,
@@ -594,41 +596,52 @@ export function useMessaging(conversation_id, current_user_id, recipient_id) {
   sendMessageRef.current = sendMessage;
   const flushingRef = useRef(false);
 
-  // Réaffiche (en « attente ») les messages mis en boîte d'envoi, même après fermeture de l'app
+  // Réaffiche (en « attente ») les messages mis en boîte d'envoi, même après fermeture de l'app.
+  // La boîte d'envoi est chiffrée au repos : on attend son déchiffrement (initOutbox) avant de la lire.
   useEffect(() => {
-    if (!conversation_id || !current_user_id) return;
-    const queued = getOutbox(current_user_id, conversation_id);
-    if (!queued.length) return;
-    setMessages((prev) =>
-      mergeMessages(
-        prev,
-        queued
-          .filter((q) => !prev.some((m) => m.client_message_id === q.clientMessageId && !isTmp(m.id)))
-          .map((q) => ({
-            id: `tmp-${q.clientMessageId}`,
-            client_message_id: q.clientMessageId,
-            conversation_id,
-            sender_id: current_user_id,
-            recipient_id: q.recipientId,
-            type: "text",
-            text: "",
-            plaintext: q.text,
-            encrypted: true,
-            decryptFailed: false,
-            reply_to_id: q.replyToId || null,
-            expires_at: q.expiresAt || null,
-            created_at: new Date(q.queuedAt).toISOString(),
-            pending: true,
-            failed: false,
-          }))
-      )
-    );
+    if (!conversation_id || !current_user_id) return undefined;
+    let alive = true;
+    initOutbox(current_user_id).then(() => {
+      if (!alive) return;
+      const queued = getOutbox(current_user_id, conversation_id);
+      if (!queued.length) return;
+      setMessages((prev) =>
+        mergeMessages(
+          prev,
+          queued
+            .filter(
+              (q) => !prev.some((m) => m.client_message_id === q.clientMessageId && !isTmp(m.id))
+            )
+            .map((q) => ({
+              id: `tmp-${q.clientMessageId}`,
+              client_message_id: q.clientMessageId,
+              conversation_id,
+              sender_id: current_user_id,
+              recipient_id: q.recipientId,
+              type: "text",
+              text: "",
+              plaintext: q.text,
+              encrypted: true,
+              decryptFailed: false,
+              reply_to_id: q.replyToId || null,
+              expires_at: q.expiresAt || null,
+              created_at: new Date(q.queuedAt).toISOString(),
+              pending: true,
+              failed: false,
+            }))
+        )
+      );
+    });
+    return () => {
+      alive = false;
+    };
   }, [conversation_id, current_user_id]);
 
   // Renvoie la boîte d'envoi (dans l'ordre) dès que le réseau est là et que les clés sont prêtes
   const flushOutbox = useCallback(async () => {
     if (flushingRef.current || isOffline() || !keysReady) return;
     if (!conversation_id || !current_user_id) return;
+    await initOutbox(current_user_id);
     const queued = getOutbox(current_user_id, conversation_id).sort(
       (a, b) => a.queuedAt - b.queuedAt
     );

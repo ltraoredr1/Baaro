@@ -9,6 +9,8 @@ import {
 import { supabase } from "../services/supabase.js";
 import { API_BASE } from "../config.js";
 import { getDeviceId } from "../device.js";
+import { wipeSecureStorage } from "../lib/messageOutbox.js";
+import { clearSmsNumbers } from "../lib/smsFallback.js";
 
 export const AppContext = createContext(null);
 
@@ -174,6 +176,13 @@ function writeProfileCache(user_id, profileData) {
   );
 }
 
+async function wipeLocalPrivateData() {
+  try {
+    await wipeSecureStorage();
+  } catch {}
+  clearSmsNumbers();
+}
+
 export function AppProvider({ children }) {
   const [session, setSession] = useState(null);
   const [user, setUser] = useState(null);
@@ -332,6 +341,7 @@ export function AppProvider({ children }) {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (event, nextSession) => {
       if (!mounted) return;
+      if (event === "SIGNED_OUT") void wipeLocalPrivateData();
       if (nextSession?.user?.is_anonymous) {
         if (!isGuestOkThisSession()) {
           try {
@@ -413,6 +423,7 @@ export function AppProvider({ children }) {
   const logout = useCallback(async () => {
     clearGuestFlags();
     safeRemove(PROFILE_CACHE_KEY);
+    await wipeLocalPrivateData();
     try {
       await supabase.auth.signOut();
     } catch {}

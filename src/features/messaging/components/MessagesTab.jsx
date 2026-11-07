@@ -963,6 +963,7 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
             <ChatInput
               disabled={uploading}
               placeholder="Écrire un message…"
+              draftKey={`baaro:draft:${id}:${activeChat.id}`}
               onSend={handleSendText}
               onSendMedia={handleSendMedia}
               onSendVoice={handleSendVoice}

@@ -61,6 +61,8 @@ import { useSettings } from "../../hooks/useSettings.js";
 import { STORAGE_KEY as LOCAL_KEY } from "../../lib/appSettings.js";
 import { confirmBiometricEnable } from "../../lib/nativeSettings.js";
 import { enableBiometric, disableBiometric } from "../../lib/biometric.js";
+import { wipeSecureStorage } from "../../lib/messageOutbox.js";
+import { clearSmsNumbers } from "../../lib/smsFallback.js";
 import { NotificationPrefsPanel } from "./NotificationPrefsPanel.jsx";
 import NotificationSoundSettings from "./NotificationSoundSettings.jsx";
 import BlockedUsersPanel from "./BlockedUsersPanel.jsx";
@@ -794,7 +796,7 @@ export default function SettingsTab({
     }
   };
 
-  const clearLocalAuthData = () => {
+  const clearLocalAuthData = async () => {
     try {
       localStorage.removeItem(LOCAL_KEY);
       localStorage.removeItem("baaro_settings_v22");
@@ -803,6 +805,12 @@ export default function SettingsTab({
     } catch {
       /* ignore */
     }
+    try {
+      await wipeSecureStorage();
+    } catch {
+      /* ignore */
+    }
+    clearSmsNumbers();
   };
 
   const handleLogout = async () => {
@@ -817,7 +825,7 @@ export default function SettingsTab({
         /* ignore */
       }
     }
-    clearLocalAuthData();
+    await clearLocalAuthData();
     window.location.href = "/";
   };
 
@@ -828,7 +836,7 @@ export default function SettingsTab({
     try {
       await supabase.auth.signOut({ scope: "global" });
       setMessage(t("logout_all_done"));
-      clearLocalAuthData();
+      await clearLocalAuthData();
       setTimeout(() => {
         window.location.href = "/";
       }, 600);
@@ -839,7 +847,7 @@ export default function SettingsTab({
       } catch {
         /* ignore */
       }
-      clearLocalAuthData();
+      await clearLocalAuthData();
       window.location.href = "/";
     } finally {
       setAccountBusy(false);
@@ -861,7 +869,7 @@ export default function SettingsTab({
       } catch {
         await supabase.auth.signOut();
       }
-      clearLocalAuthData();
+      await clearLocalAuthData();
       setMessage(t("delete_done"));
       setTimeout(() => {
         window.location.href = "/";
