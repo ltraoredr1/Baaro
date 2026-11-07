@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback } from "react";
 import { supabase } from "../../../supabaseClient.js";
 import {
   ensureKeyPair,
+  generateRecoveryCode,
+  adoptLegacyKeyPair,
   clearLocalKeyPair,
   restoreFromBackup,
 } from "../lib/crypto";
@@ -190,6 +192,69 @@ async function saveBackupToAccount(backup) {
   }
 }
 
+// ─── Activation automatique au premier usage ────────────────────────────────
+// Le code de récupération est affiché UNE FOIS dans un bandeau non bloquant.
+// Il reste en mémoire locale jusqu'à ce que l'utilisateur confirme l'avoir noté
+// (sinon, fermer l'app trop tôt le ferait perdre : la clé ne peut plus être re-sauvegardée).
+const PENDING_CODE_PREFIX = "baaro_e2e_code_pending:";
+
+function readPendingCode(userId) {
+  try {
+    return localStorage.getItem(PENDING_CODE_PREFIX + userId) || null;
+  } catch {
+    return null;
+  }
+}
+function writePendingCode(userId, code) {
+  try {
+    localStorage.setItem(PENDING_CODE_PREFIX + userId, code);
+  } catch {
+    // ignoré
+  }
+}
+function clearPendingCode(userId) {
+  try {
+    localStorage.removeItem(PENDING_CODE_PREFIX + userId);
+  } catch {
+    // ignoré
+  }
+}
+
+// Une seule création à la fois par compte (React peut lancer l'effet deux fois).
+const autoSetups = new Map();
+
+function autoSetup(userId) {
+  if (!autoSetups.has(userId)) {
+    const task = (async () => {
+      const code = generateRecoveryCode();
+      const pair = await ensureKeyPair({ userId, allowCreate: true, passphrase: code });
+
+      if (!pair?.backup) throw new Error("Création de la clé impossible.");
+
+      // Le code est gardé AVANT l'envoi de la sauvegarde, pour ne jamais le perdre.
+      writePendingCode(userId, code);
+
+      try {
+        await saveBackupToAccount(pair.backup);
+      } catch (err) {
+        clearPendingCode(userId);
+        await clearLocalKeyPair(userId);
+        throw err;
+      }
+
+      return pair;
+    })();
+
+    task.then(
+      () => setTimeout(() => autoSetups.delete(userId), 5000),
+      () => autoSetups.delete(userId)
+    );
+    autoSetups.set(userId, task);
+  }
+
+  return autoSetups.get(userId);
+}
+
 export function useCryptoKeys(userId) {
   const [privateKey, setPrivateKey] = useState(null);
   const [publicKeyJwk, setPublicKeyJwk] = useState(null);
@@ -197,6 +262,7 @@ export function useCryptoKeys(userId) {
   const [error, setError] = useState(null);
   const [mode, setMode] = useState(null); // "setup" | "unlock" | "reset" | null
   const [retry, setRetry] = useState(0);
+  const [recoveryCode, setRecoveryCode] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -206,6 +272,7 @@ export function useCryptoKeys(userId) {
     setReady(false);
     setError(null);
     setMode(null);
+    setRecoveryCode(null);
 
     if (!userId) return undefined;
 
@@ -233,8 +300,18 @@ export function useCryptoKeys(userId) {
 
         const serverPublicKey = await getProfilePublicKey(userId);
 
-        // Ne crée JAMAIS de clé automatiquement.
-        const pair = await ensureKeyPair({ allowCreate: false });
+        // La clé est propre à CE compte. Elle n'est créée automatiquement que si le compte n'en a encore aucune.
+        let pair = await ensureKeyPair({ userId, allowCreate: false });
+
+        // Ancienne clé unique d'avant les clés par compte : reprise seulement si elle est bien la nôtre.
+        if (!pair && serverPublicKey) {
+          pair = await adoptLegacyKeyPair(userId, serverPublicKey);
+        }
+
+        // Premier usage (ni clé sur le serveur, ni sauvegarde) : activation automatique, sans question.
+        if (!pair && !serverPublicKey && !hasBackup) {
+          pair = await autoSetup(userId);
+        }
 
         if (cancelled) return;
 
@@ -270,6 +347,7 @@ export function useCryptoKeys(userId) {
 
         setPrivateKey(pair.privateKey);
         setPublicKeyJwk(validPublicKey);
+        setRecoveryCode(readPendingCode(userId));
         setReady(true);
       } catch (err) {
         console.error("[useCryptoKeys]", err);
@@ -298,7 +376,7 @@ export function useCryptoKeys(userId) {
 
   // Première configuration : crée la clé + la sauvegarde protégée.
   const setupKeys = useCallback(async (passphrase) => {
-    const pair = await ensureKeyPair({ allowCreate: true, passphrase });
+    const pair = await ensureKeyPair({ userId, allowCreate: true, passphrase });
 
     if (!pair?.backup) {
       throw new Error("Une clé existe déjà sur cet appareil.");
@@ -307,12 +385,12 @@ export function useCryptoKeys(userId) {
     try {
       await saveBackupToAccount(pair.backup);
     } catch (err) {
-      await clearLocalKeyPair();
+      await clearLocalKeyPair(userId);
       throw err;
     }
 
     setRetry((n) => n + 1);
-  }, []);
+  }, [userId]);
 
   // Nouvel appareil / stockage vidé : restaure la clé depuis la sauvegarde.
   const unlockKeys = useCallback(
@@ -332,11 +410,11 @@ export function useCryptoKeys(userId) {
         throw new Error("Aucune sauvegarde de clé trouvée pour ce compte.");
       }
 
-      const restored = await restoreFromBackup(backup, passphrase);
+      const restored = await restoreFromBackup(backup, passphrase, userId);
       const serverKey = await getProfilePublicKey(userId);
 
       if (serverKey && !samePublicKey(serverKey, restored.publicKeyJwk)) {
-        await clearLocalKeyPair();
+        await clearLocalKeyPair(userId);
         throw new Error(
           "Cette sauvegarde ne correspond plus à la clé du compte. " +
             "Utilisez la réinitialisation."
@@ -352,12 +430,12 @@ export function useCryptoKeys(userId) {
   // Les anciens messages ne seront plus lisibles avec cette nouvelle clé.
   const resetKeys = useCallback(
     async (passphrase) => {
-      const pair = await ensureKeyPair({ allowCreate: true, passphrase });
+      // Réinitialisation voulue : l'ancienne clé locale (devenue inutile) est remplacée.
+      await clearLocalKeyPair(userId);
+      const pair = await ensureKeyPair({ userId, allowCreate: true, passphrase });
 
       if (!pair?.backup) {
-        throw new Error(
-          "Une clé existe déjà sur cet appareil : supprimez-la avant de réinitialiser."
-        );
+        throw new Error("Création de la nouvelle clé impossible.");
       }
 
       const { data, error: updateError } = await supabase
@@ -367,7 +445,7 @@ export function useCryptoKeys(userId) {
         .select("id");
 
       if (updateError || !data?.length) {
-        await clearLocalKeyPair();
+        await clearLocalKeyPair(userId);
         throw new Error(
           updateError?.message || "Remplacement de la clé refusé par le serveur."
         );
@@ -417,12 +495,20 @@ export function useCryptoKeys(userId) {
     }
   }, []);
 
+  // L'utilisateur confirme avoir noté son code : il n'est plus conservé ni affiché.
+  const acknowledgeRecoveryCode = useCallback(() => {
+    clearPendingCode(userId);
+    setRecoveryCode(null);
+  }, [userId]);
+
   return {
     privateKey,
     publicKeyJwk,
     ready,
     error,
     mode,
+    recoveryCode,
+    acknowledgeRecoveryCode,
     setupKeys,
     unlockKeys,
     resetKeys,
