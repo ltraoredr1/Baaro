@@ -1,4 +1,4 @@
-import { S3Client, PutObjectCommand, HeadObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, HeadObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { applyCors, getAdminClient, requireUser, rateLimitAsync } from "./_shared.js";
 import crypto from "node:crypto";
@@ -68,8 +68,38 @@ export default async function handler(req, res) {
   catch (e) { return res.status(e.status || 401).json({ ok: false, error: e.message || "Non authentifié" }); }
 
   const body = req.body || {};
-  if (!["prepare", "finalize"].includes(body.action)) {
+  if (!["prepare", "finalize", "discard"].includes(body.action)) {
     return res.status(400).json({ ok: false, error: "Action invalide" });
+  }
+
+  // Nettoyage compensatoire : le fichier est sur R2 mais la publication n'a pas été créée.
+  if (body.action === "discard") {
+    const objectKey = String(body.path || "").replace(/^\/+/, "");
+    const folder = objectKey.split("/")[0];
+    if (!FOLDERS.has(folder) || objectKey.includes("..") || !objectKey.startsWith(`${folder}/${user.id}/`)) {
+      return res.status(400).json({ ok: false, error: "Chemin média invalide" });
+    }
+    try {
+      const r2 = getR2();
+      const publicUrl = r2.publicBase ? `${r2.publicBase}/${objectKey}` : null;
+
+      // Garde-fou : on ne supprime jamais un fichier déjà référencé par une vidéo
+      // (ex. insertion réussie mais réponse perdue côté réseau).
+      if (publicUrl) {
+        const { data: refs, error: refError } = await admin
+          .from("videos").select("id").eq("video_url", publicUrl).limit(1);
+        if (refError) throw refError;
+        if (refs?.length) return res.status(200).json({ ok: true, discarded: false, reason: "referenced" });
+      }
+
+      await r2.client.send(new DeleteObjectCommand({ Bucket: r2.bucket, Key: objectKey }));
+      await admin.from("media_assets").delete()
+        .eq("bucket", r2.bucket).eq("object_key", objectKey).eq("owner_id", user.id);
+      return res.status(200).json({ ok: true, discarded: true });
+    } catch (e) {
+      console.error("[media:discard]", e);
+      return res.status(500).json({ ok: false, error: "Nettoyage média impossible" });
+    }
   }
 
   if (body.action === "finalize") {

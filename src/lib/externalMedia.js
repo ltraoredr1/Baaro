@@ -194,6 +194,26 @@ function resized(url, width, quality = 75) {
   }
 }
 
+/**
+ * Nettoyage compensatoire : supprime de R2 un fichier envoyé mais jamais publié.
+ * Au mieux : ne lève jamais d'erreur et renvoie true si le fichier a été supprimé.
+ * (Le serveur refuse de supprimer un fichier déjà référencé par une vidéo.)
+ */
+export async function discardUploadedMedia(path) {
+  if (!path) return false;
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const data = await callMediaApi(
+      { action: "discard", path },
+      session?.access_token
+    );
+    return !!(data?.ok && data.discarded);
+  } catch (error) {
+    console.warn("BAARO nettoyage média:", error);
+    return false;
+  }
+}
+
 export function thumbUrl(url) {
   return resized(url, 400);
 }

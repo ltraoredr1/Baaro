@@ -11,25 +11,32 @@ export function extractHashtags(text = "") {
 }
 
 /** Enregistre les hashtags d'une vidéo (RPC ou fallback client). */
+/** Renvoie true si les hashtags sont enregistrés (ou s'il n'y en a pas), false sinon. */
 export async function registerVideoHashtags(videoId, title, description) {
-  if (!videoId) return;
+  if (!videoId) return true;
   const text = [title, description].filter(Boolean).join(" ");
   try {
     const { error } = await supabase.rpc("register_video_hashtags", {
       p_video_id: videoId,
       p_text: text,
     });
-    if (!error) return;
+    if (!error) return true;
   } catch {
     // fallback ci-dessous
   }
 
   const tags = extractHashtags(text);
-  if (!tags.length) return;
-  await supabase.from("video_hashtags").delete().eq("video_id", videoId);
-  await supabase.from("video_hashtags").insert(
-    tags.map((tag) => ({ video_id: videoId, tag })),
-  );
+  if (!tags.length) return true;
+  try {
+    const removed = await supabase.from("video_hashtags").delete().eq("video_id", videoId);
+    if (removed.error) return false;
+    const inserted = await supabase.from("video_hashtags").insert(
+      tags.map((tag) => ({ video_id: videoId, tag })),
+    );
+    return !inserted.error;
+  } catch {
+    return false;
+  }
 }
 
 export async function getHashtagLeaderboard(tag, limit = 30) {

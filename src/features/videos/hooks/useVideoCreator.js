@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { useToast } from "../../../components/ToastContext.jsx";
-import { uploadExternalMedia } from "../../../lib/externalMedia.js";
+import {
+  discardUploadedMedia,
+  uploadExternalMedia,
+} from "../../../lib/externalMedia.js";
 import { generateAIImage } from "../../../lib/geminiAI.js";
 import {
   looksLikeVideo,
@@ -72,6 +75,9 @@ export function useVideoCreator({
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [filterRendering, setFilterRendering] = useState(false);
+  // Étapes d'une publication : "uploading" (envoi du fichier) → "creating" (ligne vidéo)
+  // → "metadata" (hashtags, réponse) → "done" (entièrement finalisée). null = au repos.
+  const [publishStage, setPublishStage] = useState(null);
 
   const photoInputRef = useRef(null);
   const previewVideoRef = useRef(null);
@@ -283,15 +289,25 @@ export function useVideoCreator({
 
     setUploading(true);
     setUploadProgress(0);
+    setPublishStage("uploading");
 
     const total = selectedFiles.length;
     let done = 0;
     let successCount = 0;
+    let metadataWarnings = 0;
+    let failure = null;
 
-    try {
-      for (const file of selectedFiles) {
-        const base = Math.round((done / total) * 100);
-        const slice = 100 / total;
+    for (const file of selectedFiles) {
+      const base = Math.round((done / total) * 100);
+      const slice = 100 / total;
+
+      // Fichiers déjà sur R2 pour cette publication : à supprimer si la ligne
+      // vidéo n'est jamais créée (suppression compensatoire).
+      const orphans = [];
+      let videoCreated = false;
+
+      try {
+        setPublishStage("uploading");
 
         const durationPromise =
           generated && selectedFiles.length === 1
@@ -326,6 +342,8 @@ export function useVideoCreator({
           onProgress: (pct) =>
             setUploadProgress(base + Math.round((pct / 100) * slice * 0.7)),
         });
+        const uploadedPath = uploaded.path || uploaded.object_key;
+        if (uploadedPath) orphans.push(uploadedPath);
         const publicUrl = uploaded.publicUrl || uploaded.url;
 
         const duration = await durationPromise;
@@ -338,10 +356,14 @@ export function useVideoCreator({
               selectedSound.file,
               "videos",
             );
+            const audioPath = uploadedAudio.path || uploadedAudio.object_key;
+            if (audioPath) orphans.push(audioPath);
             soundUrl = uploadedAudio.publicUrl || uploadedAudio.url;
           }
         }
 
+        // Étape 2 : création de la publication.
+        setPublishStage("creating");
         const collabFields = buildCollabPayload(collab);
 
         const { data: created, error: dbError } = await insertVideo(
@@ -370,51 +392,101 @@ export function useVideoCreator({
             : {},
         );
 
-        if (dbError) throw dbError;
+        if (dbError || !created?.id) {
+          throw dbError || new Error("Publication non créée");
+        }
 
-        await registerVideoHashtags(
-          created?.id,
+        // À partir d'ici la publication existe : plus aucun nettoyage de fichier,
+        // et un échec secondaire ne doit plus la faire passer pour échouée.
+        videoCreated = true;
+        successCount += 1;
+
+        // Étape 3 : métadonnées complémentaires (non bloquantes).
+        setPublishStage("metadata");
+        const hashtagsOk = await registerVideoHashtags(
+          created.id,
           uploadTitle,
           uploadDescription,
+        ).catch(() => false);
+        if (!hashtagsOk) {
+          metadataWarnings += 1;
+          console.warn("BAARO hashtags non enregistrés pour", created.id);
+        }
+      } catch (error) {
+        console.error(error);
+        failure = error;
+
+        // Fichier envoyé mais publication jamais créée : on le supprime de R2.
+        if (!videoCreated && orphans.length) {
+          await Promise.all(orphans.map((path) => discardUploadedMedia(path)));
+        }
+      }
+
+      if (failure) break;
+
+      done += 1;
+      setUploadProgress(Math.round((done / total) * 100));
+    }
+
+    try {
+      if (successCount > 0) {
+        // Réponse à un commentaire : métadonnée, non bloquante.
+        if (!failure && collab?.replyToCommentId) {
+          const { error: replyError } = await supabase
+            .from("video_comments")
+            .update({ has_video_reply: true })
+            .eq("id", collab.replyToCommentId);
+          if (replyError) {
+            metadataWarnings += 1;
+            console.warn("BAARO réponse vidéo non marquée:", replyError);
+          }
+        }
+
+        onRewardPoints?.("publish_video", "Vidéos publiées");
+        showPointsReward?.(
+          25 * successCount,
+          `${successCount} vidéo(s) publiée(s)`,
         );
-
-        successCount += 1;
-        done += 1;
-        setUploadProgress(Math.round((done / total) * 100));
       }
 
-      if (collab?.replyToCommentId && successCount > 0) {
-        await supabase
-          .from("video_comments")
-          .update({ has_video_reply: true })
-          .eq("id", collab.replyToCommentId);
+      if (!failure) {
+        setPublishStage("done");
+        showToast(
+          successCount === 1
+            ? "Vidéo publiée avec succès 🎉"
+            : `${successCount} vidéos publiées avec succès 🎉`,
+          "success",
+        );
+        if (metadataWarnings > 0) {
+          showToast(
+            "Publiée, mais certains détails (hashtags…) n'ont pas pu être enregistrés.",
+            "info",
+          );
+        }
+        setShowUpload(false);
+        resetUpload();
+        filter?.reset();
+      } else if (successCount > 0) {
+        // Échec partiel : ce qui est publié reste publié, on garde le reste à renvoyer.
+        showToast(
+          `${successCount} vidéo(s) publiée(s) sur ${total}. Échec : ${
+            failure.message || "publication impossible"
+          }`,
+          "error",
+        );
+        setSelectedFiles((prev) => prev.slice(successCount));
+      } else {
+        showToast(
+          `Erreur : ${failure.message || "publication impossible"}`,
+          "error",
+        );
       }
 
-      onRewardPoints?.("publish_video", "Vidéos publiées");
-      showPointsReward?.(
-        25 * successCount,
-        `${successCount} vidéo(s) publiée(s)`,
-      );
-      showToast(
-        successCount === 1
-          ? "Vidéo publiée avec succès 🎉"
-          : `${successCount} vidéos publiées avec succès 🎉`,
-        "success",
-      );
-
-      setShowUpload(false);
-      resetUpload();
-      filter?.reset();
-      await loadVideos();
-    } catch (error) {
-      console.error(error);
-      showToast(
-        `Erreur : ${error.message || "publication impossible"}`,
-        "error",
-      );
+      if (successCount > 0) await loadVideos();
     } finally {
       setUploading(false);
       setUploadProgress(0);
+      setPublishStage(null);
     }
   };
 
@@ -444,6 +516,7 @@ export function useVideoCreator({
     uploading,
     uploadProgress,
     filterRendering,
+    publishStage,
     fileInputRef,
     photoInputRef,
     previewVideoRef,
