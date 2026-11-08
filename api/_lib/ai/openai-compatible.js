@@ -8,10 +8,14 @@ const MISTRAL_DEFAULT_MODEL = "ministral-3b-latest";
 const GEMINI_DEFAULT_MODEL = "gemini-2.5-flash-lite";
 
 // Température basse par défaut : moins d'inventions sur les faits.
-// Réglable avec BAARO_AI_TEMPERATURE (0 à 1).
-function aiTemperature() {
-  const value = Number(process.env.BAARO_AI_TEMPERATURE);
-  return Number.isFinite(value) && value >= 0 && value <= 1 ? value : 0.3;
+// BAARO_AI_TEMPERATURE (0 à 1), si définie, s'applique à tous les modes ;
+// sinon on utilise la valeur demandée par le mode (IA / Griot), ou 0.3.
+function aiTemperature(requested) {
+  const env = process.env.BAARO_AI_TEMPERATURE;
+  const value = env === undefined || env === "" ? NaN : Number(env);
+  if (Number.isFinite(value) && value >= 0 && value <= 1) return value;
+  const asked = Number(requested);
+  return Number.isFinite(asked) && asked >= 0 && asked <= 1 ? asked : 0.3;
 }
 
 function parseModelList(value) {
@@ -48,6 +52,7 @@ export async function callOpenAICompatible({
   messages,
   system,
   maxTokens,
+  temperature,
 }) {
   const isGemini = String(base || "").includes(
     "generativelanguage.googleapis.com"
@@ -119,7 +124,7 @@ export async function callOpenAICompatible({
         model: activeModel,
         messages: formattedMessages,
         max_tokens: tokenLimit,
-        temperature: aiTemperature(),
+        temperature: aiTemperature(temperature),
       }),
     });
 
@@ -181,7 +186,7 @@ export async function callOpenAICompatible({
 
   const generationConfig = {
     maxOutputTokens: tokenLimit,
-    temperature: aiTemperature(),
+    temperature: aiTemperature(temperature),
   };
 
   let lastError = null;

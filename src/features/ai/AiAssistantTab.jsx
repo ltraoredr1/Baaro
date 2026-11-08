@@ -29,19 +29,18 @@ import { supabase } from "../../supabaseClient.js";
 import { useSettings } from "../../hooks/useSettings.js";
 
 const PRESETS_NORMAL = [
-  { icon: Coins, text: "Comment maximiser mes points aujourd'hui ?" },
-  { icon: Swords, text: "Propose-moi 3 sujets de débat viraux" },
+  { icon: MessageSquare, text: "Résume ce post en points clés" },
+  { icon: Swords, text: "Prépare-moi un débat : arguments pour et contre" },
+  { icon: Zap, text: "Aide-moi à répondre à un message difficile" },
   { icon: ImageIcon, text: "Génère une image verticale pour ma story" },
-  { icon: MessageSquare, text: "Idée de publication engageante" },
-  { icon: Zap, text: "Analyse mon activité BAARO et donne des conseils" },
+  { icon: Coins, text: "Idée de publication engageante" },
 ];
 const PRESETS_GRIOT = [
   { icon: MessageSquare, text: "Griot, donne-moi un conseil pour aujourd'hui" },
   { icon: Swords, text: "Griot, un proverbe pour mon cœur brisé ?" },
   { icon: Coins, text: "Griot, comment régler une palabre entre amis ?" },
   { icon: Zap, text: "Griot, raconte-moi l'histoire de Soundiata" },
-  { icon: ImageIcon, text: "Griot, résume ce post en points clés" },
-  { icon: Zap, text: "Griot, cherche les informations à jour sur ce sujet" },
+  { icon: ImageIcon, text: "Griot, parle-moi d'une tradition du Mandé" },
 ];
 
 // Voix féminines : le moteur natif choisit une voix française féminine
@@ -71,8 +70,8 @@ const GRIOT_VOICE_ALIASES = {
 const GRIOT_FOLLOWUPS = [
   { label: "Approfondir", prompt: "Griotte, approfondis ta réponse avec des exemples concrets." },
   { label: "Résumé court", prompt: "Griotte, fais-moi un résumé en 3 points." },
-  { label: "Options", prompt: "Griotte, donne-moi 3 options avec avantages et limites." },
-  { label: "Vérifier en ligne", prompt: "Griotte, vérifie les informations récentes sur ce sujet sur le web." },
+  { label: "Un proverbe", prompt: "Griotte, donne-moi un proverbe sûr en lien avec ma question." },
+  { label: "Son origine", prompt: "Griotte, explique le sens et l'origine, en distinguant ce qui est documenté de la tradition orale." },
 ];
 
 const PROVIDER_LABELS = {
@@ -186,7 +185,7 @@ function makeWelcome(name, isGriot) {
   return {
     id: "welcome",
     role: "assistant",
-    text: `Salut ${name || "membre"} ! 👋\nJe suis l'Assistant IA de BAARO. Que souhaites-tu créer ou analyser aujourd'hui ?`,
+    text: `Salut ${name || "membre"} ! 👋\nJe suis l'Assistant IA de BAARO : résumés, débats, aide au quotidien et idées de contenu. Pour les proverbes et la tradition, active la Griotte. Que veux-tu faire ?`,
   };
 }
 
