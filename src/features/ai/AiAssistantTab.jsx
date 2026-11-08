@@ -185,7 +185,7 @@ function makeWelcome(name, isGriot) {
   return {
     id: "welcome",
     role: "assistant",
-    text: `Salut ${name || "membre"} ! 👋\nJe suis l'Assistant IA de BAARO : résumés, débats, aide au quotidien et idées de contenu. Pour les proverbes et la tradition, active la Griotte. Que veux-tu faire ?`,
+    text: `Salut${name ? ` ${name}` : ""} ! 👋\nJe suis l'Assistant IA de BAARO : résumés, débats, aide au quotidien et idées de contenu. Pour les proverbes et la tradition, active la Griotte. Que veux-tu faire ?`,
   };
 }
 
