@@ -7,6 +7,13 @@ const GROQ_DEFAULT_MODEL = "openai/gpt-oss-20b";
 const MISTRAL_DEFAULT_MODEL = "ministral-3b-latest";
 const GEMINI_DEFAULT_MODEL = "gemini-2.5-flash-lite";
 
+// Température basse par défaut : moins d'inventions sur les faits.
+// Réglable avec BAARO_AI_TEMPERATURE (0 à 1).
+function aiTemperature() {
+  const value = Number(process.env.BAARO_AI_TEMPERATURE);
+  return Number.isFinite(value) && value >= 0 && value <= 1 ? value : 0.3;
+}
+
 function parseModelList(value) {
   return String(value || "")
     .split(",")
@@ -112,7 +119,7 @@ export async function callOpenAICompatible({
         model: activeModel,
         messages: formattedMessages,
         max_tokens: tokenLimit,
-        temperature: 0.7,
+        temperature: aiTemperature(),
       }),
     });
 
@@ -174,7 +181,7 @@ export async function callOpenAICompatible({
 
   const generationConfig = {
     maxOutputTokens: tokenLimit,
-    temperature: 0.7,
+    temperature: aiTemperature(),
   };
 
   let lastError = null;

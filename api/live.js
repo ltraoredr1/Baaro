@@ -391,7 +391,21 @@ function safeMaxTokens(value) {
 }
 
 const WEB_SEARCH_TIMEOUT_MS = 7000;
-const WEB_SEARCH_TRIGGER = /\b(aujourd'hui|maintenant|en ce moment|actualité|actualités|derni(?:è|e)res? nouvelles?|récent|récente|latest|news|prix actuel|cours actuel|météo|résultat|résultats|score|qui est le président|recherche sur internet|vérifie sur le web)\b/i;
+// Frontières Unicode : \b ne fonctionne pas après une lettre accentuée (« actualité »).
+const WEB_SEARCH_TRIGGER = new RegExp(
+  "(?<![\\p{L}\\p{N}])(?:" +
+    [
+      "aujourd'hui", "maintenant", "en ce moment", "actualit[ée]s?",
+      "derni[èe]res? nouvelles?", "r[ée]cent(?:e|es|s)?", "latest", "news",
+      "prix", "tarifs?", "cours", "taux", "m[ée]t[ée]o", "r[ée]sultats?", "score",
+      "qui est", "pr[ée]sident", "premier ministre", "ministre", "pdg",
+      "[ée]lections?", "nouveau", "nouvelle", "nouveaux", "dernier", "derni[èe]re",
+      "cette (?:ann[ée]e|semaine)", "ce mois", "202\\d",
+      "recherche sur internet", "v[ée]rifie sur le web",
+    ].join("|") +
+    ")(?![\\p{L}\\p{N}])",
+  "iu"
+);
 
 function needsWebSearch(mode, messages) {
   if (!new Set(["chat", "griot", "cohost"]).has(mode)) return false;
@@ -990,6 +1004,11 @@ async function handleAiGateway(req, res, admin, user) {
     language: context?.language || profile.language,
   });
 
+  // Sans date, le modèle croit être à l'époque de son entraînement.
+  system +=
+    `\n\nDATE DU JOUR : ${new Date().toLocaleDateString("fr-FR", { timeZone: "UTC", weekday: "long", day: "numeric", month: "long", year: "numeric" })}.` +
+    " Tes connaissances peuvent être dépassées : pour tout fait susceptible d'avoir changé et qui n'est pas dans les sources fournies, dis que tu ne peux pas le vérifier au lieu de répondre de mémoire.";
+
   let webSources = [];
   if (needsWebSearch(mode, normalizedMessages)) {
     const web = await searchWeb(
@@ -999,6 +1018,8 @@ async function handleAiGateway(req, res, admin, user) {
     if (webSources.length) system += formatWebContext(webSources);
     else if (web.configured) {
       system += "\n\nAucune source web fiable n'a été trouvée. Dis-le clairement et ne prétends pas avoir vérifié l'information.";
+    } else {
+      system += "\n\nLa recherche web n'est pas disponible. Pour toute information récente ou changeante, dis honnêtement que tu ne peux pas la vérifier.";
     }
   }
 
