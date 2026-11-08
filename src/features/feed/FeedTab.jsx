@@ -532,6 +532,23 @@ export function FeedTab({
 
   const posts = useMemo(() => rawPosts.map(formatPost), [rawPosts]);
   const loadPosts = useCallback((opts) => reload(opts), [reload]);
+  const [sharedPostId, setSharedPostId] = useState(() =>
+    typeof window !== "undefined"
+      ? new URLSearchParams(window.location.search).get("post")
+      : null
+  );
+  const sharedPostRequestRef = useRef(null);
+
+  useEffect(() => {
+    const onSharedLink = (event) => {
+      const postId = new URLSearchParams(event.detail?.search || "").get("post");
+      if (!postId) return;
+      sharedPostRequestRef.current = null;
+      setSharedPostId(postId);
+    };
+    window.addEventListener("baaro:open-shared-link", onSharedLink);
+    return () => window.removeEventListener("baaro:open-shared-link", onSharedLink);
+  }, []);
 
   const [newText, setNewText] = useState("");
   const [isShadow, setIsShadow] = useState(false);
@@ -776,6 +793,46 @@ export function FeedTab({
   useEffect(() => {
     loadPosts();
   }, [loadPosts]);
+
+  useEffect(() => {
+    if (!sharedPostId || loading) return undefined;
+    const existing = rawPosts.some(
+      (post) => String(post.id) === String(sharedPostId)
+    );
+    if (existing) {
+      setFeedTab("foryou");
+      setTagFilter(null);
+      const timer = window.setTimeout(() => {
+        const target = [...document.querySelectorAll("article[data-post-id]")].find(
+          (element) => element.dataset.postId === sharedPostId
+        );
+        target?.scrollIntoView({ behavior: "smooth", block: "start" });
+        const url = new URL(window.location.href);
+        url.searchParams.delete("post");
+        window.history.replaceState({}, document.title, `${url.pathname}${url.search}${url.hash}`);
+        setSharedPostId(null);
+      }, 0);
+      return () => window.clearTimeout(timer);
+    }
+    if (sharedPostRequestRef.current === sharedPostId) return undefined;
+    sharedPostRequestRef.current = sharedPostId;
+    supabase
+      .from("posts")
+      .select("id, text, media_url, media_type, created_at, author_id, likes_count, reposts_count, comments_count, views_count, profiles:author_id ( display_name, handle, flag, avatar_url )")
+      .eq("id", sharedPostId)
+      .maybeSingle()
+      .then(({ data, error }) => {
+        if (error || !data) {
+          showToast("Cette publication n’est pas disponible.", "info");
+          return;
+        }
+        setPosts((current) => [
+          data,
+          ...current.filter((post) => String(post.id) !== String(sharedPostId)),
+        ]);
+      });
+    return undefined;
+  }, [loading, rawPosts, setPosts, sharedPostId, showToast]);
 
   useEffect(() => {
     const onRefresh = () => {

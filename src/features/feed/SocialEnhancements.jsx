@@ -735,7 +735,7 @@ export const SocialPostEnhancements = memo(
       setBusy(true);
 
       try {
-        const url = new URL(window.location.href);
+        const url = new URL("/", window.location.origin);
         url.searchParams.set("post", post.id);
 
         const shareUrl = url.toString();

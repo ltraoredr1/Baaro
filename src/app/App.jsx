@@ -109,6 +109,18 @@ function AppShell() {
               code = url.pathname.slice(1);
             }
             if (code) navigate(`/invite/${code}`, { replace: true });
+            else if (
+              url.searchParams.has("post") ||
+              url.searchParams.has("video") ||
+              url.searchParams.has("invite")
+            ) {
+              navigate({ pathname: "/", search: url.search }, { replace: true });
+              window.dispatchEvent(
+                new CustomEvent("baaro:open-shared-link", {
+                  detail: { search: url.search },
+                })
+              );
+            }
           } catch {}
         });
         if (cancelled) {

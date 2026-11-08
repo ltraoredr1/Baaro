@@ -258,6 +258,22 @@ export function VideosTab({ onRewardPoints, onExit }) {
   const slideRefs = useRef({});
   const ratiosRef = useRef({});
   const [activeId, setActiveId] = useState(null);
+  const [sharedVideoId, setSharedVideoId] = useState(() =>
+    typeof window !== "undefined"
+      ? new URLSearchParams(window.location.search).get("video")
+      : null
+  );
+
+  useEffect(() => {
+    const onSharedLink = (event) => {
+      const videoId = new URLSearchParams(event.detail?.search || "").get("video");
+      if (!videoId) return;
+      setSharedVideoId(videoId);
+      loadVideos();
+    };
+    window.addEventListener("baaro:open-shared-link", onSharedLink);
+    return () => window.removeEventListener("baaro:open-shared-link", onSharedLink);
+  }, [loadVideos]);
 
   // Toujours la dernière valeur, utilisable dans les écouteurs d'événements.
   const activeIdRef = useRef(null);
@@ -284,6 +300,23 @@ export function VideosTab({ onRewardPoints, onExit }) {
   // Clé stable : ne change que si la liste des publications change vraiment
   // (et non à chaque like ou commentaire), pour ne pas relancer les effets.
   const feedKey = visibleVideos.map((video) => String(video.id)).join("|");
+
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (
+      !sharedVideoId ||
+      !visibleVideos.some((video) => String(video.id) === String(sharedVideoId))
+    ) return undefined;
+    const node = slideRefs.current[String(sharedVideoId)];
+    if (!node) return undefined;
+    const frame = window.requestAnimationFrame(() => {
+      node.scrollIntoView({ behavior: "auto", block: "start" });
+      url.searchParams.delete("video");
+      window.history.replaceState({}, document.title, `${url.pathname}${url.search}${url.hash}`);
+      setSharedVideoId(null);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [feedKey, sharedVideoId, visibleVideos]);
 
   const activeVideo =
     activeId == null

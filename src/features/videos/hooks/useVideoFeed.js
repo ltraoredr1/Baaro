@@ -55,6 +55,32 @@ export function useVideoFeed() {
       }
 
       if (error) throw error;
+      const sharedVideoId =
+        typeof window !== "undefined"
+          ? new URLSearchParams(window.location.search).get("video")
+          : null;
+      if (
+        sharedVideoId &&
+        !(data || []).some((video) => String(video.id) === String(sharedVideoId))
+      ) {
+        try {
+          let { data: sharedVideo, error: sharedVideoError } = await supabase
+            .from("videos")
+            .select(buildSelect(true))
+            .eq("id", sharedVideoId)
+            .maybeSingle();
+          if (sharedVideoError && isMissingColumn(sharedVideoError)) {
+            ({ data: sharedVideo, error: sharedVideoError } = await supabase
+              .from("videos")
+              .select(buildSelect(false))
+              .eq("id", sharedVideoId)
+              .maybeSingle());
+          }
+          if (!sharedVideoError && sharedVideo) data = [sharedVideo, ...(data || [])];
+        } catch (sharedVideoError) {
+          console.warn("[video-share] Impossible de charger la vidéo partagée :", sharedVideoError);
+        }
+      }
       setVideos(data || []);
 
       if (user?.id) {

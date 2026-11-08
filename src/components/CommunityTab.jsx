@@ -264,13 +264,17 @@ export default function CommunityTab({ onOpenProfile }) {
 
   /* ── Deep-link ?invite= ── */
   useEffect(() => {
-    try {
-      const params = new URLSearchParams(window.location.search);
+    const applySharedParams = (search) => {
+      const params = new URLSearchParams(search);
       const inv = params.get("invite");
       if (inv) { setInviteCode(inv); setActiveTab("discover"); setMobileView("discover"); }
       const groupId = params.get("group");
       if (groupId) setPendingGroupId(groupId);
-    } catch {}
+    };
+    const onSharedLink = (event) => applySharedParams(event.detail?.search || "");
+    try { applySharedParams(window.location.search); } catch {}
+    window.addEventListener("baaro:open-shared-link", onSharedLink);
+    return () => window.removeEventListener("baaro:open-shared-link", onSharedLink);
   }, []);
 
   /* ── Helpers ── */

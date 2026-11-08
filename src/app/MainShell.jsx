@@ -136,6 +136,22 @@ export function MainShell() {
     loadLastTab("feed")
   );
 
+  // Ouvre le module visé par les liens de partage générés par BAARO.
+  useEffect(() => {
+    const openSharedLink = (search = window.location.search) => {
+      try {
+        const params = new URLSearchParams(search);
+        if (params.get("post")) setActiveTab("feed");
+        else if (params.get("video")) setActiveTab("videos");
+        else if (params.get("invite")) setActiveTab("community");
+      } catch {}
+    };
+    const onSharedLink = (event) => openSharedLink(event.detail?.search);
+    window.addEventListener("baaro:open-shared-link", onSharedLink);
+    openSharedLink();
+    return () => window.removeEventListener("baaro:open-shared-link", onSharedLink);
+  }, []);
+
   // Langue et thème : source unique = réglages (useSettings applique déjà le DOM,
   // le stockage local et le cloud). Plus d'état local ni de clé "baaro_theme".
   const { settings, update: updateSettings } = useSettings();
