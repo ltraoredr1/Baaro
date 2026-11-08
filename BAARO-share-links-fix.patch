@@ -1,0 +1,251 @@
+[1mdiff --git a/src/app/App.jsx b/src/app/App.jsx[m
+[1mindex c874881..9ce718f 100644[m
+[1m--- a/src/app/App.jsx[m
+[1m+++ b/src/app/App.jsx[m
+[36m@@ -109,6 +109,18 @@[m [mfunction AppShell() {[m
+               code = url.pathname.slice(1);[m
+             }[m
+             if (code) navigate(`/invite/${code}`, { replace: true });[m
+[32m+[m[32m            else if ([m
+[32m+[m[32m              url.searchParams.has("post") ||[m
+[32m+[m[32m              url.searchParams.has("video") ||[m
+[32m+[m[32m              url.searchParams.has("invite")[m
+[32m+[m[32m            ) {[m
+[32m+[m[32m              navigate({ pathname: "/", search: url.search }, { replace: true });[m
+[32m+[m[32m              window.dispatchEvent([m
+[32m+[m[32m                new CustomEvent("baaro:open-shared-link", {[m
+[32m+[m[32m                  detail: { search: url.search },[m
+[32m+[m[32m                })[m
+[32m+[m[32m              );[m
+[32m+[m[32m            }[m
+           } catch {}[m
+         });[m
+         if (cancelled) {[m
+[1mdiff --git a/src/app/MainShell.jsx b/src/app/MainShell.jsx[m
+[1mindex f612b29..9213f0a 100644[m
+[1m--- a/src/app/MainShell.jsx[m
+[1m+++ b/src/app/MainShell.jsx[m
+[36m@@ -136,6 +136,22 @@[m [mexport function MainShell() {[m
+     loadLastTab("feed")[m
+   );[m
+ [m
+[32m+[m[32m  // Ouvre le module visé par les liens de partage générés par BAARO.[m
+[32m+[m[32m  useEffect(() => {[m
+[32m+[m[32m    const openSharedLink = (search = window.location.search) => {[m
+[32m+[m[32m      try {[m
+[32m+[m[32m        const params = new URLSearchParams(search);[m
+[32m+[m[32m        if (params.get("post")) setActiveTab("feed");[m
+[32m+[m[32m        else if (params.get("video")) setActiveTab("videos");[m
+[32m+[m[32m        else if (params.get("invite")) setActiveTab("community");[m
+[32m+[m[32m      } catch {}[m
+[32m+[m[32m    };[m
+[32m+[m[32m    const onSharedLink = (event) => openSharedLink(event.detail?.search);[m
+[32m+[m[32m    window.addEventListener("baaro:open-shared-link", onSharedLink);[m
+[32m+[m[32m    openSharedLink();[m
+[32m+[m[32m    return () => window.removeEventListener("baaro:open-shared-link", onSharedLink);[m
+[32m+[m[32m  }, []);[m
+[32m+[m
+   // Langue et thème : source unique = réglages (useSettings applique déjà le DOM,[m
+   // le stockage local et le cloud). Plus d'état local ni de clé "baaro_theme".[m
+   const { settings, update: updateSettings } = useSettings();[m
+[1mdiff --git a/src/components/CommunityTab.jsx b/src/components/CommunityTab.jsx[m
+[1mindex eeafa0c..31ec22c 100644[m
+[1m--- a/src/components/CommunityTab.jsx[m
+[1m+++ b/src/components/CommunityTab.jsx[m
+[36m@@ -264,13 +264,17 @@[m [mexport default function CommunityTab({ onOpenProfile }) {[m
+ [m
+   /* ── Deep-link ?invite= ── */[m
+   useEffect(() => {[m
+[31m-    try {[m
+[31m-      const params = new URLSearchParams(window.location.search);[m
+[32m+[m[32m    const applySharedParams = (search) => {[m
+[32m+[m[32m      const params = new URLSearchParams(search);[m
+       const inv = params.get("invite");[m
+       if (inv) { setInviteCode(inv); setActiveTab("discover"); setMobileView("discover"); }[m
+       const groupId = params.get("group");[m
+       if (groupId) setPendingGroupId(groupId);[m
+[31m-    } catch {}[m
+[32m+[m[32m    };[m
+[32m+[m[32m    const onSharedLink = (event) => applySharedParams(event.detail?.search || "");[m
+[32m+[m[32m    try { applySharedParams(window.location.search); } catch {}[m
+[32m+[m[32m    window.addEventListener("baaro:open-shared-link", onSharedLink);[m
+[32m+[m[32m    return () => window.removeEventListener("baaro:open-shared-link", onSharedLink);[m
+   }, []);[m
+ [m
+   /* ── Helpers ── */[m
+[1mdiff --git a/src/features/feed/FeedTab.jsx b/src/features/feed/FeedTab.jsx[m
+[1mindex 0e49259..34f33e5 100644[m
+[1m--- a/src/features/feed/FeedTab.jsx[m
+[1m+++ b/src/features/feed/FeedTab.jsx[m
+[36m@@ -532,6 +532,23 @@[m [mexport function FeedTab({[m
+ [m
+   const posts = useMemo(() => rawPosts.map(formatPost), [rawPosts]);[m
+   const loadPosts = useCallback((opts) => reload(opts), [reload]);[m
+[32m+[m[32m  const [sharedPostId, setSharedPostId] = useState(() =>[m
+[32m+[m[32m    typeof window !== "undefined"[m
+[32m+[m[32m      ? new URLSearchParams(window.location.search).get("post")[m
+[32m+[m[32m      : null[m
+[32m+[m[32m  );[m
+[32m+[m[32m  const sharedPostRequestRef = useRef(null);[m
+[32m+[m
+[32m+[m[32m  useEffect(() => {[m
+[32m+[m[32m    const onSharedLink = (event) => {[m
+[32m+[m[32m      const postId = new URLSearchParams(event.detail?.search || "").get("post");[m
+[32m+[m[32m      if (!postId) return;[m
+[32m+[m[32m      sharedPostRequestRef.current = null;[m
+[32m+[m[32m      setSharedPostId(postId);[m
+[32m+[m[32m    };[m
+[32m+[m[32m    window.addEventListener("baaro:open-shared-link", onSharedLink);[m
+[32m+[m[32m    return () => window.removeEventListener("baaro:open-shared-link", onSharedLink);[m
+[32m+[m[32m  }, []);[m
+ [m
+   const [newText, setNewText] = useState("");[m
+   const [isShadow, setIsShadow] = useState(false);[m
+[36m@@ -777,6 +794,46 @@[m [mexport function FeedTab({[m
+     loadPosts();[m
+   }, [loadPosts]);[m
+ [m
+[32m+[m[32m  useEffect(() => {[m
+[32m+[m[32m    if (!sharedPostId || loading) return undefined;[m
+[32m+[m[32m    const existing = rawPosts.some([m
+[32m+[m[32m      (post) => String(post.id) === String(sharedPostId)[m
+[32m+[m[32m    );[m
+[32m+[m[32m    if (existing) {[m
+[32m+[m[32m      setFeedTab("foryou");[m
+[32m+[m[32m      setTagFilter(null);[m
+[32m+[m[32m      const timer = window.setTimeout(() => {[m
+[32m+[m[32m        const target = [...document.querySelectorAll("article[data-post-id]")].find([m
+[32m+[m[32m          (element) => element.dataset.postId === sharedPostId[m
+[32m+[m[32m        );[m
+[32m+[m[32m        target?.scrollIntoView({ behavior: "smooth", block: "start" });[m
+[32m+[m[32m        const url = new URL(window.location.href);[m
+[32m+[m[32m        url.searchParams.delete("post");[m
+[32m+[m[32m        window.history.replaceState({}, document.title, `${url.pathname}${url.search}${url.hash}`);[m
+[32m+[m[32m        setSharedPostId(null);[m
+[32m+[m[32m      }, 0);[m
+[32m+[m[32m      return () => window.clearTimeout(timer);[m
+[32m+[m[32m    }[m
+[32m+[m[32m    if (sharedPostRequestRef.current === sharedPostId) return undefined;[m
+[32m+[m[32m    sharedPostRequestRef.current = sharedPostId;[m
+[32m+[m[32m    supabase[m
+[32m+[m[32m      .from("posts")[m
+[32m+[m[32m      .select("id, text, media_url, media_type, created_at, author_id, likes_count, reposts_count, comments_count, views_count, profiles:author_id ( display_name, handle, flag, avatar_url )")[m
+[32m+[m[32m      .eq("id", sharedPostId)[m
+[32m+[m[32m      .maybeSingle()[m
+[32m+[m[32m      .then(({ data, error }) => {[m
+[32m+[m[32m        if (error || !data) {[m
+[32m+[m[32m          showToast("Cette publication n’est pas disponible.", "info");[m
+[32m+[m[32m          return;[m
+[32m+[m[32m        }[m
+[32m+[m[32m        setPosts((current) => [[m
+[32m+[m[32m          data,[m
+[32m+[m[32m          ...current.filter((post) => String(post.id) !== String(sharedPostId)),[m
+[32m+[m[32m        ]);[m
+[32m+[m[32m      });[m
+[32m+[m[32m    return undefined;[m
+[32m+[m[32m  }, [loading, rawPosts, setPosts, sharedPostId, showToast]);[m
+[32m+[m
+   useEffect(() => {[m
+     const onRefresh = () => {[m
+       window.scrollTo({ top: 0, behavior: "smooth" });[m
+[1mdiff --git a/src/features/feed/SocialEnhancements.jsx b/src/features/feed/SocialEnhancements.jsx[m
+[1mindex ef040d0..73ae7e5 100644[m
+[1m--- a/src/features/feed/SocialEnhancements.jsx[m
+[1m+++ b/src/features/feed/SocialEnhancements.jsx[m
+[36m@@ -735,7 +735,7 @@[m [mexport const SocialPostEnhancements = memo([m
+       setBusy(true);[m
+ [m
+       try {[m
+[31m-        const url = new URL(window.location.href);[m
+[32m+[m[32m        const url = new URL("/", window.location.origin);[m
+         url.searchParams.set("post", post.id);[m
+ [m
+         const shareUrl = url.toString();[m
+[1mdiff --git a/src/features/videos/VideosTab.jsx b/src/features/videos/VideosTab.jsx[m
+[1mindex a043b14..0a8d748 100644[m
+[1m--- a/src/features/videos/VideosTab.jsx[m
+[1m+++ b/src/features/videos/VideosTab.jsx[m
+[36m@@ -258,6 +258,22 @@[m [mexport function VideosTab({ onRewardPoints, onExit }) {[m
+   const slideRefs = useRef({});[m
+   const ratiosRef = useRef({});[m
+   const [activeId, setActiveId] = useState(null);[m
+[32m+[m[32m  const [sharedVideoId, setSharedVideoId] = useState(() =>[m
+[32m+[m[32m    typeof window !== "undefined"[m
+[32m+[m[32m      ? new URLSearchParams(window.location.search).get("video")[m
+[32m+[m[32m      : null[m
+[32m+[m[32m  );[m
+[32m+[m
+[32m+[m[32m  useEffect(() => {[m
+[32m+[m[32m    const onSharedLink = (event) => {[m
+[32m+[m[32m      const videoId = new URLSearchParams(event.detail?.search || "").get("video");[m
+[32m+[m[32m      if (!videoId) return;[m
+[32m+[m[32m      setSharedVideoId(videoId);[m
+[32m+[m[32m      loadVideos();[m
+[32m+[m[32m    };[m
+[32m+[m[32m    window.addEventListener("baaro:open-shared-link", onSharedLink);[m
+[32m+[m[32m    return () => window.removeEventListener("baaro:open-shared-link", onSharedLink);[m
+[32m+[m[32m  }, [loadVideos]);[m
+ [m
+   // Toujours la dernière valeur, utilisable dans les écouteurs d'événements.[m
+   const activeIdRef = useRef(null);[m
+[36m@@ -285,6 +301,23 @@[m [mexport function VideosTab({ onRewardPoints, onExit }) {[m
+   // (et non à chaque like ou commentaire), pour ne pas relancer les effets.[m
+   const feedKey = visibleVideos.map((video) => String(video.id)).join("|");[m
+ [m
+[32m+[m[32m  useEffect(() => {[m
+[32m+[m[32m    const url = new URL(window.location.href);[m
+[32m+[m[32m    if ([m
+[32m+[m[32m      !sharedVideoId ||[m
+[32m+[m[32m      !visibleVideos.some((video) => String(video.id) === String(sharedVideoId))[m
+[32m+[m[32m    ) return undefined;[m
+[32m+[m[32m    const node = slideRefs.current[String(sharedVideoId)];[m
+[32m+[m[32m    if (!node) return undefined;[m
+[32m+[m[32m    const frame = window.requestAnimationFrame(() => {[m
+[32m+[m[32m      node.scrollIntoView({ behavior: "auto", block: "start" });[m
+[32m+[m[32m      url.searchParams.delete("video");[m
+[32m+[m[32m      window.history.replaceState({}, document.title, `${url.pathname}${url.search}${url.hash}`);[m
+[32m+[m[32m      setSharedVideoId(null);[m
+[32m+[m[32m    });[m
+[32m+[m[32m    return () => window.cancelAnimationFrame(frame);[m
+[32m+[m[32m  }, [feedKey, sharedVideoId, visibleVideos]);[m
+[32m+[m
+   const activeVideo =[m
+     activeId == null[m
+       ? null[m
+[1mdiff --git a/src/features/videos/hooks/useVideoFeed.js b/src/features/videos/hooks/useVideoFeed.js[m
+[1mindex 6451711..09ad02c 100644[m
+[1m--- a/src/features/videos/hooks/useVideoFeed.js[m
+[1m+++ b/src/features/videos/hooks/useVideoFeed.js[m
+[36m@@ -55,6 +55,32 @@[m [mexport function useVideoFeed() {[m
+       }[m
+ [m
+       if (error) throw error;[m
+[32m+[m[32m      const sharedVideoId =[m
+[32m+[m[32m        typeof window !== "undefined"[m
+[32m+[m[32m          ? new URLSearchParams(window.location.search).get("video")[m
+[32m+[m[32m          : null;[m
+[32m+[m[32m      if ([m
+[32m+[m[32m        sharedVideoId &&[m
+[32m+[m[32m        !(data || []).some((video) => String(video.id) === String(sharedVideoId))[m
+[32m+[m[32m      ) {[m
+[32m+[m[32m        try {[m
+[32m+[m[32m          let { data: sharedVideo, error: sharedVideoError } = await supabase[m
+[32m+[m[32m            .from("videos")[m
+[32m+[m[32m            .select(buildSelect(true))[m
+[32m+[m[32m            .eq("id", sharedVideoId)[m
+[32m+[m[32m            .maybeSingle();[m
+[32m+[m[32m          if (sharedVideoError && isMissingColumn(sharedVideoError)) {[m
+[32m+[m[32m            ({ data: sharedVideo, error: sharedVideoError } = await supabase[m
+[32m+[m[32m              .from("videos")[m
+[32m+[m[32m              .select(buildSelect(false))[m
+[32m+[m[32m              .eq("id", sharedVideoId)[m
+[32m+[m[32m              .maybeSingle());[m
+[32m+[m[32m          }[m
+[32m+[m[32m          if (!sharedVideoError && sharedVideo) data = [sharedVideo, ...(data || [])];[m
+[32m+[m[32m        } catch (sharedVideoError) {[m
+[32m+[m[32m          console.warn("[video-share] Impossible de charger la vidéo partagée :", sharedVideoError);[m
+[32m+[m[32m        }[m
+[32m+[m[32m      }[m
+       setVideos(data || []);[m
+ [m
+       if (user?.id) {[m
