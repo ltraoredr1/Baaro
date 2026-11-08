@@ -1,46 +1,46 @@
-name: 2 - Publish to Users (Capgo)
+
+name: Publier BAARO sur Capgo
 
 on:
   workflow_dispatch:
-    inputs:
-      channel:
-        description: 'Où publier ?'
-        required: true
-        default: 'beta'
-        type: choice
-        options:
-          - beta
-          - production
+
+permissions:
+  contents: read
 
 jobs:
   deploy:
+    name: Publication manuelle BAARO
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Vérifier la branche
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "Publication autorisée uniquement depuis main."
+            exit 1
+          fi
+
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+
+      - name: Installer Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
 
-      - run: npm ci
+      - name: Installer les dépendances
+        run: npm ci
 
-      - name: Auto version
-        id: version
-        env:
-          # Numéro (#) du dernier run déjà publié dans l'onglet Actions.
-          # Le run suivant donne 0.1.0, puis 0.1.1, 0.1.2, etc.
-          RUN_OFFSET: 43
+      - name: Générer une version unique
         run: |
-          MAJMIN=$(node -p "require('./package.json').version.split('.').slice(0,2).join('.')")
-          PATCH=$(( ${{ github.run_number }} - RUN_OFFSET - 1 ))
-          if [ "$PATCH" -lt 0 ]; then
-            echo "RUN_OFFSET trop grand : baisse-le." && exit 1
-          fi
-          NEW="$MAJMIN.$PATCH"
-          npm version $NEW --no-git-tag-version --allow-same-version
-          echo "version=$NEW" >> $GITHUB_OUTPUT
+          BASE=$(node -p "require('./package.json').version")
+          MAJMIN=$(echo "$BASE" | cut -d. -f1-2)
+          NEW="$MAJMIN.${GITHUB_RUN_NUMBER}"
+          npm version "$NEW" --no-git-tag-version --allow-same-version
+          echo "Version publiée : $NEW"
 
-      - name: Build Web
+      - name: Construire BAARO
         run: npm run build
         env:
           VITE_APP_ENV: production
@@ -52,5 +52,10 @@ jobs:
           VITE_VAPID_PUBLIC_KEY: ${{ secrets.VITE_VAPID_PUBLIC_KEY }}
           VITE_BAARO_MEDIA_WORKER_URL: ${{ secrets.VITE_BAARO_MEDIA_WORKER_URL }}
 
-      - name: Upload to Capgo
-        run: npx @capgo/cli@latest bundle upload --channel ${{ inputs.channel }} --apikey ${{ secrets.CAPGO_TOKEN }}
+      - name: Publier sur Capgo Production
+        env:
+          CAPGO_TOKEN: ${{ secrets.CAPGO_TOKEN }}
+        run: |
+          npx @capgo/cli@latest bundle upload \
+            --channel production \
+            --apikey "$CAPGO_TOKEN"
