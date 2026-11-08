@@ -203,7 +203,7 @@ export async function translateMedia(
   const target = assertTargetLang(targetLang);
 
   return post(
-    "/api/translate-media",
+    "/api/translate",
     {
       mediaUrl: mediaUrl.trim(),
       targetLang: target,
