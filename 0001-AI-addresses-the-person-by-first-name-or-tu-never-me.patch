@@ -1,0 +1,86 @@
+From cfcb5406c71b93b634f53420c064d2d790874412 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 8 Nov 2026 11:11:47 +0000
+Subject: [PATCH] AI addresses the person by first name or 'tu', never
+ 'membre'/'utilisateur'/'enfant'
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01XttQVh8guyrdFTtm9S8eUN
+---
+ api/live.js                        | 11 +++++++----
+ src/features/ai/AiAssistantTab.jsx |  2 +-
+ 2 files changed, 8 insertions(+), 5 deletions(-)
+
+diff --git a/api/live.js b/api/live.js
+index 4fe5d0c..47981dd 100644
+--- a/api/live.js
++++ b/api/live.js
+@@ -302,7 +302,8 @@ Style :
+ - Quand c'est utile, termine par une seule question ou proposition d'étape suivante.
+ 
+ Règles :
+-- Tu es l'Assistant IA, pas la Griotte. Pour un proverbe, une tradition ou un récit culturel, invite le membre à activer le mode « Griotte » au lieu d'y répondre toi-même.
++- Adresse-toi à la personne par son prénom (donné dans le contexte) ou simplement avec « tu ». N'emploie jamais les mots « membre », « utilisateur » ou « enfant » pour lui parler.
++- Tu es l'Assistant IA, pas la Griotte. Pour un proverbe, une tradition ou un récit culturel, invite la personne à activer le mode « Griotte » au lieu d'y répondre toi-même.
+ - Pour un résumé, utilise : « Résumé en une phrase », « Points clés », « À retenir ». Ne déforme jamais le texte fourni.
+ - Pour un débat, présente au moins deux points de vue avec leurs meilleurs arguments, sans imposer ton opinion sur les sujets politiques ou religieux.
+ - N'invente jamais de chiffres, de statistiques, de règles de points ou de fonctionnalités BAARO que tu ne connais pas. Si tu n'es pas sûr, dis-le.
+@@ -315,6 +316,7 @@ const GRIOT_SYSTEM_PROMPT = `Tu es FA-BAARO, la griotte numérique de BAARO, une
+ TON RÔLE : tu es la gardienne des proverbes, de la tradition, de la culture et des récits du Mandé. Tu ne fais ni résumés de posts, ni débats, ni code, ni actualité, ni aide technique : pour cela, invite doucement la personne à repasser en « Assistant IA ».
+ 
+ RÈGLES DE QUALITÉ :
++- Adresse-toi à la personne par son prénom (donné dans le contexte) ou simplement avec « tu ». N'emploie jamais les mots « membre », « utilisateur » ou « enfant » pour lui parler.
+ - Réponds dans la langue de la personne, en français par défaut. Tu peux glisser une courte formule bambara avec sa traduction uniquement si tu la connais avec confiance. N'invente jamais de proverbe, de citation, de mot bambara ou de tradition.
+ - Donne une réponse utile et proportionnée : courte pour une question simple, 3 à 7 points pour une question complexe. Commence par la réponse directe, puis explique.
+ - Pour une question factuelle, sépare clairement : « Ce que l'on sait », « Ce qui est incertain » et « Ce que je te conseille ».
+@@ -353,6 +355,7 @@ ${Object.entries(GUIDE_TABS)
+   .join("\n")}
+ 
+ Règles :
++- Adresse-toi à la personne par son prénom si tu le connais, sinon avec « tu » ; n'emploie jamais « membre » ni « utilisateur » pour lui parler.
+ - Réponds dans la langue du membre (français par défaut), tutoiement, ton simple et chaleureux. Maximum 120 mots.
+ - Appuie-toi UNIQUEMENT sur la liste des écrans ci-dessus. N'invente jamais de bouton, de chiffre, de règle de points, de pourcentage, de prix ou de fonctionnalité. Si tu ne sais pas, dis-le et propose l'écran le plus proche.
+ - Format : phrases courtes, listes avec "- ", **gras** pour les mots clés. Pas de tableau ni de titre.
+@@ -413,7 +416,7 @@ function buildSystem(mode, context) {
+ 
+     // On ajoute juste le prénom pour personnaliser
+     if (context?.display_name) {
+-      griotPrompt += `\n\nL'enfant qui te parle s'appelle : ${cleanLine(context.display_name, 60)}. Appelle-le par son prénom.`;
++      griotPrompt += `\n\nLa personne qui te parle s'appelle : ${cleanLine(context.display_name, 60)}. Appelle-la par son prénom.`;
+     }
+     return griotPrompt.slice(0, 12000);
+   }
+@@ -424,7 +427,7 @@ function buildSystem(mode, context) {
+     let guidePrompt = GUIDE_SYSTEM_PROMPT;
+     const lines = [];
+     if (context?.display_name) {
+-      lines.push(`Prénom/pseudo du membre : ${cleanLine(context.display_name, 60)}`);
++      lines.push(`Prénom/pseudo de la personne : ${cleanLine(context.display_name, 60)}`);
+     }
+     if (context?.language) {
+       lines.push(`Langue préférée : ${cleanLine(context.language, 20)}`);
+@@ -445,7 +448,7 @@ function buildSystem(mode, context) {
+ 
+   if (context && typeof context === "object") {
+     if (context.display_name) {
+-      lines.push(`Prénom/pseudo du membre : ${cleanLine(context.display_name, 60)}`);
++      lines.push(`Prénom/pseudo de la personne : ${cleanLine(context.display_name, 60)}`);
+     }
+     if (context.language) {
+       lines.push(`Langue préférée : ${cleanLine(context.language, 20)}`);
+diff --git a/src/features/ai/AiAssistantTab.jsx b/src/features/ai/AiAssistantTab.jsx
+index e264ad6..515b391 100644
+--- a/src/features/ai/AiAssistantTab.jsx
++++ b/src/features/ai/AiAssistantTab.jsx
+@@ -185,7 +185,7 @@ function makeWelcome(name, isGriot) {
+   return {
+     id: "welcome",
+     role: "assistant",
+-    text: `Salut ${name || "membre"} ! 👋\nJe suis l'Assistant IA de BAARO : résumés, débats, aide au quotidien et idées de contenu. Pour les proverbes et la tradition, active la Griotte. Que veux-tu faire ?`,
++    text: `Salut${name ? ` ${name}` : ""} ! 👋\nJe suis l'Assistant IA de BAARO : résumés, débats, aide au quotidien et idées de contenu. Pour les proverbes et la tradition, active la Griotte. Que veux-tu faire ?`,
+   };
+ }
+ 
+-- 
+2.43.0
+
