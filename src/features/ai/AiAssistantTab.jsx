@@ -1,291 +1,44 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import { Capacitor } from "@capacitor/core";
-import { SpeechRecognition } from "@capacitor-community/speech-recognition";
-import { TextToSpeech } from "@capacitor-community/text-to-speech";
 import {
   Sparkles,
   Send,
   Bot,
-  User,
-  Zap,
-  MessageSquare,
-  Coins,
-  Swords,
   Mic,
   Square,
   Volume2,
   VolumeX,
-  PlusCircle,
-  Video,
-  Copy,
   RotateCcw,
-  RefreshCw,
-  Image as ImageIcon,
 } from "lucide-react";
 import { COLORS } from "../../theme.js";
 import { useToast } from "../../components/ToastContext.jsx";
 import { API_BASE } from "../../config.js";
 import { supabase } from "../../supabaseClient.js";
 import { useSettings } from "../../hooks/useSettings.js";
-
-const PRESETS_NORMAL = [
-  { icon: MessageSquare, text: "Résume ce post en points clés" },
-  { icon: Swords, text: "Prépare-moi un débat : arguments pour et contre" },
-  { icon: Zap, text: "Aide-moi à répondre à un message difficile" },
-  { icon: ImageIcon, text: "Génère une image verticale pour ma story" },
-  { icon: Coins, text: "Idée de publication engageante" },
-];
-const PRESETS_GRIOT = [
-  { icon: MessageSquare, text: "Griot, donne-moi un conseil pour aujourd'hui" },
-  { icon: Swords, text: "Griot, un proverbe pour mon cœur brisé ?" },
-  { icon: Coins, text: "Griot, comment régler une palabre entre amis ?" },
-  { icon: Zap, text: "Griot, raconte-moi l'histoire de Soundiata" },
-  { icon: ImageIcon, text: "Griot, parle-moi d'une tradition du Mandé" },
-];
-
-// Voix féminines : le moteur natif choisit une voix française féminine
-// disponible sur l'appareil ; le serveur adapte aussi le style de réponse.
-const GRIOT_VOICE_PROFILES = {
-  fatou: { label: "Fatou", hint: "douce et rassurante", gender: "female" },
-  aminata: { label: "Aminata", hint: "posée et structurée", gender: "female" },
-  mariam: { label: "Mariam", hint: "conteuse et chaleureuse", gender: "female" },
-  awa: { label: "Awa", hint: "énergique et directe", gender: "female" },
-  moussa: { label: "Moussa", hint: "calme et profond", gender: "male" },
-  bakary: { label: "Bakary", hint: "précis et protecteur", gender: "male" },
-  oumar: { label: "Oumar", hint: "vivant et encourageant", gender: "male" },
-};
-const GRIOT_VOICE_LABELS = Object.fromEntries(
-  Object.entries(GRIOT_VOICE_PROFILES).map(([key, profile]) => [
-    key,
-    `${profile.label} · ${profile.hint}`,
-  ])
-);
-
-const GRIOT_VOICE_ALIASES = {
-  normal: "fatou",
-  conseil: "fatou",
-  palabre: "aminata",
-  histoire: "mariam",
-};
-const GRIOT_FOLLOWUPS = [
-  { label: "Approfondir", prompt: "Griotte, approfondis ta réponse avec des exemples concrets." },
-  { label: "Résumé court", prompt: "Griotte, fais-moi un résumé en 3 points." },
-  { label: "Un proverbe", prompt: "Griotte, donne-moi un proverbe sûr en lien avec ma question." },
-  { label: "Son origine", prompt: "Griotte, explique le sens et l'origine, en distinguant ce qui est documenté de la tradition orale." },
-];
-
-const PROVIDER_LABELS = {
-  gemini: "Gemini",
-  groq: "Groq",
-  mistral: "Mistral",
-  anthropic: "Claude",
-  openai: "OpenAI",
-  xai: "xAI",
-  moonshot: "Moonshot",
-};
-
-const HISTORY_LIMIT = 12;
-const STORED_LIMIT = 50;
-const MAX_INPUT_LENGTH = 4000;
-const REQUEST_TIMEOUT_MS = 45000;
-const STORAGE_PREFIX = "baaro_ai_chat_v1_";
-const SPEAK_KEY = "baaro_ai_autospeak";
-const GRIOT_KEY = "baaro_griot_mode";
-const GRIOT_VOICE_KEY = "baaro_griot_voice";
-
-/* ---------- Utilitaires ---------- */
-
-// Prononciations phonétiques pour la synthèse vocale (modifiables ici).
-// Le texte affiché reste inchangé : seule la voix utilise ces remplacements.
-const SPEECH_PRONUNCIATIONS = [
-  { pattern: /\bB\.?A\.?A\.?R\.?O\b/gi, spoken: "Barreau" },
-  { pattern: /\bIA\b/g, spoken: "I A" },
-];
-
-function applyPronunciations(text) {
-  return SPEECH_PRONUNCIATIONS.reduce(
-    (result, { pattern, spoken }) => result.replace(pattern, spoken),
-    text
-  );
-}
-
-function cleanTextForSpeech(text) {
-  return applyPronunciations(String(text || ""))
-    .replace(/```[\s\S]*?```/g, " bloc de code omis ")
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
-    .replace(/https?:\/\/\S+/gi, " lien ")
-    .replace(/[*#_`~]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function resolveAssistantName(profile) {
-  const candidates = [
-    profile?.display_name,
-    profile?.first_name,
-    profile?.handle,
-  ];
-  const value = candidates
-    .map((item) => String(item || "").trim())
-    .find((item) => item && !/^membre baaro$/i.test(item));
-  return value?.replace(/^@/, "") || "ami";
-}
-
-async function findNativeVoice(voiceKey) {
-  try {
-    const { voices = [] } = await TextToSpeech.getSupportedVoices();
-    const french = voices
-      .map((voice, index) => ({ voice, index }))
-      .filter(({ voice }) => /^fr(?:-|_|$)/i.test(String(voice?.lang || "")));
-    if (!french.length) return undefined;
-    const profileName = GRIOT_VOICE_PROFILES[voiceKey]?.label?.toLowerCase() || "";
-    const profile = GRIOT_VOICE_PROFILES[voiceKey];
-    const femaleWords = /female|femme|woman|女性|fran[cç]aise|google fran[cç]ais|amelie|audrey|marie|julie|sophie|claire|fatou|aminata|mariam|awa/i;
-    const maleWords = /male|homme|man|masculin|homme fran[cç]ais|thomas|paul|pierre|jacques|moussa|bakary|oumar/i;
-    const ranked = [...french].sort((a, b) => {
-      const score = ({ voice }) => {
-        const name = String(voice?.name || "").toLowerCase();
-        const genderMatch = profile?.gender === "male" ? maleWords.test(name) : femaleWords.test(name);
-        return (name.includes(profileName) ? 4 : 0) + (genderMatch ? 3 : 0) + (voice?.localService ? 1 : 0);
-      };
-      return score(b) - score(a);
-    });
-    return ranked[0]?.index;
-  } catch {
-    return undefined;
-  }
-}
-
-function getSafeImageUrl(value) {
-  if (typeof value !== "string" || !value.trim()) return null;
-  try {
-    const url = new URL(value);
-    if (url.protocol !== "https:" && url.protocol !== "http:") return null;
-    return url.href;
-  } catch {
-    return null;
-  }
-}
-
-function getProviderLabel(provider, isGriot) {
-  if (isGriot) return "Fa-Baaro · Griotte";
-  if (typeof provider !== "string" || !provider.trim()) return "IA Active";
-  const key = provider.trim().toLowerCase();
-  return PROVIDER_LABELS[key] || provider.trim();
-}
-
-function makeWelcome(name, isGriot) {
-  if (isGriot) {
-    return {
-      id: "welcome",
-      role: "assistant",
-      text: `I ko, ${name || "ami·e de BAARO"}... 👋\nJe suis Fa-Baaro, la voix numérique de BAARO, inspirée par l'écoute et la parole transmises de génération en génération. Je ne suis pas une personne réelle et je ne remplacerai jamais un proche ou un professionnel.\nAssieds-toi, parle-moi : je t'aiderai à réfléchir avec douceur et clarté.`,
-    };
-  }
-  return {
-    id: "welcome",
-    role: "assistant",
-    text: `Salut${name ? ` ${name}` : ""} ! 👋\nJe suis l'Assistant IA de BAARO : résumés, débats, aide au quotidien et idées de contenu. Pour les proverbes et la tradition, active la Griotte. Que veux-tu faire ?`,
-  };
-}
-
-function loadStoredMessages(key, name, isGriot) {
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return [makeWelcome(name, isGriot)];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed) || parsed.length === 0) {
-      return [makeWelcome(name, isGriot)];
-    }
-    const valid = parsed.filter(
-      (m) =>
-        m &&
-        typeof m.id === "string" &&
-        (m.role === "user" || m.role === "assistant") &&
-        typeof m.text === "string" &&
-        !m.isError
-    );
-    if (valid.length === 0) return [makeWelcome(name, isGriot)];
-    return valid[0].id === "welcome"
-      ? [makeWelcome(name, isGriot), ...valid.slice(1)]
-      : [makeWelcome(name, isGriot), ...valid];
-  } catch {
-    return [makeWelcome(name, isGriot)];
-  }
-}
-
-function readGriotMode() {
-  try {
-    return localStorage.getItem(GRIOT_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
-function readGriotVoice() {
-  try {
-    const stored = localStorage.getItem(GRIOT_VOICE_KEY);
-    if (stored && GRIOT_VOICE_PROFILES[stored]) return stored;
-    return GRIOT_VOICE_ALIASES[stored] || "fatou";
-  } catch {
-    return "fatou";
-  }
-}
-
-function isTouchDevice() {
-  return (
-    typeof window !== "undefined" &&
-    typeof window.matchMedia === "function" &&
-    window.matchMedia("(pointer: coarse)").matches
-  );
-}
-
-/* ---------- Rendu texte léger (gras, listes, titres) ---------- */
-
-function renderInline(line, prefix) {
-  return line.split(/(\*\*[^*]+\*\*)/g).map((part, i) =>
-    part.length > 4 && part.startsWith("**") && part.endsWith("**") ? (
-      <strong key={`${prefix}-${i}`}>{part.slice(2, -2)}</strong>
-    ) : (
-      part
-    )
-  );
-}
-
-function RichText({ text }) {
-  const lines = String(text || "").split("\n");
-
-  return (
-    <div className="space-y-1">
-      {lines.map((line, i) => {
-        if (!line.trim()) return <div key={i} className="h-2" />;
-
-        const heading = line.match(/^#{1,3}\s+(.*)/);
-        if (heading) {
-          return (
-            <p key={i} className="font-bold">
-              {renderInline(heading[1], i)}
-            </p>
-          );
-        }
-
-        const bullet = line.match(/^\s*(?:[-•*]|\d+\.)\s+(.*)/);
-        if (bullet) {
-          return (
-            <p key={i} className="pl-3 relative">
-              <span className="absolute left-0">•</span>
-              {renderInline(bullet[1], i)}
-            </p>
-          );
-        }
-
-        return <p key={i}>{renderInline(line, i)}</p>;
-      })}
-    </div>
-  );
-}
-
-/* ---------- Composant principal ---------- */
+import {
+  GRIOT_KEY,
+  GRIOT_VOICE_KEY,
+  GRIOT_VOICE_LABELS,
+  GRIOT_VOICE_PROFILES,
+  HISTORY_LIMIT,
+  MAX_INPUT_LENGTH,
+  PRESETS_GRIOT,
+  PRESETS_NORMAL,
+  REQUEST_TIMEOUT_MS,
+  STORAGE_PREFIX,
+  STORED_LIMIT,
+} from "./aiAssistantConfig.js";
+import {
+  getProviderLabel,
+  getSafeHttpUrl,
+  isTouchDevice,
+  loadStoredMessages,
+  makeWelcome,
+  readGriotMode,
+  readGriotVoice,
+  resolveAssistantName,
+} from "./aiAssistantHelpers.js";
+import { useAiVoice } from "./useAiVoice.js";
+import { AiMessageItem } from "./AiMessageItem.jsx";
 
 export function AiAssistantTab({
   userProfile,
@@ -300,7 +53,6 @@ export function AiAssistantTab({
     () => resolveAssistantName(userProfile),
     [userProfile]
   );
-  const nativeApp = Capacitor.isNativePlatform();
 
   // Mode Griot : conversation séparée de l'assistant normal
   const [isGriot, setIsGriot] = useState(readGriotMode);
@@ -319,22 +71,11 @@ export function AiAssistantTab({
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [provider, setProvider] = useState(null);
-  const [speakingMessageId, setSpeakingMessageId] = useState(null);
-  const [isListening, setIsListening] = useState(false);
-  const [autoSpeak, setAutoSpeak] = useState(() => {
-    try {
-      return localStorage.getItem(SPEAK_KEY) === "1";
-    } catch {
-      return false;
-    }
-  });
 
   const bottomRef = useRef(null);
-  const recognitionRef = useRef(null);
   const inputRef = useRef(null);
   const abortRef = useRef(null);
   const requestIdRef = useRef(0);
-  const speakingIdRef = useRef(null);
   const mountedRef = useRef(false);
 
   const presets = settings.ai_suggest
@@ -343,85 +84,44 @@ export function AiAssistantTab({
       : PRESETS_NORMAL
     : [];
 
-  /* ----- Voix ----- */
+  /* ----- Voix (lecture + dictée) ----- */
 
-  const stopSpeech = useCallback(() => {
-    if (nativeApp) {
-      TextToSpeech.stop().catch(() => {});
-    }
-    if (typeof window !== "undefined" && "speechSynthesis" in window) {
-      try {
-        window.speechSynthesis.cancel();
-      } catch {
-        // Synthèse indisponible.
-      }
-    }
-    speakingIdRef.current = null;
-    if (mountedRef.current) setSpeakingMessageId(null);
-  }, [nativeApp]);
-
-  const stopListening = useCallback(() => {
-    const recognition = recognitionRef.current;
-    recognitionRef.current = null;
-
-    if (recognition?.native) {
-      SpeechRecognition.stop().catch(() => {});
-      SpeechRecognition.removeAllListeners().catch(() => {});
-    } else if (recognition) {
-      try {
-        recognition.onstart = null;
-        recognition.onresult = null;
-        recognition.onerror = null;
-        recognition.onend = null;
-        recognition.abort();
-      } catch {
-        try {
-          recognition.stop();
-        } catch {
-          // Déjà arrêtée.
-        }
-      }
-    }
-    if (mountedRef.current) setIsListening(false);
+  const appendTranscript = useCallback((transcript) => {
+    setInput((previous) =>
+      (previous ? `${previous} ${transcript}` : transcript).slice(
+        0,
+        MAX_INPUT_LENGTH
+      )
+    );
   }, []);
+
+  const {
+    autoSpeak,
+    speakingMessageId,
+    isListening,
+    speakText,
+    stopSpeech,
+    stopListening,
+    toggleAutoSpeak,
+    toggleListening,
+  } = useAiVoice({
+    isGriot,
+    griotVoice,
+    onTranscript: appendTranscript,
+    showToast,
+  });
+
+  /* ----- Cycle de vie ----- */
 
   useEffect(() => {
     mountedRef.current = true;
-
     return () => {
       mountedRef.current = false;
       requestIdRef.current += 1;
       abortRef.current?.abort();
       abortRef.current = null;
-
-      const recognition = recognitionRef.current;
-      recognitionRef.current = null;
-      if (recognition?.native) {
-        SpeechRecognition.stop().catch(() => {});
-        SpeechRecognition.removeAllListeners().catch(() => {});
-      } else if (recognition) {
-        try {
-          recognition.onstart = null;
-          recognition.onresult = null;
-          recognition.onerror = null;
-          recognition.onend = null;
-          recognition.abort();
-        } catch {
-          // Nettoyage best effort.
-        }
-      }
-
-      if (typeof window !== "undefined" && "speechSynthesis" in window) {
-        try {
-          window.speechSynthesis.cancel();
-        } catch {
-          // Nettoyage best effort.
-        }
-      }
-      if (nativeApp) TextToSpeech.stop().catch(() => {});
-      speakingIdRef.current = null;
     };
-  }, [nativeApp]);
+  }, []);
 
   useEffect(() => {
     if (!displayName || displayName === "ami") return;
@@ -430,18 +130,6 @@ export function AiAssistantTab({
       return [makeWelcome(displayName, isGriot)];
     });
   }, [displayName, isGriot]);
-
-  useEffect(() => {
-    const handleVisibility = () => {
-      if (document.hidden) {
-        stopSpeech();
-        stopListening();
-      }
-    };
-    document.addEventListener("visibilitychange", handleVisibility);
-    return () =>
-      document.removeEventListener("visibilitychange", handleVisibility);
-  }, [stopSpeech, stopListening]);
 
   /* ----- Persistance de la conversation ----- */
 
@@ -480,195 +168,6 @@ export function AiAssistantTab({
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
   }, [input]);
-
-  const speakText = useCallback(
-    async (messageId, text, { force = false } = {}) => {
-      if (speakingIdRef.current === messageId) {
-        stopSpeech();
-        return;
-      }
-
-      const cleaned = cleanTextForSpeech(text);
-      if (!cleaned) return;
-      stopSpeech();
-      speakingIdRef.current = messageId;
-      setSpeakingMessageId(messageId);
-
-      const done = () => {
-        if (speakingIdRef.current === messageId) {
-          speakingIdRef.current = null;
-          if (mountedRef.current) setSpeakingMessageId(null);
-        }
-      };
-
-      try {
-        if (nativeApp) {
-          const voice = await findNativeVoice(griotVoice);
-          await TextToSpeech.speak({
-            text: cleaned,
-            lang: "fr-FR",
-            rate: isGriot ? 0.92 : 1,
-            pitch: isGriot ? 0.85 : 1,
-            volume: 1,
-            category: "playback",
-            queueStrategy: 0,
-            ...(voice === undefined ? {} : { voice }),
-          });
-          done();
-          return;
-        }
-
-        if (
-          typeof window === "undefined" ||
-          !("speechSynthesis" in window) ||
-          typeof window.SpeechSynthesisUtterance !== "function"
-        ) {
-          throw new Error("La synthèse vocale n'est pas disponible sur cet appareil");
-        }
-
-        const synth = window.speechSynthesis;
-        const utterance = new window.SpeechSynthesisUtterance(cleaned);
-        utterance.lang = "fr-FR";
-        utterance.rate = isGriot ? 0.92 : 1;
-        utterance.pitch = isGriot ? 0.85 : 1;
-        const voices = synth.getVoices() || [];
-        const frenchVoice =
-          voices.find((v) => (v.lang || "").toLowerCase().replace(/_/g, "-") === "fr-fr") ||
-          voices.find((v) => (v.lang || "").toLowerCase().startsWith("fr"));
-        if (frenchVoice) utterance.voice = frenchVoice;
-        utterance.onend = done;
-        utterance.onerror = done;
-        synth.speak(utterance);
-      } catch (error) {
-        done();
-        if (force) {
-          showToast(error?.message || "Impossible de lire cette réponse à voix haute", "error");
-        }
-      }
-    },
-    [showToast, stopSpeech, isGriot, nativeApp]
-  );
-
-  const toggleAutoSpeak = useCallback(() => {
-    setAutoSpeak((previous) => {
-      const next = !previous;
-      try {
-        localStorage.setItem(SPEAK_KEY, next ? "1" : "0");
-      } catch {
-        // Ignoré.
-      }
-      if (!next) stopSpeech();
-      return next;
-    });
-  }, [stopSpeech]);
-
-  const toggleListening = useCallback(async () => {
-    if (recognitionRef.current) {
-      stopListening();
-      return;
-    }
-
-    if (nativeApp) {
-      try {
-        const { available } = await SpeechRecognition.available();
-        if (!available) throw new Error("La reconnaissance vocale est indisponible sur cet appareil");
-
-        let permission = await SpeechRecognition.checkPermissions();
-        if (permission.speechRecognition !== "granted") {
-          permission = await SpeechRecognition.requestPermissions();
-        }
-        if (permission.speechRecognition !== "granted") {
-          throw new Error("L'autorisation du microphone est refusée");
-        }
-
-        await SpeechRecognition.removeAllListeners();
-        recognitionRef.current = { native: true };
-        await SpeechRecognition.addListener("partialResults", (data) => {
-          const transcript = data?.matches?.[0] || data?.value?.[0];
-          if (!transcript || !mountedRef.current) return;
-          setInput((previous) =>
-            (previous ? `${previous} ${transcript}` : transcript).slice(0, MAX_INPUT_LENGTH)
-          );
-        });
-        await SpeechRecognition.addListener("listeningState", (data) => {
-          if (data?.status === "started" && mountedRef.current) setIsListening(true);
-          if (data?.status === "stopped") {
-            recognitionRef.current = null;
-            if (mountedRef.current) setIsListening(false);
-          }
-        });
-        setIsListening(true);
-        await SpeechRecognition.start({
-          language: "fr-FR",
-          maxResults: 1,
-          partialResults: true,
-          popup: false,
-        });
-      } catch (error) {
-        recognitionRef.current = null;
-        setIsListening(false);
-        showToast(error?.message || "Impossible d'activer le micro", "error");
-      }
-      return;
-    }
-
-    if (typeof window === "undefined") {
-      showToast("La dictée vocale n'est pas disponible", "error");
-      return;
-    }
-
-    const SpeechRecognition =
-      window.SpeechRecognition || window.webkitSpeechRecognition;
-
-    if (!SpeechRecognition) {
-      showToast(
-        "La dictée vocale n'est pas supportée par votre navigateur",
-        "error"
-      );
-      return;
-    }
-
-    try {
-      const recognition = new SpeechRecognition();
-      recognition.lang = "fr-FR";
-      recognition.interimResults = false;
-      recognition.maxAlternatives = 1;
-      recognition.continuous = false;
-
-      recognition.onstart = () => {
-        if (mountedRef.current) setIsListening(true);
-      };
-
-      recognition.onresult = (event) => {
-        const transcript = event.results?.[0]?.[0]?.transcript;
-        if (!transcript || !mountedRef.current) return;
-        setInput((previous) =>
-          (previous ? `${previous} ${transcript}` : transcript).slice(
-            0,
-            MAX_INPUT_LENGTH
-          )
-        );
-      };
-
-      recognition.onerror = () => {
-        if (mountedRef.current) setIsListening(false);
-      };
-
-      recognition.onend = () => {
-        if (recognitionRef.current === recognition) {
-          recognitionRef.current = null;
-        }
-        if (mountedRef.current) setIsListening(false);
-      };
-
-      recognitionRef.current = recognition;
-      recognition.start();
-    } catch {
-      recognitionRef.current = null;
-      setIsListening(false);
-      showToast("Impossible d'activer le micro", "error");
-    }
-  }, [showToast, stopListening, nativeApp]);
 
   /* ----- Actions sur les messages ----- */
 
@@ -861,7 +360,7 @@ export function AiAssistantTab({
             ? data.reply.trim()
             : "Voici une suggestion personnalisée.";
 
-        const imageUrl = getSafeImageUrl(data.imageUrl);
+        const imageUrl = getSafeHttpUrl(data.imageUrl);
         const assistantMsgId = `a_${Date.now()}_${requestId}`;
 
         setMessages((previous) => [
@@ -934,6 +433,11 @@ export function AiAssistantTab({
     ]
   );
 
+  const handleRetry = useCallback(
+    (text) => handleSend(text, { retry: true }),
+    [handleSend]
+  );
+
   const handleKeyDown = (event) => {
     if (
       event.key === "Enter" &&
@@ -961,12 +465,12 @@ export function AiAssistantTab({
           className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
           style={{ background: COLORS.gold, color: "#000" }}
         >
-            {isGriot ? <span className="text-xl">👩🏾</span> : <Bot size={20} />}
+          {isGriot ? <span className="text-xl">👩🏾</span> : <Bot size={20} />}
         </div>
 
         <div className="min-w-0 flex-1">
           <h2 className="font-bold text-sm text-white truncate">
-          {isGriot ? "Fa-Baaro, la Griotte" : "Assistant IA BAARO"}
+            {isGriot ? "Fa-Baaro, la Griotte" : "Assistant IA BAARO"}
           </h2>
           <p className="text-xs text-white/50 truncate">
             {isGriot ? "Voix féminines du Mandé" : "Multi-IA intelligent"}
@@ -1091,216 +595,21 @@ export function AiAssistantTab({
           aria-live="polite"
           aria-relevant="additions"
         >
-          {messages.map((message) => {
-            const isSpeaking = speakingMessageId === message.id;
-            const isAssistant = message.role === "assistant";
-            const showActions =
-              isAssistant && !message.isError && message.id !== "welcome";
-
-            return (
-              <div
-                key={message.id}
-                className={`flex gap-2.5 ${
-                  message.role === "user" ? "flex-row-reverse" : ""
-                }`}
-              >
-                <div
-                  className="w-8 h-8 rounded-full flex items-center justify-center shrink-0"
-                  style={{
-                    background: message.isError
-                      ? "#ef4444"
-                      : isAssistant
-                        ? COLORS.gold
-                        : COLORS.teal,
-                    color: "#000",
-                  }}
-                >
-                  {isAssistant ? (
-                    isGriot && !message.isError ? (
-                      <span className="text-sm">👴</span>
-                    ) : (
-                      <Bot size={15} />
-                    )
-                  ) : (
-                    <User size={15} />
-                  )}
-                </div>
-
-                <div className="max-w-[85%] min-w-0 flex flex-col gap-1.5">
-                  <div
-                    className="px-3.5 py-2.5 rounded-2xl text-sm leading-relaxed break-words border"
-                    style={{
-                      background: message.isError
-                        ? "rgba(239,68,68,0.12)"
-                        : COLORS.surface2,
-                      color: COLORS.ivory,
-                      borderColor: message.isError
-                        ? "rgba(239,68,68,0.35)"
-                        : COLORS.border,
-                    }}
-                  >
-                    <RichText text={message.text} />
-
-                    {message.sources?.length > 0 && (
-                      <div className="mt-3 pt-2 border-t border-white/10 space-y-1">
-                        <p className="text-[10px] font-semibold text-white/50">Sources vérifiées maintenant</p>
-                        {message.sources.slice(0, 5).map((source, index) => (
-                          <a
-                            key={`${source.url}-${index}`}
-                            href={source.url}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="block text-[11px] underline underline-offset-2 truncate"
-                            style={{ color: COLORS.teal }}
-                          >
-                            [{index + 1}] {source.title || source.url}
-                          </a>
-                        ))}
-                      </div>
-                    )}
-
-                    {message.imageUrl && (
-                      <div className="mt-3 rounded-xl overflow-hidden border border-white/10">
-                        <img
-                          src={message.imageUrl}
-                          alt="Visuel généré par l'IA"
-                          className="w-full max-h-64 object-contain"
-                          loading="lazy"
-                          referrerPolicy="no-referrer"
-                          onError={(event) => {
-                            event.currentTarget.style.display = "none";
-                          }}
-                        />
-                      </div>
-                    )}
-                  </div>
-
-                  {message.isError && message.retryText && (
-                    <button
-                      type="button"
-                      onClick={() =>
-                        handleSend(message.retryText, { retry: true })
-                      }
-                      disabled={loading}
-                      className="self-start flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg border transition-all active:scale-95 disabled:opacity-50"
-                      style={{
-                        background: COLORS.surface2,
-                        borderColor: COLORS.border,
-                        color: COLORS.ivory,
-                      }}
-                    >
-                      <RefreshCw size={12} />
-                      Réessayer
-                    </button>
-                  )}
-
-                  {showActions && isGriot && (
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      {GRIOT_FOLLOWUPS.map((followup) => (
-                        <button
-                          key={followup.label}
-                          type="button"
-                          onClick={() => handleSend(followup.prompt)}
-                          disabled={loading}
-                          className="px-2.5 py-1 rounded-full border text-[10px] font-semibold transition-all active:scale-95 disabled:opacity-50"
-                          style={{
-                            background: `${COLORS.gold}12`,
-                            borderColor: COLORS.borderGold,
-                            color: COLORS.gold,
-                          }}
-                        >
-                          {followup.label}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-
-                  {showActions && (
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          speakText(message.id, message.text, { force: true })
-                        }
-                        className="flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg border transition-all active:scale-95"
-                        style={{
-                          background: isSpeaking
-                            ? `${COLORS.teal}20`
-                            : COLORS.surface2,
-                          borderColor: isSpeaking
-                            ? COLORS.borderTeal
-                            : COLORS.border,
-                          color: isSpeaking ? COLORS.teal : COLORS.muted,
-                        }}
-                        aria-label={
-                          isSpeaking ? "Arrêter la lecture" : "Écouter la réponse"
-                        }
-                        aria-pressed={isSpeaking}
-                      >
-                        {isSpeaking ? (
-                          <VolumeX size={13} />
-                        ) : (
-                          <Volume2 size={13} />
-                        )}
-                        <span>{isSpeaking ? "Arrêter" : "Écouter"}</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => copyMessage(message.text)}
-                        className="flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg border transition-all active:scale-95"
-                        style={{
-                          background: COLORS.surface2,
-                          borderColor: COLORS.border,
-                          color: COLORS.muted,
-                        }}
-                        aria-label="Copier la réponse"
-                      >
-                        <Copy size={12} />
-                        Copier
-                      </button>
-
-                      {message.canGenerate &&
-                        typeof onGenerateMedia === "function" && (
-                          <button
-                            type="button"
-                            onClick={() => onGenerateMedia(message.text)}
-                            className="flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg border transition-all active:scale-95"
-                            style={{
-                              background: `${COLORS.gold}20`,
-                              borderColor: COLORS.borderGold,
-                              color: COLORS.gold,
-                            }}
-                            aria-label="Créer un visuel à partir de cette idée"
-                          >
-                            <Video size={13} />
-                            Créer le visuel
-                          </button>
-                        )}
-
-                      {message.canPublish &&
-                        typeof onPublishAction === "function" && (
-                          <button
-                            type="button"
-                            onClick={() => onPublishAction(message.text)}
-                            className="flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg border transition-all active:scale-95"
-                            style={{
-                              background: `${COLORS.teal}20`,
-                              borderColor: COLORS.borderTeal,
-                              color: COLORS.teal,
-                            }}
-                            aria-label="Publier cette idée"
-                          >
-                            <PlusCircle size={13} />
-                            Publier
-                          </button>
-                        )}
-                    </div>
-                  )}
-                </div>
-              </div>
-            );
-          })}
+          {messages.map((message) => (
+            <AiMessageItem
+              key={message.id}
+              message={message}
+              isGriot={isGriot}
+              isSpeaking={speakingMessageId === message.id}
+              loading={loading}
+              onSpeak={speakText}
+              onCopy={copyMessage}
+              onRetry={handleRetry}
+              onSend={handleSend}
+              onGenerateMedia={onGenerateMedia}
+              onPublishAction={onPublishAction}
+            />
+          ))}
 
           {loading && (
             <div
