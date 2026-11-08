@@ -17,10 +17,6 @@ if (process.env.BAARO_AI_PROVIDER_ORDER) {
   console.log(`Provider order: ${process.env.BAARO_AI_PROVIDER_ORDER}`);
 }
 
-if (process.env.TAVILY_API_KEY) {
-  console.log("Web freshness search: configured");
-}
-
 if (!enabled.length) {
   console.error(
     "Configure au moins une clé GROQ_API_KEY, MISTRAL_API_KEY ou GEMINI_API_KEY."

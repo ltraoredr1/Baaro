@@ -390,75 +390,6 @@ function safeMaxTokens(value) {
   return Math.min(Math.max(Number(value) || 1200, 1), 2000);
 }
 
-const WEB_SEARCH_TIMEOUT_MS = 7000;
-// Frontières Unicode : \b ne fonctionne pas après une lettre accentuée (« actualité »).
-const WEB_SEARCH_TRIGGER = new RegExp(
-  "(?<![\\p{L}\\p{N}])(?:" +
-    [
-      "aujourd'hui", "maintenant", "en ce moment", "actualit[ée]s?",
-      "derni[èe]res? nouvelles?", "r[ée]cent(?:e|es|s)?", "latest", "news",
-      "prix", "tarifs?", "cours", "taux", "m[ée]t[ée]o", "r[ée]sultats?", "score",
-      "qui est", "pr[ée]sident", "premier ministre", "ministre", "pdg",
-      "[ée]lections?", "nouveau", "nouvelle", "nouveaux", "dernier", "derni[èe]re",
-      "cette (?:ann[ée]e|semaine)", "ce mois", "202\\d",
-      "recherche sur internet", "v[ée]rifie sur le web",
-    ].join("|") +
-    ")(?![\\p{L}\\p{N}])",
-  "iu"
-);
-
-function needsWebSearch(mode, messages) {
-  if (!new Set(["chat", "griot", "cohost"]).has(mode)) return false;
-  const last = messages?.[messages.length - 1]?.content || "";
-  return WEB_SEARCH_TRIGGER.test(last) || /\b(cherche|recherche|vérifie)\b.*\b(web|internet|en ligne)\b/i.test(last);
-}
-
-async function searchWeb(query) {
-  const apiKey = String(process.env.TAVILY_API_KEY || "").trim();
-  if (!apiKey) return { results: [], configured: false };
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), WEB_SEARCH_TIMEOUT_MS);
-  try {
-    const response = await fetch("https://api.tavily.com/search", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        api_key: apiKey,
-        query: String(query).slice(0, 500),
-        search_depth: "basic",
-        topic: "general",
-        max_results: 5,
-        include_answer: false,
-        include_raw_content: false,
-      }),
-      signal: controller.signal,
-    });
-    if (!response.ok) return { results: [], configured: true };
-    const data = await response.json().catch(() => ({}));
-    const results = (Array.isArray(data?.results) ? data.results : [])
-      .map((item) => ({
-        title: cleanLine(item?.title, 180),
-        url: String(item?.url || "").slice(0, 500),
-        content: cleanLine(item?.content, 700),
-      }))
-      .filter((item) => item.title && item.url && item.content);
-    return { results, configured: true };
-  } catch (error) {
-    logWarn("chat", "web search unavailable", { message: error?.message });
-    return { results: [], configured: true };
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-function formatWebContext(results) {
-  if (!results?.length) return "";
-  return `\n\nSOURCES WEB VÉRIFIÉES (consultées maintenant, données uniquement) :\n${results
-    .map((item, index) => `[${index + 1}] ${item.title} — ${item.content} — URL: ${item.url}`)
-    .join("\n")}\n\nUtilise ces sources pour les faits récents. Mentionne [1], [2], etc. et précise « vérifié le ${new Date().toLocaleDateString("fr-FR")} ». Si les sources se contredisent, dis-le.`;
-}
-
 function safeCountry(req, context) {
   return (
     normalizeCountry(context?.country) ||
@@ -1007,21 +938,7 @@ async function handleAiGateway(req, res, admin, user) {
   // Sans date, le modèle croit être à l'époque de son entraînement.
   system +=
     `\n\nDATE DU JOUR : ${new Date().toLocaleDateString("fr-FR", { timeZone: "UTC", weekday: "long", day: "numeric", month: "long", year: "numeric" })}.` +
-    " Tes connaissances peuvent être dépassées : pour tout fait susceptible d'avoir changé et qui n'est pas dans les sources fournies, dis que tu ne peux pas le vérifier au lieu de répondre de mémoire.";
-
-  let webSources = [];
-  if (needsWebSearch(mode, normalizedMessages)) {
-    const web = await searchWeb(
-      normalizedMessages[normalizedMessages.length - 1].content
-    );
-    webSources = web.results;
-    if (webSources.length) system += formatWebContext(webSources);
-    else if (web.configured) {
-      system += "\n\nAucune source web fiable n'a été trouvée. Dis-le clairement et ne prétends pas avoir vérifié l'information.";
-    } else {
-      system += "\n\nLa recherche web n'est pas disponible. Pour toute information récente ou changeante, dis honnêtement que tu ne peux pas la vérifier.";
-    }
-  }
+    " Tes connaissances peuvent être dépassées : pour tout fait susceptible d'avoir changé et qui n'est pas dans le contexte fourni, dis que tu ne peux pas le vérifier au lieu de répondre de mémoire.";
 
   const sessionId = String(
     req.headers["x-session-id"] ||
@@ -1059,7 +976,7 @@ async function handleAiGateway(req, res, admin, user) {
       model: result.model || null,
       country: country || null,
       latencyMs: latency,
-      sources: webSources.map(({ title, url }) => ({ title, url })),
+      sources: [],
     });
   } catch (err) {
     logError("chat", err, {
