@@ -1,4 +1,7 @@
 {
+  "functions": {
+    "api/translate.js": { "maxDuration": 300 }
+  },
   "rewrites": [
     { "source": "/api/live/token", "destination": "/api/live" },
     { "source": "/api/live-roles", "destination": "/api/live" },

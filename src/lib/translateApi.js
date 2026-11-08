@@ -211,7 +211,7 @@ export async function translateMedia(
       videoId,
       sourceLang: sourceLang ? normalizeLang(sourceLang) : null,
     },
-    { timeoutMs: 120000, ...options },
+    { timeoutMs: 290000, ...options },
     "Traduction du média impossible. Réessaie dans un instant."
   );
 }

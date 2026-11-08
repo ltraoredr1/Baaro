@@ -4,7 +4,7 @@
  * BAARO — Traduction de texte et génération de sous-titres média.
  *
  * Texte : Groq
- * Média : Gemini (l'URL seule ne garantit pas l'analyse réelle de la vidéo)
+ * Média : worker FFmpeg/Whisper (transcription réelle + traduction des cues)
  *
  * Sécurité :
  * - Authentification obligatoire
@@ -23,9 +23,45 @@ import {
 
 import { providerConfig } from "./_lib/ai/router.js";
 import { callOpenAICompatible } from "./_lib/ai/openai-compatible.js";
+import crypto from "node:crypto";
 
 const MAX_CHARS = 4000;
 const MAX_MEDIA_URL_LENGTH = 2048;
+
+const MEDIA_WORKER_TIMEOUT_MS = 280_000;
+
+// Dossiers R2 dont le contenu est public dans BAARO. Le chat et les autres
+// dossiers privés ne peuvent pas être transmis au worker.
+const TRANSLATABLE_MEDIA_FOLDERS = new Set(["videos", "posts", "stories"]);
+
+/**
+ * Convertit une URL publique R2 BAARO en clé d'objet.
+ * Refuse toute URL qui ne vient pas de R2_PUBLIC_BASE_URL : le worker ne doit
+ * jamais télécharger une adresse arbitraire fournie par le client.
+ */
+function r2KeyFromMediaUrl(mediaUrl) {
+  const base = String(process.env.R2_PUBLIC_BASE_URL || "").replace(/\/+$/, "");
+  if (!base || !mediaUrl.startsWith(`${base}/`)) return null;
+
+  let key;
+  try {
+    key = decodeURIComponent(
+      new URL(mediaUrl).pathname.replace(/^\/+/, "")
+    );
+  } catch {
+    return null;
+  }
+
+  const basePath = new URL(base).pathname.replace(/^\/+|\/+$/g, "");
+  if (basePath && key.startsWith(`${basePath}/`)) {
+    key = key.slice(basePath.length + 1);
+  }
+
+  if (!key || key.includes("..") || key.includes("\\")) return null;
+  if (!TRANSLATABLE_MEDIA_FOLDERS.has(key.split("/")[0])) return null;
+
+  return key;
+}
 
 const ALLOWED_LANGS = new Set([
   "fr", "en", "es", "pt", "ar", "zh", "hi", "ru", "ja", "de",
@@ -107,37 +143,6 @@ async function invokeGroqTranslation({
     messages,
     system,
     maxTokens: maxTokens || 1200,
-  });
-}
-
-/**
- * Génération de sous-titres via Gemini.
- *
- * Attention : transmettre une URL dans le prompt ne permet pas
- * nécessairement au modèle de récupérer ou d'analyser la vidéo.
- * Cette branche nécessite un pipeline média réellement compatible.
- */
-async function invokeGeminiMedia({
-  messages,
-  system,
-  maxTokens,
-}) {
-  const cfg = providerConfig("gemini");
-
-  if (!cfg) {
-    throw Object.assign(
-      new Error("Gemini indisponible : vérifie GEMINI_API_KEY."),
-      { status: 503 }
-    );
-  }
-
-  return callOpenAICompatible({
-    key: cfg.key,
-    base: cfg.base,
-    model: cfg.model,
-    messages,
-    system,
-    maxTokens: maxTokens || 2000,
   });
 }
 
@@ -251,59 +256,128 @@ export default async function handler(req, res) {
 
     const mode = body.mode === "dub" ? "dub" : "subtitles";
 
-    try {
-      const prompt = [
-        `URL du média : ${mediaUrl}`,
-        `Langue cible des sous-titres : ${LANG_NAMES[targetLang]}.`,
-        "Si le média et son audio sont réellement accessibles,",
-        "transcris l'audio et traduis les paroles.",
-        "Retourne uniquement du WebVTT valide commençant par WEBVTT.",
-        "Conserve les horodatages réels si disponibles.",
-        "N'invente pas de transcription ni d'horodatages.",
-        "Si le média n'est pas accessible, indique clairement l'échec.",
-      ].join("\n");
+    // Le doublage (synthèse vocale + synchronisation) n'est pas encore
+    // implémenté : on le dit clairement au lieu de renvoyer de faux contenus.
+    if (mode === "dub") {
+      return jsonError(
+        res,
+        501,
+        "Le doublage n'est pas encore disponible. Utilise les sous-titres."
+      );
+    }
 
-      const result = await invokeGeminiMedia({
-        messages: [
-          {
-            role: "user",
-            content: prompt,
+    const sourceKey = r2KeyFromMediaUrl(mediaUrl);
+
+    if (!sourceKey) {
+      return jsonError(
+        res,
+        400,
+        "Ce média n'est pas hébergé sur BAARO ou ne peut pas être traduit."
+      );
+    }
+
+    const workerUrl = String(
+      process.env.BAARO_MEDIA_PROCESSOR_URL || ""
+    ).trim();
+    const workerSecret = String(
+      process.env.BAARO_WORKER_SECRET || ""
+    ).trim();
+
+    if (!workerUrl || !workerSecret) {
+      console.error(
+        "[translate-media] BAARO_MEDIA_PROCESSOR_URL ou BAARO_WORKER_SECRET manquant"
+      );
+      return jsonError(
+        res,
+        503,
+        "Le service de traitement vidéo n'est pas configuré."
+      );
+    }
+
+    try {
+      // Pipeline réel exécuté par le worker :
+      // R2 → FFmpeg/Whisper (transcription horodatée) → traduction des
+      // cues → VTT publié sur R2.
+      const workerResponse = await fetch(workerUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-baaro-worker-secret": workerSecret,
+        },
+        body: JSON.stringify({
+          job: {
+            id: crypto.randomUUID(),
+            job_type: "translate",
+            owner_id: user.id,
+            video_id:
+              typeof body.videoId === "string" ||
+              typeof body.videoId === "number"
+                ? String(body.videoId).slice(0, 80)
+                : null,
+            payload: {
+              sourceKey,
+              targetLanguage: LANG_NAMES[targetLang],
+              sourceLanguage:
+                typeof body.sourceLang === "string"
+                  ? body.sourceLang.slice(0, 20)
+                  : "auto",
+            },
           },
-        ],
-        system:
-          "Tu aides à produire des sous-titres WebVTT. " +
-          "N'invente jamais une transcription audio ni des horodatages.",
-        maxTokens: 2000,
+        }),
+        signal: AbortSignal.timeout(MEDIA_WORKER_TIMEOUT_MS),
       });
 
-      const vttText = String(result.reply || "").trim();
+      const payload = await workerResponse.json().catch(() => ({}));
 
-      // Ne pas transformer une réponse arbitraire en faux sous-titres.
-      if (!/^WEBVTT(?:\s|$)/.test(vttText)) {
+      if (!workerResponse.ok || !payload?.ok) {
+        console.error(
+          "[translate-media] worker",
+          workerResponse.status,
+          payload?.error || ""
+        );
         return jsonError(
           res,
           502,
-          "Le modèle n'a pas fourni de WebVTT valide. " +
-            "Une transcription réelle du média est nécessaire."
+          "La transcription du média a échoué. Réessaie plus tard."
         );
       }
 
-      res.setHeader("X-BAARO-AI-Provider", "gemini");
-      res.setHeader(
-        "X-BAARO-AI-Model",
-        result.modelUsed || "unknown"
-      );
+      const result = payload.result || {};
+      const vttUrl = result.subtitles?.url || null;
+
+      if (!vttUrl) {
+        return jsonError(
+          res,
+          502,
+          "Le worker n'a pas produit de sous-titres."
+        );
+      }
+
+      // Renvoie aussi le texte VTT pour éviter un second aller-retour
+      // (et un éventuel blocage CORS) côté client.
+      let vttText = "";
+      try {
+        const vttResponse = await fetch(vttUrl, {
+          signal: AbortSignal.timeout(15_000),
+        });
+        if (vttResponse.ok) vttText = (await vttResponse.text()).trim();
+      } catch {
+        // vttUrl reste utilisable seul.
+      }
+
+      if (vttText && !/^WEBVTT(?:\s|$)/.test(vttText)) {
+        vttText = "";
+      }
 
       return res.status(200).json({
         ok: true,
         targetLang,
-        sourceLang: "auto",
+        sourceLang: result.sourceLanguage || "auto",
         mode,
+        vttUrl,
         vttText,
         translatedText: vttText,
-        provider: "gemini",
-        warning:
-          "La génération réelle dépend de l'accessibilité du média par le modèle.",
+        provider: result.provider || "worker",
       });
     } catch (error) {
       console.error(
@@ -311,11 +385,15 @@ export default async function handler(req, res) {
         error?.message || error
       );
 
+      const timedOut =
+        error?.name === "TimeoutError" || error?.name === "AbortError";
+
       return jsonError(
         res,
-        error.status || 502,
-        error.message ||
-          "Impossible de générer les sous-titres du média."
+        timedOut ? 504 : 502,
+        timedOut
+          ? "Le traitement de la vidéo prend trop de temps. Essaie une vidéo plus courte."
+          : "Impossible de générer les sous-titres du média."
       );
     }
   }
