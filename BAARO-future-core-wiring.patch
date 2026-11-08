@@ -1,0 +1,197 @@
+[1mdiff --git a/src/features/future/FutureCorePanel.jsx b/src/features/future/FutureCorePanel.jsx[m
+[1mindex 1438b72..e3a3620 100644[m
+[1m--- a/src/features/future/FutureCorePanel.jsx[m
+[1m+++ b/src/features/future/FutureCorePanel.jsx[m
+[36m@@ -1,51 +1,71 @@[m
+ import { useEffect, useState } from "react";[m
+[31m-import { getFuturePreferences, setFuturePreference } from "../../lib/features.js";[m
+[32m+[m[32mimport { FUTURE_CORE_MODULES, getFuturePreferences, setFuturePreference } from "../../lib/futureCore.js";[m
+ import { supabase } from "../../supabaseClient.js";[m
+ import { ShieldAlert, Languages, WifiOff, Store, Activity, KeyRound, Download, ChevronRight, Video, Database } from "lucide-react";[m
+ [m
+[31m-const MODULES = [[m
+[31m-  { key: "ai_editing", title: "AI Editing (Gemini)", desc: "Smart hooks, chapitrage automatique, surbrillance et cadrage intelligent.", icon: Video },[m
+[31m-  { key: "translator", title: "Traduction universelle", desc: "Sous-titres, doublage vocal et traduction texte instantanée par Gemini.", icon: Languages },[m
+[31m-  { key: "safety", title: "Modération & Anti-arnaque", desc: "Analyse contextuelle des liens, détection d'abus et modération préventive.", icon: ShieldAlert },[m
+[31m-  { key: "trust", title: "Trust ID", desc: "Identité et réputation explicables, contestables et vérifiables.", icon: KeyRound },[m
+[31m-  { key: "media_r2", title: "Média & Streaming R2", desc: "Uploads directs sécurisés, encodage HLS et diffusion rapide sans latence.", icon: Database },[m
+[31m-  { key: "offline", title: "Offline-first", desc: "File locale chiffrée et synchronisation différée résiliente.", icon: WifiOff },[m
+[31m-  { key: "commerce", title: "Commerce & Paiements", desc: "Découverte produits, vendeurs vérifiés, Stripe et suivi des commandes.", icon: Store },[m
+[31m-  { key: "creator", title: "Creator Economy & Coach", desc: "Analyse d'audience, conseils de croissance IA, abonnements et pourboires.", icon: Activity },[m
+[31m-];[m
+[32m+[m[32mconst MODULE_DETAILS = {[m
+[32m+[m[32m  ai_agent: { title: "Assistant IA personnel", desc: "Des parcours guidés par objectif, soumis à votre contrôle.", icon: Video },[m
+[32m+[m[32m  trust: { title: "Trust Graph", desc: "Une réputation explicable, fondée sur des événements vérifiables.", icon: KeyRound },[m
+[32m+[m[32m  anti_scam: { title: "Modération & anti-arnaque", desc: "Signaux de risque et prévention des abus, avec contrôle humain.", icon: ShieldAlert },[m
+[32m+[m[32m  translator: { title: "Traduction universelle", desc: "Sous-titres, traduction et doublage assistés.", icon: Languages },[m
+[32m+[m[32m  offline: { title: "Offline-first", desc: "File locale et synchronisation différée résiliente.", icon: WifiOff },[m
+[32m+[m[32m  commerce: { title: "Commerce", desc: "Découverte de produits, vendeurs et commandes.", icon: Store },[m
+[32m+[m[32m  creator: { title: "Outils créateur", desc: "Audience, création et monétisation des contenus.", icon: Activity },[m
+[32m+[m[32m  observability: { title: "Fiabilité & transparence", desc: "Mesures opérationnelles avec collecte minimisée.", icon: Database },[m
+[32m+[m[32m};[m
+[32m+[m
+[32m+[m[32mconst MODULES = FUTURE_CORE_MODULES.map((key) => ({ key, ...MODULE_DETAILS[key] }));[m
+ [m
+ export function FutureCorePanel({ user_id }) {[m
+   const [prefs, setPrefs] = useState({});[m
+   const [busy, setBusy] = useState(null);[m
+   const [notice, setNotice] = useState("");[m
+   useEffect(() => {[m
+[31m-    if (!user_id) return;[m
+[31m-    getFuturePreferences(user_id).then(setPrefs).catch(() => setPrefs({}));[m
+[32m+[m[32m    let active = true;[m
+[32m+[m[32m    setNotice("");[m
+[32m+[m[32m    if (!user_id) {[m
+[32m+[m[32m      setPrefs({});[m
+[32m+[m[32m      return () => { active = false; };[m
+[32m+[m[32m    }[m
+[32m+[m[32m    setPrefs({});[m
+[32m+[m[32m    getFuturePreferences(user_id)[m
+[32m+[m[32m      .then((nextPrefs) => { if (active) setPrefs(nextPrefs); })[m
+[32m+[m[32m      .catch(() => {[m
+[32m+[m[32m        if (active) setNotice("Impossible de charger les préférences des modules.");[m
+[32m+[m[32m      });[m
+[32m+[m[32m    return () => { active = false; };[m
+   }, [user_id]);[m
+   async function toggle(moduleKey) {[m
+     if (!user_id || busy) return;[m
+     setBusy(moduleKey);[m
+[31m-    const nextPrefs = { ...prefs, [moduleKey]: !(prefs[moduleKey] ?? true) };[m
+     try {[m
+[31m-      await setFuturePreference(user_id, moduleKey, nextPrefs[moduleKey]);[m
+[32m+[m[32m      const nextPrefs = await setFuturePreference(user_id, moduleKey, !(prefs[moduleKey] ?? true));[m
+       setPrefs(nextPrefs);[m
+     } catch {[m
+       setNotice("Impossible d'enregistrer cette préférence pour le moment.");[m
+[32m+[m[32m    } finally {[m
+[32m+[m[32m      setBusy(null);[m
+     }[m
+[31m-    setBusy(null);[m
+   }[m
+   async function exportData() {[m
+     if (!user_id) return;[m
+     setBusy("export");[m
+[31m-    const { data, error } = await supabase.rpc("future_export_user_data");[m
+[31m-    if (error) setNotice("L'export est temporairement indisponible.");[m
+[31m-    else {[m
+[32m+[m[32m    try {[m
+[32m+[m[32m      const { data, error } = await supabase.rpc("future_export_user_data");[m
+[32m+[m[32m      if (error) throw error;[m
+       const blob = new Blob([JSON.stringify(data || {}, null, 2)], { type: "application/json" });[m
+       const url = URL.createObjectURL(blob);[m
+[31m-      const a = document.createElement("a"); a.href = url; a.download = `baaro-data-${new Date().toISOString().slice(0, 10)}.json`; a.click(); URL.revokeObjectURL(url);[m
+[32m+[m[32m      const a = document.createElement("a");[m
+[32m+[m[32m      a.href = url;[m
+[32m+[m[32m      a.download = `baaro-data-${new Date().toISOString().slice(0, 10)}.json`;[m
+[32m+[m[32m      a.click();[m
+[32m+[m[32m      window.setTimeout(() => URL.revokeObjectURL(url), 0);[m
+       setNotice("Export préparé. Aucun secret ni jeton n'est inclus.");[m
+[32m+[m[32m    } catch {[m
+[32m+[m[32m      setNotice("L'export est temporairement indisponible.");[m
+[32m+[m[32m    } finally {[m
+[32m+[m[32m      setBusy(null);[m
+     }[m
+[31m-    setBusy(null);[m
+   }[m
+   return ([m
+     <section className="space-y-3">[m
+[36m@@ -54,7 +74,7 @@[m [mexport function FutureCorePanel({ user_id }) {[m
+           <h2 className="text-lg font-bold text-white">BAARO Core Intelligence v2.0</h2>[m
+           <p className="text-xs text-white/45">Contrôlez les capacités avancées et modules IA de votre compte.</p>[m
+         </div>[m
+[31m-        <button onClick={exportData} disabled={busy === "export"} className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[.04] px-3 py-2 text-xs font-semibold text-white/75 disabled:opacity-40 transition hover:bg-white/10">[m
+[32m+[m[32m        <button onClick={exportData} disabled={!user_id || !!busy} className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[.04] px-3 py-2 text-xs font-semibold text-white/75 disabled:opacity-40 transition hover:bg-white/10">[m
+           <Download size={15} /> Exporter mes données[m
+         </button>[m
+       </div>[m
+[36m@@ -63,7 +83,7 @@[m [mexport function FutureCorePanel({ user_id }) {[m
+         {MODULES.map(({ key, title, desc, icon: Icon }) => {[m
+           const enabled = prefs[key] ?? true;[m
+           return ([m
+[31m-            <button key={key} onClick={() => toggle(key)} disabled={busy === key} className="group text-left rounded-2xl border border-white/10 bg-white/[.025] p-4 transition hover:bg-white/[.055] disabled:opacity-50">[m
+[32m+[m[32m            <button key={key} onClick={() => toggle(key)} disabled={!user_id || !!busy} className="group text-left rounded-2xl border border-white/10 bg-white/[.025] p-4 transition hover:bg-white/[.055] disabled:opacity-50">[m
+               <div className="flex items-center justify-between">[m
+                 <span className="rounded-xl bg-cyan-300/10 p-2 text-cyan-300"><Icon size={18} /></span>[m
+                 <span className={`h-2.5 w-2.5 rounded-full ${enabled ? "bg-emerald-400" : "bg-white/20"}`} />[m
+[1mdiff --git a/src/lib/features.js b/src/lib/features.js[m
+[1mindex e80a6df..95912f2 100644[m
+[1m--- a/src/lib/features.js[m
+[1m+++ b/src/lib/features.js[m
+[36m@@ -1,21 +1,10 @@[m
+[31m-import { supabase } from '../supabaseClient.js';[m
+[31m-export const FUTURE_CORE_MODULES = Object.freeze(['ai_agent','trust','anti_scam','translator','offline','commerce','creator','observability']);[m
+[31m-export async function getFuturePreferences(user_id) {[m
+[31m-  if (!user_id) return {};[m
+[31m-  const { data } = await supabase.from('user_settings').select('enabled_modules').eq('user_id', user_id).maybeSingle();[m
+[31m-  return data?.enabled_modules || {};[m
+[31m-}[m
+[31m-export async function setFuturePreference(user_id, module_key, enabled) {[m
+[31m-  const cur = await getFuturePreferences(user_id);[m
+[31m-  const next = { ...cur, [module_key]: !!enabled };[m
+[31m-  return supabase.from('user_settings').upsert({ user_id, enabled_modules: next, updated_at: new Date().toISOString() }, { onConflict: 'user_id' });[m
+[31m-}[m
+[31m-export async function createAgentTask(user_id, goal) {[m
+[31m-  return supabase.from('ai_agent_tasks').insert({ user_id, goal: String(goal).trim().slice(0,2000), status: 'awaiting_confirmation', requires_confirmation: true, plan: [{ step: 'analyze_goal', status: 'pending', attempts: 0 }] }).select('*').single();[m
+[31m-}[m
+[31m-export async function recordSafetySignal(p) {[m
+[31m-  return supabase.from('safety_signals').insert({ user_id: p.user_id||null, target_type: p.targetType, target_id: String(p.targetId), risk_level: p.riskLevel, reasons: p.reasons||[], action: p.action||'review' });[m
+[31m-}[m
+[31m-export async function enqueueOfflineOperation(p) {[m
+[31m-  return supabase.from('offline_sync_queue').upsert({ user_id: p.user_id, client_id: p.clientId, operation: p.operation, payload: p.payload||{}, status: 'pending', attempts: 0, next_attempt_at: new Date().toISOString() }, { onConflict: 'user_id,client_id' });[m
+[31m-}[m
+[32m+[m[32mexport {[m
+[32m+[m[32m  FUTURE_CORE_MODULES,[m
+[32m+[m[32m  createAgentTask,[m
+[32m+[m[32m  enqueueOfflineOperation,[m
+[32m+[m[32m  getFuturePreferences,[m
+[32m+[m[32m  isModuleEnabled,[m
+[32m+[m[32m  recordSafetySignal,[m
+[32m+[m[32m  setFuturePreference,[m
+[32m+[m[32m  toggleFutureModule,[m
+[32m+[m[32m} from './futureCore.js';[m
+[1mdiff --git a/src/lib/futureCore.js b/src/lib/futureCore.js[m
+[1mindex 42f4621..8444a57 100644[m
+[1m--- a/src/lib/futureCore.js[m
+[1m+++ b/src/lib/futureCore.js[m
+[36m@@ -4,6 +4,10 @@[m [mexport const FUTURE_CORE_MODULES = Object.freeze([[m
+   'ai_agent','trust','anti_scam','translator','offline','commerce','creator','observability'[m
+ ]);[m
+ [m
+[32m+[m[32mconst DEFAULT_FUTURE_PREFERENCES = Object.freeze([m
+[32m+[m[32m  Object.fromEntries(FUTURE_CORE_MODULES.map((moduleKey) => [moduleKey, true]))[m
+[32m+[m[32m);[m
+[32m+[m
+ export async function createAgentTask(user_id, goal) {[m
+   const clean = String(goal || '').trim().slice(0, 2000);[m
+   if (!user_id || !clean) throw new Error('goal_required');[m
+[36m@@ -48,14 +52,14 @@[m [mexport async function getFuturePreferences(user_id) {[m
+     .select('enabled_modules')[m
+     .eq('user_id', user_id)[m
+     .maybeSingle();[m
+[31m-  [m
+[31m-  if (error && error.code !== 'PGRST116') throw error;[m
+[31m-  [m
+[31m-  // Si pas encore de settings, tous activés par défaut[m
+[31m-  if (!data?.enabled_modules || Object.keys(data.enabled_modules).length === 0) {[m
+[31m-    return Object.fromEntries(FUTURE_CORE_MODULES.map(k => [k, true]));[m
+[31m-  }[m
+[31m-  return data.enabled_modules;[m
+[32m+[m
+[32m+[m[32m  if (error) throw error;[m
+[32m+[m
+[32m+[m[32m  const saved = data?.enabled_modules;[m
+[32m+[m[32m  const savedPreferences = saved && typeof saved === 'object' && !Array.isArray(saved)[m
+[32m+[m[32m    ? saved[m
+[32m+[m[32m    : {};[m
+[32m+[m[32m  return { ...DEFAULT_FUTURE_PREFERENCES, ...savedPreferences };[m
+ }[m
+ [m
+ export async function setFuturePreference(user_id, module_key, enabled) {[m
+[36m@@ -80,6 +84,7 @@[m [mexport async function setFuturePreference(user_id, module_key, enabled) {[m
+ }[m
+ [m
+ export async function toggleFutureModule(user_id, module_key) {[m
+[32m+[m[32m  if (!FUTURE_CORE_MODULES.includes(module_key)) throw new Error('unknown_module');[m
+   const current = await getFuturePreferences(user_id);[m
+   const newValue = !current[module_key];[m
+   return setFuturePreference(user_id, module_key, newValue);[m
