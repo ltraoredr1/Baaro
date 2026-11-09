@@ -66,7 +66,7 @@ export function StoryCard({ story: s, isMine, counts, onOpen }) {
 
       <div className="text-[10px] opacity-60 flex items-center justify-between gap-2 z-10">
         <span>{new Date(s.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-        {isMine && <span>👁 {counts?.views || 0} · ❤️ {counts?.likes || 0}</span>}
+        {isMine && <span>👁 {counts ? counts.views : '—'} · ❤️ {counts ? counts.likes : '—'}</span>}
       </div>
     </button>
   );

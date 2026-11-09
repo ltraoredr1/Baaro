@@ -60,20 +60,24 @@ export async function fetchScheduledStories(userId) {
 
 /** Map storyId -> emoji choisi par l'utilisateur. */
 export async function fetchMyReactions(userId, storyIds) {
-  const { data } = await supabase
+  if (!userId || !storyIds?.length) return new Map();
+  const { data, error } = await supabase
     .from('story_reactions')
     .select('story_id, reaction')
     .eq('user_id', userId)
     .in('story_id', storyIds);
+  if (error) throw error;
   return new Map((data || []).map((r) => [r.story_id, r.reaction]));
 }
 
 export async function fetchStoryCounts(storyId) {
-  const [{ count: views }, { count: likes }] = await Promise.all([
+  const [viewsResult, likesResult] = await Promise.all([
     supabase.from('story_views').select('viewer_id', { count: 'exact', head: true }).eq('story_id', storyId),
     supabase.from('story_reactions').select('user_id', { count: 'exact', head: true }).eq('story_id', storyId),
   ]);
-  return { views: views ?? 0, likes: likes ?? 0 };
+  if (viewsResult.error) throw viewsResult.error;
+  if (likesResult.error) throw likesResult.error;
+  return { views: viewsResult.count ?? 0, likes: likesResult.count ?? 0 };
 }
 
 /** shop_products n'a pas de user_id : on passe par shops.owner_id -> shop_id. */
@@ -93,18 +97,20 @@ export async function fetchMyProducts(userId) {
 
 /** Produit à jour (prix / stock), car story.product est une copie figée. */
 export async function fetchLiveProduct(productId) {
-  const { data } = await supabase.from('shop_products').select('*').eq('id', productId).maybeSingle();
+  const { data, error } = await supabase.from('shop_products').select('*').eq('id', productId).maybeSingle();
+  if (error) throw error;
   return data || null;
 }
 
 export async function searchProfiles(query) {
   const term = (query || '').trim().replace(/[%,()]/g, '');
   if (term.length < 2) return [];
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('profiles')
     .select('id, display_name, handle')
     .or(`handle.ilike.%${term}%,display_name.ilike.%${term}%`)
     .limit(6);
+  if (error) throw error;
   return data || [];
 }
 
@@ -116,7 +122,17 @@ export async function fetchProductStats() {
 
 // ---------- Écriture ----------
 export async function recordStoryView(storyId) {
-  try { await supabase.rpc('record_story_view', { p_story_id: storyId }); } catch { /* non bloquant */ }
+  try {
+    const { error } = await supabase.rpc('record_story_view', { p_story_id: storyId });
+    if (error) {
+      console.warn('[Stories] vue non enregistrée :', error.message);
+      return false;
+    }
+    return true;
+  } catch (error) {
+    console.warn('[Stories] vue non enregistrée :', error?.message || error);
+    return false;
+  }
 }
 
 export async function setReaction(storyId, userId, emoji) {
@@ -145,21 +161,44 @@ export async function answerSticker(storyId, stickerId, userId, body) {
 
 /** type : 'view' | 'click' | 'add_to_cart' | 'purchase' */
 export async function recordProductEvent({ storyId, productId, type, quantity = 1, orderId = null }) {
-  if (!storyId || productId === undefined || productId === null) return;
+  if (!storyId || productId === undefined || productId === null) return false;
+  if (!['view', 'click', 'add_to_cart', 'purchase'].includes(type)) return false;
+  if (!Number.isSafeInteger(quantity) || quantity < 1) return false;
   try {
-    await supabase.rpc('record_story_product_event', {
+    const { error } = await supabase.rpc('record_story_product_event', {
       p_story_id: storyId,
       p_product_id: String(productId),
       p_event: type,
       p_quantity: quantity,
       p_order_id: orderId,
     });
-  } catch { /* statistiques : jamais bloquant */ }
+    if (error) {
+      console.warn('[Stories] événement produit non enregistré :', error.message);
+      return false;
+    }
+    return true;
+  } catch (error) {
+    console.warn('[Stories] événement produit non enregistré :', error?.message || error);
+    return false;
+  }
 }
 
 export async function insertStory(payload) {
   const { error } = await supabase.from('stories').insert(payload);
   if (error) throw error;
+}
+
+/** Un seul INSERT PostgREST pour garder le lot cohérent côté PostgreSQL. */
+export async function insertStories(payloads) {
+  if (!Array.isArray(payloads) || payloads.length === 0) return;
+  const { error } = await supabase.from('stories').insert(payloads);
+  if (error) {
+    const wrapped = new Error(error.message || 'Création des stories impossible');
+    wrapped.code = error.code;
+    // Une erreur PostgreSQL explicite signifie que la transaction d'INSERT a échoué.
+    wrapped.safeToDiscard = true;
+    throw wrapped;
+  }
 }
 
 export async function deleteStory(storyId, authorId) {
@@ -168,9 +207,13 @@ export async function deleteStory(storyId, authorId) {
   if (!data?.length) throw new Error('Story introuvable ou déjà supprimée.');
 }
 
-export async function uploadStoryMedia(file, userId) {
-  const result = await uploadExternalMedia(file, { folder: 'stories', user_id: userId, maxBytes: MAX_UPLOAD_BYTES });
-  return result.url;
+export async function uploadStoryMedia(file, userId, verifiedMime) {
+  const uploadFile = verifiedMime && (!file.type || file.type === 'application/octet-stream')
+    ? new File([file], file.name || 'story-media', { type: verifiedMime, lastModified: file.lastModified })
+    : file;
+  return uploadExternalMedia(uploadFile, {
+    folder: 'stories', user_id: userId, maxBytes: MAX_UPLOAD_BYTES,
+  });
 }
 
 export function subscribeToStories(onChange) {

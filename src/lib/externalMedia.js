@@ -109,6 +109,7 @@ export async function uploadExternalMedia(inputFile, folderOrOptions = "posts") 
   let compress = true;
   let maxImageSide = DEFAULT_MAX_SIDE;
   let imageQuality = DEFAULT_QUALITY;
+  let maxBytes = null;
 
   if (typeof folderOrOptions === "string") {
     folder = folderOrOptions;
@@ -121,12 +122,19 @@ export async function uploadExternalMedia(inputFile, folderOrOptions = "posts") 
     if (folderOrOptions.compress === false) compress = false;
     if (folderOrOptions.maxImageSide) maxImageSide = folderOrOptions.maxImageSide;
     if (folderOrOptions.imageQuality) imageQuality = folderOrOptions.imageQuality;
+    if (Number.isSafeInteger(folderOrOptions.maxBytes) && folderOrOptions.maxBytes > 0) {
+      maxBytes = folderOrOptions.maxBytes;
+    }
   }
 
   // Réduit les images AVANT l'envoi : moins de données montantes et descendantes
   const file = compress
     ? await compressImage(inputFile, { maxSide: maxImageSide, quality: imageQuality })
     : inputFile;
+
+  if (maxBytes !== null && file.size > maxBytes) {
+    throw new Error(`Fichier trop volumineux (maximum ${Math.round(maxBytes / (1024 * 1024))} Mo).`);
+  }
 
   const ext = file.name?.split(".").pop() || "bin";
   const size = file.size;
@@ -144,16 +152,23 @@ export async function uploadExternalMedia(inputFile, folderOrOptions = "posts") 
   if (!prep.ok) throw new Error(prep.error || "prepare failed");
   const { uploadUrl, path, publicUrl } = prep;
 
-  // 2. Envoi direct sur R2 (pas d'en-tête d'authentification ici, l'URL signée suffit)
-  await putFileWithRetry(uploadUrl, file, onProgress);
-  onProgress?.(100);
+  let fin;
+  try {
+    // 2. Envoi direct sur R2 (pas d'en-tête d'authentification ici, l'URL signée suffit)
+    await putFileWithRetry(uploadUrl, file, onProgress);
+    onProgress?.(100);
 
-  // 3. Étape "finalize" AVEC le token d'authentification
-  const fin = await callMediaApi(
-    { action: "finalize", folder, path, publicUrl, size, contentType, fileName },
-    token
-  );
-  if (!fin.ok) throw new Error(fin.error || "finalize failed");
+    // 3. Étape "finalize" AVEC le token d'authentification
+    fin = await callMediaApi(
+      { action: "finalize", folder, path, publicUrl, size, contentType, fileName },
+      token
+    );
+    if (!fin.ok) throw new Error(fin.error || "finalize failed");
+  } catch (error) {
+    // La story n'a pas encore été insérée ; l'objet préparé n'est donc pas publié.
+    await discardUploadedMedia(path);
+    throw error;
+  }
 
   const asset = fin.asset || {};
   return {

@@ -18,7 +18,7 @@ export function ViewerContent({ story, userId, viewer, cart, videoRef, readOnly,
   const { mediaLoading, setMediaLoading, setProgress, translatedCaption, setTranslatedCaption, next, setIsPaused } = viewer;
   const stop = (e) => e.stopPropagation();
 
-  const product = useLiveProduct(story.product);
+  const { product, status: productStatus } = useLiveProduct(story.product);
   const isMine = story.author_id === userId;
   // On ne mesure que les vues d'autres personnes, et jamais dans un highlight (pas de story_id valide).
   const trackingStoryId = !readOnly && userId && !isMine ? story.id : null;
@@ -38,13 +38,15 @@ export function ViewerContent({ story, userId, viewer, cart, videoRef, readOnly,
   const showRelation = !readOnly && !!userId && !!authorId && !isMine;
   const [rel, setRel] = useState(null); // { following, friend: 'none'|'pending_out'|'pending_in'|'friends' }
   const [relBusy, setRelBusy] = useState(false);
+  const [relError, setRelError] = useState('');
 
   const loadRelation = useCallback(async () => {
     if (!showRelation) return null;
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('follows')
       .select('follower_id,followed_id,status,is_friend')
       .or(`and(follower_id.eq.${userId},followed_id.eq.${authorId}),and(follower_id.eq.${authorId},followed_id.eq.${userId})`);
+    if (error) throw error;
     const mine = data?.find((r) => r.follower_id === userId);
     const theirs = data?.find((r) => r.follower_id === authorId);
     let friend = 'none';
@@ -57,18 +59,23 @@ export function ViewerContent({ story, userId, viewer, cart, videoRef, readOnly,
   useEffect(() => {
     let alive = true;
     setRel(null);
-    loadRelation().then((r) => alive && setRel(r)).catch(() => {});
+    setRelError('');
+    loadRelation()
+      .then((r) => alive && setRel(r))
+      .catch((e) => alive && setRelError(e?.message || 'Relations indisponibles'));
     return () => { alive = false; };
   }, [loadRelation]);
 
   const runRelation = async (action) => {
     if (relBusy) return;
     setRelBusy(true);
+    setRelError('');
     try {
-      await action();
+      const result = await action();
+      if (result?.error) throw result.error;
       setRel(await loadRelation());
-    } catch {
-      /* l'état affiché reste celui de la base */
+    } catch (e) {
+      setRelError(e?.message || 'Action impossible. Réessaie.');
     } finally {
       setRelBusy(false);
     }
@@ -95,8 +102,12 @@ export function ViewerContent({ story, userId, viewer, cart, videoRef, readOnly,
             autoPlay
             playsInline
             onLoadedData={() => setMediaLoading(false)}
-            onTimeUpdate={(e) => setProgress((e.currentTarget.currentTime / e.currentTarget.duration) * 100)}
+            onTimeUpdate={(e) => {
+              const { currentTime, duration } = e.currentTarget;
+              if (Number.isFinite(duration) && duration > 0) setProgress((currentTime / duration) * 100);
+            }}
             onEnded={next}
+            onError={() => { setMediaLoading(false); next(); }}
           />
         ) : (
           <>
@@ -134,8 +145,14 @@ export function ViewerContent({ story, userId, viewer, cart, videoRef, readOnly,
         </div>
       )}
 
+      {showRelation && !rel && relError && (
+        <div role="status" className="absolute top-[76px] left-4 right-4 z-30 text-xs text-red-200" onClick={stop}>
+          {relError}
+        </div>
+      )}
+
       {showRelButtons && (
-        <div className="absolute top-[76px] left-4 z-30 flex items-center gap-2" onClick={stop}>
+        <div className="absolute top-[76px] left-4 z-30 flex items-center gap-2 flex-wrap" onClick={stop}>
           {rel.friend === 'friends' && <span className={pillOn}>✓ Amis</span>}
 
           {rel.friend !== 'friends' && rel.friend !== 'pending_out' && (
@@ -160,10 +177,23 @@ export function ViewerContent({ story, userId, viewer, cart, videoRef, readOnly,
             </button>
           )}
           {rel.friend === 'pending_out' && <span className={pillOff}>Demande envoyée</span>}
+          {relError && <span role="status" className="w-full text-xs text-red-200">{relError}</span>}
         </div>
       )}
 
-      {product && (
+      {story.product && productStatus !== 'live' && (
+        <div
+          role="status"
+          className={`absolute ${showRelButtons ? 'top-32' : 'top-20'} inset-x-6 z-30 rounded-xl border border-white/20 bg-black/75 px-3 py-2 text-center text-xs text-white`}
+          onClick={stop}
+        >
+          {productStatus === 'loading' && 'Vérification du prix et du stock…'}
+          {productStatus === 'error' && 'Prix et stock actuels indisponibles. Réessaie avant de commander.'}
+          {productStatus === 'unavailable' && 'Ce produit n’est plus disponible.'}
+        </div>
+      )}
+
+      {product && productStatus === 'live' && (
         <div className={`absolute ${showRelButtons ? 'top-32' : 'top-20'} inset-x-6 z-30 space-y-2`} onClick={stop}>
           <ProductCard
             product={product}

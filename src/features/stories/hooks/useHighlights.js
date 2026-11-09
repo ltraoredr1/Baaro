@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import * as api from '../api/highlightsApi.js';
 
 /** Highlights d'un profil. Utilisable aussi depuis la page profil : useHighlights(profileId). */
@@ -6,21 +6,33 @@ export function useHighlights(ownerId) {
   const [list, setList] = useState([]);
   const [owner, setOwner] = useState(null);
   const [loading, setLoading] = useState(true);
+  const requestId = useRef(0);
 
   const load = useCallback(async () => {
-    if (!ownerId) { setLoading(false); return; }
+    const current = ++requestId.current;
+    if (!ownerId) {
+      setList([]); setOwner(null); setLoading(false);
+      return;
+    }
+    setLoading(true);
     try {
-      const [l, o] = await Promise.all([api.fetchHighlights(ownerId), api.fetchProfile(ownerId)]);
-      setList(l);
-      setOwner(o);
+      const [nextList, nextOwner] = await Promise.all([api.fetchHighlights(ownerId), api.fetchProfile(ownerId)]);
+      if (current === requestId.current) {
+        setList(nextList);
+        setOwner(nextOwner);
+      }
     } catch (e) {
-      console.error('[Highlights] load:', e);
+      if (current === requestId.current) console.error('[Highlights] load:', e);
     } finally {
-      setLoading(false);
+      if (current === requestId.current) setLoading(false);
     }
   }, [ownerId]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    setList([]); setOwner(null);
+    load();
+    return () => { requestId.current += 1; };
+  }, [load]);
 
   const create = async (title, story) => { await api.createHighlight(title, story); await load(); };
 

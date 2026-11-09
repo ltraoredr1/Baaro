@@ -15,6 +15,10 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - run: sudo apt-get update && sudo apt-get install -y clang lld
       - uses: actions/setup-node@v4
         with:
           node-version-file: '.nvmrc'
@@ -33,6 +37,15 @@ jobs:
       - run: npm run check:payout
       - run: npm run check:performance
       - run: npm run check:android
+      - run: npm run test:stories
+        env:
+          VITE_APP_ENV: test
+      - name: Verify committed Stories WASM matches its sources
+        run: |
+          if [[ -n "$(git status --porcelain -- public/wasm)" ]]; then
+            echo "::error::Les binaires Stories WASM sont absents ou obsolètes. Regénère-les avec npm run test:stories et inclus public/wasm dans le commit."
+            exit 1
+          fi
       - run: npm run build
         env:
           VITE_APP_ENV: production

@@ -7,9 +7,9 @@
     "node": "24.x"
   },
   "scripts": {
-    "predev": "node scripts/copy-ort-wasm.mjs && node scripts/copy-mediapipe-wasm.mjs",
+    "predev": "node scripts/build-stories-wasm.mjs && node scripts/copy-ort-wasm.mjs && node scripts/copy-mediapipe-wasm.mjs",
     "dev": "vite",
-    "prebuild": "node scripts/copy-ort-wasm.mjs && node scripts/copy-mediapipe-wasm.mjs",
+    "prebuild": "node scripts/build-stories-wasm.mjs && node scripts/copy-ort-wasm.mjs && node scripts/copy-mediapipe-wasm.mjs",
     "build": "vite build",
     "preview": "vite preview",
     "check:production": "node scripts/check-production.mjs",
@@ -39,7 +39,9 @@
     "capgo:upload:delta": "npm run build && npx @capgo/cli@latest bundle upload --channel production --delta",
     "capgo:list": "npx @capgo/cli@latest bundle list",
     "ci": "npm run check:lock && npm run check:production && npm run audit:security && npm run check:secrets && npm run check:upstash && npm run check:e2e && npm run check:e2e:smoke && npm run check:payout && npm run check:performance && npm run check:android && npm run build",
-    "test:chat-translate": "node scripts/test-chat-autotranslate.mjs"
+    "test:chat-translate": "node scripts/test-chat-autotranslate.mjs",
+    "pretest:stories": "node scripts/build-stories-wasm.mjs --strict",
+    "test:stories": "node --test tests/stories/*.test.mjs && node scripts/test-story-policy-rust.mjs && node scripts/test-stories-wasm.mjs"
   },
   "dependencies": {
     "@aparajita/capacitor-biometric-auth": "^7.0.1",

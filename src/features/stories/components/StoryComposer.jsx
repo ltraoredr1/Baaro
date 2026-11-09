@@ -152,13 +152,13 @@ export function StoryComposer({ composer: c, products, cart, embedded = false })
         <div className="grid grid-cols-4 gap-2">
           {/* `capture` ouvre directement l'appareil photo / caméra sur mobile */}
           <Tile as="label" icon={Camera} label="Photo">
-            <input type="file" accept="image/*" capture="environment" onChange={c.addFiles} className="hidden" />
+            <input type="file" accept="image/jpeg,image/png,image/gif,image/webp,image/avif" capture="environment" onChange={c.addFiles} className="hidden" />
           </Tile>
           <Tile as="label" icon={Video} label="Vidéo">
-            <input type="file" accept="video/*" capture="environment" onChange={c.addFiles} className="hidden" />
+            <input type="file" accept="video/mp4,video/webm,video/quicktime,video/x-m4v" capture="environment" onChange={c.addFiles} className="hidden" />
           </Tile>
           <Tile as="label" icon={ImageIcon} label="Galerie">
-            <input type="file" accept="image/*,video/*" multiple onChange={c.addFiles} className="hidden" />
+            <input type="file" accept="image/jpeg,image/png,image/gif,image/webp,image/avif,video/mp4,video/webm,video/quicktime,video/x-m4v" multiple onChange={c.addFiles} className="hidden" />
           </Tile>
           <Tile
             icon={Sticker}

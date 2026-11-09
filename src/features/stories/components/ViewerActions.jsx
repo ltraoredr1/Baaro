@@ -8,8 +8,8 @@ export function ViewerActions({ story, isMine, current, busy, counts, onReact, o
     <div className="flex items-center gap-2 flex-wrap">
       {isMine && (
         <>
-          <button onClick={() => onOpenEngagement('storyViews')} className={pill}>👁 {counts?.views || 0}</button>
-          <button onClick={() => onOpenEngagement('storyLikes')} className={pill}>❤️ {counts?.likes || 0}</button>
+          <button onClick={() => onOpenEngagement('storyViews')} className={pill}>👁 {counts ? counts.views : '—'}</button>
+          <button onClick={() => onOpenEngagement('storyLikes')} className={pill}>❤️ {counts ? counts.likes : '—'}</button>
         </>
       )}
 

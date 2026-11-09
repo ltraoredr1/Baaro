@@ -11,25 +11,26 @@ export function useStoryViewer(stories, onOpen) {
   const timer = useRef(null);
 
   const currentStory = index !== null ? stories[index] : null;
+  const needsMediaLoad = (story) => Boolean(story?.media_url && story.media_type !== 'text');
 
   const reset = () => { setProgress(0); setTranslatedCaption(null); };
 
   const next = useCallback(() => {
     if (index === null) return;
     if (index < stories.length - 1) {
-      setMediaLoading(true); setProgress(0); setTranslatedCaption(null);
+      setMediaLoading(needsMediaLoad(stories[index + 1])); setProgress(0); setTranslatedCaption(null);
       setIndex((i) => i + 1);
     } else {
       setIndex(null); setTranslatedCaption(null);
     }
-  }, [index, stories.length]);
+  }, [index, stories]);
 
   const previous = useCallback(() => {
     if (index !== null && index > 0) {
-      setMediaLoading(true); setProgress(0); setTranslatedCaption(null);
+      setMediaLoading(needsMediaLoad(stories[index - 1])); setProgress(0); setTranslatedCaption(null);
       setIndex((i) => i - 1);
     }
-  }, [index]);
+  }, [index, stories]);
 
   // Défilement auto des images / textes (les vidéos pilotent via onTimeUpdate)
   useEffect(() => {
@@ -47,7 +48,7 @@ export function useStoryViewer(stories, onOpen) {
   const open = async (i) => {
     const s = stories[i];
     if (!s) return;
-    reset(); setMediaLoading(true); setIndex(i);
+    reset(); setMediaLoading(needsMediaLoad(s)); setIndex(i);
     await onOpen?.(s);
   };
 

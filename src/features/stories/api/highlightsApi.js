@@ -25,24 +25,31 @@ export async function fetchHighlights(ownerId) {
 }
 
 export async function fetchProfile(ownerId) {
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('profiles')
     .select('id, display_name, handle, avatar_url, flag')
     .eq('id', ownerId)
     .maybeSingle();
+  if (error) throw error;
   return data || null;
 }
 
 export async function createHighlight(title, story) {
+  const cleanTitle = String(title || '').trim().slice(0, 40);
+  if (!cleanTitle) throw new Error('Le titre du highlight est obligatoire.');
   const cover = story.media_type === 'image' ? story.media_url : null;
   const { data, error } = await supabase
     .from('story_highlights')
-    .insert({ title: title.trim(), cover_url: cover })
+    .insert({ title: cleanTitle, cover_url: cover })
     .select('id')
     .single();
   if (error) throw error;
   const { error: ie } = await supabase.from('story_highlight_items').insert(toItem(story, data.id, 0));
-  if (ie) throw ie;
+  if (ie) {
+    const { error: rollbackError } = await supabase.from('story_highlights').delete().eq('id', data.id);
+    if (rollbackError) console.error('[Highlights] impossible de nettoyer le parent incomplet:', rollbackError.message);
+    throw ie;
+  }
   return data.id;
 }
 

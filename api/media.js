@@ -1,9 +1,12 @@
-import { S3Client, PutObjectCommand, HeadObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, HeadObjectCommand, GetObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { applyCors, getAdminClient, requireUser, rateLimitAsync } from "./_shared.js";
+import { detectStoryMediaType, isCompatibleStoryMime } from "./_lib/story-media-signature.js";
 import crypto from "node:crypto";
 
 const MAX_BYTES = 500 * 1024 * 1024;
+const MAX_STORY_BYTES = 100 * 1024 * 1024;
+const maxBytesForFolder = (folder) => folder === "stories" ? MAX_STORY_BYTES : MAX_BYTES;
 // Les dossiers utilisés par les uploads média doivent être explicitement autorisés.
 const FOLDERS = new Set([
   "profiles",
@@ -108,8 +111,9 @@ export default async function handler(req, res) {
     const folder = String(body.folder || objectKey.split("/")[0] || "misc");
     const size = Number(body.size);
     const mime = String(body.contentType || "application/octet-stream").slice(0, 150);
+    let storageMime = mime;
     const fileName = String(body.fileName || "upload").slice(0, 255);
-    if (!FOLDERS.has(folder) || !objectKey.startsWith(`${folder}/${user.id}/`) || !Number.isSafeInteger(size) || size <= 0 || size > MAX_BYTES) {
+    if (!FOLDERS.has(folder) || !objectKey.startsWith(`${folder}/${user.id}/`) || !Number.isSafeInteger(size) || size <= 0 || size > maxBytesForFolder(folder)) {
       return res.status(400).json({ ok: false, error: "Métadonnées média invalides" });
     }
     if (isBlocked(mime, objectKey.split(".").pop())) {
@@ -121,7 +125,7 @@ export default async function handler(req, res) {
       const expectedUrl = `${r2.publicBase}/${objectKey}`;
       if (publicUrl !== expectedUrl) return res.status(400).json({ ok: false, error: "URL média invalide" });
 
-      // Vérifie seulement que le fichier a bien été envoyé sur R2 (aucune limite ajoutée)
+      // La taille réelle R2 est autoritaire : ne pas se fier au poids déclaré par le client.
       let realSize = size;
       try {
         const head = await r2.client.send(new HeadObjectCommand({ Bucket: r2.bucket, Key: objectKey }));
@@ -131,10 +135,30 @@ export default async function handler(req, res) {
       } catch {
         return res.status(404).json({ ok: false, error: "Fichier introuvable : envoi non terminé." });
       }
+      if (realSize > maxBytesForFolder(folder)) {
+        await r2.client.send(new DeleteObjectCommand({ Bucket: r2.bucket, Key: objectKey }));
+        return res.status(413).json({ ok: false, error: "Fichier trop volumineux pour ce type de média." });
+      }
+      if (folder === "stories") {
+        const prefixResult = await r2.client.send(new GetObjectCommand({
+          Bucket: r2.bucket,
+          Key: objectKey,
+          Range: "bytes=0-63",
+        }));
+        const prefix = prefixResult.Body
+          ? Buffer.from(await prefixResult.Body.transformToByteArray())
+          : Buffer.alloc(0);
+        const detectedType = detectStoryMediaType(prefix);
+        if (!isCompatibleStoryMime(detectedType, mime)) {
+          await r2.client.send(new DeleteObjectCommand({ Bucket: r2.bucket, Key: objectKey }));
+          return res.status(415).json({ ok: false, error: "Le contenu du fichier ne correspond pas à un format Story pris en charge." });
+        }
+        if (mime.toLowerCase() === "application/octet-stream") storageMime = detectedType;
+      }
 
       const row = {
         owner_id: user.id, provider: "cloudflare-r2", bucket: r2.bucket, folder, object_key: objectKey,
-        public_url: expectedUrl, mime_type: mime, byte_size: realSize, original_name: fileName,
+        public_url: expectedUrl, mime_type: storageMime, byte_size: realSize, original_name: fileName,
         status: "ready", updated_at: new Date().toISOString(),
       };
       const ASSET_COLUMNS = "id,owner_id,provider,bucket,folder,object_key,public_url,mime_type,byte_size,original_name,status,created_at,updated_at";
@@ -158,7 +182,7 @@ export default async function handler(req, res) {
 
   const folder = String(body.folder || "misc");
   const size = Number(body.size);
-  if (!FOLDERS.has(folder) || !Number.isSafeInteger(size) || size <= 0 || size > MAX_BYTES) {
+  if (!FOLDERS.has(folder) || !Number.isSafeInteger(size) || size <= 0 || size > maxBytesForFolder(folder)) {
     return res.status(400).json({ ok: false, error: "Paramètres média invalides" });
   }
 
