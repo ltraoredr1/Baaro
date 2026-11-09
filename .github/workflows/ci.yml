@@ -1,52 +1,142 @@
 name: BAARO CI — Production Readiness
+
 on:
   push:
     branches: [main, develop]
   pull_request:
     branches: [main, develop]
   workflow_dispatch:
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
+
 jobs:
   checks:
     name: Production Checks
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Rust version pinned to the locally verified toolchain.
+      - name: Install Rust 1.99.1
+        uses: dtolnay/rust-toolchain@1.99.1
         with:
           targets: wasm32-unknown-unknown
-      - run: sudo apt-get update && sudo apt-get install -y clang-18 lld-18
-      - uses: actions/setup-node@v4
+
+      # Pin the Ubuntu runner to keep the compiler environment stable.
+      - name: Install Clang 18 and LLD 18
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y clang-18 lld-18
+
+      # Node.js version pinned to the locally verified version.
+      - name: Setup Node.js 24.22.2
+        uses: actions/setup-node@v4
         with:
-          node-version-file: '.nvmrc'
-          cache: 'npm'
-      - run: npm ci --prefer-offline --no-audit
-      - run: npm run check:lock
-      - run: npm run check:production
-      - run: npm run audit:security
-      - run: npm run check:secrets
-      - run: npm run check:upstash
+          node-version: 24.22.2
+          cache: npm
+
+      # Fail early if the CI environment differs from Codespaces.
+      - name: Verify toolchain versions
+        run: |
+          set -euo pipefail
+
+          echo "===== NODE ====="
+          node --version
+          test "$(node --version)" = "v24.22.2"
+
+          echo "===== NPM ====="
+          npm --version
+
+          echo "===== RUST ====="
+          rustc --version
+          cargo --version
+          rustc --version | grep -F "1.99.1"
+          cargo --version | grep -F "1.99.1"
+
+          echo "===== RUST TARGET ====="
+          rustup target list --installed
+          rustup target list --installed | grep -qx "wasm32-unknown-unknown"
+
+          echo "===== CLANG ====="
+          clang-18 --version
+          clang-18 --version | grep -F "18.1.3"
+
+          echo "===== LLD ====="
+          wasm-ld-18 --version
+          wasm-ld-18 --version | grep -F "18.1.3"
+
+      - name: Install npm dependencies
+        run: npm ci --prefer-offline --no-audit
+
+      - name: Check lockfile
+        run: npm run check:lock
+
+      - name: Production checks
+        run: npm run check:production
+
+      - name: Security audit
+        run: npm run audit:security
+
+      - name: Check secrets
+        run: npm run check:secrets
+
+      - name: Check Upstash configuration
+        run: npm run check:upstash
         env:
           UPSTASH_REDIS_REST_URL: ""
           UPSTASH_REDIS_REST_TOKEN: ""
-      - run: npm run check:e2e
-      - run: npm run check:e2e:smoke
-      - run: npm run check:payout
-      - run: npm run check:performance
-      - run: npm run check:android
-      - run: npm run test:stories
+
+      - name: E2E readiness
+        run: npm run check:e2e
+
+      - name: E2E smoke checks
+        run: npm run check:e2e:smoke
+
+      - name: Payout checks
+        run: npm run check:payout
+
+      - name: Performance checks
+        run: npm run check:performance
+
+      - name: Android checks
+        run: npm run check:android
+
+      # Builds Rust and C WASM artifacts and executes Stories tests.
+      - name: Stories tests and WASM compilation
+        run: npm run test:stories
         env:
           VITE_APP_ENV: test
-      - name: Verify committed Stories WASM matches its sources
+
+      # Detect missing, modified or untracked generated WASM artifacts.
+      - name: Verify committed Stories WASM
         run: |
+          set -euo pipefail
+
+          echo "===== WASM FILES ====="
+          ls -lh public/wasm/
+
+          echo "===== WASM CHECKSUMS ====="
+          sha256sum public/wasm/*.wasm
+
+          echo "===== GIT STATUS ====="
+          git status --short -- public/wasm
+
           if [[ -n "$(git status --porcelain -- public/wasm)" ]]; then
-            echo "::error::Les binaires Stories WASM sont absents ou obsolètes. Regénère-les avec npm run test:stories et inclus public/wasm dans le commit."
+            echo "::error::Stories WASM artifacts differ from the committed versions."
+            echo "::error::Run npm run test:stories and commit the generated public/wasm files."
             exit 1
           fi
-      - run: npm run build
+
+          echo "Stories WASM artifacts are synchronized."
+
+      - name: Production build
+        run: npm run build
         env:
           VITE_APP_ENV: production
           VITE_SUPABASE_URL: https://example.supabase.co
