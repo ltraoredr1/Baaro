@@ -1,0 +1,1938 @@
+diff --git a/api/e2e-backup.js b/api/e2e-backup.js
+new file mode 100644
+index 0000000..c236f03
+--- /dev/null
++++ b/api/e2e-backup.js
+@@ -0,0 +1,231 @@
++/**
++ * Sauvegarde de la clé E2E protégée par un PIN à 4 chiffres.
++ *
++ * Un PIN à 4 chiffres n'a que 10 000 combinaisons : il n'est sûr que si le
++ * nombre d'essais est limité PAR LE SERVEUR. Ce endpoint :
++ *  - ne renvoie la sauvegarde (et le secret d'enveloppe) qu'après vérification
++ *    d'une preuve dérivée du PIN (le PIN lui-même ne quitte jamais l'appareil) ;
++ *  - bloque le compte après 5 erreurs (1 h, puis 24 h, puis 7 jours) ;
++ *  - ne stocke jamais la clé privée en clair : elle est chiffrée côté client
++ *    avec une clé qui dépend À LA FOIS du PIN et du secret d'enveloppe.
++ *
++ * Table : voir docs/e2e-pin-backup.sql (accès service_role uniquement).
++ */
++import crypto from "node:crypto";
++import { getAdminClient, requireUser, applyCors, rateLimitAsync } from "./_shared.js";
++
++const TABLE = "e2e_key_backups";
++const FAILS_PER_LEVEL = 5;
++const LOCK_DURATIONS_MS = [
++  60 * 60 * 1000, // 1 h
++  24 * 60 * 60 * 1000, // 24 h
++  7 * 24 * 60 * 60 * 1000, // 7 jours
++];
++const MAX_BACKUP_BYTES = 16 * 1024;
++const B64 = /^[A-Za-z0-9+/]+={0,2}$/;
++
++function b64Bytes(value, expectedLength) {
++  if (typeof value !== "string" || !B64.test(value)) return null;
++  const buf = Buffer.from(value, "base64");
++  return buf.length === expectedLength ? buf : null;
++}
++
++function getPepper() {
++  const pepper = process.env.E2E_PIN_PEPPER;
++  if (!pepper || pepper.length < 32) {
++    throw new Error("E2E_PIN_PEPPER (32 caractères minimum) doit être définie.");
++  }
++  return pepper;
++}
++
++function hashProof(userId, proofBuf) {
++  return crypto
++    .createHmac("sha256", getPepper())
++    .update(userId)
++    .update(proofBuf)
++    .digest("hex");
++}
++
++function safeEqualHex(a, b) {
++  const ba = Buffer.from(String(a), "hex");
++  const bb = Buffer.from(String(b), "hex");
++  return ba.length === bb.length && crypto.timingSafeEqual(ba, bb);
++}
++
++export default async function handler(req, res) {
++  if (applyCors(req, res)) return;
++
++  if (req.method !== "POST") {
++    return res.status(405).json({ error: "Méthode non autorisée" });
++  }
++
++  const limit = await rateLimitAsync(req, {
++    key: "e2e-backup",
++    max: 30,
++    windowMs: 60_000,
++  });
++  if (!limit.ok) {
++    Object.entries(limit.headers || {}).forEach(([k, v]) => res.setHeader(k, v));
++    return res.status(limit.status).json(limit.body);
++  }
++
++  let admin;
++  let user;
++  try {
++    admin = getAdminClient();
++    getPepper();
++  } catch (error) {
++    console.error("[e2e-backup] configuration :", error.message);
++    return res.status(500).json({ error: "Configuration serveur indisponible" });
++  }
++
++  try {
++    user = await requireUser(req, admin);
++  } catch (error) {
++    return res.status(error.status || 401).json({
++      error: error.message || "Utilisateur non authentifié",
++    });
++  }
++
++  const body = req.body || {};
++  const action = body.action;
++
++  try {
++    // ── status : le sel est public, il faut le connaître avant de calculer la preuve
++    if (action === "status") {
++      const { data, error } = await admin
++        .from(TABLE)
++        .select("salt, iter, locked_until, failed_attempts")
++        .eq("user_id", user.id)
++        .maybeSingle();
++      if (error) throw error;
++
++      if (!data) return res.json({ exists: false });
++
++      const lockedUntil =
++        data.locked_until && new Date(data.locked_until) > new Date()
++          ? data.locked_until
++          : null;
++
++      return res.json({
++        exists: true,
++        salt: data.salt,
++        iter: data.iter,
++        lockedUntil,
++        attemptsLeft: Math.max(0, FAILS_PER_LEVEL - (data.failed_attempts || 0)),
++      });
++    }
++
++    // ── save : crée ou remplace la sauvegarde
++    if (action === "save") {
++      const proof = b64Bytes(body.proof, 32);
++      const salt = b64Bytes(body.salt, 16);
++      const wrapSecret = b64Bytes(body.wrapSecret, 32);
++      const iter = body.iter;
++      const backup = body.backup;
++
++      if (
++        !proof ||
++        !salt ||
++        !wrapSecret ||
++        !Number.isInteger(iter) ||
++        iter < 100_000 ||
++        iter > 2_000_000 ||
++        !backup ||
++        typeof backup !== "object" ||
++        JSON.stringify(backup).length > MAX_BACKUP_BYTES
++      ) {
++        return res.status(400).json({ error: "Données de sauvegarde invalides" });
++      }
++
++      const { error } = await admin.from(TABLE).upsert(
++        {
++          user_id: user.id,
++          proof_hash: hashProof(user.id, proof),
++          salt: salt.toString("base64"),
++          iter,
++          wrap_secret: wrapSecret.toString("base64"),
++          backup,
++          failed_attempts: 0,
++          lock_level: 0,
++          locked_until: null,
++          updated_at: new Date().toISOString(),
++        },
++        { onConflict: "user_id" }
++      );
++      if (error) throw error;
++
++      return res.json({ ok: true });
++    }
++
++    // ── restore : vérifie la preuve, compte les échecs, applique les blocages
++    if (action === "restore") {
++      const proof = b64Bytes(body.proof, 32);
++      if (!proof) return res.status(400).json({ error: "Preuve invalide" });
++
++      const { data, error } = await admin
++        .from(TABLE)
++        .select("*")
++        .eq("user_id", user.id)
++        .maybeSingle();
++      if (error) throw error;
++      if (!data) return res.status(404).json({ error: "Aucune sauvegarde" });
++
++      if (data.locked_until && new Date(data.locked_until) > new Date()) {
++        return res.status(429).json({
++          error: "Trop d'essais. Réessaie plus tard.",
++          lockedUntil: data.locked_until,
++          attemptsLeft: 0,
++        });
++      }
++
++      if (safeEqualHex(hashProof(user.id, proof), data.proof_hash)) {
++        await admin
++          .from(TABLE)
++          .update({ failed_attempts: 0, lock_level: 0, locked_until: null })
++          .eq("user_id", user.id);
++
++        return res.json({
++          ok: true,
++          backup: data.backup,
++          wrapSecret: data.wrap_secret,
++          salt: data.salt,
++          iter: data.iter,
++        });
++      }
++
++      // Mauvais PIN
++      const fails = (data.failed_attempts || 0) + 1;
++      const update = { failed_attempts: fails };
++      let lockedUntil = null;
++
++      if (fails >= FAILS_PER_LEVEL) {
++        const level = Math.min(data.lock_level || 0, LOCK_DURATIONS_MS.length - 1);
++        lockedUntil = new Date(Date.now() + LOCK_DURATIONS_MS[level]).toISOString();
++        update.failed_attempts = 0;
++        update.lock_level = (data.lock_level || 0) + 1;
++        update.locked_until = lockedUntil;
++      }
++
++      await admin.from(TABLE).update(update).eq("user_id", user.id);
++
++      return res.status(401).json({
++        error: "PIN incorrect",
++        attemptsLeft: lockedUntil ? 0 : FAILS_PER_LEVEL - fails,
++        lockedUntil,
++      });
++    }
++
++    // ── delete : suppression (réinitialisation de la clé)
++    if (action === "delete") {
++      const { error } = await admin.from(TABLE).delete().eq("user_id", user.id);
++      if (error) throw error;
++      return res.json({ ok: true });
++    }
++
++    return res.status(400).json({ error: "Action inconnue" });
++  } catch (error) {
++    console.error("[e2e-backup]", error);
++    return res.status(500).json({ error: "Erreur serveur" });
++  }
++}
+diff --git a/docs/e2e-pin-backup.sql b/docs/e2e-pin-backup.sql
+new file mode 100644
+index 0000000..9fa2644
+--- /dev/null
++++ b/docs/e2e-pin-backup.sql
+@@ -0,0 +1,23 @@
++-- Sauvegarde de la clé E2E protégée par PIN (4 chiffres).
++-- À exécuter dans l'éditeur SQL de Supabase.
++-- Aucune policy : seule la clé service_role (api/e2e-backup.js) peut lire/écrire.
++-- Les clients ne peuvent donc jamais lire la sauvegarde sans passer par la limite d'essais.
++
++create table if not exists public.e2e_key_backups (
++  user_id         uuid primary key references auth.users(id) on delete cascade,
++  proof_hash      text not null,          -- HMAC(pepper, preuve dérivée du PIN)
++  salt            text not null,          -- sel PBKDF2 (public)
++  iter            integer not null,       -- itérations PBKDF2
++  wrap_secret     text not null,          -- secret d'enveloppe (libéré seulement après PIN correct)
++  backup          jsonb not null,         -- clé privée chiffrée (PIN + wrap_secret)
++  failed_attempts integer not null default 0,
++  lock_level      integer not null default 0,
++  locked_until    timestamptz,
++  updated_at      timestamptz not null default now()
++);
++
++alter table public.e2e_key_backups enable row level security;
++revoke all on public.e2e_key_backups from anon, authenticated;
++
++-- Variable d'environnement Vercel à ajouter (32+ caractères aléatoires) :
++--   E2E_PIN_PEPPER=<chaîne aléatoire longue>
+diff --git a/src/features/messaging/components/MessagesTab.jsx b/src/features/messaging/components/MessagesTab.jsx
+index 7cb60b5..15a5f11 100644
+--- a/src/features/messaging/components/MessagesTab.jsx
++++ b/src/features/messaging/components/MessagesTab.jsx
+@@ -6,7 +6,7 @@ import { useMessageExtras } from "../hooks/useMessageExtras.js";
+ import { Fragment, useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from "react";
+ import {
+   ArrowLeft, MessageCircle, Plus, X, Search,
+-  Loader2, ChevronDown, Pin, Wrench, Lock, Copy, Check
++  Loader2, ChevronDown, Pin, Wrench, Lock, Copy, Check, Eye, EyeOff
+ } from "lucide-react";
+ import { COLORS as THEME_COLORS } from "../../../theme.js";
+ import { supabase } from "../../../supabaseClient.js";
+@@ -16,7 +16,6 @@ import { ChatCallModal } from "./ChatCallModal.jsx";
+ import {
+   deserializePayload,
+   decryptMessage,
+-  generateRecoveryCode,
+   normalizeRecoveryInput,
+ } from "../lib/crypto.js";
+ import { makeClientMessageId, markMessageRead } from "../lib/chatFeatures.js";
+@@ -101,76 +100,95 @@ function Avatar({ src, flag, size = 44, bg }) {
+   );
+ }
+ 
+-// Configuration / récupération des clés de chiffrement (code de récupération).
+-// setup : nouveau code · unlock : saisir le code sur un nouvel appareil · reset : nouvelle clé
+-function KeyRecoveryPanel({ mode, C, onSetup, onUnlock, onReset }) {
++// Configuration / récupération des clés de chiffrement par PIN à 4 chiffres.
++// setup : choisir un PIN · unlock : saisir le PIN sur un nouvel appareil · reset : nouvelle clé
++// (backupKind "legacy" : anciens comptes, qui gardent leur ancien code de récupération long)
++function KeyRecoveryPanel({ mode, backupKind, C, onSetup, onUnlock, onReset }) {
+   const [view, setView] = useState(mode); // permet de passer de "unlock" à "reset"
+-  const [code] = useState(generateRecoveryCode); // généré une seule fois
+-  const [input, setInput] = useState("");
+-  const [saved, setSaved] = useState(false);
+-  const [copied, setCopied] = useState(false);
++  const [pin, setPin] = useState("");
++  const [pin2, setPin2] = useState("");
++  const [legacyCode, setLegacyCode] = useState("");
++  const [showPin, setShowPin] = useState(false);
++  const [remembered, setRemembered] = useState(false);
+   const [busy, setBusy] = useState(false);
+   const [err, setErr] = useState("");
+ 
+-  const generating = view === "setup" || view === "reset";
++  const legacyUnlock = view === "unlock" && backupKind === "legacy";
++  const needsConfirm = view === "setup" || view === "reset" || legacyUnlock;
+ 
+   const texts = {
+     setup: {
+       title: "Protège tes messages",
+-      body: "Voici ton code de récupération. Il te permettra de retrouver tes conversations sur un nouvel appareil. Il ne peut pas être récupéré : conserve-le en lieu sûr.",
++      body: "Choisis un PIN à 4 chiffres. Il te permettra de retrouver tes conversations sur un nouvel appareil, sans rien perdre.",
+       button: "Activer la messagerie sécurisée",
+     },
+     unlock: {
+       title: "Retrouve tes conversations",
+-      body: "Saisis ton code de récupération pour déverrouiller tes messages sur cet appareil.",
++      body: legacyUnlock
++        ? "Saisis une dernière fois ton ancien code de récupération, puis choisis un PIN à 4 chiffres : il le remplacera."
++        : "Saisis ton PIN à 4 chiffres pour déverrouiller tes messages sur cet appareil.",
+       button: "Déverrouiller",
+     },
+     reset: {
+       title: "Nouvelle clé de chiffrement",
+-      body: "Aucune sauvegarde n'est utilisable. Une nouvelle clé sera créée : les anciens messages ne seront pas lisibles sur cet appareil. Note bien ton nouveau code de récupération.",
++      body: "Aucune sauvegarde n'est utilisable. Une nouvelle clé sera créée : les anciens messages ne seront pas lisibles sur cet appareil. Choisis un nouveau PIN à 4 chiffres.",
+       button: "Créer une nouvelle clé",
+     },
+   }[view];
+ 
+-  const copy = async () => {
+-    try {
+-      await navigator.clipboard.writeText(code);
+-      setCopied(true);
+-      setTimeout(() => setCopied(false), 2000);
+-    } catch {
+-      setErr("Copie impossible : recopie le code à la main.");
+-    }
+-  };
++  const onlyDigits = (value) => value.replace(/\D/g, "").slice(0, 4);
+ 
+   const submit = async (e) => {
+     e.preventDefault();
+     setErr("");
+ 
+-    if (generating && !saved) {
+-      setErr("Confirme que tu as noté ton code de récupération.");
++    if (legacyUnlock && !legacyCode.trim()) {
++      setErr("Saisis ton code de récupération.");
+       return;
+     }
+-    if (!generating && !input.trim()) {
+-      setErr("Saisis ton code de récupération.");
++    if (!/^\d{4}$/.test(pin)) {
++      setErr("Le PIN doit contenir exactement 4 chiffres.");
++      return;
++    }
++    if (needsConfirm && pin !== pin2) {
++      setErr("Les deux PIN ne sont pas identiques.");
++      return;
++    }
++    if ((view === "setup" || view === "reset") && !remembered) {
++      setErr("Confirme que tu as retenu ton PIN.");
+       return;
+     }
+ 
+     setBusy(true);
+     try {
+-      if (view === "setup") await onSetup(code);
+-      else if (view === "reset") await onReset(code);
+-      else await onUnlock(normalizeRecoveryInput(input));
++      if (view === "setup") await onSetup(pin);
++      else if (view === "reset") await onReset(pin);
++      else if (legacyUnlock) await onUnlock(normalizeRecoveryInput(legacyCode), pin);
++      else await onUnlock(pin);
+     } catch (error) {
+       setErr(
+-        /incorrecte/i.test(error?.message || "")
++        legacyUnlock && /incorrecte/i.test(error?.message || "")
+           ? "Code de récupération incorrect."
+           : error?.message || "Opération impossible."
+       );
++      setPin("");
++      setPin2("");
+     } finally {
+       setBusy(false);
+     }
+   };
+ 
++  const pinInputProps = {
++    type: showPin ? "text" : "password",
++    inputMode: "numeric",
++    pattern: "[0-9]*",
++    maxLength: 4,
++    autoComplete: "off",
++    className:
++      "w-full px-4 py-3 rounded-2xl border text-center text-2xl font-mono tracking-[0.6em] outline-none",
++    style: { background: C.surface, borderColor: C.borderGold, color: C.ivory },
++  };
++
+   return (
+     <div className="flex flex-col items-center px-6 py-12 max-w-md mx-auto w-full">
+       <div
+@@ -188,44 +206,10 @@ function KeyRecoveryPanel({ mode, C, onSetup, onUnlock, onReset }) {
+       </p>
+ 
+       <form onSubmit={submit} className="w-full space-y-3">
+-        {generating ? (
+-          <>
+-            <div
+-              className="rounded-2xl border px-3 py-4 text-center"
+-              style={{ background: C.surface, borderColor: C.borderGold }}
+-            >
+-              <p
+-                className="font-mono text-base font-semibold tracking-wider break-all select-all"
+-                style={{ color: C.gold }}
+-              >
+-                {code}
+-              </p>
+-            </div>
+-
+-            <button
+-              type="button"
+-              onClick={copy}
+-              className="w-full py-2.5 rounded-2xl text-xs font-semibold flex items-center justify-center gap-2 border"
+-              style={{ borderColor: C.border, color: C.ivory, background: C.surface }}
+-            >
+-              {copied ? <Check size={14} /> : <Copy size={14} />}
+-              {copied ? "Copié" : "Copier le code"}
+-            </button>
+-
+-            <label className="flex items-start gap-2 text-xs pt-1" style={{ color: C.muted }}>
+-              <input
+-                type="checkbox"
+-                checked={saved}
+-                onChange={(e) => setSaved(e.target.checked)}
+-                className="mt-0.5"
+-              />
+-              J'ai noté mon code de récupération (gestionnaire de mots de passe, papier…).
+-            </label>
+-          </>
+-        ) : (
++        {legacyUnlock && (
+           <input
+-            value={input}
+-            onChange={(e) => setInput(e.target.value)}
++            value={legacyCode}
++            onChange={(e) => setLegacyCode(e.target.value)}
+             placeholder="XXXX-XXXX-XXXX-XXXX-XXXX"
+             autoComplete="off"
+             autoCapitalize="characters"
+@@ -234,9 +218,58 @@ function KeyRecoveryPanel({ mode, C, onSetup, onUnlock, onReset }) {
+             style={{ background: C.surface, borderColor: C.borderGold, color: C.ivory }}
+           />
+         )}
++        <input
++          {...pinInputProps}
++          value={pin}
++          onChange={(e) => setPin(onlyDigits(e.target.value))}
++          placeholder="••••"
++          aria-label={legacyUnlock ? "Nouveau PIN à 4 chiffres" : "PIN à 4 chiffres"}
++          autoFocus={!legacyUnlock}
++        />
++        {needsConfirm && (
++          <input
++            {...pinInputProps}
++            value={pin2}
++            onChange={(e) => setPin2(onlyDigits(e.target.value))}
++            placeholder="••••"
++            aria-label="Confirmer le PIN"
++          />
++        )}
++
++        {needsConfirm && (
++          <button
++            type="button"
++            onClick={() => setShowPin((v) => !v)}
++            className="w-full text-xs flex items-center justify-center gap-1.5"
++            style={{ color: C.muted }}
++          >
++            {showPin ? <EyeOff size={14} /> : <Eye size={14} />}
++            {showPin ? "Masquer le PIN" : "Afficher le PIN"}
++          </button>
++        )}
++
++        {needsConfirm && (
++          <p className="text-xs text-center" style={{ color: C.muted }}>
++            Si tu perds ton téléphone et que tu oublies ce PIN, tes anciens messages ne pourront
++            pas être récupérés. Note-le dans un endroit sûr (carnet, gestionnaire de mots de passe)
++            et évite une date de naissance ou 1234.
++          </p>
++        )}
++
++        {(view === "setup" || view === "reset") && (
++          <label className="flex items-start gap-2 text-xs" style={{ color: C.muted }}>
++            <input
++              type="checkbox"
++              checked={remembered}
++              onChange={(e) => setRemembered(e.target.checked)}
++              className="mt-0.5"
++            />
++            J'ai retenu mon PIN. On te demandera de le confirmer dans quelques jours.
++          </label>
++        )}
+ 
+         {err && (
+-          <p role="alert" className="text-xs" style={{ color: "#fca5a5" }}>
++          <p role="alert" className="text-xs text-center" style={{ color: "#fca5a5" }}>
+             {err}
+           </p>
+         )}
+@@ -264,7 +297,7 @@ function KeyRecoveryPanel({ mode, C, onSetup, onUnlock, onReset }) {
+             className="w-full text-xs py-2"
+             style={{ color: C.muted }}
+           >
+-            Code perdu ? Créer une nouvelle clé
++            {legacyUnlock ? "Code perdu ?" : "PIN oublié ?"} Créer une nouvelle clé
+           </button>
+         )}
+       </form>
+@@ -272,6 +305,280 @@ function KeyRecoveryPanel({ mode, C, onSetup, onUnlock, onReset }) {
+   );
+ }
+ 
++// PIN oublié sur un appareil qui garde la clé : code SMS/e-mail, puis nouveau PIN (historique conservé).
++function PinForgotPanel({ C, onSendCode, onReset, onBack, onClose }) {
++  const [codeSent, setCodeSent] = useState(false);
++  const [channel, setChannel] = useState("sms");
++  const [code, setCode] = useState("");
++  const [newPin, setNewPin] = useState("");
++  const [newPin2, setNewPin2] = useState("");
++  const [busy, setBusy] = useState(false);
++  const [err, setErr] = useState("");
++  const [done, setDone] = useState("");
++
++  const onlyDigits = (value) => value.replace(/\D/g, "").slice(0, 4);
++  const pinField = (value, setter, label) => (
++    <input
++      type="password"
++      inputMode="numeric"
++      pattern="[0-9]*"
++      maxLength={4}
++      autoComplete="off"
++      value={value}
++      onChange={(e) => setter(onlyDigits(e.target.value))}
++      placeholder="••••"
++      aria-label={label}
++      className="w-full px-4 py-2.5 rounded-xl border text-center text-xl font-mono tracking-[0.6em] outline-none"
++      style={{ background: C.surface2, borderColor: C.borderGold, color: C.ivory }}
++    />
++  );
++
++  const submit = async (e) => {
++    e.preventDefault();
++    setErr("");
++
++    if (codeSent) {
++      if (!code.trim()) return setErr("Saisis le code reçu.");
++      if (!/^\d{4}$/.test(newPin)) return setErr("Le nouveau PIN doit contenir exactement 4 chiffres.");
++      if (newPin !== newPin2) return setErr("Les deux nouveaux PIN ne sont pas identiques.");
++    }
++
++    setBusy(true);
++    try {
++      if (!codeSent) {
++        setChannel(await onSendCode());
++        setCodeSent(true);
++      } else {
++        await onReset(code.trim(), newPin);
++        setDone("Nouveau PIN enregistré ✅ Tes conversations sont conservées.");
++      }
++    } catch (error) {
++      setErr(error?.message || "Opération impossible.");
++    } finally {
++      setBusy(false);
++    }
++  };
++
++  return (
++    <div
++      role="status"
++      className="rounded-2xl border p-3 mb-3"
++      style={{ background: C.surface, borderColor: C.borderGold }}
++    >
++      <div className="flex items-start justify-between gap-2 mb-1">
++        <p className="text-sm font-semibold" style={{ color: C.ivory }}>🔑 PIN oublié</p>
++        <button type="button" onClick={onClose} aria-label="Fermer" style={{ color: C.muted }}>
++          <X size={16} />
++        </button>
++      </div>
++
++      {done ? (
++        <p className="text-xs" style={{ color: C.muted }}>{done}</p>
++      ) : (
++        <form onSubmit={submit} className="space-y-2">
++          <p className="text-xs" style={{ color: C.muted }}>
++            {codeSent
++              ? `Saisis le code reçu par ${channel === "email" ? "e-mail" : "SMS"}, puis choisis un nouveau PIN. Tes conversations sont conservées.`
++              : "Tu gardes ce téléphone : on te renvoie un code pour vérifier que c'est bien toi, puis tu choisis un nouveau PIN. Rien n'est perdu."}
++          </p>
++
++          {codeSent && (
++            <>
++              <input
++                value={code}
++                onChange={(e) => setCode(e.target.value.replace(/\s/g, ""))}
++                inputMode="numeric"
++                autoComplete="one-time-code"
++                placeholder="Code reçu"
++                aria-label="Code reçu"
++                className="w-full px-4 py-2.5 rounded-xl border text-center text-base font-mono outline-none"
++                style={{ background: C.surface2, borderColor: C.borderGold, color: C.ivory }}
++              />
++              {pinField(newPin, setNewPin, "Nouveau PIN")}
++              {pinField(newPin2, setNewPin2, "Confirmer le nouveau PIN")}
++            </>
++          )}
++
++          {err && <p role="alert" className="text-xs" style={{ color: "#fca5a5" }}>{err}</p>}
++
++          <button
++            type="submit"
++            disabled={busy}
++            className="w-full py-2 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 disabled:opacity-60"
++            style={{ background: `linear-gradient(135deg, ${C.gold}, #C49A3C)`, color: "#0B1220" }}
++          >
++            {busy && <Loader2 size={14} className="animate-spin" />}
++            {codeSent ? "Enregistrer le nouveau PIN" : "Recevoir un code"}
++          </button>
++          <button type="button" onClick={onBack} className="w-full text-xs py-1" style={{ color: C.muted }}>
++            Retour
++          </button>
++        </form>
++      )}
++    </div>
++  );
++}
++
++// Vérification (rappel) et changement du PIN. Le PIN ne quitte jamais l'appareil.
++function PinManagePanel({
++  initialView = "verify",
++  C,
++  onVerify,
++  onChange,
++  canResetPin,
++  onSendCode,
++  onResetWithCode,
++  onClose,
++}) {
++  const [view, setView] = useState(initialView); // "verify" | "change"
++  const [oldPin, setOldPin] = useState("");
++  const [newPin, setNewPin] = useState("");
++  const [newPin2, setNewPin2] = useState("");
++  const [busy, setBusy] = useState(false);
++  const [err, setErr] = useState("");
++  const [done, setDone] = useState("");
++
++  const onlyDigits = (value) => value.replace(/\D/g, "").slice(0, 4);
++  const field = (value, setter, label) => (
++    <input
++      type="password"
++      inputMode="numeric"
++      pattern="[0-9]*"
++      maxLength={4}
++      autoComplete="off"
++      value={value}
++      onChange={(e) => setter(onlyDigits(e.target.value))}
++      placeholder="••••"
++      aria-label={label}
++      className="w-full px-4 py-2.5 rounded-xl border text-center text-xl font-mono tracking-[0.6em] outline-none"
++      style={{ background: C.surface2, borderColor: C.borderGold, color: C.ivory }}
++    />
++  );
++
++  const submit = async (e) => {
++    e.preventDefault();
++    setErr("");
++
++    if (!/^\d{4}$/.test(oldPin)) {
++      setErr("Le PIN doit contenir exactement 4 chiffres.");
++      return;
++    }
++    if (view === "change") {
++      if (!/^\d{4}$/.test(newPin)) {
++        setErr("Le nouveau PIN doit contenir exactement 4 chiffres.");
++        return;
++      }
++      if (newPin !== newPin2) {
++        setErr("Les deux nouveaux PIN ne sont pas identiques.");
++        return;
++      }
++    }
++
++    setBusy(true);
++    try {
++      if (view === "verify") {
++        await onVerify(oldPin);
++        setDone("PIN correct ✅ Tu t'en souviens bien.");
++      } else {
++        await onChange(oldPin, newPin);
++        setDone("PIN modifié ✅ Tes conversations sont conservées.");
++      }
++      setOldPin("");
++      setNewPin("");
++      setNewPin2("");
++    } catch (error) {
++      setErr(error?.message || "Opération impossible.");
++      setOldPin("");
++    } finally {
++      setBusy(false);
++    }
++  };
++
++  if (view === "forgot") {
++    return (
++      <PinForgotPanel
++        C={C}
++        onSendCode={onSendCode}
++        onReset={onResetWithCode}
++        onBack={() => setView("verify")}
++        onClose={onClose}
++      />
++    );
++  }
++
++  return (
++    <div
++      role="status"
++      className="rounded-2xl border p-3 mb-3"
++      style={{ background: C.surface, borderColor: C.borderGold }}
++    >
++      <div className="flex items-start justify-between gap-2 mb-1">
++        <p className="text-sm font-semibold" style={{ color: C.ivory }}>
++          {view === "verify" ? "🔑 Tu te souviens de ton PIN ?" : "🔑 Changer mon PIN"}
++        </p>
++        <button type="button" onClick={onClose} aria-label="Fermer" style={{ color: C.muted }}>
++          <X size={16} />
++        </button>
++      </div>
++
++      {done ? (
++        <p className="text-xs" style={{ color: C.muted }}>{done}</p>
++      ) : (
++        <form onSubmit={submit} className="space-y-2">
++          <p className="text-xs" style={{ color: C.muted }}>
++            {view === "verify"
++              ? "Saisis-le pour confirmer. Sans lui, tu ne pourras pas retrouver tes messages sur un nouvel appareil."
++              : "Saisis ton PIN actuel, puis choisis le nouveau."}
++          </p>
++          {field(oldPin, setOldPin, view === "verify" ? "PIN" : "PIN actuel")}
++          {view === "change" && (
++            <>
++              {field(newPin, setNewPin, "Nouveau PIN")}
++              {field(newPin2, setNewPin2, "Confirmer le nouveau PIN")}
++            </>
++          )}
++          {err && (
++            <p role="alert" className="text-xs" style={{ color: "#fca5a5" }}>{err}</p>
++          )}
++          <button
++            type="submit"
++            disabled={busy}
++            className="w-full py-2 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 disabled:opacity-60"
++            style={{ background: `linear-gradient(135deg, ${C.gold}, #C49A3C)`, color: "#0B1220" }}
++          >
++            {busy && <Loader2 size={14} className="animate-spin" />}
++            {view === "verify" ? "Vérifier" : "Changer le PIN"}
++          </button>
++          <button
++            type="button"
++            onClick={() => {
++              setErr("");
++              setView(view === "verify" ? "change" : "verify");
++            }}
++            className="w-full text-xs py-1"
++            style={{ color: C.muted }}
++          >
++            {view === "verify" ? "Changer mon PIN" : "Juste vérifier mon PIN"}
++          </button>
++          {canResetPin && (
++            <button
++              type="button"
++              onClick={() => {
++                setErr("");
++                setView("forgot");
++              }}
++              className="w-full text-xs py-1"
++              style={{ color: C.gold }}
++            >
++              PIN oublié ?
++            </button>
++          )}
++        </form>
++      )}
++    </div>
++  );
++}
++
+ // Bandeau affiché une seule fois après l'activation automatique de la messagerie sécurisée.
+ function RecoveryCodeNotice({ code, C, onDone }) {
+   const [copied, setCopied] = useState(false);
+@@ -338,6 +645,30 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
+   const [conversations, setConversations] = useState([]);
+   const [activeChat, setActiveChat] = useState(null);
+   const messaging = useMessaging(activeChat?.id, id, activeChat?.otherUserId);
++  const [pinPanel, setPinPanel] = useState(null); // null | "verify" | "change"
++  const [reminderDismissed, setReminderDismissed] = useState(false);
++
++  // Rappel (jours 1, 7, 30) ou ouverture manuelle depuis le menu : même panneau.
++  const showPinPanel =
++    messaging.keysBackupKind === "pin" &&
++    !messaging.keysMode &&
++    (!!pinPanel || (messaging.pinReminderDue && !reminderDismissed));
++  const pinPanelEl = showPinPanel ? (
++    <PinManagePanel
++      key={pinPanel || "reminder"}
++      initialView={pinPanel || "verify"}
++      C={C}
++      onVerify={messaging.verifyPin}
++      onChange={messaging.changePin}
++      canResetPin={messaging.canResetPin}
++      onSendCode={messaging.sendPinResetCode}
++      onResetWithCode={messaging.resetPinWithCode}
++      onClose={() => {
++        setPinPanel(null);
++        setReminderDismissed(true);
++      }}
++    />
++  ) : null;
+   const { privateKey } = messaging;
+   const messages = messaging.messages || [];
+   const extras = useMessageExtras(activeChat?.id, id, messages);
+@@ -1047,6 +1378,19 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
+                   <p className="text-xs leading-snug mb-2" style={{ color: C.muted }}>
+                     La traduction automatique est désactivée par défaut. Active-la uniquement si tu en as besoin.
+                   </p>
++                  {messaging.keysBackupKind === "pin" && (
++                    <button
++                      type="button"
++                      onClick={() => {
++                        setPinPanel("verify");
++                        setChatToolsOpen(false);
++                      }}
++                      className="w-full text-left text-xs rounded-xl bg-white/5 px-2 py-2 mb-2"
++                      style={{ color: C.ivory }}
++                    >
++                      🔑 Vérifier ou changer mon PIN
++                    </button>
++                  )}
+                   <div className="flex items-center justify-between rounded-xl bg-white/5 px-2">
+                     <span className="text-xs" style={{ color: C.muted }}>
+                       Traduction automatique
+@@ -1058,6 +1402,7 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
+             </div>
+           </div>
+ 
++          {pinPanelEl && <div className="px-3 pt-3">{pinPanelEl}</div>}
+           {messaging.recoveryCode && !messaging.keysMode && (
+             <div className="px-3 pt-3">
+               <RecoveryCodeNotice
+@@ -1074,6 +1419,7 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
+               <KeyRecoveryPanel
+                 key={messaging.keysMode}
+                 mode={messaging.keysMode}
++                backupKind={messaging.keysBackupKind}
+                 C={C}
+                 onSetup={messaging.setupKeys}
+                 onUnlock={messaging.unlockKeys}
+@@ -1228,6 +1574,17 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
+         <h2 className="text-2xl font-bold flex items-center gap-2.5" style={{ color: C.ivory }}>
+           <MessageCircle size={20} style={{ color: C.gold }} /> Messages
+         </h2>
++        {messaging.keysBackupKind === "pin" && (
++          <button
++            type="button"
++            onClick={() => setPinPanel((v) => (v ? null : "verify"))}
++            aria-label="Vérifier ou changer mon PIN"
++            className="mr-2 px-3 py-2.5 rounded-full text-sm hover:bg-white/10"
++            style={{ color: C.gold }}
++          >
++            🔑
++          </button>
++        )}
+         <button
+           onClick={() => setShowNewChat(true)}
+           className="flex items-center gap-1.5 px-4 py-2.5 rounded-full text-sm font-semibold"
+@@ -1237,6 +1594,7 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
+         </button>
+       </div>
+ 
++      {pinPanelEl}
+       {messaging.recoveryCode && !messaging.keysMode && (
+         <RecoveryCodeNotice
+           code={messaging.recoveryCode}
+diff --git a/src/features/messaging/hooks/useCryptoKeys.js b/src/features/messaging/hooks/useCryptoKeys.js
+index 561c671..68ae3bd 100644
+--- a/src/features/messaging/hooks/useCryptoKeys.js
++++ b/src/features/messaging/hooks/useCryptoKeys.js
+@@ -2,21 +2,97 @@ import { useState, useEffect, useCallback } from "react";
+ import { supabase } from "../../../supabaseClient.js";
+ import {
+   ensureKeyPair,
+-  generateRecoveryCode,
+   adoptLegacyKeyPair,
+   clearLocalKeyPair,
+   restoreFromBackup,
++  restoreFromPinBackup,
++  verifyPinBackup,
++  rewrapPinBackup,
++  hasDeviceEscrow,
++  buildPinBackupFromDeviceEscrow,
++  rewrapLegacyBackupWithPin,
++  computePinProof,
++  isValidPin,
+ } from "../lib/crypto";
+ 
+ /**
+  * Modes de récupération exposés à l'interface :
+- *  - "setup"  : compte sans clé → créer une phrase secrète
++ *  - "setup"  : compte sans clé → choisir un PIN à 4 chiffres
+  *  - "unlock" : clé du compte absente de cet appareil, sauvegarde disponible
+- *               → saisir la phrase secrète pour retrouver les conversations
++ *               → saisir le PIN (ou, pour les anciens comptes, l'ancien code long)
+  *  - "reset"  : clé du compte absente et aucune sauvegarde
+  *               → nouvelle clé (anciens messages illisibles sur cet appareil)
++ *
++ * backupKind : "pin" (sauvegarde serveur protégée par PIN, essais limités)
++ *              ou "legacy" (ancien code de récupération long, dans user_metadata).
+  */
+ 
++// ─── API de sauvegarde par PIN (api/e2e-backup.js) ───────────────────────────
++
++const API_BASE = (
++  (typeof import.meta !== "undefined" && import.meta.env?.VITE_API_BASE_URL) ||
++  ""
++).replace(/\/$/, "");
++
++function formatLock(lockedUntil) {
++  const ms = new Date(lockedUntil).getTime() - Date.now();
++  const minutes = Math.max(1, Math.ceil(ms / 60000));
++
++  if (minutes < 60) return `${minutes} min`;
++  if (minutes < 60 * 48) return `${Math.ceil(minutes / 60)} h`;
++  return `${Math.ceil(minutes / 1440)} jours`;
++}
++
++async function callBackupApi(action, payload = {}) {
++  const { data } = await supabase.auth.getSession();
++  const token = data?.session?.access_token;
++
++  if (!token) throw new Error("Session requise.");
++
++  const res = await fetch(`${API_BASE}/api/e2e-backup`, {
++    method: "POST",
++    headers: {
++      "Content-Type": "application/json",
++      Authorization: `Bearer ${token}`,
++    },
++    body: JSON.stringify({ action, ...payload }),
++  });
++
++  const json = await res.json().catch(() => ({}));
++
++  if (!res.ok) {
++    if (res.status === 429 && json.lockedUntil) {
++      throw new Error(
++        `Trop d'essais. Réessaie dans ${formatLock(json.lockedUntil)}.`
++      );
++    }
++
++    if (res.status === 401 && action === "restore") {
++      const left = json.attemptsLeft;
++      throw new Error(
++        json.lockedUntil
++          ? `PIN incorrect. Trop d'essais : réessaie dans ${formatLock(json.lockedUntil)}.`
++          : `PIN incorrect. ${left} essai${left > 1 ? "s" : ""} restant${left > 1 ? "s" : ""}.`
++      );
++    }
++
++    throw new Error(json.error || "Sauvegarde de la clé indisponible.");
++  }
++
++  return json;
++}
++
++// Statut de la sauvegarde PIN. Un échec réseau ne doit jamais faire croire
++// qu'il n'y a pas de sauvegarde (sinon on proposerait de créer une 2e clé).
++async function fetchPinStatus() {
++  try {
++    return await callBackupApi("status");
++  } catch (err) {
++    console.warn("[useCryptoKeys] Statut sauvegarde PIN indisponible :", err);
++    return null;
++  }
++}
++
+ // Évite de republier inutilement une clé déjà vérifiée.
+ const published = new Map();
+ 
+@@ -182,77 +258,74 @@ async function requestPersistentStorage() {
+   }
+ }
+ 
+-async function saveBackupToAccount(backup) {
+-  const { error } = await supabase.auth.updateUser({
+-    data: { e2e_backup: backup },
+-  });
+-
+-  if (error) {
+-    throw new Error("Sauvegarde de la clé impossible : " + error.message);
+-  }
++// Sauvegarde PIN : envoi de la preuve + de la clé chiffrée au serveur.
++async function savePinBackupToServer(pinAuth) {
++  await callBackupApi("save", pinAuth);
+ }
+ 
+-// ─── Activation automatique au premier usage ────────────────────────────────
+-// Le code de récupération est affiché UNE FOIS dans un bandeau non bloquant.
+-// Il reste en mémoire locale jusqu'à ce que l'utilisateur confirme l'avoir noté
+-// (sinon, fermer l'app trop tôt le ferait perdre : la clé ne peut plus être re-sauvegardée).
+-const PENDING_CODE_PREFIX = "baaro_e2e_code_pending:";
++// ─── Rappel de vérification du PIN (jours 1, 7 et 30) ────────────────────────
++// Un PIN qu'on ne saisit jamais s'oublie : on invite à le ressaisir à intervalles espacés.
++const PIN_CHECK_PREFIX = "baaro_e2e_pin_check:";
++const PIN_CHECK_DELAYS_MS = [1, 7, 30].map((d) => d * 24 * 60 * 60 * 1000);
+ 
+-function readPendingCode(userId) {
++function readPinCheck(userId) {
+   try {
+-    return localStorage.getItem(PENDING_CODE_PREFIX + userId) || null;
++    const raw = JSON.parse(localStorage.getItem(PIN_CHECK_PREFIX + userId) || "null");
++    return raw && Number.isFinite(raw.t) && Number.isInteger(raw.stage) ? raw : null;
+   } catch {
+     return null;
+   }
+ }
+-function writePendingCode(userId, code) {
++function writePinCheck(userId, value) {
+   try {
+-    localStorage.setItem(PENDING_CODE_PREFIX + userId, code);
++    localStorage.setItem(PIN_CHECK_PREFIX + userId, JSON.stringify(value));
+   } catch {
+     // ignoré
+   }
+ }
+-function clearPendingCode(userId) {
+-  try {
+-    localStorage.removeItem(PENDING_CODE_PREFIX + userId);
+-  } catch {
+-    // ignoré
+-  }
++function isPinCheckDue(record) {
++  return (
++    !!record &&
++    record.stage < PIN_CHECK_DELAYS_MS.length &&
++    Date.now() >= record.t + PIN_CHECK_DELAYS_MS[record.stage]
++  );
+ }
+ 
+-// Une seule création à la fois par compte (React peut lancer l'effet deux fois).
+-const autoSetups = new Map();
++// Récupère la sauvegarde PIN côté serveur après vérification de la preuve.
++// Les mauvais PIN comptent dans la limite d'essais du serveur.
++async function fetchPinBackupData(pin) {
++  const status = await callBackupApi("status");
+ 
+-function autoSetup(userId) {
+-  if (!autoSetups.has(userId)) {
+-    const task = (async () => {
+-      const code = generateRecoveryCode();
+-      const pair = await ensureKeyPair({ userId, allowCreate: true, passphrase: code });
++  if (!status?.exists) {
++    throw new Error("Aucune sauvegarde de clé trouvée pour ce compte.");
++  }
+ 
+-      if (!pair?.backup) throw new Error("Création de la clé impossible.");
++  if (status.lockedUntil) {
++    throw new Error(`Trop d'essais. Réessaie dans ${formatLock(status.lockedUntil)}.`);
++  }
+ 
+-      // Le code est gardé AVANT l'envoi de la sauvegarde, pour ne jamais le perdre.
+-      writePendingCode(userId, code);
++  const proof = await computePinProof(pin, status.salt, status.iter);
+ 
+-      try {
+-        await saveBackupToAccount(pair.backup);
+-      } catch (err) {
+-        clearPendingCode(userId);
+-        await clearLocalKeyPair(userId);
+-        throw err;
+-      }
++  return callBackupApi("restore", { proof });
++}
+ 
+-      return pair;
+-    })();
++// ─── Ancien code de récupération (comptes créés avant le PIN) ────────────────
++// Un code long affiché une seule fois pouvait être en attente de confirmation.
++const PENDING_CODE_PREFIX = "baaro_e2e_code_pending:";
+ 
+-    task.then(
+-      () => setTimeout(() => autoSetups.delete(userId), 5000),
+-      () => autoSetups.delete(userId)
+-    );
+-    autoSetups.set(userId, task);
++function readPendingCode(userId) {
++  try {
++    return localStorage.getItem(PENDING_CODE_PREFIX + userId) || null;
++  } catch {
++    return null;
++  }
++}
++function clearPendingCode(userId) {
++  try {
++    localStorage.removeItem(PENDING_CODE_PREFIX + userId);
++  } catch {
++    // ignoré
+   }
+-
+-  return autoSetups.get(userId);
+ }
+ 
+ // Erreurs liées à la clé locale : on propose la récupération au lieu de bloquer.
+@@ -265,7 +338,10 @@ export function useCryptoKeys(userId) {
+   const [ready, setReady] = useState(false);
+   const [error, setError] = useState(null);
+   const [mode, setMode] = useState(null); // "setup" | "unlock" | "reset" | null
++  const [backupKind, setBackupKind] = useState(null); // "pin" | "legacy" | null
+   const [retry, setRetry] = useState(0);
++  const [pinReminderDue, setPinReminderDue] = useState(false);
++  const [canResetPin, setCanResetPin] = useState(false);
+   const [recoveryCode, setRecoveryCode] = useState(null);
+ 
+   useEffect(() => {
+@@ -276,6 +352,7 @@ export function useCryptoKeys(userId) {
+     setReady(false);
+     setError(null);
+     setMode(null);
++    setBackupKind(null);
+     setRecoveryCode(null);
+ 
+     if (!userId) return undefined;
+@@ -298,7 +375,15 @@ export function useCryptoKeys(userId) {
+           throw new Error("Utilisateur non authentifié ou compte incorrect.");
+         }
+ 
+-        hasBackup = !!user.user_metadata?.e2e_backup;
++        const hasLegacyBackup = !!user.user_metadata?.e2e_backup;
++        const pinStatus = await fetchPinStatus();
++        const hasPinBackup = !!pinStatus?.exists;
++
++        hasBackup = hasLegacyBackup || hasPinBackup;
++
++        if (!cancelled) {
++          setBackupKind(hasPinBackup ? "pin" : hasLegacyBackup ? "legacy" : null);
++        }
+ 
+         await requestPersistentStorage();
+ 
+@@ -326,9 +411,12 @@ export function useCryptoKeys(userId) {
+           }
+         }
+ 
+-        // Premier usage (ni clé sur le serveur, ni sauvegarde) : activation automatique, sans question.
+-        if (!pair && !serverPublicKey && !hasBackup) {
+-          pair = await autoSetup(userId);
++        // Le statut de la sauvegarde est inconnu (réseau) alors que le compte a déjà une clé :
++        // ne jamais proposer la réinitialisation, qui ferait perdre l'historique.
++        if (!pair && serverPublicKey && !hasBackup && pinStatus === null) {
++          throw new Error(
++            "Impossible de vérifier ta sauvegarde de clé. Vérifie ta connexion et réessaie."
++          );
+         }
+ 
+         if (cancelled) return;
+@@ -390,45 +478,111 @@ export function useCryptoKeys(userId) {
+     };
+   }, [userId, retry]);
+ 
++  // Rappel : démarre le compteur à la première utilisation du PIN, puis espace les vérifications.
++  useEffect(() => {
++    if (!userId || !ready || backupKind !== "pin") {
++      setPinReminderDue(false);
++      return;
++    }
++
++    let record = readPinCheck(userId);
++
++    if (!record) {
++      record = { t: Date.now(), stage: 0 };
++      writePinCheck(userId, record);
++    }
++
++    setPinReminderDue(isPinCheckDue(record));
++  }, [userId, ready, backupKind]);
++
++  // « PIN oublié » possible seulement si cet appareil garde la copie de secours de la clé.
++  useEffect(() => {
++    if (!userId || !ready) {
++      setCanResetPin(false);
++      return undefined;
++    }
++
++    let off = false;
++    hasDeviceEscrow(userId).then((ok) => {
++      if (!off) setCanResetPin(ok);
++    });
++
++    return () => {
++      off = true;
++    };
++  }, [userId, ready]);
++
+   // ─── Actions de récupération ──────────────────────────────────────────────
+ 
+-  // Première configuration : crée la clé + la sauvegarde protégée.
+-  const setupKeys = useCallback(async (passphrase) => {
+-    const pair = await ensureKeyPair({ userId, allowCreate: true, passphrase });
++  // Première configuration : crée la clé + la sauvegarde protégée par PIN (4 chiffres).
++  const setupKeys = useCallback(async (pin) => {
++    if (!isValidPin(pin)) {
++      throw new Error("Le PIN doit contenir exactement 4 chiffres.");
++    }
++
++    const pair = await ensureKeyPair({ userId, allowCreate: true, pin });
+ 
+-    if (!pair?.backup) {
++    if (!pair?.pinAuth) {
+       throw new Error("Une clé existe déjà sur cet appareil.");
+     }
+ 
+     try {
+-      await saveBackupToAccount(pair.backup);
++      await savePinBackupToServer(pair.pinAuth);
+     } catch (err) {
+       await clearLocalKeyPair(userId);
+       throw err;
+     }
+ 
++    writePinCheck(userId, { t: Date.now(), stage: 0 });
+     setRetry((n) => n + 1);
+   }, [userId]);
+ 
+   // Nouvel appareil / stockage vidé : restaure la clé depuis la sauvegarde.
++  // secret = PIN à 4 chiffres (sauvegarde "pin") ou ancien code long (sauvegarde "legacy").
+   const unlockKeys = useCallback(
+-    async (passphrase) => {
+-      const {
+-        data: { user },
+-        error: authError,
+-      } = await supabase.auth.getUser();
+-
+-      if (authError || !user) {
+-        throw new Error("Vérification de session impossible.");
+-      }
++    async (secret, newPin) => {
++      let restored;
++
++      if (backupKind === "pin") {
++        if (!isValidPin(secret)) {
++          throw new Error("Le PIN doit contenir exactement 4 chiffres.");
++        }
+ 
+-      const backup = user.user_metadata?.e2e_backup;
++        // Le PIN ne quitte jamais l'appareil : seule une preuve dérivée est envoyée.
++        const data = await fetchPinBackupData(secret);
+ 
+-      if (!backup) {
+-        throw new Error("Aucune sauvegarde de clé trouvée pour ce compte.");
++        restored = await restoreFromPinBackup(data, secret, userId);
++      } else {
++        const {
++          data: { user },
++          error: authError,
++        } = await supabase.auth.getUser();
++
++        if (authError || !user) {
++          throw new Error("Vérification de session impossible.");
++        }
++
++        const backup = user.user_metadata?.e2e_backup;
++
++        if (!backup) {
++          throw new Error("Aucune sauvegarde de clé trouvée pour ce compte.");
++        }
++
++        restored = await restoreFromBackup(backup, secret, userId);
++
++        // Migration vers le PIN : l'ancien code long ne sera plus nécessaire.
++        // Un échec ici ne bloque pas le déverrouillage (l'ancien code reste valable).
++        if (isValidPin(newPin)) {
++          try {
++            const pinAuth = await rewrapLegacyBackupWithPin(backup, secret, newPin);
++            await savePinBackupToServer(pinAuth);
++            writePinCheck(userId, { t: Date.now(), stage: 0 });
++          } catch (err) {
++            console.warn("[useCryptoKeys] Migration vers le PIN impossible :", err);
++          }
++        }
+       }
+ 
+-      const restored = await restoreFromBackup(backup, passphrase, userId);
+       const serverKey = await getProfilePublicKey(userId);
+ 
+       if (serverKey && !samePublicKey(serverKey, restored.publicKeyJwk)) {
+@@ -441,18 +595,22 @@ export function useCryptoKeys(userId) {
+ 
+       setRetry((n) => n + 1);
+     },
+-    [userId]
++    [userId, backupKind]
+   );
+ 
+-  // Aucune sauvegarde (ou phrase oubliée) : nouvelle clé.
++  // Aucune sauvegarde (ou PIN oublié) : nouvelle clé protégée par un nouveau PIN.
+   // Les anciens messages ne seront plus lisibles avec cette nouvelle clé.
+   const resetKeys = useCallback(
+-    async (passphrase) => {
++    async (pin) => {
++      if (!isValidPin(pin)) {
++        throw new Error("Le PIN doit contenir exactement 4 chiffres.");
++      }
++
+       // Réinitialisation voulue : l'ancienne clé locale (devenue inutile) est remplacée.
+       await clearLocalKeyPair(userId);
+-      const pair = await ensureKeyPair({ userId, allowCreate: true, passphrase });
++      const pair = await ensureKeyPair({ userId, allowCreate: true, pin });
+ 
+-      if (!pair?.backup) {
++      if (!pair?.pinAuth) {
+         throw new Error("Création de la nouvelle clé impossible.");
+       }
+ 
+@@ -470,7 +628,9 @@ export function useCryptoKeys(userId) {
+       }
+ 
+       try {
+-        await saveBackupToAccount(pair.backup);
++        // Remplace aussi l'ancienne sauvegarde PIN (et remet les essais à zéro).
++        await savePinBackupToServer(pair.pinAuth);
++        writePinCheck(userId, { t: Date.now(), stage: 0 });
+       } catch (err) {
+         // La clé est remplacée sur le serveur ; on garde la clé locale.
+         console.warn("[useCryptoKeys] Sauvegarde non enregistrée.");
+@@ -483,6 +643,119 @@ export function useCryptoKeys(userId) {
+     [userId]
+   );
+ 
++  // Vérifie que l'utilisateur se souvient de son PIN (sans modifier la clé locale).
++  const verifyPin = useCallback(async (pin) => {
++    if (!isValidPin(pin)) {
++      throw new Error("Le PIN doit contenir exactement 4 chiffres.");
++    }
++
++    const data = await fetchPinBackupData(pin);
++    await verifyPinBackup(data, pin);
++
++    const record = readPinCheck(userId) || { t: Date.now(), stage: 0 };
++    writePinCheck(userId, { ...record, stage: record.stage + 1 });
++    setPinReminderDue(false);
++
++    return true;
++  }, [userId]);
++
++  // Changement de PIN : l'ancien PIN est requis, la clé et l'historique sont conservés.
++  const changePin = useCallback(async (oldPin, newPin) => {
++    if (!isValidPin(oldPin) || !isValidPin(newPin)) {
++      throw new Error("Le PIN doit contenir exactement 4 chiffres.");
++    }
++
++    if (oldPin === newPin) {
++      throw new Error("Le nouveau PIN doit être différent de l'ancien.");
++    }
++
++    const data = await fetchPinBackupData(oldPin);
++    const pinAuth = await rewrapPinBackup(data, oldPin, newPin);
++
++    await savePinBackupToServer(pinAuth);
++
++    // Nouveau PIN : le cycle de rappels repart de zéro.
++    writePinCheck(userId, { t: Date.now(), stage: 0 });
++    setPinReminderDue(false);
++
++    return true;
++  }, [userId]);
++
++  // PIN oublié (appareil conservé) — étape 1 : code de vérification par SMS ou e-mail.
++  const sendPinResetCode = useCallback(async () => {
++    const {
++      data: { user },
++      error: authError,
++    } = await supabase.auth.getUser();
++
++    if (authError || !user || user.id !== userId) {
++      throw new Error("Vérification de session impossible.");
++    }
++
++    if (user.phone) {
++      const phone = user.phone.startsWith("+") ? user.phone : `+${user.phone}`;
++      const { error: otpError } = await supabase.auth.signInWithOtp({
++        phone,
++        options: { shouldCreateUser: false },
++      });
++      if (otpError) throw new Error("Envoi du code impossible : " + otpError.message);
++      return "sms";
++    }
++
++    if (user.email) {
++      const { error: otpError } = await supabase.auth.signInWithOtp({
++        email: user.email,
++        options: { shouldCreateUser: false },
++      });
++      if (otpError) throw new Error("Envoi du code impossible : " + otpError.message);
++      return "email";
++    }
++
++    throw new Error("Aucun téléphone ni e-mail pour vérifier ton identité.");
++  }, [userId]);
++
++  // PIN oublié — étape 2 : code reçu + nouveau PIN. L'historique est conservé.
++  const resetPinWithCode = useCallback(async (code, newPin) => {
++    if (!isValidPin(newPin)) {
++      throw new Error("Le PIN doit contenir exactement 4 chiffres.");
++    }
++
++    const token = String(code || "").trim();
++    if (!token) throw new Error("Saisis le code reçu.");
++
++    const {
++      data: { user },
++      error: authError,
++    } = await supabase.auth.getUser();
++
++    if (authError || !user || user.id !== userId) {
++      throw new Error("Vérification de session impossible.");
++    }
++
++    const { data, error: verifyError } = user.phone
++      ? await supabase.auth.verifyOtp({
++          phone: user.phone.startsWith("+") ? user.phone : `+${user.phone}`,
++          token,
++          type: "sms",
++        })
++      : await supabase.auth.verifyOtp({ email: user.email, token, type: "email" });
++
++    if (verifyError) throw new Error("Code incorrect ou expiré.");
++    if (data?.user?.id !== userId) {
++      throw new Error("Ce code ne correspond pas à ce compte.");
++    }
++
++    // Identité revérifiée : on ré-enveloppe la clé de cet appareil avec le nouveau PIN.
++    const pinAuth = await buildPinBackupFromDeviceEscrow(userId, newPin);
++    await savePinBackupToServer(pinAuth);
++
++    writePinCheck(userId, { t: Date.now(), stage: 0 });
++    setBackupKind("pin");
++    setPinReminderDue(false);
++
++    return true;
++  }, [userId]);
++
+   // Récupération et validation de la clé publique d'un destinataire.
+   const fetchRecipientPublicKey = useCallback(async (recipientId) => {
+     if (!recipientId || typeof recipientId !== "string") {
+@@ -525,8 +798,15 @@ export function useCryptoKeys(userId) {
+     ready,
+     error,
+     mode,
++    backupKind,
+     recoveryCode,
+     acknowledgeRecoveryCode,
++    pinReminderDue,
++    verifyPin,
++    changePin,
++    canResetPin,
++    sendPinResetCode,
++    resetPinWithCode,
+     setupKeys,
+     unlockKeys,
+     resetKeys,
+diff --git a/src/features/messaging/hooks/useMessaging.js b/src/features/messaging/hooks/useMessaging.js
+index 00f1f87..4ba0dd6 100644
+--- a/src/features/messaging/hooks/useMessaging.js
++++ b/src/features/messaging/hooks/useMessaging.js
+@@ -86,8 +86,15 @@ export function useMessaging(conversation_id, current_user_id, recipient_id) {
+     ready: keysReady,
+     error: keysError,
+     mode: keysMode,
++    backupKind: keysBackupKind,
+     recoveryCode,
+     acknowledgeRecoveryCode,
++    pinReminderDue,
++    verifyPin,
++    changePin,
++    canResetPin,
++    sendPinResetCode,
++    resetPinWithCode,
+     setupKeys,
+     unlockKeys,
+     resetKeys,
+@@ -681,6 +688,13 @@ export function useMessaging(conversation_id, current_user_id, recipient_id) {
+     keysReady,
+     keysError,
+     keysMode,
++    keysBackupKind,
++    pinReminderDue,
++    verifyPin,
++    changePin,
++    canResetPin,
++    sendPinResetCode,
++    resetPinWithCode,
+     recoveryCode,
+     acknowledgeRecoveryCode,
+     setupKeys,
+diff --git a/src/features/messaging/lib/crypto.js b/src/features/messaging/lib/crypto.js
+index 5f59abf..a12b1f2 100644
+--- a/src/features/messaging/lib/crypto.js
++++ b/src/features/messaging/lib/crypto.js
+@@ -255,6 +255,84 @@ async function idbDelete(key) {
+   });
+ }
+ 
++// ─── Copie de secours locale (PIN oublié, appareil conservé) ─────────────────
++//
++// La clé privée utilisée pour déchiffrer reste NON extractable. En plus, on garde
++// sur l'appareil une copie chiffrée par une clé AES elle-même non extractable
++// (stockée dans IndexedDB). Elle ne sert qu'au parcours « PIN oublié » : après une
++// nouvelle vérification d'identité (code SMS/e-mail), l'app ré-enveloppe la clé
++// avec un nouveau PIN. Compromis assumé : un script malveillant exécuté dans la
++// page pourrait lire cette copie ; la CSP stricte de l'app limite ce risque.
++
++function escrowIdFor(userId) {
++  return `escrow:${userId || ""}`;
++}
++
++async function saveDeviceEscrow(userId, privateKeyJwk) {
++  const c = getCrypto();
++  const wrapKey = await c.subtle.generateKey(AES_ALGORITHM, false, [
++    "encrypt",
++    "decrypt",
++  ]);
++  const iv = c.getRandomValues(new Uint8Array(AES_IV_LENGTH));
++  const ct = await c.subtle.encrypt(
++    { name: "AES-GCM", iv, tagLength: 128 },
++    wrapKey,
++    new TextEncoder().encode(JSON.stringify(privateKeyJwk))
++  );
++
++  await idbSet(escrowIdFor(userId), { wrapKey, iv, ct });
++}
++
++export async function hasDeviceEscrow(userId = null) {
++  try {
++    const entry = await idbGet(escrowIdFor(userId));
++    return !!(entry && entry.wrapKey && entry.iv && entry.ct);
++  } catch {
++    return false;
++  }
++}
++
++/**
++ * PIN oublié sur un appareil qui possède encore la clé : produit une nouvelle
++ * sauvegarde protégée par `newPin` (données "save" du serveur). L'appelant doit
++ * avoir revérifié l'identité de l'utilisateur AVANT d'appeler cette fonction.
++ */
++export async function buildPinBackupFromDeviceEscrow(userId, newPin) {
++  assertPin(newPin);
++
++  const entry = await idbGet(escrowIdFor(userId));
++  const pair = await getLocalKeyPair(userId);
++
++  if (!entry || !entry.wrapKey || !pair) {
++    throw new Error("Cette clé n'est pas récupérable sur cet appareil.");
++  }
++
++  let privateKeyJwk;
++  try {
++    const plaintext = await getCrypto().subtle.decrypt(
++      { name: "AES-GCM", iv: entry.iv, tagLength: 128 },
++      entry.wrapKey,
++      entry.ct
++    );
++    privateKeyJwk = JSON.parse(new TextDecoder().decode(plaintext));
++  } catch {
++    throw new Error("Cette clé n'est pas récupérable sur cet appareil.");
++  }
++
++  // Garde-fou : la copie de secours doit correspondre à la clé du compte.
++  if (
++    privateKeyJwk?.n !== pair.publicKeyJwk.n ||
++    privateKeyJwk?.e !== pair.publicKeyJwk.e
++  ) {
++    throw new Error("Cette clé n'est pas récupérable sur cet appareil.");
++  }
++
++  const { pinAuth } = await buildPinBackup(privateKeyJwk, pair.publicKeyJwk, newPin);
++
++  return pinAuth;
++}
++
+ // ─── Import des clés ────────────────────────────────────────────────────────
+ 
+ async function importPrivateKey(jwk) {
+@@ -366,11 +444,7 @@ async function buildBackup(privateKeyJwk, publicKeyJwk, passphrase) {
+   };
+ }
+ 
+-/**
+- * Restaure la paire de clés locale du compte depuis une sauvegarde.
+- * Lève "Phrase secrète incorrecte." si la phrase ne convient pas.
+- */
+-export async function restoreFromBackup(backup, passphrase, userId = null) {
++async function decryptLegacyBackup(backup, passphrase) {
+   if (
+     !backup ||
+     backup.v !== BACKUP_VERSION ||
+@@ -399,8 +473,6 @@ export async function restoreFromBackup(backup, passphrase, userId = null) {
+   const iv = new Uint8Array(base64ToBuf(backup.iv));
+   const ct = base64ToBuf(backup.ct);
+ 
+-  let privateKeyJwk = null;
+-
+   for (const candidate of candidates) {
+     try {
+       const wrapKey = await deriveWrapKey(candidate, salt, backup.iter);
+@@ -411,29 +483,242 @@ export async function restoreFromBackup(backup, passphrase, userId = null) {
+         ct
+       );
+ 
+-      privateKeyJwk = JSON.parse(new TextDecoder().decode(plaintext));
+-      break;
++      return JSON.parse(new TextDecoder().decode(plaintext));
+     } catch {
+       // Mauvaise phrase : on essaie la suivante.
+     }
+   }
+ 
+-  if (!privateKeyJwk) {
+-    throw new Error("Phrase secrète incorrecte.");
+-  }
++  throw new Error("Phrase secrète incorrecte.");
++}
++
++/**
++ * Restaure la paire de clés locale du compte depuis une sauvegarde.
++ * Lève "Phrase secrète incorrecte." si la phrase ne convient pas.
++ */
++export async function restoreFromBackup(backup, passphrase, userId = null) {
++  const privateKeyJwk = await decryptLegacyBackup(backup, passphrase);
+ 
+   const publicKeyJwk = validatePublicKeyJwk(backup.publicKeyJwk);
+   const privateKey = await importPrivateKey(privateKeyJwk);
+ 
+   await idbSet(keyIdFor(userId), { publicKeyJwk, privateKey, version: 2 });
++  await saveDeviceEscrow(userId, privateKeyJwk);
+ 
+   return { publicKeyJwk, privateKey };
+ }
+ 
++/**
++ * Migration d'un ancien compte : déchiffre la sauvegarde à code long puis la
++ * ré-enveloppe avec un PIN à 4 chiffres. Retourne les données à envoyer au
++ * serveur (action "save"). La clé en clair ne sort pas de cette fonction.
++ */
++export async function rewrapLegacyBackupWithPin(backup, passphrase, pin) {
++  assertPin(pin);
++
++  const privateKeyJwk = await decryptLegacyBackup(backup, passphrase);
++  const publicKeyJwk = validatePublicKeyJwk(backup.publicKeyJwk);
++
++  const { pinAuth } = await buildPinBackup(privateKeyJwk, publicKeyJwk, pin);
++
++  return pinAuth;
++}
++
++// ─── Sauvegarde protégée par un PIN à 4 chiffres ────────────────────────────
++//
++// Un PIN court n'est sûr que si le serveur limite les essais (api/e2e-backup.js).
++// - Du PIN on dérive 64 octets (PBKDF2) : 32 octets de « preuve » envoyés au
++//   serveur pour vérification, 32 octets de matériau de clé qui ne quittent
++//   jamais l'appareil.
++// - La clé d'enveloppe AES = HKDF(matériau, sel = secret d'enveloppe serveur).
++//   Sans le secret d'enveloppe (libéré seulement après un PIN correct), la
++//   sauvegarde ne peut pas être attaquée hors ligne.
++
++const PIN_BACKUP_VERSION = 2;
++const PIN_PBKDF2_ITERATIONS = 300000; // x2 blocs de sortie (64 octets) ≈ 600 000 de coût
++const PIN_REGEX = /^\d{4}$/;
++
++export function isValidPin(pin) {
++  return typeof pin === "string" && PIN_REGEX.test(pin);
++}
++
++function assertPin(pin) {
++  if (!isValidPin(pin)) {
++    throw new Error("Le PIN doit contenir exactement 4 chiffres.");
++  }
++}
++
++async function derivePinMaterial(pin, salt, iterations) {
++  const subtle = getCrypto().subtle;
++
++  const base = await subtle.importKey(
++    "raw",
++    new TextEncoder().encode(pin),
++    "PBKDF2",
++    false,
++    ["deriveBits"]
++  );
++
++  const bits = await subtle.deriveBits(
++    { name: "PBKDF2", salt, iterations, hash: "SHA-256" },
++    base,
++    512
++  );
++
++  return { proof: bits.slice(0, 32), kekMaterial: bits.slice(32) };
++}
++
++async function deriveEnvelopeKey(kekMaterial, wrapSecret) {
++  const subtle = getCrypto().subtle;
++
++  const hkdfBase = await subtle.importKey("raw", kekMaterial, "HKDF", false, [
++    "deriveKey",
++  ]);
++
++  return subtle.deriveKey(
++    {
++      name: "HKDF",
++      hash: "SHA-256",
++      salt: wrapSecret,
++      info: new TextEncoder().encode("baaro-e2e-pin-wrap-v1"),
++    },
++    hkdfBase,
++    AES_ALGORITHM,
++    false,
++    ["encrypt", "decrypt"]
++  );
++}
++
++/**
++ * Calcule la preuve envoyée au serveur pour vérifier le PIN (base64).
++ * Le sel et le nombre d'itérations viennent de l'action "status".
++ */
++export async function computePinProof(pin, saltBase64, iterations) {
++  assertPin(pin);
++
++  const salt = new Uint8Array(base64ToBuf(saltBase64));
++  const { proof } = await derivePinMaterial(pin, salt, iterations);
++
++  return bufToBase64(proof);
++}
++
++async function buildPinBackup(privateKeyJwk, publicKeyJwk, pin) {
++  assertPin(pin);
++
++  const c = getCrypto();
++  const salt = c.getRandomValues(new Uint8Array(16));
++  const wrapSecret = c.getRandomValues(new Uint8Array(32));
++  const iv = c.getRandomValues(new Uint8Array(AES_IV_LENGTH));
++
++  const { proof, kekMaterial } = await derivePinMaterial(
++    pin,
++    salt,
++    PIN_PBKDF2_ITERATIONS
++  );
++  const envelopeKey = await deriveEnvelopeKey(kekMaterial, wrapSecret);
++
++  const ciphertext = await c.subtle.encrypt(
++    { name: "AES-GCM", iv, tagLength: 128 },
++    envelopeKey,
++    new TextEncoder().encode(JSON.stringify(privateKeyJwk))
++  );
++
++  return {
++    // Envoyé au serveur (api/e2e-backup.js, action "save").
++    pinAuth: {
++      proof: bufToBase64(proof),
++      salt: bufToBase64(salt),
++      iter: PIN_PBKDF2_ITERATIONS,
++      wrapSecret: bufToBase64(wrapSecret),
++      backup: {
++        v: PIN_BACKUP_VERSION,
++        kind: "pin",
++        publicKeyJwk,
++        iv: bufToBase64(iv),
++        ct: bufToBase64(ciphertext),
++      },
++    },
++  };
++}
++
++async function decryptPinBackup({ backup, wrapSecret, salt, iter }, pin) {
++  assertPin(pin);
++
++  if (
++    !backup ||
++    backup.v !== PIN_BACKUP_VERSION ||
++    backup.kind !== "pin" ||
++    !Number.isInteger(iter) ||
++    iter < 100000 ||
++    iter > 2000000
++  ) {
++    throw new Error("Sauvegarde de clé invalide.");
++  }
++
++  const saltBuf = new Uint8Array(base64ToBuf(salt));
++  const wrapBuf = new Uint8Array(base64ToBuf(wrapSecret));
++  const iv = new Uint8Array(base64ToBuf(backup.iv));
++  const ct = base64ToBuf(backup.ct);
++
++  const { kekMaterial } = await derivePinMaterial(pin, saltBuf, iter);
++  const envelopeKey = await deriveEnvelopeKey(kekMaterial, wrapBuf);
++
++  try {
++    const plaintext = await getCrypto().subtle.decrypt(
++      { name: "AES-GCM", iv, tagLength: 128 },
++      envelopeKey,
++      ct
++    );
++    return JSON.parse(new TextDecoder().decode(plaintext));
++  } catch {
++    throw new Error("PIN incorrect.");
++  }
++}
++
++/**
++ * Restaure la clé locale à partir de la réponse du serveur (action "restore")
++ * et du PIN saisi. Lève "PIN incorrect." si le déchiffrement échoue.
++ */
++export async function restoreFromPinBackup(data, pin, userId = null) {
++  const privateKeyJwk = await decryptPinBackup(data, pin);
++
++  const publicKeyJwk = validatePublicKeyJwk(data.backup.publicKeyJwk);
++  const privateKey = await importPrivateKey(privateKeyJwk);
++
++  await idbSet(keyIdFor(userId), { publicKeyJwk, privateKey, version: 2 });
++  await saveDeviceEscrow(userId, privateKeyJwk);
++
++  return { publicKeyJwk, privateKey };
++}
++
++/** Vérifie qu'un PIN ouvre bien la sauvegarde, sans toucher à la clé locale. */
++export async function verifyPinBackup(data, pin) {
++  await decryptPinBackup(data, pin);
++  return true;
++}
++
++/**
++ * Changement de PIN : déchiffre avec l'ancien, ré-enveloppe avec le nouveau
++ * (nouveau sel, nouveau secret d'enveloppe). Retourne les données "save".
++ */
++export async function rewrapPinBackup(data, oldPin, newPin) {
++  assertPin(newPin);
++
++  const privateKeyJwk = await decryptPinBackup(data, oldPin);
++  const publicKeyJwk = validatePublicKeyJwk(data.backup.publicKeyJwk);
++
++  const { pinAuth } = await buildPinBackup(privateKeyJwk, publicKeyJwk, newPin);
++
++  return pinAuth;
++}
++
+ // ─── Génération / récupération des clés ─────────────────────────────────────
+ 
+-async function createKeyPair(passphrase, userId) {
+-  assertPassphrase(passphrase);
++async function createKeyPair(passphrase, userId, pin) {
++  const usePin = pin !== undefined && pin !== null;
++
++  if (usePin) assertPin(pin);
++  else assertPassphrase(passphrase);
+ 
+   const subtle = getCrypto().subtle;
+ 
+@@ -445,11 +730,21 @@ async function createKeyPair(passphrase, userId) {
+   const publicKeyJwk = await subtle.exportKey("jwk", generated.publicKey);
+   const privateKeyJwk = await subtle.exportKey("jwk", generated.privateKey);
+ 
+-  const backup = await buildBackup(privateKeyJwk, publicKeyJwk, passphrase);
+-
+   const privateKey = await importPrivateKey(privateKeyJwk);
+ 
++  if (usePin) {
++    const { pinAuth } = await buildPinBackup(privateKeyJwk, publicKeyJwk, pin);
++
++    await idbSet(keyIdFor(userId), { publicKeyJwk, privateKey, version: 2 });
++    await saveDeviceEscrow(userId, privateKeyJwk);
++
++    return { publicKeyJwk, privateKey, pinAuth };
++  }
++
++  const backup = await buildBackup(privateKeyJwk, publicKeyJwk, passphrase);
++
+   await idbSet(keyIdFor(userId), { publicKeyJwk, privateKey, version: 2 });
++  await saveDeviceEscrow(userId, privateKeyJwk);
+ 
+   return { publicKeyJwk, privateKey, backup };
+ }
+@@ -485,6 +780,7 @@ export async function getLocalKeyPair(userId = null) {
+ 
+ export async function clearLocalKeyPair(userId = null) {
+   await idbDelete(keyIdFor(userId));
++  await idbDelete(escrowIdFor(userId));
+ }
+ 
+ // Compare deux clés publiques RSA (module + exposant).
+@@ -544,7 +840,12 @@ export async function adoptLegacyKeyPair(userId, serverPublicKey) {
+   return { publicKeyJwk: legacy.publicKeyJwk, privateKey: legacy.privateKey };
+ }
+ 
+-export async function ensureKeyPair({ userId = null, allowCreate = false, passphrase } = {}) {
++export async function ensureKeyPair({
++  userId = null,
++  allowCreate = false,
++  passphrase,
++  pin,
++} = {}) {
+   const existing = await getLocalKeyPair(userId);
+ 
+   if (existing) return existing;
+@@ -553,7 +854,7 @@ export async function ensureKeyPair({ userId = null, allowCreate = false, passph
+   const keyId = keyIdFor(userId);
+ 
+   if (!keyPairPromises.has(keyId)) {
+-    const task = createKeyPair(passphrase, userId).finally(() => {
++    const task = createKeyPair(passphrase, userId, pin).finally(() => {
+       keyPairPromises.delete(keyId);
+     });
+ 
