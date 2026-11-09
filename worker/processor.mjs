@@ -75,8 +75,14 @@ async function source(job, dir) {
 
   // L'extension de la clé ne prouve rien : on vérifie la signature réelle
   // du fichier (binaire Rust) avant de le confier à FFmpeg.
+  // Fail-closed : le sniff est obligatoire.
   const sniffed = await sniffFile(input);
-  if (sniffed && (sniffed.danger || (config.sniffStrict && !sniffed.media))) {
+
+  if (!sniffed) {
+    throw new Error("Contrôle de signature obligatoire : résultat absent");
+  }
+
+  if (sniffed.danger || (config.sniffStrict && !sniffed.media)) {
     throw new Error(
       `Fichier source refusé : type détecté « ${sniffed.kind} »`
     );
