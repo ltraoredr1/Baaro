@@ -38,3 +38,4 @@ supabase/.temp/
 
 # Rust
 target/
+!public/wasm/
