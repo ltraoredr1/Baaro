@@ -11,7 +11,8 @@
     "process": "node processor.mjs",
     "cleanup:multipart": "node cleanup-multipart.mjs",
     "build:rust": "cargo build --release --locked --manifest-path rust/baaro-media/Cargo.toml",
-    "test:rust": "node test/rust-parity.mjs"
+    "test:rust": "node test/rust-sniff.mjs",
+    "bench:rust": "node test/benchmark-rust.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.859.0",

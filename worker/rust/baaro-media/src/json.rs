@@ -17,18 +17,6 @@ pub fn push_str(out: &mut String, s: &str) {
     out.push('"');
 }
 
-/// Ajoute un tableau JSON de chaînes.
-pub fn push_str_array(out: &mut String, items: &[&str]) {
-    out.push('[');
-    for (i, item) in items.iter().enumerate() {
-        if i > 0 {
-            out.push(',');
-        }
-        push_str(out, item);
-    }
-    out.push(']');
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

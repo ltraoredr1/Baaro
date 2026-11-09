@@ -2,13 +2,11 @@
 name = "baaro-media"
 version = "0.1.0"
 edition = "2021"
-description = "Outils média du worker BAARO : détection de type par signature et découpage WebVTT"
+description = "Détection de type de fichier par signature pour le worker BAARO"
 license = "MIT"
 publish = false
 
-# Aucune dépendance externe : binaire petit, build reproductible, rien à auditer.
-[dependencies]
-
+# Aucun crate externe : binaire léger et build reproductible.
 [profile.release]
 opt-level = 3
 lto = true

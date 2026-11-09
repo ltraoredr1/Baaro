@@ -1,11 +1,9 @@
-import { parseVttNative } from "./native.mjs";
-
 /**
- * Découpe le WebVTT en blocs sans perdre les horodatages.
- * Version JavaScript de référence (et de repli) : le binaire Rust
- * `baaro-media vtt-parse` doit produire exactement le même résultat.
+ * Découpe un WebVTT en blocs sans perdre les horodatages.
+ * Une seule implémentation JavaScript est conservée pour éviter le coût
+ * du lancement d’un processus Rust à chaque parsing.
  */
-export function parseVttJs(vtt) {
+export function parseVtt(vtt) {
   const normalized = String(vtt || "")
     .replace(/^﻿/, "")
     .replace(/\r/g, "")
@@ -17,9 +15,7 @@ export function parseVttJs(vtt) {
 
   return normalized.split(/\n{2,}/).map((block) => {
     const lines = block.split("\n");
-    const timingIndex = lines.findIndex(
-      (line) => line.includes("-->")
-    );
+    const timingIndex = lines.findIndex((line) => line.includes("-->"));
 
     if (timingIndex < 0) {
       return { raw: block, timing: null, text: [] };
@@ -32,9 +28,4 @@ export function parseVttJs(vtt) {
       text: lines.slice(timingIndex + 1),
     };
   });
-}
-
-/** Rust si disponible, sinon JavaScript. */
-export function parseVtt(vtt) {
-  return parseVttNative(vtt) ?? parseVttJs(vtt);
 }

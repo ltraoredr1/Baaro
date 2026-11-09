@@ -21,7 +21,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   rust:
-    name: baaro-media (fmt, clippy, tests, parité JS)
+    name: baaro-media (fmt, clippy, tests signatures)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:

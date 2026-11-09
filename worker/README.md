@@ -28,6 +28,27 @@ npm start
 
 Le endpoint `POST /process` est protégé par `x-baaro-worker-secret`.
 
+## Valider et mesurer Rust
+
+Rust est conservé uniquement pour détecter le type réel d'un fichier par sa signature. Le découpage WebVTT reste en JavaScript : le détour par un processus Rust était plus lent sur les mesures locales. Le binaire Rust est construit dans l'image du worker. Pour valider le code localement :
+
+```bash
+cd worker
+cargo fmt --check --manifest-path rust/baaro-media/Cargo.toml
+cargo clippy --locked --manifest-path rust/baaro-media/Cargo.toml -- -D warnings
+cargo test --locked --manifest-path rust/baaro-media/Cargo.toml
+npm run build:rust
+BAARO_MEDIA_BIN="$PWD/rust/baaro-media/target/release/baaro-media" npm run test:rust
+```
+
+Pour mesurer la latence du détecteur de signatures sur la même architecture que le worker déployé :
+
+```bash
+BAARO_MEDIA_BIN="$PWD/rust/baaro-media/target/release/baaro-media" npm run bench:rust
+```
+
+Le rapport affiche la médiane, le p95, la moyenne et le débit du détecteur. C'est un microbenchmark local : une décision de déploiement doit aussi s'appuyer sur des mesures de Cloud Run avec la même image, la même région et une charge représentative.
+
 ## Uploads vidéo volumineux
 
 Le worker expose un multipart upload authentifié pour l'onglet Vidéos :
