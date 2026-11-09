@@ -1,0 +1,977 @@
+diff --git a/.github/workflows/worker-rust.yml b/.github/workflows/worker-rust.yml
+new file mode 100644
+index 0000000..5fe0020
+--- /dev/null
++++ b/.github/workflows/worker-rust.yml
+@@ -0,0 +1,47 @@
++name: Worker média — Rust
++on:
++  push:
++    branches: [main, develop]
++    paths:
++      - 'worker/rust/**'
++      - 'worker/lib/**'
++      - 'worker/test/**'
++      - 'worker/Dockerfile'
++      - '.github/workflows/worker-rust.yml'
++  pull_request:
++    paths:
++      - 'worker/rust/**'
++      - 'worker/lib/**'
++      - 'worker/test/**'
++      - 'worker/Dockerfile'
++      - '.github/workflows/worker-rust.yml'
++  workflow_dispatch:
++concurrency:
++  group: worker-rust-${{ github.ref }}
++  cancel-in-progress: true
++jobs:
++  rust:
++    name: baaro-media (fmt, clippy, tests, parité JS)
++    runs-on: ubuntu-latest
++    timeout-minutes: 15
++    defaults:
++      run:
++        working-directory: worker
++    steps:
++      - uses: actions/checkout@v4
++      - uses: actions/setup-node@v4
++        with:
++          node-version-file: '.nvmrc'
++      - uses: dtolnay/rust-toolchain@stable
++        with:
++          components: rustfmt, clippy
++      - uses: Swatinem/rust-cache@v2
++        with:
++          workspaces: worker/rust/baaro-media
++      - run: cargo fmt --check --manifest-path rust/baaro-media/Cargo.toml
++      - run: cargo clippy --locked --manifest-path rust/baaro-media/Cargo.toml -- -D warnings
++      - run: cargo test --locked --manifest-path rust/baaro-media/Cargo.toml
++      - run: npm run build:rust
++      - run: npm run test:rust
++        env:
++          BAARO_MEDIA_BIN: ${{ github.workspace }}/worker/rust/baaro-media/target/release/baaro-media
+diff --git a/.gitignore b/.gitignore
+index 97c9f9c..b04451f 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -35,3 +35,6 @@ tmp/
+ temp/
+ .capgo/
+ supabase/.temp/
++
++# Rust
++target/
+diff --git a/worker/.dockerignore b/worker/.dockerignore
+new file mode 100644
+index 0000000..53d8a1a
+--- /dev/null
++++ b/worker/.dockerignore
+@@ -0,0 +1,2 @@
++node_modules
++rust/**/target
+diff --git a/worker/Dockerfile b/worker/Dockerfile
+index c6a3e40..cd874f5 100644
+--- a/worker/Dockerfile
++++ b/worker/Dockerfile
+@@ -1,9 +1,18 @@
++# --- Étape 1 : compilation du binaire Rust (baaro-media) ---
++FROM rust:1-bookworm AS rust-build
++WORKDIR /build
++COPY rust/baaro-media/ ./
++RUN cargo build --release --locked
++
++# --- Étape 2 : image d'exécution du worker ---
+ FROM node:22-bookworm-slim
+ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg python3 python3-pip ca-certificates && rm -rf /var/lib/apt/lists/*
++COPY --from=rust-build /build/target/release/baaro-media /usr/local/bin/baaro-media
+ WORKDIR /app
+ COPY package.json ./
+ RUN npm install --omit=dev
+ COPY . .
+ ENV NODE_ENV=production
++ENV BAARO_MEDIA_BIN=/usr/local/bin/baaro-media
+ EXPOSE 8787
+ CMD ["node", "server.mjs"]
+diff --git a/worker/lib/config.mjs b/worker/lib/config.mjs
+index 4268357..c453cc4 100644
+--- a/worker/lib/config.mjs
++++ b/worker/lib/config.mjs
+@@ -5,6 +5,10 @@ export const config = {
+   ffmpeg: process.env.FFMPEG_BIN || "ffmpeg",
+   ffprobe: process.env.FFPROBE_BIN || "ffprobe",
+   whisper: process.env.WHISPER_BIN || "whisper",
++  // Binaire Rust (worker/rust/baaro-media). Absent : le worker retombe sur le JS.
++  mediaBin: process.env.BAARO_MEDIA_BIN || "baaro-media",
++  // 1 : refuser aussi les fichiers dont la signature est inconnue (par défaut : seulement les types dangereux).
++  sniffStrict: process.env.BAARO_SNIFF_STRICT === "1",
+   r2: {
+     accountId: process.env.R2_ACCOUNT_ID || "",
+     accessKeyId: process.env.R2_ACCESS_KEY_ID || "",
+diff --git a/worker/lib/native.mjs b/worker/lib/native.mjs
+new file mode 100644
+index 0000000..4597e00
+--- /dev/null
++++ b/worker/lib/native.mjs
+@@ -0,0 +1,62 @@
++import { execFile, spawnSync } from "node:child_process";
++import { promisify } from "node:util";
++import { config } from "./config.mjs";
++
++const execFileAsync = promisify(execFile);
++
++let warned = false;
++
++function warnOnce(error) {
++  if (warned) return;
++  warned = true;
++  console.warn(
++    `[worker] binaire Rust ${config.mediaBin} indisponible (${error?.code || error?.message}) : repli sur le code JS`
++  );
++}
++
++/**
++ * Type réel d'un fichier d'après sa signature (binaire Rust baaro-media).
++ * Retourne { kind, mime, media, danger, size } ou null si le binaire est absent
++ * ou échoue : la validation est alors simplement ignorée.
++ */
++export async function sniffFile(path) {
++  try {
++    const { stdout } = await execFileAsync(
++      config.mediaBin,
++      ["sniff", path],
++      { timeout: 10_000, maxBuffer: 64 * 1024 }
++    );
++    return JSON.parse(stdout);
++  } catch (error) {
++    // Code numérique = le binaire a tourné mais n'a pas pu lire le fichier ;
++    // code texte (ENOENT, EACCES…) = binaire introuvable ou inexécutable.
++    if (typeof error?.code !== "number") warnOnce(error);
++    return null;
++  }
++}
++
++/**
++ * Découpe un WebVTT avec le binaire Rust.
++ * Retourne le tableau de blocs, ou null (binaire absent, entrée invalide, erreur) :
++ * l'appelant retombe alors sur l'implémentation JS, qui produit les mêmes erreurs.
++ */
++export function parseVttNative(vtt) {
++  const result = spawnSync(config.mediaBin, ["vtt-parse"], {
++    input: String(vtt ?? ""),
++    encoding: "utf8",
++    timeout: 10_000,
++    maxBuffer: 64 * 1024 * 1024,
++  });
++
++  if (result.error) {
++    warnOnce(result.error);
++    return null;
++  }
++  if (result.status !== 0) return null;
++
++  try {
++    return JSON.parse(result.stdout);
++  } catch {
++    return null;
++  }
++}
+diff --git a/worker/lib/vtt.mjs b/worker/lib/vtt.mjs
+new file mode 100644
+index 0000000..9f26c32
+--- /dev/null
++++ b/worker/lib/vtt.mjs
+@@ -0,0 +1,40 @@
++import { parseVttNative } from "./native.mjs";
++
++/**
++ * Découpe le WebVTT en blocs sans perdre les horodatages.
++ * Version JavaScript de référence (et de repli) : le binaire Rust
++ * `baaro-media vtt-parse` doit produire exactement le même résultat.
++ */
++export function parseVttJs(vtt) {
++  const normalized = String(vtt || "")
++    .replace(/^﻿/, "")
++    .replace(/\r/g, "")
++    .trim();
++
++  if (!/^WEBVTT(?:\s|$)/.test(normalized)) {
++    throw new Error("La transcription ne contient pas un WebVTT valide");
++  }
++
++  return normalized.split(/\n{2,}/).map((block) => {
++    const lines = block.split("\n");
++    const timingIndex = lines.findIndex(
++      (line) => line.includes("-->")
++    );
++
++    if (timingIndex < 0) {
++      return { raw: block, timing: null, text: [] };
++    }
++
++    return {
++      raw: null,
++      prefix: lines.slice(0, timingIndex),
++      timing: lines[timingIndex],
++      text: lines.slice(timingIndex + 1),
++    };
++  });
++}
++
++/** Rust si disponible, sinon JavaScript. */
++export function parseVtt(vtt) {
++  return parseVttNative(vtt) ?? parseVttJs(vtt);
++}
+diff --git a/worker/package.json b/worker/package.json
+index bbe81ff..29d88da 100644
+--- a/worker/package.json
++++ b/worker/package.json
+@@ -9,7 +9,9 @@
+     "build": "echo \"Rien \u00e0 compiler\"",
+     "start": "node server.mjs",
+     "process": "node processor.mjs",
+-    "cleanup:multipart": "node cleanup-multipart.mjs"
++    "cleanup:multipart": "node cleanup-multipart.mjs",
++    "build:rust": "cargo build --release --locked --manifest-path rust/baaro-media/Cargo.toml",
++    "test:rust": "node test/rust-parity.mjs"
+   },
+   "dependencies": {
+     "@aws-sdk/client-s3": "^3.859.0",
+diff --git a/worker/processor.mjs b/worker/processor.mjs
+index 49b30e9..e8914fd 100644
+--- a/worker/processor.mjs
++++ b/worker/processor.mjs
+@@ -14,6 +14,8 @@ import {
+   publicUrl,
+ } from "./lib/r2.mjs";
+ import { run } from "./lib/exec.mjs";
++import { sniffFile } from "./lib/native.mjs";
++import { parseVtt } from "./lib/vtt.mjs";
+ 
+ const VIDEO_EXT = ".mp4";
+ const MAX_TRANSLATION_CHARS = 30000;
+@@ -70,6 +72,16 @@ async function source(job, dir) {
+   );
+ 
+   await downloadToFile(key, input);
++
++  // L'extension de la clé ne prouve rien : on vérifie la signature réelle
++  // du fichier (binaire Rust) avant de le confier à FFmpeg.
++  const sniffed = await sniffFile(input);
++  if (sniffed && (sniffed.danger || (config.sniffStrict && !sniffed.media))) {
++    throw new Error(
++      `Fichier source refusé : type détecté « ${sniffed.kind} »`
++    );
++  }
++
+   return input;
+ }
+ 
+@@ -381,38 +393,6 @@ async function translateWithAI(messages, targetLanguage) {
+   );
+ }
+ 
+-/**
+- * Découpe le WebVTT en blocs sans perdre les horodatages.
+- */
+-function parseVtt(vtt) {
+-  const normalized = String(vtt || "")
+-    .replace(/^\uFEFF/, "")
+-    .replace(/\r/g, "")
+-    .trim();
+-
+-  if (!/^WEBVTT(?:\s|$)/.test(normalized)) {
+-    throw new Error("La transcription ne contient pas un WebVTT valide");
+-  }
+-
+-  return normalized.split(/\n{2,}/).map((block) => {
+-    const lines = block.split("\n");
+-    const timingIndex = lines.findIndex(
+-      (line) => line.includes("-->")
+-    );
+-
+-    if (timingIndex < 0) {
+-      return { raw: block, timing: null, text: [] };
+-    }
+-
+-    return {
+-      raw: null,
+-      prefix: lines.slice(0, timingIndex),
+-      timing: lines[timingIndex],
+-      text: lines.slice(timingIndex + 1),
+-    };
+-  });
+-}
+-
+ function extractJson(text) {
+   const cleaned = String(text)
+     .replace(/^```(?:json)?\s*/i, "")
+diff --git a/worker/rust/baaro-media/Cargo.lock b/worker/rust/baaro-media/Cargo.lock
+new file mode 100644
+index 0000000..9a8add0
+--- /dev/null
++++ b/worker/rust/baaro-media/Cargo.lock
+@@ -0,0 +1,7 @@
++# This file is automatically @generated by Cargo.
++# It is not intended for manual editing.
++version = 4
++
++[[package]]
++name = "baaro-media"
++version = "0.1.0"
+diff --git a/worker/rust/baaro-media/Cargo.toml b/worker/rust/baaro-media/Cargo.toml
+new file mode 100644
+index 0000000..6f63a3f
+--- /dev/null
++++ b/worker/rust/baaro-media/Cargo.toml
+@@ -0,0 +1,17 @@
++[package]
++name = "baaro-media"
++version = "0.1.0"
++edition = "2021"
++description = "Outils média du worker BAARO : détection de type par signature et découpage WebVTT"
++license = "MIT"
++publish = false
++
++# Aucune dépendance externe : binaire petit, build reproductible, rien à auditer.
++[dependencies]
++
++[profile.release]
++opt-level = 3
++lto = true
++codegen-units = 1
++panic = "abort"
++strip = true
+diff --git a/worker/rust/baaro-media/src/json.rs b/worker/rust/baaro-media/src/json.rs
+new file mode 100644
+index 0000000..9cc2fff
+--- /dev/null
++++ b/worker/rust/baaro-media/src/json.rs
+@@ -0,0 +1,42 @@
++//! Écriture JSON minimale (sortie uniquement), sans dépendance.
++
++/// Ajoute `s` à `out` comme chaîne JSON, guillemets compris.
++pub fn push_str(out: &mut String, s: &str) {
++    out.push('"');
++    for c in s.chars() {
++        match c {
++            '"' => out.push_str("\\\""),
++            '\\' => out.push_str("\\\\"),
++            '\n' => out.push_str("\\n"),
++            '\r' => out.push_str("\\r"),
++            '\t' => out.push_str("\\t"),
++            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
++            c => out.push(c),
++        }
++    }
++    out.push('"');
++}
++
++/// Ajoute un tableau JSON de chaînes.
++pub fn push_str_array(out: &mut String, items: &[&str]) {
++    out.push('[');
++    for (i, item) in items.iter().enumerate() {
++        if i > 0 {
++            out.push(',');
++        }
++        push_str(out, item);
++    }
++    out.push(']');
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn escapes_specials() {
++        let mut s = String::new();
++        push_str(&mut s, "a\"b\\c\nd\u{1}é");
++        assert_eq!(s, "\"a\\\"b\\\\c\\nd\\u0001é\"");
++    }
++}
+diff --git a/worker/rust/baaro-media/src/main.rs b/worker/rust/baaro-media/src/main.rs
+new file mode 100644
+index 0000000..6ce5db4
+--- /dev/null
++++ b/worker/rust/baaro-media/src/main.rs
+@@ -0,0 +1,81 @@
++//! baaro-media — petits outils appelés par le worker Node.
++//!
++//!   baaro-media sniff <fichier>   → JSON du type réel (signature des premiers octets)
++//!   baaro-media vtt-parse         → lit un WebVTT sur stdin, écrit les blocs en JSON
++//!   baaro-media --version
++//!
++//! Codes de sortie : 0 succès, 1 erreur d'E/S, 2 usage ou entrée invalide.
++//! Les messages d'erreur vont sur stderr.
++
++mod json;
++mod sniff;
++mod vtt;
++
++use std::fs::File;
++use std::io::{self, Read, Write};
++use std::process::ExitCode;
++
++/// Plafond de lecture sur stdin (un WebVTT de plusieurs heures reste très en dessous).
++const MAX_STDIN: u64 = 32 * 1024 * 1024;
++
++fn fail(code: u8, msg: &str) -> ExitCode {
++    eprintln!("baaro-media: {msg}");
++    ExitCode::from(code)
++}
++
++fn cmd_sniff(path: &str) -> ExitCode {
++    let file = match File::open(path) {
++        Ok(f) => f,
++        Err(e) => return fail(1, &format!("ouverture impossible : {e}")),
++    };
++    let size = file.metadata().map(|m| m.len()).unwrap_or(0);
++    let mut head = Vec::with_capacity(sniff::HEAD_LEN);
++    if let Err(e) = file.take(sniff::HEAD_LEN as u64).read_to_end(&mut head) {
++        return fail(1, &format!("lecture impossible : {e}"));
++    }
++    println!("{}", sniff::to_json(&sniff::sniff(&head), size));
++    ExitCode::SUCCESS
++}
++
++fn cmd_vtt_parse() -> ExitCode {
++    let mut raw = Vec::new();
++    if let Err(e) = io::stdin().lock().take(MAX_STDIN + 1).read_to_end(&mut raw) {
++        return fail(1, &format!("lecture de stdin impossible : {e}"));
++    }
++    if raw.len() as u64 > MAX_STDIN {
++        return fail(2, "entrée trop volumineuse");
++    }
++    let text = String::from_utf8_lossy(&raw);
++    let normalized = vtt::normalize(&text);
++    match vtt::parse(&normalized) {
++        Ok(blocks) => {
++            let mut out = io::stdout().lock();
++            if writeln!(out, "{}", vtt::to_json(&blocks)).is_err() {
++                return fail(1, "écriture impossible");
++            }
++            ExitCode::SUCCESS
++        }
++        Err(msg) => fail(2, msg),
++    }
++}
++
++fn main() -> ExitCode {
++    let args: Vec<String> = std::env::args().skip(1).collect();
++    match args
++        .iter()
++        .map(String::as_str)
++        .collect::<Vec<_>>()
++        .as_slice()
++    {
++        ["--version"] => {
++            println!("baaro-media {}", env!("CARGO_PKG_VERSION"));
++            ExitCode::SUCCESS
++        }
++        ["sniff", path] => cmd_sniff(path),
++        ["vtt-parse"] => cmd_vtt_parse(),
++        _ => fail(
++            2,
++            "usage : baaro-media sniff <fichier> | vtt-parse | --version",
++        ),
++    }
++}
+diff --git a/worker/rust/baaro-media/src/sniff.rs b/worker/rust/baaro-media/src/sniff.rs
+new file mode 100644
+index 0000000..c13e536
+--- /dev/null
++++ b/worker/rust/baaro-media/src/sniff.rs
+@@ -0,0 +1,213 @@
++//! Détection du type réel d'un fichier à partir de ses premiers octets.
++//!
++//! Le worker télécharge des fichiers envoyés par des utilisateurs : l'extension
++//! de la clé R2 ne prouve rien. On regarde la signature avant de lancer FFmpeg.
++
++use crate::json;
++
++/// Nombre d'octets lus au début du fichier.
++pub const HEAD_LEN: usize = 4096;
++
++#[derive(Debug, PartialEq, Eq)]
++pub struct Sniffed {
++    pub kind: &'static str,
++    pub mime: &'static str,
++    /// Média que le worker sait traiter (vidéo, audio, image).
++    pub media: bool,
++    /// Type connu comme n'étant PAS un média : à refuser (exécutable, archive, page web…).
++    pub danger: bool,
++}
++
++const fn media(kind: &'static str, mime: &'static str) -> Sniffed {
++    Sniffed {
++        kind,
++        mime,
++        media: true,
++        danger: false,
++    }
++}
++
++const fn danger(kind: &'static str, mime: &'static str) -> Sniffed {
++    Sniffed {
++        kind,
++        mime,
++        media: false,
++        danger: true,
++    }
++}
++
++const UNKNOWN: Sniffed = Sniffed {
++    kind: "unknown",
++    mime: "application/octet-stream",
++    media: false,
++    danger: false,
++};
++
++fn contains(haystack: &[u8], needle: &[u8]) -> bool {
++    haystack.windows(needle.len()).any(|w| w == needle)
++}
++
++fn starts_with_ci(haystack: &[u8], needle: &[u8]) -> bool {
++    haystack.len() >= needle.len() && haystack[..needle.len()].eq_ignore_ascii_case(needle)
++}
++
++/// Texte HTML ou script déguisé : on ignore les espaces de tête.
++fn looks_like_html(head: &[u8]) -> bool {
++    let start = head
++        .iter()
++        .position(|b| !b.is_ascii_whitespace())
++        .unwrap_or(head.len());
++    let t = &head[start..];
++    [
++        &b"<!doctype html"[..],
++        b"<html",
++        b"<script",
++        b"<?xml",
++        b"<svg",
++    ]
++    .iter()
++    .any(|p| starts_with_ci(t, p))
++}
++
++pub fn sniff(head: &[u8]) -> Sniffed {
++    // Conteneur ISO (MP4, M4A, MOV) : taille (4 octets) puis "ftyp" puis marque.
++    if head.len() >= 12 && &head[4..8] == b"ftyp" {
++        return match &head[8..12] {
++            b"M4A " | b"M4B " => media("m4a", "audio/mp4"),
++            b"qt  " => media("mov", "video/quicktime"),
++            _ => media("mp4", "video/mp4"),
++        };
++    }
++    // EBML : WebM ou Matroska.
++    if head.starts_with(&[0x1A, 0x45, 0xDF, 0xA3]) {
++        let window = &head[..head.len().min(64)];
++        return if contains(window, b"webm") {
++            media("webm", "video/webm")
++        } else {
++            media("mkv", "video/x-matroska")
++        };
++    }
++    if head.starts_with(&[0xFF, 0xD8, 0xFF]) {
++        return media("jpg", "image/jpeg");
++    }
++    if head.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) {
++        return media("png", "image/png");
++    }
++    if head.len() >= 12 && &head[0..4] == b"RIFF" && &head[8..12] == b"WAVE" {
++        return media("wav", "audio/wav");
++    }
++    if head.starts_with(b"ID3") || (head.len() >= 2 && head[0] == 0xFF && head[1] & 0xE0 == 0xE0) {
++        return media("mp3", "audio/mpeg");
++    }
++
++    // Types qui ne sont jamais un média valide.
++    if head.starts_with(&[0x7F, b'E', b'L', b'F']) {
++        return danger("elf", "application/x-elf");
++    }
++    if head.starts_with(b"MZ") {
++        return danger("pe", "application/x-msdownload");
++    }
++    if head.starts_with(b"PK\x03\x04") || head.starts_with(b"PK\x05\x06") {
++        return danger("zip", "application/zip");
++    }
++    if head.starts_with(&[0x1F, 0x8B]) {
++        return danger("gzip", "application/gzip");
++    }
++    if head.starts_with(b"%PDF") {
++        return danger("pdf", "application/pdf");
++    }
++    if head.starts_with(b"#!") {
++        return danger("script", "text/x-script");
++    }
++    if looks_like_html(head) {
++        return danger("html", "text/html");
++    }
++
++    UNKNOWN
++}
++
++/// Sortie JSON de la commande `sniff`.
++pub fn to_json(s: &Sniffed, size: u64) -> String {
++    let mut out = String::from("{\"kind\":");
++    json::push_str(&mut out, s.kind);
++    out.push_str(",\"mime\":");
++    json::push_str(&mut out, s.mime);
++    out.push_str(&format!(
++        ",\"media\":{},\"danger\":{},\"size\":{}}}",
++        s.media, s.danger, size
++    ));
++    out
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    fn kind(b: &[u8]) -> &'static str {
++        sniff(b).kind
++    }
++
++    #[test]
++    fn mp4_family() {
++        assert_eq!(kind(b"\0\0\0\x20ftypisom\0\0\0\0"), "mp4");
++        assert_eq!(kind(b"\0\0\0\x20ftypM4A \0\0\0\0"), "m4a");
++        assert_eq!(kind(b"\0\0\0\x14ftypqt  \0\0\0\0"), "mov");
++    }
++
++    #[test]
++    fn webm_vs_mkv() {
++        let mut webm = vec![0x1A, 0x45, 0xDF, 0xA3, 0x42, 0x82, 0x84];
++        webm.extend_from_slice(b"webm");
++        assert_eq!(kind(&webm), "webm");
++        let mut mkv = vec![0x1A, 0x45, 0xDF, 0xA3, 0x42, 0x82, 0x88];
++        mkv.extend_from_slice(b"matroska");
++        assert_eq!(kind(&mkv), "mkv");
++    }
++
++    #[test]
++    fn images_and_audio() {
++        assert_eq!(kind(&[0xFF, 0xD8, 0xFF, 0xE0]), "jpg");
++        assert_eq!(
++            kind(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]),
++            "png"
++        );
++        assert_eq!(kind(b"RIFF\x24\0\0\0WAVEfmt "), "wav");
++        assert_eq!(kind(b"ID3\x04\0\0"), "mp3");
++        assert_eq!(kind(&[0xFF, 0xFB, 0x90, 0x00]), "mp3");
++    }
++
++    #[test]
++    fn dangerous_types_are_flagged() {
++        for (bytes, k) in [
++            (&b"\x7FELF\x02\x01"[..], "elf"),
++            (b"MZ\x90\0", "pe"),
++            (b"PK\x03\x04\x14", "zip"),
++            (b"\x1F\x8B\x08", "gzip"),
++            (b"%PDF-1.7", "pdf"),
++            (b"#!/bin/sh\n", "script"),
++            (b"  \n<!DOCTYPE html><html>", "html"),
++            (b"<svg xmlns=", "html"),
++        ] {
++            let s = sniff(bytes);
++            assert_eq!(s.kind, k);
++            assert!(s.danger && !s.media);
++        }
++    }
++
++    #[test]
++    fn unknown_is_not_dangerous() {
++        let s = sniff(b"\x01\x02\x03 random bytes");
++        assert_eq!(s, UNKNOWN);
++        assert!(!s.danger);
++        assert_eq!(sniff(b""), UNKNOWN);
++    }
++
++    #[test]
++    fn json_shape() {
++        let s = sniff(&[0xFF, 0xD8, 0xFF]);
++        assert_eq!(
++            to_json(&s, 3),
++            "{\"kind\":\"jpg\",\"mime\":\"image/jpeg\",\"media\":true,\"danger\":false,\"size\":3}"
++        );
++    }
++}
+diff --git a/worker/rust/baaro-media/src/vtt.rs b/worker/rust/baaro-media/src/vtt.rs
+new file mode 100644
+index 0000000..99c025e
+--- /dev/null
++++ b/worker/rust/baaro-media/src/vtt.rs
+@@ -0,0 +1,172 @@
++//! Découpage WebVTT en blocs, identique à `parseVtt` de `lib/vtt.mjs` (version JS de repli).
++//!
++//! Un bloc est soit une ligne d'en-tête/NOTE sans horodatage (conservée telle quelle),
++//! soit un « cue » : lignes de préfixe (identifiant), ligne d'horodatage, lignes de texte.
++
++use crate::json;
++
++#[derive(Debug, PartialEq, Eq)]
++pub enum Block<'a> {
++    Raw(&'a str),
++    Cue {
++        prefix: Vec<&'a str>,
++        timing: &'a str,
++        text: Vec<&'a str>,
++    },
++}
++
++/// Même notion d'espace que `String.prototype.trim` en JavaScript (BOM compris).
++fn is_js_space(c: char) -> bool {
++    c.is_whitespace() || c == '\u{FEFF}'
++}
++
++/// Équivalent de `.replace(/^﻿/, "").replace(/\r/g, "").trim()`.
++pub fn normalize(input: &str) -> String {
++    let no_bom = input.strip_prefix('\u{FEFF}').unwrap_or(input);
++    no_bom
++        .replace('\r', "")
++        .trim_matches(is_js_space)
++        .to_string()
++}
++
++/// Équivalent de `/^WEBVTT(?:\s|$)/`.
++fn has_header(s: &str) -> bool {
++    match s.strip_prefix("WEBVTT") {
++        Some(rest) => rest.chars().next().is_none_or(is_js_space),
++        None => false,
++    }
++}
++
++/// Équivalent de `split(/\n{2,}/)`.
++fn split_blocks(s: &str) -> Vec<&str> {
++    let bytes = s.as_bytes();
++    let mut out = Vec::new();
++    let (mut start, mut i) = (0, 0);
++    while i < bytes.len() {
++        if bytes[i] == b'\n' {
++            let mut j = i;
++            while j < bytes.len() && bytes[j] == b'\n' {
++                j += 1;
++            }
++            if j - i >= 2 {
++                out.push(&s[start..i]);
++                start = j;
++            }
++            i = j;
++        } else {
++            i += 1;
++        }
++    }
++    out.push(&s[start..]);
++    out
++}
++
++pub fn parse(normalized: &str) -> Result<Vec<Block<'_>>, &'static str> {
++    if !has_header(normalized) {
++        return Err("La transcription ne contient pas un WebVTT valide");
++    }
++    Ok(split_blocks(normalized)
++        .into_iter()
++        .map(|block| {
++            let lines: Vec<&str> = block.split('\n').collect();
++            match lines.iter().position(|l| l.contains("-->")) {
++                None => Block::Raw(block),
++                Some(i) => Block::Cue {
++                    prefix: lines[..i].to_vec(),
++                    timing: lines[i],
++                    text: lines[i + 1..].to_vec(),
++                },
++            }
++        })
++        .collect())
++}
++
++/// Sortie JSON, même forme que les objets renvoyés par la version JS.
++pub fn to_json(blocks: &[Block<'_>]) -> String {
++    let mut out = String::from("[");
++    for (i, b) in blocks.iter().enumerate() {
++        if i > 0 {
++            out.push(',');
++        }
++        match b {
++            Block::Raw(raw) => {
++                out.push_str("{\"raw\":");
++                json::push_str(&mut out, raw);
++                out.push_str(",\"timing\":null,\"text\":[]}");
++            }
++            Block::Cue {
++                prefix,
++                timing,
++                text,
++            } => {
++                out.push_str("{\"raw\":null,\"prefix\":");
++                json::push_str_array(&mut out, prefix);
++                out.push_str(",\"timing\":");
++                json::push_str(&mut out, timing);
++                out.push_str(",\"text\":");
++                json::push_str_array(&mut out, text);
++                out.push('}');
++            }
++        }
++    }
++    out.push(']');
++    out
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    const SAMPLE: &str = "\u{FEFF}WEBVTT\r\n\r\nNOTE hello\r\n\r\n1\r\n00:00:00.000 --> 00:00:02.000\r\nBonjour\r\nle monde\r\n\r\n00:00:02.000 --> 00:00:04.000\r\nSalut\r\n";
++
++    #[test]
++    fn rejects_missing_header() {
++        assert!(parse(&normalize("Bonjour")).is_err());
++        assert!(parse(&normalize("WEBVTTX\n\n")).is_err());
++        assert!(parse(&normalize("WEBVTT")).is_ok());
++        assert!(parse(&normalize("WEBVTT - titre\n")).is_ok());
++    }
++
++    #[test]
++    fn splits_cues_and_raw_blocks() {
++        let n = normalize(SAMPLE);
++        let blocks = parse(&n).unwrap();
++        assert_eq!(blocks.len(), 4);
++        assert_eq!(blocks[0], Block::Raw("WEBVTT"));
++        assert_eq!(blocks[1], Block::Raw("NOTE hello"));
++        assert_eq!(
++            blocks[2],
++            Block::Cue {
++                prefix: vec!["1"],
++                timing: "00:00:00.000 --> 00:00:02.000",
++                text: vec!["Bonjour", "le monde"],
++            }
++        );
++        assert_eq!(
++            blocks[3],
++            Block::Cue {
++                prefix: vec![],
++                timing: "00:00:02.000 --> 00:00:04.000",
++                text: vec!["Salut"],
++            }
++        );
++    }
++
++    #[test]
++    fn single_blank_line_with_spaces_does_not_split() {
++        // Comme en JS : "\n \n" n'est pas une coupure /\n{2,}/.
++        let n = normalize("WEBVTT\n\n00:00:00.000 --> 00:00:01.000\na\n \nb\n");
++        let blocks = parse(&n).unwrap();
++        assert_eq!(blocks.len(), 2);
++    }
++
++    #[test]
++    fn json_output() {
++        let n = normalize("WEBVTT\n\n00:00:00.000 --> 00:00:01.000\n\"a\"\n");
++        let j = to_json(&parse(&n).unwrap());
++        assert_eq!(
++            j,
++            "[{\"raw\":\"WEBVTT\",\"timing\":null,\"text\":[]},{\"raw\":null,\"prefix\":[],\"timing\":\"00:00:00.000 --> 00:00:01.000\",\"text\":[\"\\\"a\\\"\"]}]"
++        );
++    }
++}
+diff --git a/worker/test/rust-parity.mjs b/worker/test/rust-parity.mjs
+new file mode 100644
+index 0000000..096bbee
+--- /dev/null
++++ b/worker/test/rust-parity.mjs
+@@ -0,0 +1,95 @@
++// Vérifie que le binaire Rust se comporte comme l'implémentation JS de référence.
++// Usage : BAARO_MEDIA_BIN=rust/baaro-media/target/release/baaro-media node test/rust-parity.mjs
++import assert from "node:assert/strict";
++import { mkdtemp, writeFile, rm } from "node:fs/promises";
++import { tmpdir } from "node:os";
++import { join } from "node:path";
++import { parseVttJs } from "../lib/vtt.mjs";
++import { parseVttNative, sniffFile } from "../lib/native.mjs";
++
++let checks = 0;
++
++function sameAsJs(input, label) {
++  let expected;
++  let jsFailed = false;
++  try {
++    expected = parseVttJs(input);
++  } catch {
++    jsFailed = true;
++  }
++
++  const actual = parseVttNative(input);
++
++  if (jsFailed) {
++    assert.equal(actual, null, `${label} : le JS refuse, Rust doit refuser`);
++  } else {
++    assert.notEqual(actual, null, `${label} : Rust a échoué alors que le JS accepte`);
++    assert.deepEqual(actual, expected, `${label} : résultat différent`);
++  }
++  checks++;
++}
++
++// --- Cas ciblés -------------------------------------------------------------
++const fixtures = {
++  simple: "WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nBonjour\n",
++  bom_crlf: "﻿WEBVTT\r\n\r\n1\r\n00:00:00.000 --> 00:00:01.000\r\nA\r\nB\r\n",
++  titre: "WEBVTT - un titre\n\nNOTE commentaire\n\n00:00:01.000 --> 00:00:02.000\nx",
++  entete_seul: "WEBVTT",
++  tab_apres_entete: "WEBVTT\tx\n\n00:00:00.000 --> 00:00:01.000\nx",
++  blanc_avec_espace: "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\na\n \nb\n",
++  plusieurs_vides: "WEBVTT\n\n\n\n00:00:00.000 --> 00:00:01.000\na\n\n\n\n\n00:00:01.000 --> 00:00:02.000\nb",
++  echappements: 'WEBVTT\n\n00:00:00.000 --> 00:00:01.000\n"citation" \\ antislash\ttab\n',
++  unicode: "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nߒߞߏ — é — 😀 —  \n",
++  espaces_autour: "  \n\nWEBVTT\n\n00:00:00.000 --> 00:00:01.000\nx\n\n  ",
++  pas_vtt: "Bonjour",
++  entete_colle: "WEBVTTX\n\n",
++  vide: "",
++};
++for (const [name, input] of Object.entries(fixtures)) sameAsJs(input, name);
++
++// --- Fuzz déterministe ------------------------------------------------------
++let seed = 12345;
++const rand = (n) => {
++  seed = (seed * 1664525 + 1013904223) >>> 0;
++  return seed % n;
++};
++const pieces = [
++  "WEBVTT", "\n", "\n", "\n\n", "\r\n", " ", "\t", "-->", "00:00:01.000 --> 00:00:02.000",
++  "texte", "NOTE x", "é", "😀", '"', "\\", "﻿", " ", "1",
++];
++for (let i = 0; i < 3000; i++) {
++  let s = rand(4) === 0 ? "" : "WEBVTT";
++  const n = rand(25);
++  for (let k = 0; k < n; k++) s += pieces[rand(pieces.length)];
++  sameAsJs(s, `fuzz#${i}`);
++}
++
++// --- sniff ------------------------------------------------------------------
++const dir = await mkdtemp(join(tmpdir(), "baaro-sniff-"));
++try {
++  const cases = [
++    ["a.mp4", Buffer.from("\0\0\0\x20ftypisom\0\0\0\0"), { kind: "mp4", media: true, danger: false }],
++    ["b.jpg", Buffer.from([0xff, 0xd8, 0xff, 0xe0]), { kind: "jpg", media: true, danger: false }],
++    ["c.mp4", Buffer.from("\x7fELF\x02\x01\x01"), { kind: "elf", media: false, danger: true }],
++    ["d.mp4", Buffer.from("<html><script>alert(1)</script>"), { kind: "html", media: false, danger: true }],
++    ["e.mp4", Buffer.from("PK\x03\x04rest"), { kind: "zip", media: false, danger: true }],
++    ["f.bin", Buffer.from("rien de connu"), { kind: "unknown", media: false, danger: false }],
++  ];
++  for (const [name, bytes, want] of cases) {
++    const path = join(dir, name);
++    await writeFile(path, bytes);
++    const got = await sniffFile(path);
++    assert.ok(got, `sniff ${name} : pas de résultat`);
++    assert.equal(got.kind, want.kind, `sniff ${name}`);
++    assert.equal(got.media, want.media, `sniff ${name} media`);
++    assert.equal(got.danger, want.danger, `sniff ${name} danger`);
++    assert.equal(got.size, bytes.length, `sniff ${name} size`);
++    checks++;
++  }
++  assert.equal(await sniffFile(join(dir, "inexistant")), null);
++  checks++;
++} finally {
++  await rm(dir, { recursive: true, force: true });
++}
++
++console.log(`OK : ${checks} vérifications (VTT JS/Rust identiques, sniff conforme)`);
