@@ -5,6 +5,10 @@ export const config = {
   ffmpeg: process.env.FFMPEG_BIN || "ffmpeg",
   ffprobe: process.env.FFPROBE_BIN || "ffprobe",
   whisper: process.env.WHISPER_BIN || "whisper",
+  // Binaire Rust (worker/rust/baaro-media). Absent : le worker retombe sur le JS.
+  mediaBin: process.env.BAARO_MEDIA_BIN || "baaro-media",
+  // 1 : refuser aussi les fichiers dont la signature est inconnue (par défaut : seulement les types dangereux).
+  sniffStrict: process.env.BAARO_SNIFF_STRICT === "1",
   r2: {
     accountId: process.env.R2_ACCOUNT_ID || "",
     accessKeyId: process.env.R2_ACCESS_KEY_ID || "",

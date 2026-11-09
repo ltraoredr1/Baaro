@@ -1,0 +1,47 @@
+name: Worker média — Rust
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'worker/rust/**'
+      - 'worker/lib/**'
+      - 'worker/test/**'
+      - 'worker/Dockerfile'
+      - '.github/workflows/worker-rust.yml'
+  pull_request:
+    paths:
+      - 'worker/rust/**'
+      - 'worker/lib/**'
+      - 'worker/test/**'
+      - 'worker/Dockerfile'
+      - '.github/workflows/worker-rust.yml'
+  workflow_dispatch:
+concurrency:
+  group: worker-rust-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  rust:
+    name: baaro-media (fmt, clippy, tests, parité JS)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: worker
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: worker/rust/baaro-media
+      - run: cargo fmt --check --manifest-path rust/baaro-media/Cargo.toml
+      - run: cargo clippy --locked --manifest-path rust/baaro-media/Cargo.toml -- -D warnings
+      - run: cargo test --locked --manifest-path rust/baaro-media/Cargo.toml
+      - run: npm run build:rust
+      - run: npm run test:rust
+        env:
+          BAARO_MEDIA_BIN: ${{ github.workspace }}/worker/rust/baaro-media/target/release/baaro-media

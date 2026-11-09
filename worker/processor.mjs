@@ -14,6 +14,8 @@ import {
   publicUrl,
 } from "./lib/r2.mjs";
 import { run } from "./lib/exec.mjs";
+import { sniffFile } from "./lib/native.mjs";
+import { parseVtt } from "./lib/vtt.mjs";
 
 const VIDEO_EXT = ".mp4";
 const MAX_TRANSLATION_CHARS = 30000;
@@ -70,6 +72,16 @@ async function source(job, dir) {
   );
 
   await downloadToFile(key, input);
+
+  // L'extension de la clé ne prouve rien : on vérifie la signature réelle
+  // du fichier (binaire Rust) avant de le confier à FFmpeg.
+  const sniffed = await sniffFile(input);
+  if (sniffed && (sniffed.danger || (config.sniffStrict && !sniffed.media))) {
+    throw new Error(
+      `Fichier source refusé : type détecté « ${sniffed.kind} »`
+    );
+  }
+
   return input;
 }
 
@@ -379,38 +391,6 @@ async function translateWithAI(messages, targetLanguage) {
       lastError?.message || "erreur inconnue"
     }`
   );
-}
-
-/**
- * Découpe le WebVTT en blocs sans perdre les horodatages.
- */
-function parseVtt(vtt) {
-  const normalized = String(vtt || "")
-    .replace(/^\uFEFF/, "")
-    .replace(/\r/g, "")
-    .trim();
-
-  if (!/^WEBVTT(?:\s|$)/.test(normalized)) {
-    throw new Error("La transcription ne contient pas un WebVTT valide");
-  }
-
-  return normalized.split(/\n{2,}/).map((block) => {
-    const lines = block.split("\n");
-    const timingIndex = lines.findIndex(
-      (line) => line.includes("-->")
-    );
-
-    if (timingIndex < 0) {
-      return { raw: block, timing: null, text: [] };
-    }
-
-    return {
-      raw: null,
-      prefix: lines.slice(0, timingIndex),
-      timing: lines[timingIndex],
-      text: lines.slice(timingIndex + 1),
-    };
-  });
 }
 
 function extractJson(text) {
