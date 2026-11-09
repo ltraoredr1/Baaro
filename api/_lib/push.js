@@ -32,7 +32,7 @@ const VAPID_SUBJECT =
   process.env.VAPID_SUBJECT || "mailto:support@baaro.app";
 
 const ANDROID_CHANNEL_ID =
-  process.env.FCM_ANDROID_CHANNEL_ID || "baaro_notifications";
+  process.env.FCM_ANDROID_CHANNEL_ID || "baaro_notifications_v2";
 
 /** Son par défaut BAARO */
 const DEFAULT_PUSH_SOUND = "/sounds/baaro_pulse.mp3";

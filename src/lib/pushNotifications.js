@@ -25,7 +25,7 @@ const VAPID_PUBLIC = import.meta.env.VITE_VAPID_PUBLIC_KEY || "";
 const NATIVE_REGISTRATION_TIMEOUT_MS = 20000;
 const SW_READY_TIMEOUT_MS = 10000;
 const SERVICE_WORKER_URL = "/sw.js";
-const ANDROID_CHANNEL_ID = "baaro_notifications";
+const ANDROID_CHANNEL_ID = "baaro_notifications_v2";
 /** Nom du fichier dans android/app/src/main/res/raw/ (sans extension) */
 const ANDROID_CHANNEL_SOUND = "baaro_pulse";
 const SYNC_MIN_INTERVAL_MS = 10 * 60 * 1000;
