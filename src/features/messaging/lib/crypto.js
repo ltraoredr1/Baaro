@@ -255,6 +255,84 @@ async function idbDelete(key) {
   });
 }
 
+// ─── Copie de secours locale (PIN oublié, appareil conservé) ─────────────────
+//
+// La clé privée utilisée pour déchiffrer reste NON extractable. En plus, on garde
+// sur l'appareil une copie chiffrée par une clé AES elle-même non extractable
+// (stockée dans IndexedDB). Elle ne sert qu'au parcours « PIN oublié » : après une
+// nouvelle vérification d'identité (code SMS/e-mail), l'app ré-enveloppe la clé
+// avec un nouveau PIN. Compromis assumé : un script malveillant exécuté dans la
+// page pourrait lire cette copie ; la CSP stricte de l'app limite ce risque.
+
+function escrowIdFor(userId) {
+  return `escrow:${userId || ""}`;
+}
+
+async function saveDeviceEscrow(userId, privateKeyJwk) {
+  const c = getCrypto();
+  const wrapKey = await c.subtle.generateKey(AES_ALGORITHM, false, [
+    "encrypt",
+    "decrypt",
+  ]);
+  const iv = c.getRandomValues(new Uint8Array(AES_IV_LENGTH));
+  const ct = await c.subtle.encrypt(
+    { name: "AES-GCM", iv, tagLength: 128 },
+    wrapKey,
+    new TextEncoder().encode(JSON.stringify(privateKeyJwk))
+  );
+
+  await idbSet(escrowIdFor(userId), { wrapKey, iv, ct });
+}
+
+export async function hasDeviceEscrow(userId = null) {
+  try {
+    const entry = await idbGet(escrowIdFor(userId));
+    return !!(entry && entry.wrapKey && entry.iv && entry.ct);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * PIN oublié sur un appareil qui possède encore la clé : produit une nouvelle
+ * sauvegarde protégée par `newPin` (données "save" du serveur). L'appelant doit
+ * avoir revérifié l'identité de l'utilisateur AVANT d'appeler cette fonction.
+ */
+export async function buildPinBackupFromDeviceEscrow(userId, newPin) {
+  assertPin(newPin);
+
+  const entry = await idbGet(escrowIdFor(userId));
+  const pair = await getLocalKeyPair(userId);
+
+  if (!entry || !entry.wrapKey || !pair) {
+    throw new Error("Cette clé n'est pas récupérable sur cet appareil.");
+  }
+
+  let privateKeyJwk;
+  try {
+    const plaintext = await getCrypto().subtle.decrypt(
+      { name: "AES-GCM", iv: entry.iv, tagLength: 128 },
+      entry.wrapKey,
+      entry.ct
+    );
+    privateKeyJwk = JSON.parse(new TextDecoder().decode(plaintext));
+  } catch {
+    throw new Error("Cette clé n'est pas récupérable sur cet appareil.");
+  }
+
+  // Garde-fou : la copie de secours doit correspondre à la clé du compte.
+  if (
+    privateKeyJwk?.n !== pair.publicKeyJwk.n ||
+    privateKeyJwk?.e !== pair.publicKeyJwk.e
+  ) {
+    throw new Error("Cette clé n'est pas récupérable sur cet appareil.");
+  }
+
+  const { pinAuth } = await buildPinBackup(privateKeyJwk, pair.publicKeyJwk, newPin);
+
+  return pinAuth;
+}
+
 // ─── Import des clés ────────────────────────────────────────────────────────
 
 async function importPrivateKey(jwk) {
@@ -366,11 +444,7 @@ async function buildBackup(privateKeyJwk, publicKeyJwk, passphrase) {
   };
 }
 
-/**
- * Restaure la paire de clés locale du compte depuis une sauvegarde.
- * Lève "Phrase secrète incorrecte." si la phrase ne convient pas.
- */
-export async function restoreFromBackup(backup, passphrase, userId = null) {
+async function decryptLegacyBackup(backup, passphrase) {
   if (
     !backup ||
     backup.v !== BACKUP_VERSION ||
@@ -399,8 +473,6 @@ export async function restoreFromBackup(backup, passphrase, userId = null) {
   const iv = new Uint8Array(base64ToBuf(backup.iv));
   const ct = base64ToBuf(backup.ct);
 
-  let privateKeyJwk = null;
-
   for (const candidate of candidates) {
     try {
       const wrapKey = await deriveWrapKey(candidate, salt, backup.iter);
@@ -411,29 +483,242 @@ export async function restoreFromBackup(backup, passphrase, userId = null) {
         ct
       );
 
-      privateKeyJwk = JSON.parse(new TextDecoder().decode(plaintext));
-      break;
+      return JSON.parse(new TextDecoder().decode(plaintext));
     } catch {
       // Mauvaise phrase : on essaie la suivante.
     }
   }
 
-  if (!privateKeyJwk) {
-    throw new Error("Phrase secrète incorrecte.");
-  }
+  throw new Error("Phrase secrète incorrecte.");
+}
+
+/**
+ * Restaure la paire de clés locale du compte depuis une sauvegarde.
+ * Lève "Phrase secrète incorrecte." si la phrase ne convient pas.
+ */
+export async function restoreFromBackup(backup, passphrase, userId = null) {
+  const privateKeyJwk = await decryptLegacyBackup(backup, passphrase);
 
   const publicKeyJwk = validatePublicKeyJwk(backup.publicKeyJwk);
   const privateKey = await importPrivateKey(privateKeyJwk);
 
   await idbSet(keyIdFor(userId), { publicKeyJwk, privateKey, version: 2 });
+  await saveDeviceEscrow(userId, privateKeyJwk);
 
   return { publicKeyJwk, privateKey };
 }
 
+/**
+ * Migration d'un ancien compte : déchiffre la sauvegarde à code long puis la
+ * ré-enveloppe avec un PIN à 4 chiffres. Retourne les données à envoyer au
+ * serveur (action "save"). La clé en clair ne sort pas de cette fonction.
+ */
+export async function rewrapLegacyBackupWithPin(backup, passphrase, pin) {
+  assertPin(pin);
+
+  const privateKeyJwk = await decryptLegacyBackup(backup, passphrase);
+  const publicKeyJwk = validatePublicKeyJwk(backup.publicKeyJwk);
+
+  const { pinAuth } = await buildPinBackup(privateKeyJwk, publicKeyJwk, pin);
+
+  return pinAuth;
+}
+
+// ─── Sauvegarde protégée par un PIN à 4 chiffres ────────────────────────────
+//
+// Un PIN court n'est sûr que si le serveur limite les essais (api/e2e-backup.js).
+// - Du PIN on dérive 64 octets (PBKDF2) : 32 octets de « preuve » envoyés au
+//   serveur pour vérification, 32 octets de matériau de clé qui ne quittent
+//   jamais l'appareil.
+// - La clé d'enveloppe AES = HKDF(matériau, sel = secret d'enveloppe serveur).
+//   Sans le secret d'enveloppe (libéré seulement après un PIN correct), la
+//   sauvegarde ne peut pas être attaquée hors ligne.
+
+const PIN_BACKUP_VERSION = 2;
+const PIN_PBKDF2_ITERATIONS = 300000; // x2 blocs de sortie (64 octets) ≈ 600 000 de coût
+const PIN_REGEX = /^\d{4}$/;
+
+export function isValidPin(pin) {
+  return typeof pin === "string" && PIN_REGEX.test(pin);
+}
+
+function assertPin(pin) {
+  if (!isValidPin(pin)) {
+    throw new Error("Le PIN doit contenir exactement 4 chiffres.");
+  }
+}
+
+async function derivePinMaterial(pin, salt, iterations) {
+  const subtle = getCrypto().subtle;
+
+  const base = await subtle.importKey(
+    "raw",
+    new TextEncoder().encode(pin),
+    "PBKDF2",
+    false,
+    ["deriveBits"]
+  );
+
+  const bits = await subtle.deriveBits(
+    { name: "PBKDF2", salt, iterations, hash: "SHA-256" },
+    base,
+    512
+  );
+
+  return { proof: bits.slice(0, 32), kekMaterial: bits.slice(32) };
+}
+
+async function deriveEnvelopeKey(kekMaterial, wrapSecret) {
+  const subtle = getCrypto().subtle;
+
+  const hkdfBase = await subtle.importKey("raw", kekMaterial, "HKDF", false, [
+    "deriveKey",
+  ]);
+
+  return subtle.deriveKey(
+    {
+      name: "HKDF",
+      hash: "SHA-256",
+      salt: wrapSecret,
+      info: new TextEncoder().encode("baaro-e2e-pin-wrap-v1"),
+    },
+    hkdfBase,
+    AES_ALGORITHM,
+    false,
+    ["encrypt", "decrypt"]
+  );
+}
+
+/**
+ * Calcule la preuve envoyée au serveur pour vérifier le PIN (base64).
+ * Le sel et le nombre d'itérations viennent de l'action "status".
+ */
+export async function computePinProof(pin, saltBase64, iterations) {
+  assertPin(pin);
+
+  const salt = new Uint8Array(base64ToBuf(saltBase64));
+  const { proof } = await derivePinMaterial(pin, salt, iterations);
+
+  return bufToBase64(proof);
+}
+
+async function buildPinBackup(privateKeyJwk, publicKeyJwk, pin) {
+  assertPin(pin);
+
+  const c = getCrypto();
+  const salt = c.getRandomValues(new Uint8Array(16));
+  const wrapSecret = c.getRandomValues(new Uint8Array(32));
+  const iv = c.getRandomValues(new Uint8Array(AES_IV_LENGTH));
+
+  const { proof, kekMaterial } = await derivePinMaterial(
+    pin,
+    salt,
+    PIN_PBKDF2_ITERATIONS
+  );
+  const envelopeKey = await deriveEnvelopeKey(kekMaterial, wrapSecret);
+
+  const ciphertext = await c.subtle.encrypt(
+    { name: "AES-GCM", iv, tagLength: 128 },
+    envelopeKey,
+    new TextEncoder().encode(JSON.stringify(privateKeyJwk))
+  );
+
+  return {
+    // Envoyé au serveur (api/e2e-backup.js, action "save").
+    pinAuth: {
+      proof: bufToBase64(proof),
+      salt: bufToBase64(salt),
+      iter: PIN_PBKDF2_ITERATIONS,
+      wrapSecret: bufToBase64(wrapSecret),
+      backup: {
+        v: PIN_BACKUP_VERSION,
+        kind: "pin",
+        publicKeyJwk,
+        iv: bufToBase64(iv),
+        ct: bufToBase64(ciphertext),
+      },
+    },
+  };
+}
+
+async function decryptPinBackup({ backup, wrapSecret, salt, iter }, pin) {
+  assertPin(pin);
+
+  if (
+    !backup ||
+    backup.v !== PIN_BACKUP_VERSION ||
+    backup.kind !== "pin" ||
+    !Number.isInteger(iter) ||
+    iter < 100000 ||
+    iter > 2000000
+  ) {
+    throw new Error("Sauvegarde de clé invalide.");
+  }
+
+  const saltBuf = new Uint8Array(base64ToBuf(salt));
+  const wrapBuf = new Uint8Array(base64ToBuf(wrapSecret));
+  const iv = new Uint8Array(base64ToBuf(backup.iv));
+  const ct = base64ToBuf(backup.ct);
+
+  const { kekMaterial } = await derivePinMaterial(pin, saltBuf, iter);
+  const envelopeKey = await deriveEnvelopeKey(kekMaterial, wrapBuf);
+
+  try {
+    const plaintext = await getCrypto().subtle.decrypt(
+      { name: "AES-GCM", iv, tagLength: 128 },
+      envelopeKey,
+      ct
+    );
+    return JSON.parse(new TextDecoder().decode(plaintext));
+  } catch {
+    throw new Error("PIN incorrect.");
+  }
+}
+
+/**
+ * Restaure la clé locale à partir de la réponse du serveur (action "restore")
+ * et du PIN saisi. Lève "PIN incorrect." si le déchiffrement échoue.
+ */
+export async function restoreFromPinBackup(data, pin, userId = null) {
+  const privateKeyJwk = await decryptPinBackup(data, pin);
+
+  const publicKeyJwk = validatePublicKeyJwk(data.backup.publicKeyJwk);
+  const privateKey = await importPrivateKey(privateKeyJwk);
+
+  await idbSet(keyIdFor(userId), { publicKeyJwk, privateKey, version: 2 });
+  await saveDeviceEscrow(userId, privateKeyJwk);
+
+  return { publicKeyJwk, privateKey };
+}
+
+/** Vérifie qu'un PIN ouvre bien la sauvegarde, sans toucher à la clé locale. */
+export async function verifyPinBackup(data, pin) {
+  await decryptPinBackup(data, pin);
+  return true;
+}
+
+/**
+ * Changement de PIN : déchiffre avec l'ancien, ré-enveloppe avec le nouveau
+ * (nouveau sel, nouveau secret d'enveloppe). Retourne les données "save".
+ */
+export async function rewrapPinBackup(data, oldPin, newPin) {
+  assertPin(newPin);
+
+  const privateKeyJwk = await decryptPinBackup(data, oldPin);
+  const publicKeyJwk = validatePublicKeyJwk(data.backup.publicKeyJwk);
+
+  const { pinAuth } = await buildPinBackup(privateKeyJwk, publicKeyJwk, newPin);
+
+  return pinAuth;
+}
+
 // ─── Génération / récupération des clés ─────────────────────────────────────
 
-async function createKeyPair(passphrase, userId) {
-  assertPassphrase(passphrase);
+async function createKeyPair(passphrase, userId, pin) {
+  const usePin = pin !== undefined && pin !== null;
+
+  if (usePin) assertPin(pin);
+  else assertPassphrase(passphrase);
 
   const subtle = getCrypto().subtle;
 
@@ -445,11 +730,21 @@ async function createKeyPair(passphrase, userId) {
   const publicKeyJwk = await subtle.exportKey("jwk", generated.publicKey);
   const privateKeyJwk = await subtle.exportKey("jwk", generated.privateKey);
 
-  const backup = await buildBackup(privateKeyJwk, publicKeyJwk, passphrase);
-
   const privateKey = await importPrivateKey(privateKeyJwk);
 
+  if (usePin) {
+    const { pinAuth } = await buildPinBackup(privateKeyJwk, publicKeyJwk, pin);
+
+    await idbSet(keyIdFor(userId), { publicKeyJwk, privateKey, version: 2 });
+    await saveDeviceEscrow(userId, privateKeyJwk);
+
+    return { publicKeyJwk, privateKey, pinAuth };
+  }
+
+  const backup = await buildBackup(privateKeyJwk, publicKeyJwk, passphrase);
+
   await idbSet(keyIdFor(userId), { publicKeyJwk, privateKey, version: 2 });
+  await saveDeviceEscrow(userId, privateKeyJwk);
 
   return { publicKeyJwk, privateKey, backup };
 }
@@ -485,6 +780,7 @@ export async function getLocalKeyPair(userId = null) {
 
 export async function clearLocalKeyPair(userId = null) {
   await idbDelete(keyIdFor(userId));
+  await idbDelete(escrowIdFor(userId));
 }
 
 // Compare deux clés publiques RSA (module + exposant).
@@ -544,7 +840,12 @@ export async function adoptLegacyKeyPair(userId, serverPublicKey) {
   return { publicKeyJwk: legacy.publicKeyJwk, privateKey: legacy.privateKey };
 }
 
-export async function ensureKeyPair({ userId = null, allowCreate = false, passphrase } = {}) {
+export async function ensureKeyPair({
+  userId = null,
+  allowCreate = false,
+  passphrase,
+  pin,
+} = {}) {
   const existing = await getLocalKeyPair(userId);
 
   if (existing) return existing;
@@ -553,7 +854,7 @@ export async function ensureKeyPair({ userId = null, allowCreate = false, passph
   const keyId = keyIdFor(userId);
 
   if (!keyPairPromises.has(keyId)) {
-    const task = createKeyPair(passphrase, userId).finally(() => {
+    const task = createKeyPair(passphrase, userId, pin).finally(() => {
       keyPairPromises.delete(keyId);
     });
 

@@ -2,20 +2,96 @@ import { useState, useEffect, useCallback } from "react";
 import { supabase } from "../../../supabaseClient.js";
 import {
   ensureKeyPair,
-  generateRecoveryCode,
   adoptLegacyKeyPair,
   clearLocalKeyPair,
   restoreFromBackup,
+  restoreFromPinBackup,
+  verifyPinBackup,
+  rewrapPinBackup,
+  hasDeviceEscrow,
+  buildPinBackupFromDeviceEscrow,
+  rewrapLegacyBackupWithPin,
+  computePinProof,
+  isValidPin,
 } from "../lib/crypto";
 
 /**
  * Modes de récupération exposés à l'interface :
- *  - "setup"  : compte sans clé → créer une phrase secrète
+ *  - "setup"  : compte sans clé → choisir un PIN à 4 chiffres
  *  - "unlock" : clé du compte absente de cet appareil, sauvegarde disponible
- *               → saisir la phrase secrète pour retrouver les conversations
+ *               → saisir le PIN (ou, pour les anciens comptes, l'ancien code long)
  *  - "reset"  : clé du compte absente et aucune sauvegarde
  *               → nouvelle clé (anciens messages illisibles sur cet appareil)
+ *
+ * backupKind : "pin" (sauvegarde serveur protégée par PIN, essais limités)
+ *              ou "legacy" (ancien code de récupération long, dans user_metadata).
  */
+
+// ─── API de sauvegarde par PIN (api/e2e-backup.js) ───────────────────────────
+
+const API_BASE = (
+  (typeof import.meta !== "undefined" && import.meta.env?.VITE_API_BASE_URL) ||
+  ""
+).replace(/\/$/, "");
+
+function formatLock(lockedUntil) {
+  const ms = new Date(lockedUntil).getTime() - Date.now();
+  const minutes = Math.max(1, Math.ceil(ms / 60000));
+
+  if (minutes < 60) return `${minutes} min`;
+  if (minutes < 60 * 48) return `${Math.ceil(minutes / 60)} h`;
+  return `${Math.ceil(minutes / 1440)} jours`;
+}
+
+async function callBackupApi(action, payload = {}) {
+  const { data } = await supabase.auth.getSession();
+  const token = data?.session?.access_token;
+
+  if (!token) throw new Error("Session requise.");
+
+  const res = await fetch(`${API_BASE}/api/e2e-backup`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ action, ...payload }),
+  });
+
+  const json = await res.json().catch(() => ({}));
+
+  if (!res.ok) {
+    if (res.status === 429 && json.lockedUntil) {
+      throw new Error(
+        `Trop d'essais. Réessaie dans ${formatLock(json.lockedUntil)}.`
+      );
+    }
+
+    if (res.status === 401 && action === "restore") {
+      const left = json.attemptsLeft;
+      throw new Error(
+        json.lockedUntil
+          ? `PIN incorrect. Trop d'essais : réessaie dans ${formatLock(json.lockedUntil)}.`
+          : `PIN incorrect. ${left} essai${left > 1 ? "s" : ""} restant${left > 1 ? "s" : ""}.`
+      );
+    }
+
+    throw new Error(json.error || "Sauvegarde de la clé indisponible.");
+  }
+
+  return json;
+}
+
+// Statut de la sauvegarde PIN. Un échec réseau ne doit jamais faire croire
+// qu'il n'y a pas de sauvegarde (sinon on proposerait de créer une 2e clé).
+async function fetchPinStatus() {
+  try {
+    return await callBackupApi("status");
+  } catch (err) {
+    console.warn("[useCryptoKeys] Statut sauvegarde PIN indisponible :", err);
+    return null;
+  }
+}
 
 // Évite de republier inutilement une clé déjà vérifiée.
 const published = new Map();
@@ -182,20 +258,59 @@ async function requestPersistentStorage() {
   }
 }
 
-async function saveBackupToAccount(backup) {
-  const { error } = await supabase.auth.updateUser({
-    data: { e2e_backup: backup },
-  });
-
-  if (error) {
-    throw new Error("Sauvegarde de la clé impossible : " + error.message);
-  }
+// Sauvegarde PIN : envoi de la preuve + de la clé chiffrée au serveur.
+async function savePinBackupToServer(pinAuth) {
+  await callBackupApi("save", pinAuth);
 }
 
-// ─── Activation automatique au premier usage ────────────────────────────────
-// Le code de récupération est affiché UNE FOIS dans un bandeau non bloquant.
-// Il reste en mémoire locale jusqu'à ce que l'utilisateur confirme l'avoir noté
-// (sinon, fermer l'app trop tôt le ferait perdre : la clé ne peut plus être re-sauvegardée).
+// ─── Rappel de vérification du PIN (jours 1, 7 et 30) ────────────────────────
+// Un PIN qu'on ne saisit jamais s'oublie : on invite à le ressaisir à intervalles espacés.
+const PIN_CHECK_PREFIX = "baaro_e2e_pin_check:";
+const PIN_CHECK_DELAYS_MS = [1, 7, 30].map((d) => d * 24 * 60 * 60 * 1000);
+
+function readPinCheck(userId) {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PIN_CHECK_PREFIX + userId) || "null");
+    return raw && Number.isFinite(raw.t) && Number.isInteger(raw.stage) ? raw : null;
+  } catch {
+    return null;
+  }
+}
+function writePinCheck(userId, value) {
+  try {
+    localStorage.setItem(PIN_CHECK_PREFIX + userId, JSON.stringify(value));
+  } catch {
+    // ignoré
+  }
+}
+function isPinCheckDue(record) {
+  return (
+    !!record &&
+    record.stage < PIN_CHECK_DELAYS_MS.length &&
+    Date.now() >= record.t + PIN_CHECK_DELAYS_MS[record.stage]
+  );
+}
+
+// Récupère la sauvegarde PIN côté serveur après vérification de la preuve.
+// Les mauvais PIN comptent dans la limite d'essais du serveur.
+async function fetchPinBackupData(pin) {
+  const status = await callBackupApi("status");
+
+  if (!status?.exists) {
+    throw new Error("Aucune sauvegarde de clé trouvée pour ce compte.");
+  }
+
+  if (status.lockedUntil) {
+    throw new Error(`Trop d'essais. Réessaie dans ${formatLock(status.lockedUntil)}.`);
+  }
+
+  const proof = await computePinProof(pin, status.salt, status.iter);
+
+  return callBackupApi("restore", { proof });
+}
+
+// ─── Ancien code de récupération (comptes créés avant le PIN) ────────────────
+// Un code long affiché une seule fois pouvait être en attente de confirmation.
 const PENDING_CODE_PREFIX = "baaro_e2e_code_pending:";
 
 function readPendingCode(userId) {
@@ -205,54 +320,12 @@ function readPendingCode(userId) {
     return null;
   }
 }
-function writePendingCode(userId, code) {
-  try {
-    localStorage.setItem(PENDING_CODE_PREFIX + userId, code);
-  } catch {
-    // ignoré
-  }
-}
 function clearPendingCode(userId) {
   try {
     localStorage.removeItem(PENDING_CODE_PREFIX + userId);
   } catch {
     // ignoré
   }
-}
-
-// Une seule création à la fois par compte (React peut lancer l'effet deux fois).
-const autoSetups = new Map();
-
-function autoSetup(userId) {
-  if (!autoSetups.has(userId)) {
-    const task = (async () => {
-      const code = generateRecoveryCode();
-      const pair = await ensureKeyPair({ userId, allowCreate: true, passphrase: code });
-
-      if (!pair?.backup) throw new Error("Création de la clé impossible.");
-
-      // Le code est gardé AVANT l'envoi de la sauvegarde, pour ne jamais le perdre.
-      writePendingCode(userId, code);
-
-      try {
-        await saveBackupToAccount(pair.backup);
-      } catch (err) {
-        clearPendingCode(userId);
-        await clearLocalKeyPair(userId);
-        throw err;
-      }
-
-      return pair;
-    })();
-
-    task.then(
-      () => setTimeout(() => autoSetups.delete(userId), 5000),
-      () => autoSetups.delete(userId)
-    );
-    autoSetups.set(userId, task);
-  }
-
-  return autoSetups.get(userId);
 }
 
 // Erreurs liées à la clé locale : on propose la récupération au lieu de bloquer.
@@ -265,7 +338,10 @@ export function useCryptoKeys(userId) {
   const [ready, setReady] = useState(false);
   const [error, setError] = useState(null);
   const [mode, setMode] = useState(null); // "setup" | "unlock" | "reset" | null
+  const [backupKind, setBackupKind] = useState(null); // "pin" | "legacy" | null
   const [retry, setRetry] = useState(0);
+  const [pinReminderDue, setPinReminderDue] = useState(false);
+  const [canResetPin, setCanResetPin] = useState(false);
   const [recoveryCode, setRecoveryCode] = useState(null);
 
   useEffect(() => {
@@ -276,6 +352,7 @@ export function useCryptoKeys(userId) {
     setReady(false);
     setError(null);
     setMode(null);
+    setBackupKind(null);
     setRecoveryCode(null);
 
     if (!userId) return undefined;
@@ -298,7 +375,15 @@ export function useCryptoKeys(userId) {
           throw new Error("Utilisateur non authentifié ou compte incorrect.");
         }
 
-        hasBackup = !!user.user_metadata?.e2e_backup;
+        const hasLegacyBackup = !!user.user_metadata?.e2e_backup;
+        const pinStatus = await fetchPinStatus();
+        const hasPinBackup = !!pinStatus?.exists;
+
+        hasBackup = hasLegacyBackup || hasPinBackup;
+
+        if (!cancelled) {
+          setBackupKind(hasPinBackup ? "pin" : hasLegacyBackup ? "legacy" : null);
+        }
 
         await requestPersistentStorage();
 
@@ -326,9 +411,12 @@ export function useCryptoKeys(userId) {
           }
         }
 
-        // Premier usage (ni clé sur le serveur, ni sauvegarde) : activation automatique, sans question.
-        if (!pair && !serverPublicKey && !hasBackup) {
-          pair = await autoSetup(userId);
+        // Le statut de la sauvegarde est inconnu (réseau) alors que le compte a déjà une clé :
+        // ne jamais proposer la réinitialisation, qui ferait perdre l'historique.
+        if (!pair && serverPublicKey && !hasBackup && pinStatus === null) {
+          throw new Error(
+            "Impossible de vérifier ta sauvegarde de clé. Vérifie ta connexion et réessaie."
+          );
         }
 
         if (cancelled) return;
@@ -390,45 +478,111 @@ export function useCryptoKeys(userId) {
     };
   }, [userId, retry]);
 
+  // Rappel : démarre le compteur à la première utilisation du PIN, puis espace les vérifications.
+  useEffect(() => {
+    if (!userId || !ready || backupKind !== "pin") {
+      setPinReminderDue(false);
+      return;
+    }
+
+    let record = readPinCheck(userId);
+
+    if (!record) {
+      record = { t: Date.now(), stage: 0 };
+      writePinCheck(userId, record);
+    }
+
+    setPinReminderDue(isPinCheckDue(record));
+  }, [userId, ready, backupKind]);
+
+  // « PIN oublié » possible seulement si cet appareil garde la copie de secours de la clé.
+  useEffect(() => {
+    if (!userId || !ready) {
+      setCanResetPin(false);
+      return undefined;
+    }
+
+    let off = false;
+    hasDeviceEscrow(userId).then((ok) => {
+      if (!off) setCanResetPin(ok);
+    });
+
+    return () => {
+      off = true;
+    };
+  }, [userId, ready]);
+
   // ─── Actions de récupération ──────────────────────────────────────────────
 
-  // Première configuration : crée la clé + la sauvegarde protégée.
-  const setupKeys = useCallback(async (passphrase) => {
-    const pair = await ensureKeyPair({ userId, allowCreate: true, passphrase });
+  // Première configuration : crée la clé + la sauvegarde protégée par PIN (4 chiffres).
+  const setupKeys = useCallback(async (pin) => {
+    if (!isValidPin(pin)) {
+      throw new Error("Le PIN doit contenir exactement 4 chiffres.");
+    }
 
-    if (!pair?.backup) {
+    const pair = await ensureKeyPair({ userId, allowCreate: true, pin });
+
+    if (!pair?.pinAuth) {
       throw new Error("Une clé existe déjà sur cet appareil.");
     }
 
     try {
-      await saveBackupToAccount(pair.backup);
+      await savePinBackupToServer(pair.pinAuth);
     } catch (err) {
       await clearLocalKeyPair(userId);
       throw err;
     }
 
+    writePinCheck(userId, { t: Date.now(), stage: 0 });
     setRetry((n) => n + 1);
   }, [userId]);
 
   // Nouvel appareil / stockage vidé : restaure la clé depuis la sauvegarde.
+  // secret = PIN à 4 chiffres (sauvegarde "pin") ou ancien code long (sauvegarde "legacy").
   const unlockKeys = useCallback(
-    async (passphrase) => {
-      const {
-        data: { user },
-        error: authError,
-      } = await supabase.auth.getUser();
+    async (secret, newPin) => {
+      let restored;
 
-      if (authError || !user) {
-        throw new Error("Vérification de session impossible.");
+      if (backupKind === "pin") {
+        if (!isValidPin(secret)) {
+          throw new Error("Le PIN doit contenir exactement 4 chiffres.");
+        }
+
+        // Le PIN ne quitte jamais l'appareil : seule une preuve dérivée est envoyée.
+        const data = await fetchPinBackupData(secret);
+
+        restored = await restoreFromPinBackup(data, secret, userId);
+      } else {
+        const {
+          data: { user },
+          error: authError,
+        } = await supabase.auth.getUser();
+
+        if (authError || !user) {
+          throw new Error("Vérification de session impossible.");
+        }
+
+        const backup = user.user_metadata?.e2e_backup;
+
+        if (!backup) {
+          throw new Error("Aucune sauvegarde de clé trouvée pour ce compte.");
+        }
+
+        restored = await restoreFromBackup(backup, secret, userId);
+
+        // Migration vers le PIN : l'ancien code long ne sera plus nécessaire.
+        // Un échec ici ne bloque pas le déverrouillage (l'ancien code reste valable).
+        if (isValidPin(newPin)) {
+          try {
+            const pinAuth = await rewrapLegacyBackupWithPin(backup, secret, newPin);
+            await savePinBackupToServer(pinAuth);
+            writePinCheck(userId, { t: Date.now(), stage: 0 });
+          } catch (err) {
+            console.warn("[useCryptoKeys] Migration vers le PIN impossible :", err);
+          }
+        }
       }
 
-      const backup = user.user_metadata?.e2e_backup;
-
-      if (!backup) {
-        throw new Error("Aucune sauvegarde de clé trouvée pour ce compte.");
-      }
-
-      const restored = await restoreFromBackup(backup, passphrase, userId);
       const serverKey = await getProfilePublicKey(userId);
 
       if (serverKey && !samePublicKey(serverKey, restored.publicKeyJwk)) {
@@ -441,18 +595,22 @@ export function useCryptoKeys(userId) {
 
       setRetry((n) => n + 1);
     },
-    [userId]
+    [userId, backupKind]
   );
 
-  // Aucune sauvegarde (ou phrase oubliée) : nouvelle clé.
+  // Aucune sauvegarde (ou PIN oublié) : nouvelle clé protégée par un nouveau PIN.
   // Les anciens messages ne seront plus lisibles avec cette nouvelle clé.
   const resetKeys = useCallback(
-    async (passphrase) => {
+    async (pin) => {
+      if (!isValidPin(pin)) {
+        throw new Error("Le PIN doit contenir exactement 4 chiffres.");
+      }
+
       // Réinitialisation voulue : l'ancienne clé locale (devenue inutile) est remplacée.
       await clearLocalKeyPair(userId);
-      const pair = await ensureKeyPair({ userId, allowCreate: true, passphrase });
+      const pair = await ensureKeyPair({ userId, allowCreate: true, pin });
 
-      if (!pair?.backup) {
+      if (!pair?.pinAuth) {
         throw new Error("Création de la nouvelle clé impossible.");
       }
 
@@ -470,7 +628,9 @@ export function useCryptoKeys(userId) {
       }
 
       try {
-        await saveBackupToAccount(pair.backup);
+        // Remplace aussi l'ancienne sauvegarde PIN (et remet les essais à zéro).
+        await savePinBackupToServer(pair.pinAuth);
+        writePinCheck(userId, { t: Date.now(), stage: 0 });
       } catch (err) {
         // La clé est remplacée sur le serveur ; on garde la clé locale.
         console.warn("[useCryptoKeys] Sauvegarde non enregistrée.");
@@ -482,6 +642,119 @@ export function useCryptoKeys(userId) {
     },
     [userId]
   );
+
+  // Vérifie que l'utilisateur se souvient de son PIN (sans modifier la clé locale).
+  const verifyPin = useCallback(async (pin) => {
+    if (!isValidPin(pin)) {
+      throw new Error("Le PIN doit contenir exactement 4 chiffres.");
+    }
+
+    const data = await fetchPinBackupData(pin);
+    await verifyPinBackup(data, pin);
+
+    const record = readPinCheck(userId) || { t: Date.now(), stage: 0 };
+    writePinCheck(userId, { ...record, stage: record.stage + 1 });
+    setPinReminderDue(false);
+
+    return true;
+  }, [userId]);
+
+  // Changement de PIN : l'ancien PIN est requis, la clé et l'historique sont conservés.
+  const changePin = useCallback(async (oldPin, newPin) => {
+    if (!isValidPin(oldPin) || !isValidPin(newPin)) {
+      throw new Error("Le PIN doit contenir exactement 4 chiffres.");
+    }
+
+    if (oldPin === newPin) {
+      throw new Error("Le nouveau PIN doit être différent de l'ancien.");
+    }
+
+    const data = await fetchPinBackupData(oldPin);
+    const pinAuth = await rewrapPinBackup(data, oldPin, newPin);
+
+    await savePinBackupToServer(pinAuth);
+
+    // Nouveau PIN : le cycle de rappels repart de zéro.
+    writePinCheck(userId, { t: Date.now(), stage: 0 });
+    setPinReminderDue(false);
+
+    return true;
+  }, [userId]);
+
+  // PIN oublié (appareil conservé) — étape 1 : code de vérification par SMS ou e-mail.
+  const sendPinResetCode = useCallback(async () => {
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser();
+
+    if (authError || !user || user.id !== userId) {
+      throw new Error("Vérification de session impossible.");
+    }
+
+    if (user.phone) {
+      const phone = user.phone.startsWith("+") ? user.phone : `+${user.phone}`;
+      const { error: otpError } = await supabase.auth.signInWithOtp({
+        phone,
+        options: { shouldCreateUser: false },
+      });
+      if (otpError) throw new Error("Envoi du code impossible : " + otpError.message);
+      return "sms";
+    }
+
+    if (user.email) {
+      const { error: otpError } = await supabase.auth.signInWithOtp({
+        email: user.email,
+        options: { shouldCreateUser: false },
+      });
+      if (otpError) throw new Error("Envoi du code impossible : " + otpError.message);
+      return "email";
+    }
+
+    throw new Error("Aucun téléphone ni e-mail pour vérifier ton identité.");
+  }, [userId]);
+
+  // PIN oublié — étape 2 : code reçu + nouveau PIN. L'historique est conservé.
+  const resetPinWithCode = useCallback(async (code, newPin) => {
+    if (!isValidPin(newPin)) {
+      throw new Error("Le PIN doit contenir exactement 4 chiffres.");
+    }
+
+    const token = String(code || "").trim();
+    if (!token) throw new Error("Saisis le code reçu.");
+
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser();
+
+    if (authError || !user || user.id !== userId) {
+      throw new Error("Vérification de session impossible.");
+    }
+
+    const { data, error: verifyError } = user.phone
+      ? await supabase.auth.verifyOtp({
+          phone: user.phone.startsWith("+") ? user.phone : `+${user.phone}`,
+          token,
+          type: "sms",
+        })
+      : await supabase.auth.verifyOtp({ email: user.email, token, type: "email" });
+
+    if (verifyError) throw new Error("Code incorrect ou expiré.");
+    if (data?.user?.id !== userId) {
+      throw new Error("Ce code ne correspond pas à ce compte.");
+    }
+
+    // Identité revérifiée : on ré-enveloppe la clé de cet appareil avec le nouveau PIN.
+    const pinAuth = await buildPinBackupFromDeviceEscrow(userId, newPin);
+    await savePinBackupToServer(pinAuth);
+
+    writePinCheck(userId, { t: Date.now(), stage: 0 });
+    setBackupKind("pin");
+    setPinReminderDue(false);
+
+    return true;
+  }, [userId]);
 
   // Récupération et validation de la clé publique d'un destinataire.
   const fetchRecipientPublicKey = useCallback(async (recipientId) => {
@@ -525,8 +798,15 @@ export function useCryptoKeys(userId) {
     ready,
     error,
     mode,
+    backupKind,
     recoveryCode,
     acknowledgeRecoveryCode,
+    pinReminderDue,
+    verifyPin,
+    changePin,
+    canResetPin,
+    sendPinResetCode,
+    resetPinWithCode,
     setupKeys,
     unlockKeys,
     resetKeys,

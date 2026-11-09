@@ -6,7 +6,7 @@ import { useMessageExtras } from "../hooks/useMessageExtras.js";
 import { Fragment, useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from "react";
 import {
   ArrowLeft, MessageCircle, Plus, X, Search,
-  Loader2, ChevronDown, Pin, Wrench, Lock, Copy, Check
+  Loader2, ChevronDown, Pin, Wrench, Lock, Copy, Check, Eye, EyeOff
 } from "lucide-react";
 import { COLORS as THEME_COLORS } from "../../../theme.js";
 import { supabase } from "../../../supabaseClient.js";
@@ -16,7 +16,6 @@ import { ChatCallModal } from "./ChatCallModal.jsx";
 import {
   deserializePayload,
   decryptMessage,
-  generateRecoveryCode,
   normalizeRecoveryInput,
 } from "../lib/crypto.js";
 import { makeClientMessageId, markMessageRead } from "../lib/chatFeatures.js";
@@ -101,74 +100,93 @@ function Avatar({ src, flag, size = 44, bg }) {
   );
 }
 
-// Configuration / récupération des clés de chiffrement (code de récupération).
-// setup : nouveau code · unlock : saisir le code sur un nouvel appareil · reset : nouvelle clé
-function KeyRecoveryPanel({ mode, C, onSetup, onUnlock, onReset }) {
+// Configuration / récupération des clés de chiffrement par PIN à 4 chiffres.
+// setup : choisir un PIN · unlock : saisir le PIN sur un nouvel appareil · reset : nouvelle clé
+// (backupKind "legacy" : anciens comptes, qui gardent leur ancien code de récupération long)
+function KeyRecoveryPanel({ mode, backupKind, C, onSetup, onUnlock, onReset }) {
   const [view, setView] = useState(mode); // permet de passer de "unlock" à "reset"
-  const [code] = useState(generateRecoveryCode); // généré une seule fois
-  const [input, setInput] = useState("");
-  const [saved, setSaved] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [pin, setPin] = useState("");
+  const [pin2, setPin2] = useState("");
+  const [legacyCode, setLegacyCode] = useState("");
+  const [showPin, setShowPin] = useState(false);
+  const [remembered, setRemembered] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
-  const generating = view === "setup" || view === "reset";
+  const legacyUnlock = view === "unlock" && backupKind === "legacy";
+  const needsConfirm = view === "setup" || view === "reset" || legacyUnlock;
 
   const texts = {
     setup: {
       title: "Protège tes messages",
-      body: "Voici ton code de récupération. Il te permettra de retrouver tes conversations sur un nouvel appareil. Il ne peut pas être récupéré : conserve-le en lieu sûr.",
+      body: "Choisis un PIN à 4 chiffres. Il te permettra de retrouver tes conversations sur un nouvel appareil, sans rien perdre.",
       button: "Activer la messagerie sécurisée",
     },
     unlock: {
       title: "Retrouve tes conversations",
-      body: "Saisis ton code de récupération pour déverrouiller tes messages sur cet appareil.",
+      body: legacyUnlock
+        ? "Saisis une dernière fois ton ancien code de récupération, puis choisis un PIN à 4 chiffres : il le remplacera."
+        : "Saisis ton PIN à 4 chiffres pour déverrouiller tes messages sur cet appareil.",
       button: "Déverrouiller",
     },
     reset: {
       title: "Nouvelle clé de chiffrement",
-      body: "Aucune sauvegarde n'est utilisable. Une nouvelle clé sera créée : les anciens messages ne seront pas lisibles sur cet appareil. Note bien ton nouveau code de récupération.",
+      body: "Aucune sauvegarde n'est utilisable. Une nouvelle clé sera créée : les anciens messages ne seront pas lisibles sur cet appareil. Choisis un nouveau PIN à 4 chiffres.",
       button: "Créer une nouvelle clé",
     },
   }[view];
 
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(code);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      setErr("Copie impossible : recopie le code à la main.");
-    }
-  };
+  const onlyDigits = (value) => value.replace(/\D/g, "").slice(0, 4);
 
   const submit = async (e) => {
     e.preventDefault();
     setErr("");
 
-    if (generating && !saved) {
-      setErr("Confirme que tu as noté ton code de récupération.");
+    if (legacyUnlock && !legacyCode.trim()) {
+      setErr("Saisis ton code de récupération.");
       return;
     }
-    if (!generating && !input.trim()) {
-      setErr("Saisis ton code de récupération.");
+    if (!/^\d{4}$/.test(pin)) {
+      setErr("Le PIN doit contenir exactement 4 chiffres.");
+      return;
+    }
+    if (needsConfirm && pin !== pin2) {
+      setErr("Les deux PIN ne sont pas identiques.");
+      return;
+    }
+    if ((view === "setup" || view === "reset") && !remembered) {
+      setErr("Confirme que tu as retenu ton PIN.");
       return;
     }
 
     setBusy(true);
     try {
-      if (view === "setup") await onSetup(code);
-      else if (view === "reset") await onReset(code);
-      else await onUnlock(normalizeRecoveryInput(input));
+      if (view === "setup") await onSetup(pin);
+      else if (view === "reset") await onReset(pin);
+      else if (legacyUnlock) await onUnlock(normalizeRecoveryInput(legacyCode), pin);
+      else await onUnlock(pin);
     } catch (error) {
       setErr(
-        /incorrecte/i.test(error?.message || "")
+        legacyUnlock && /incorrecte/i.test(error?.message || "")
           ? "Code de récupération incorrect."
           : error?.message || "Opération impossible."
       );
+      setPin("");
+      setPin2("");
     } finally {
       setBusy(false);
     }
+  };
+
+  const pinInputProps = {
+    type: showPin ? "text" : "password",
+    inputMode: "numeric",
+    pattern: "[0-9]*",
+    maxLength: 4,
+    autoComplete: "off",
+    className:
+      "w-full px-4 py-3 rounded-2xl border text-center text-2xl font-mono tracking-[0.6em] outline-none",
+    style: { background: C.surface, borderColor: C.borderGold, color: C.ivory },
   };
 
   return (
@@ -188,44 +206,10 @@ function KeyRecoveryPanel({ mode, C, onSetup, onUnlock, onReset }) {
       </p>
 
       <form onSubmit={submit} className="w-full space-y-3">
-        {generating ? (
-          <>
-            <div
-              className="rounded-2xl border px-3 py-4 text-center"
-              style={{ background: C.surface, borderColor: C.borderGold }}
-            >
-              <p
-                className="font-mono text-base font-semibold tracking-wider break-all select-all"
-                style={{ color: C.gold }}
-              >
-                {code}
-              </p>
-            </div>
-
-            <button
-              type="button"
-              onClick={copy}
-              className="w-full py-2.5 rounded-2xl text-xs font-semibold flex items-center justify-center gap-2 border"
-              style={{ borderColor: C.border, color: C.ivory, background: C.surface }}
-            >
-              {copied ? <Check size={14} /> : <Copy size={14} />}
-              {copied ? "Copié" : "Copier le code"}
-            </button>
-
-            <label className="flex items-start gap-2 text-xs pt-1" style={{ color: C.muted }}>
-              <input
-                type="checkbox"
-                checked={saved}
-                onChange={(e) => setSaved(e.target.checked)}
-                className="mt-0.5"
-              />
-              J'ai noté mon code de récupération (gestionnaire de mots de passe, papier…).
-            </label>
-          </>
-        ) : (
+        {legacyUnlock && (
           <input
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
+            value={legacyCode}
+            onChange={(e) => setLegacyCode(e.target.value)}
             placeholder="XXXX-XXXX-XXXX-XXXX-XXXX"
             autoComplete="off"
             autoCapitalize="characters"
@@ -234,9 +218,58 @@ function KeyRecoveryPanel({ mode, C, onSetup, onUnlock, onReset }) {
             style={{ background: C.surface, borderColor: C.borderGold, color: C.ivory }}
           />
         )}
+        <input
+          {...pinInputProps}
+          value={pin}
+          onChange={(e) => setPin(onlyDigits(e.target.value))}
+          placeholder="••••"
+          aria-label={legacyUnlock ? "Nouveau PIN à 4 chiffres" : "PIN à 4 chiffres"}
+          autoFocus={!legacyUnlock}
+        />
+        {needsConfirm && (
+          <input
+            {...pinInputProps}
+            value={pin2}
+            onChange={(e) => setPin2(onlyDigits(e.target.value))}
+            placeholder="••••"
+            aria-label="Confirmer le PIN"
+          />
+        )}
+
+        {needsConfirm && (
+          <button
+            type="button"
+            onClick={() => setShowPin((v) => !v)}
+            className="w-full text-xs flex items-center justify-center gap-1.5"
+            style={{ color: C.muted }}
+          >
+            {showPin ? <EyeOff size={14} /> : <Eye size={14} />}
+            {showPin ? "Masquer le PIN" : "Afficher le PIN"}
+          </button>
+        )}
+
+        {needsConfirm && (
+          <p className="text-xs text-center" style={{ color: C.muted }}>
+            Si tu perds ton téléphone et que tu oublies ce PIN, tes anciens messages ne pourront
+            pas être récupérés. Note-le dans un endroit sûr (carnet, gestionnaire de mots de passe)
+            et évite une date de naissance ou 1234.
+          </p>
+        )}
+
+        {(view === "setup" || view === "reset") && (
+          <label className="flex items-start gap-2 text-xs" style={{ color: C.muted }}>
+            <input
+              type="checkbox"
+              checked={remembered}
+              onChange={(e) => setRemembered(e.target.checked)}
+              className="mt-0.5"
+            />
+            J'ai retenu mon PIN. On te demandera de le confirmer dans quelques jours.
+          </label>
+        )}
 
         {err && (
-          <p role="alert" className="text-xs" style={{ color: "#fca5a5" }}>
+          <p role="alert" className="text-xs text-center" style={{ color: "#fca5a5" }}>
             {err}
           </p>
         )}
@@ -264,10 +297,284 @@ function KeyRecoveryPanel({ mode, C, onSetup, onUnlock, onReset }) {
             className="w-full text-xs py-2"
             style={{ color: C.muted }}
           >
-            Code perdu ? Créer une nouvelle clé
+            {legacyUnlock ? "Code perdu ?" : "PIN oublié ?"} Créer une nouvelle clé
           </button>
         )}
       </form>
+    </div>
+  );
+}
+
+// PIN oublié sur un appareil qui garde la clé : code SMS/e-mail, puis nouveau PIN (historique conservé).
+function PinForgotPanel({ C, onSendCode, onReset, onBack, onClose }) {
+  const [codeSent, setCodeSent] = useState(false);
+  const [channel, setChannel] = useState("sms");
+  const [code, setCode] = useState("");
+  const [newPin, setNewPin] = useState("");
+  const [newPin2, setNewPin2] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [done, setDone] = useState("");
+
+  const onlyDigits = (value) => value.replace(/\D/g, "").slice(0, 4);
+  const pinField = (value, setter, label) => (
+    <input
+      type="password"
+      inputMode="numeric"
+      pattern="[0-9]*"
+      maxLength={4}
+      autoComplete="off"
+      value={value}
+      onChange={(e) => setter(onlyDigits(e.target.value))}
+      placeholder="••••"
+      aria-label={label}
+      className="w-full px-4 py-2.5 rounded-xl border text-center text-xl font-mono tracking-[0.6em] outline-none"
+      style={{ background: C.surface2, borderColor: C.borderGold, color: C.ivory }}
+    />
+  );
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setErr("");
+
+    if (codeSent) {
+      if (!code.trim()) return setErr("Saisis le code reçu.");
+      if (!/^\d{4}$/.test(newPin)) return setErr("Le nouveau PIN doit contenir exactement 4 chiffres.");
+      if (newPin !== newPin2) return setErr("Les deux nouveaux PIN ne sont pas identiques.");
+    }
+
+    setBusy(true);
+    try {
+      if (!codeSent) {
+        setChannel(await onSendCode());
+        setCodeSent(true);
+      } else {
+        await onReset(code.trim(), newPin);
+        setDone("Nouveau PIN enregistré ✅ Tes conversations sont conservées.");
+      }
+    } catch (error) {
+      setErr(error?.message || "Opération impossible.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div
+      role="status"
+      className="rounded-2xl border p-3 mb-3"
+      style={{ background: C.surface, borderColor: C.borderGold }}
+    >
+      <div className="flex items-start justify-between gap-2 mb-1">
+        <p className="text-sm font-semibold" style={{ color: C.ivory }}>🔑 PIN oublié</p>
+        <button type="button" onClick={onClose} aria-label="Fermer" style={{ color: C.muted }}>
+          <X size={16} />
+        </button>
+      </div>
+
+      {done ? (
+        <p className="text-xs" style={{ color: C.muted }}>{done}</p>
+      ) : (
+        <form onSubmit={submit} className="space-y-2">
+          <p className="text-xs" style={{ color: C.muted }}>
+            {codeSent
+              ? `Saisis le code reçu par ${channel === "email" ? "e-mail" : "SMS"}, puis choisis un nouveau PIN. Tes conversations sont conservées.`
+              : "Tu gardes ce téléphone : on te renvoie un code pour vérifier que c'est bien toi, puis tu choisis un nouveau PIN. Rien n'est perdu."}
+          </p>
+
+          {codeSent && (
+            <>
+              <input
+                value={code}
+                onChange={(e) => setCode(e.target.value.replace(/\s/g, ""))}
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                placeholder="Code reçu"
+                aria-label="Code reçu"
+                className="w-full px-4 py-2.5 rounded-xl border text-center text-base font-mono outline-none"
+                style={{ background: C.surface2, borderColor: C.borderGold, color: C.ivory }}
+              />
+              {pinField(newPin, setNewPin, "Nouveau PIN")}
+              {pinField(newPin2, setNewPin2, "Confirmer le nouveau PIN")}
+            </>
+          )}
+
+          {err && <p role="alert" className="text-xs" style={{ color: "#fca5a5" }}>{err}</p>}
+
+          <button
+            type="submit"
+            disabled={busy}
+            className="w-full py-2 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 disabled:opacity-60"
+            style={{ background: `linear-gradient(135deg, ${C.gold}, #C49A3C)`, color: "#0B1220" }}
+          >
+            {busy && <Loader2 size={14} className="animate-spin" />}
+            {codeSent ? "Enregistrer le nouveau PIN" : "Recevoir un code"}
+          </button>
+          <button type="button" onClick={onBack} className="w-full text-xs py-1" style={{ color: C.muted }}>
+            Retour
+          </button>
+        </form>
+      )}
+    </div>
+  );
+}
+
+// Vérification (rappel) et changement du PIN. Le PIN ne quitte jamais l'appareil.
+function PinManagePanel({
+  initialView = "verify",
+  C,
+  onVerify,
+  onChange,
+  canResetPin,
+  onSendCode,
+  onResetWithCode,
+  onClose,
+}) {
+  const [view, setView] = useState(initialView); // "verify" | "change"
+  const [oldPin, setOldPin] = useState("");
+  const [newPin, setNewPin] = useState("");
+  const [newPin2, setNewPin2] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [done, setDone] = useState("");
+
+  const onlyDigits = (value) => value.replace(/\D/g, "").slice(0, 4);
+  const field = (value, setter, label) => (
+    <input
+      type="password"
+      inputMode="numeric"
+      pattern="[0-9]*"
+      maxLength={4}
+      autoComplete="off"
+      value={value}
+      onChange={(e) => setter(onlyDigits(e.target.value))}
+      placeholder="••••"
+      aria-label={label}
+      className="w-full px-4 py-2.5 rounded-xl border text-center text-xl font-mono tracking-[0.6em] outline-none"
+      style={{ background: C.surface2, borderColor: C.borderGold, color: C.ivory }}
+    />
+  );
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setErr("");
+
+    if (!/^\d{4}$/.test(oldPin)) {
+      setErr("Le PIN doit contenir exactement 4 chiffres.");
+      return;
+    }
+    if (view === "change") {
+      if (!/^\d{4}$/.test(newPin)) {
+        setErr("Le nouveau PIN doit contenir exactement 4 chiffres.");
+        return;
+      }
+      if (newPin !== newPin2) {
+        setErr("Les deux nouveaux PIN ne sont pas identiques.");
+        return;
+      }
+    }
+
+    setBusy(true);
+    try {
+      if (view === "verify") {
+        await onVerify(oldPin);
+        setDone("PIN correct ✅ Tu t'en souviens bien.");
+      } else {
+        await onChange(oldPin, newPin);
+        setDone("PIN modifié ✅ Tes conversations sont conservées.");
+      }
+      setOldPin("");
+      setNewPin("");
+      setNewPin2("");
+    } catch (error) {
+      setErr(error?.message || "Opération impossible.");
+      setOldPin("");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (view === "forgot") {
+    return (
+      <PinForgotPanel
+        C={C}
+        onSendCode={onSendCode}
+        onReset={onResetWithCode}
+        onBack={() => setView("verify")}
+        onClose={onClose}
+      />
+    );
+  }
+
+  return (
+    <div
+      role="status"
+      className="rounded-2xl border p-3 mb-3"
+      style={{ background: C.surface, borderColor: C.borderGold }}
+    >
+      <div className="flex items-start justify-between gap-2 mb-1">
+        <p className="text-sm font-semibold" style={{ color: C.ivory }}>
+          {view === "verify" ? "🔑 Tu te souviens de ton PIN ?" : "🔑 Changer mon PIN"}
+        </p>
+        <button type="button" onClick={onClose} aria-label="Fermer" style={{ color: C.muted }}>
+          <X size={16} />
+        </button>
+      </div>
+
+      {done ? (
+        <p className="text-xs" style={{ color: C.muted }}>{done}</p>
+      ) : (
+        <form onSubmit={submit} className="space-y-2">
+          <p className="text-xs" style={{ color: C.muted }}>
+            {view === "verify"
+              ? "Saisis-le pour confirmer. Sans lui, tu ne pourras pas retrouver tes messages sur un nouvel appareil."
+              : "Saisis ton PIN actuel, puis choisis le nouveau."}
+          </p>
+          {field(oldPin, setOldPin, view === "verify" ? "PIN" : "PIN actuel")}
+          {view === "change" && (
+            <>
+              {field(newPin, setNewPin, "Nouveau PIN")}
+              {field(newPin2, setNewPin2, "Confirmer le nouveau PIN")}
+            </>
+          )}
+          {err && (
+            <p role="alert" className="text-xs" style={{ color: "#fca5a5" }}>{err}</p>
+          )}
+          <button
+            type="submit"
+            disabled={busy}
+            className="w-full py-2 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 disabled:opacity-60"
+            style={{ background: `linear-gradient(135deg, ${C.gold}, #C49A3C)`, color: "#0B1220" }}
+          >
+            {busy && <Loader2 size={14} className="animate-spin" />}
+            {view === "verify" ? "Vérifier" : "Changer le PIN"}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setErr("");
+              setView(view === "verify" ? "change" : "verify");
+            }}
+            className="w-full text-xs py-1"
+            style={{ color: C.muted }}
+          >
+            {view === "verify" ? "Changer mon PIN" : "Juste vérifier mon PIN"}
+          </button>
+          {canResetPin && (
+            <button
+              type="button"
+              onClick={() => {
+                setErr("");
+                setView("forgot");
+              }}
+              className="w-full text-xs py-1"
+              style={{ color: C.gold }}
+            >
+              PIN oublié ?
+            </button>
+          )}
+        </form>
+      )}
     </div>
   );
 }
@@ -338,6 +645,30 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
   const [conversations, setConversations] = useState([]);
   const [activeChat, setActiveChat] = useState(null);
   const messaging = useMessaging(activeChat?.id, id, activeChat?.otherUserId);
+  const [pinPanel, setPinPanel] = useState(null); // null | "verify" | "change"
+  const [reminderDismissed, setReminderDismissed] = useState(false);
+
+  // Rappel (jours 1, 7, 30) ou ouverture manuelle depuis le menu : même panneau.
+  const showPinPanel =
+    messaging.keysBackupKind === "pin" &&
+    !messaging.keysMode &&
+    (!!pinPanel || (messaging.pinReminderDue && !reminderDismissed));
+  const pinPanelEl = showPinPanel ? (
+    <PinManagePanel
+      key={pinPanel || "reminder"}
+      initialView={pinPanel || "verify"}
+      C={C}
+      onVerify={messaging.verifyPin}
+      onChange={messaging.changePin}
+      canResetPin={messaging.canResetPin}
+      onSendCode={messaging.sendPinResetCode}
+      onResetWithCode={messaging.resetPinWithCode}
+      onClose={() => {
+        setPinPanel(null);
+        setReminderDismissed(true);
+      }}
+    />
+  ) : null;
   const { privateKey } = messaging;
   const messages = messaging.messages || [];
   const extras = useMessageExtras(activeChat?.id, id, messages);
@@ -1047,6 +1378,19 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
                   <p className="text-xs leading-snug mb-2" style={{ color: C.muted }}>
                     La traduction automatique est désactivée par défaut. Active-la uniquement si tu en as besoin.
                   </p>
+                  {messaging.keysBackupKind === "pin" && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPinPanel("verify");
+                        setChatToolsOpen(false);
+                      }}
+                      className="w-full text-left text-xs rounded-xl bg-white/5 px-2 py-2 mb-2"
+                      style={{ color: C.ivory }}
+                    >
+                      🔑 Vérifier ou changer mon PIN
+                    </button>
+                  )}
                   <div className="flex items-center justify-between rounded-xl bg-white/5 px-2">
                     <span className="text-xs" style={{ color: C.muted }}>
                       Traduction automatique
@@ -1058,6 +1402,7 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
             </div>
           </div>
 
+          {pinPanelEl && <div className="px-3 pt-3">{pinPanelEl}</div>}
           {messaging.recoveryCode && !messaging.keysMode && (
             <div className="px-3 pt-3">
               <RecoveryCodeNotice
@@ -1074,6 +1419,7 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
               <KeyRecoveryPanel
                 key={messaging.keysMode}
                 mode={messaging.keysMode}
+                backupKind={messaging.keysBackupKind}
                 C={C}
                 onSetup={messaging.setupKeys}
                 onUnlock={messaging.unlockKeys}
@@ -1228,6 +1574,17 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
         <h2 className="text-2xl font-bold flex items-center gap-2.5" style={{ color: C.ivory }}>
           <MessageCircle size={20} style={{ color: C.gold }} /> Messages
         </h2>
+        {messaging.keysBackupKind === "pin" && (
+          <button
+            type="button"
+            onClick={() => setPinPanel((v) => (v ? null : "verify"))}
+            aria-label="Vérifier ou changer mon PIN"
+            className="mr-2 px-3 py-2.5 rounded-full text-sm hover:bg-white/10"
+            style={{ color: C.gold }}
+          >
+            🔑
+          </button>
+        )}
         <button
           onClick={() => setShowNewChat(true)}
           className="flex items-center gap-1.5 px-4 py-2.5 rounded-full text-sm font-semibold"
@@ -1237,6 +1594,7 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
         </button>
       </div>
 
+      {pinPanelEl}
       {messaging.recoveryCode && !messaging.keysMode && (
         <RecoveryCodeNotice
           code={messaging.recoveryCode}
