@@ -5,6 +5,7 @@
  * l'API CinetPay (token GET obligatoire côté provider).
  * Ne jamais logger l'URL contenant le token.
  */
+import adRevenue from "./_lib/ad-revenue.js";
 import { applyCors, getAdminClient, rateLimitAsync } from "./_shared.js";
 
 const TOKEN = process.env.CINETPAY_TRANSFER_TOKEN || "";
@@ -50,6 +51,7 @@ function expectedXofFromMinor(amountMinor) {
 }
 
 export default async function handler(req, res) {
+  if (req.query?.route === "ad-revenue") return adRevenue(req, res);
   if (applyCors(req, res)) return;
 
   // CinetPay pings en GET pour vérifier l'URL ; POST pour les notifs.

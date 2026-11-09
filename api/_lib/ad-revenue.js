@@ -1,4 +1,4 @@
-import { applyCors, getAdminClient, rateLimitAsync } from './_shared.js';
+import { applyCors, getAdminClient, rateLimitAsync } from '../_shared.js';
 const SECRET = process.env.BAARO_AD_REVENUE_SECRET || '';
 
 export default async function handler(req,res){
