@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const out = join(root, 'public', 'wasm');
 const rustc = process.env.RUSTC || join(process.env.CARGO_HOME || join(homedir(), '.cargo'), 'bin', 'rustc');
-const clang = process.env.CLANG || 'clang';
+const clang = process.env.CLANG || 'clang-18';
 const strict = process.argv.includes('--strict');
 const artifacts = [join(out, 'stories_policy.wasm'), join(out, 'stories_media.wasm')];
 

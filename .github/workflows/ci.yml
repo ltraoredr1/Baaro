@@ -18,7 +18,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-      - run: sudo apt-get update && sudo apt-get install -y clang lld
+      - run: sudo apt-get update && sudo apt-get install -y clang-18 lld-18
       - uses: actions/setup-node@v4
         with:
           node-version-file: '.nvmrc'
