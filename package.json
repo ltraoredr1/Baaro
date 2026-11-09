@@ -9,7 +9,7 @@
   "scripts": {
     "predev": "node scripts/build-stories-wasm.mjs && node scripts/copy-ort-wasm.mjs && node scripts/copy-mediapipe-wasm.mjs",
     "dev": "vite",
-    "prebuild": "node scripts/build-stories-wasm.mjs && node scripts/copy-ort-wasm.mjs && node scripts/copy-mediapipe-wasm.mjs",
+    "prebuild": "(rustup target add wasm32-unknown-unknown 2>/dev/null || true) && node scripts/build-stories-wasm.mjs && node scripts/copy-ort-wasm.mjs && node scripts/copy-mediapipe-wasm.mjs",
     "build": "vite build",
     "preview": "vite preview",
     "check:production": "node scripts/check-production.mjs",
