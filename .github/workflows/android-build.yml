@@ -1,30 +1,52 @@
 name: Build Android APK
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version à publier (patch, minor, major)'
+        required: true
+        default: 'patch'
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
 
 concurrency:
   group: android-build-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
-
+    env:
+      CLANG: clang-18
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Setup Node.js
+      - name: Install Rust 1.99.1
+        uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install Clang 18 and LLD 18
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y clang-18 lld-18
+
+      - name: Setup Node.js 24.22.2
         uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: 24.22.2
           cache: npm
 
       - name: Setup Java
@@ -49,7 +71,6 @@ jobs:
           VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
         run: |
           set -euo pipefail
-
           check_url() {
             local name="$1" value="$2"
             if [[ -z "$value" ]]; then
@@ -65,24 +86,23 @@ jobs:
               exit 1
             fi
           }
-
           check_url VITE_SUPABASE_URL "${VITE_SUPABASE_URL:-}"
           check_url VITE_API_BASE_URL "${VITE_API_BASE_URL:-}"
-
           if [[ -z "${VITE_SUPABASE_ANON_KEY:-}" ]]; then
             echo "::error::Le secret VITE_SUPABASE_ANON_KEY est manquant."
             exit 1
           fi
-
           echo "Secrets valides."
           echo "Commit : ${GITHUB_SHA}"
           echo "Date UTC : $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --prefer-offline --no-audit
+
+      - name: Bump version
+        run: npm version ${{ inputs.version }} --no-git-tag-version
 
       - name: Build web application
-        # npm run build exécute prebuild, qui copie ONNX Runtime dans public/ort.
         run: npm run build
         env:
           VITE_APP_ENV: production
@@ -101,6 +121,9 @@ jobs:
           test -s dist/ort/ort-wasm-simd-threaded.asyncify.mjs
           test -s dist/ort/ort-wasm-simd-threaded.asyncify.wasm
 
+      - name: Create Updater Maison bundle
+        run: node scripts/build-update.mjs
+
       - name: Sync Capacitor
         run: npx cap sync android
 
@@ -117,12 +140,10 @@ jobs:
         run: |
           set -euo pipefail
           APK="android/app/build/outputs/apk/debug/app-debug.apk"
-
           if [[ ! -s "$APK" ]]; then
             echo "::error::APK absent ou vide : $APK"
             exit 1
           fi
-
           ls -lh "$APK"
 
       - name: Upload debug APK
@@ -132,3 +153,11 @@ jobs:
           path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
+
+      - name: Publish update manifest for all users
+        run: |
+          git config user.name "baaro-release-bot"
+          git config user.email "release@baaro.app"
+          git add package.json package-lock.json public/updates/
+          git commit -m "release: publie la version $(node -p "require('./package.json').version") pour tous les utilisateurs" || echo "Rien à publier"
+          git push
