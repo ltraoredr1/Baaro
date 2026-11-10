@@ -1,12 +1,15 @@
 {
   "name": "BAARO",
   "short_name": "BAARO",
-  "description": "Réseau social mondial avec points, crypto et assistant IA intégré.",
-  "start_url": "/",
+  "id": "/",
+  "scope": "/",
+  "start_url": "/?source=pwa",
   "display": "standalone",
   "background_color": "#0B1526",
   "theme_color": "#0B1526",
   "orientation": "portrait",
+  "description": "Réseau social mondial avec points, crypto et assistant IA intégré.",
+  "categories": ["social", "entertainment"],
   "icons": [
     {
       "src": "/icon-192.png",
