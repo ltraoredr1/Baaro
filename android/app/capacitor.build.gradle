@@ -14,13 +14,14 @@ dependencies {
     implementation project(':capacitor-community-privacy-screen')
     implementation project(':capacitor-community-speech-recognition')
     implementation project(':capacitor-community-text-to-speech')
+    implementation project(':capacitor-trancee-nearby-connections')
     implementation project(':capacitor-app')
+    implementation project(':capacitor-filesystem')
     implementation project(':capacitor-haptics')
     implementation project(':capacitor-keyboard')
     implementation project(':capacitor-push-notifications')
     implementation project(':capacitor-splash-screen')
     implementation project(':capacitor-status-bar')
-    implementation project(':capgo-capacitor-updater')
 
 }
 
