@@ -1,14 +1,16 @@
 import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { join } from "node:path";
 
-const version = process.env.npm_package_version || "1.0.0";
+const pkg = JSON.parse(readFileSync("package.json", "utf8"));
+const version = pkg.version || "1.0.0";
 const outDir = "public/updates";
 mkdirSync(outDir, { recursive: true });
 
 // 1. Zip dist/
-execSync(`npx --yes archiver-cli dist ${outDir}/${version}.zip 2>/dev/null || (cd dist && zip -r ../${outDir}/${version}.zip . > /dev/null)`, { stdio: "inherit" });
+console.log(`[Baaro] Build update ${version}...`);
+execSync(`cd dist && zip -r ../${outDir}/${version}.zip . -q`, { stdio: "inherit" });
 
 // 2. SHA256
 const buf = readFileSync(join(outDir, `${version}.zip`));
@@ -23,4 +25,4 @@ const manifest = {
   notes: `Baaro ${version} - updater maison`,
 };
 writeFileSync(join(outDir, "manifest.json"), JSON.stringify(manifest, null, 2));
-console.log(`[Baaro] Update prêt : ${version} - sha256 ${sha256.slice(0, 12)}...`);
+console.log(`[Baaro] Update prêt : ${version} - ${sha256.slice(0, 12)}...`);
