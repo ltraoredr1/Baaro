@@ -1,0 +1,1060 @@
+diff --git a/.github/workflows/worker-rust.yml b/.github/workflows/worker-rust.yml
+index 4e89cc6..c796c59 100644
+--- a/.github/workflows/worker-rust.yml
++++ b/.github/workflows/worker-rust.yml
+@@ -1,4 +1,4 @@
+-name: Worker média — Rust
++name: Worker média — Rust/C
+ on:
+   push:
+     branches: [main, develop]
+@@ -6,24 +6,34 @@ on:
+       - 'worker/rust/**'
+       - 'worker/lib/**'
+       - 'worker/test/**'
++      - 'worker/processor.mjs'
++      - 'worker/server.mjs'
++      - 'worker/package.json'
++      - 'worker/package-lock.json'
+       - 'worker/Dockerfile'
++      - 'worker/deploy/**'
+       - '.github/workflows/worker-rust.yml'
+   pull_request:
+     paths:
+       - 'worker/rust/**'
+       - 'worker/lib/**'
+       - 'worker/test/**'
++      - 'worker/processor.mjs'
++      - 'worker/server.mjs'
++      - 'worker/package.json'
++      - 'worker/package-lock.json'
+       - 'worker/Dockerfile'
++      - 'worker/deploy/**'
+       - '.github/workflows/worker-rust.yml'
+   workflow_dispatch:
+ concurrency:
+-  group: worker-rust-${{ github.ref }}
++  group: worker-rust-c-${{ github.ref }}
+   cancel-in-progress: true
+ jobs:
+-  rust:
+-    name: baaro-media (fmt, clippy, tests signatures)
++  rust-c:
++    name: worker Rust/C, tests et images
+     runs-on: ubuntu-latest
+-    timeout-minutes: 15
++    timeout-minutes: 30
+     defaults:
+       run:
+         working-directory: worker
+@@ -38,10 +48,24 @@ jobs:
+       - uses: Swatinem/rust-cache@v2
+         with:
+           workspaces: worker/rust/baaro-media
++      - name: Install FFmpeg C headers and test binary
++        run: |
++          sudo apt-get update
++          sudo apt-get install --yes --no-install-recommends build-essential pkg-config ffmpeg libavformat-dev
+       - run: cargo fmt --check --manifest-path rust/baaro-media/Cargo.toml
+       - run: cargo clippy --locked --manifest-path rust/baaro-media/Cargo.toml -- -D warnings
+       - run: cargo test --locked --manifest-path rust/baaro-media/Cargo.toml
+       - run: npm run build:rust
++      - run: ldd rust/baaro-media/target/release/baaro-media | tee /tmp/baaro-media-ldd.txt && ! grep -q 'not found' /tmp/baaro-media-ldd.txt
+       - run: npm run test:rust
+         env:
+           BAARO_MEDIA_BIN: ${{ github.workspace }}/worker/rust/baaro-media/target/release/baaro-media
++      - name: Build both production images
++        run: |
++          docker build --file Dockerfile --tag baaro-media-worker:ci .
++          docker build --file deploy/Dockerfile.cloudrun --tag baaro-media-worker-cloudrun:ci .
++      - name: Smoke-test Rust/C inside both images
++        run: |
++          for image in baaro-media-worker:ci baaro-media-worker-cloudrun:ci; do
++            docker run --rm --entrypoint sh "$image" -ec "$(cat test/native-image-smoke.sh)"
++          done
+diff --git a/docs/RUST_WORKER_VALIDATION.md b/docs/RUST_WORKER_VALIDATION.md
+index 7590386..fef7d2e 100644
+--- a/docs/RUST_WORKER_VALIDATION.md
++++ b/docs/RUST_WORKER_VALIDATION.md
+@@ -1,33 +1,40 @@
+-# Nettoyage et validation du worker Rust BAARO
++# Intégration et validation du worker Rust/C BAARO
+ 
+-**Date :** 9 novembre 2026  
+-**Périmètre :** worker média de `ltraoredr1/Baaro`. Aucun déploiement distant ni push GitHub n’a été effectué.
++**Date :** 10 novembre 2026
++**Périmètre :** worker média de `ltraoredr1/Baaro`. Le pipeline principal conserve FFmpeg/Node ; Rust et C interviennent dans le contrôle des sources, sans réécrire le transcodage.
+ 
+-## Nettoyage effectué
++## Changements
+ 
+-Rust est conservé pour la détection du type réel des fichiers par signature. Le parsing WebVTT est désormais réalisé uniquement en JavaScript : le module `worker/rust/baaro-media/src/vtt.rs`, la commande CLI `vtt-parse`, son adaptateur `spawnSync`, ses tests de parité et le patch historique redondant `BAARO-rust-worker.patch` ont été supprimés. Le helper JSON pour tableaux, inutilisé après cette suppression, a également été retiré.
++- Rust classe les fichiers selon leur signature ; les formats inconnus et les types dangereux ne sont pas acceptés.
++- Un shim C appelle `libavformat` pour ouvrir les fichiers allowlistés et vérifier la présence d’un flux audio avec codec/fréquence détectés ou d’un flux vidéo avec dimensions détectées. Le résultat expose les informations audio/vidéo, dimensions, durée et état du probe.
++- Node refuse un conteneur invalide, inconnu ou non vérifié avant FFmpeg. L’absence, le timeout ou l’échec du binaire ne déclenche aucun fallback permissif ; un média rejeté reçoit un statut HTTP 422.
++- Le worker vérifie au démarrage que le binaire natif se charge et annonce sa version libavformat ; `/health` inclut cette version.
++- Les deux recettes Docker compilent Rust+C dans un stage natif et installent FFmpeg dans l’image runtime. Le workflow CI construit les deux images et exécute le validateur dans chacune.
++- Aucune dépendance Cargo ou npm supplémentaire. La compilation système requiert `build-essential`, `pkg-config` et `libavformat-dev`; le runtime dépend des bibliothèques FFmpeg apportées par le paquet `ffmpeg`.
+ 
+-Le manifeste Cargo ne déclarait déjà aucun crate externe. Son bloc `[dependencies]` vide a été supprimé ; le `Cargo.lock` reste en place pour préserver les builds `--locked`. Aucun paquet npm n’a été ajouté ou supprimé.
++Le probe vérifie l’ouverture du conteneur et la découverte des flux ; il ne décode pas l’intégralité du média ni ne garantit l’absence de corruption plus loin dans le fichier. FFmpeg reste responsable du décodage et du transcodage.
+ 
+-## Contrôles après nettoyage
++## Vérifications exécutées localement
+ 
+ | Contrôle | Résultat |
+ |---|---|
+ | `cargo fmt --check` | Réussi |
+-| `cargo clippy --locked -- -D warnings` | Réussi, aucun code mort |
+-| `cargo test --locked` | 7 tests réussis, 0 échec |
+-| Compilation release | Réussie avec Rust 1.99.1 |
+-| Test Node des signatures | 7 vérifications réussies |
+-| Parsing WebVTT JavaScript | Syntaxe et test fonctionnel réussis |
+-| Benchmark du détecteur de signature | 120 mesures : médiane 1,818 ms, p95 2,176 ms, moyenne 1,856 ms |
+-| Smoke test du worker | Démarrage et `/health` réussis |
++| `cargo clippy --locked -- -D warnings` | Réussi, aucun avertissement |
++| `cargo test --locked` | 10 tests Rust réussis |
++| Build release Rust/C | Réussi avec Rust 1.99.1 |
++| Tests Node natifs | 19 vérifications : signatures sûres/dangereuses/inconnues, WAV réel et MP4 vidéo réel avec dimensions, et fichier absent |
++| Test fail-closed | Réussi : binaire absent → refus au démarrage et lors du contrôle |
++| Smoke `/health` | Réussi ; réponse annonce `baaro-media 0.1.0 (libavformat 60.16.100)` |
++| `ldd` du binaire | Toutes les bibliothèques partagées résolues sur Linux ARM64 |
++| Syntaxe Node/shell | Réussie |
++| Installation npm | 27 paquets existants installés, 0 vulnérabilité signalée |
+ 
+-Le benchmark WebVTT précédent motivait la suppression : le parsing JS médian mesuré était de 0,003 ms pour 1 cue, 0,054 ms pour 100 cues et 1,022 ms pour 2 000 cues ; les appels Rust par processus étaient respectivement de 1,698 ms, 1,993 ms et 6,230 ms.
++## Mesure locale
+ 
+-## Point à vérifier avant production
++Le benchmark révisé mesure le chemin complet sur un WAV valide — processus CLI, signature Rust et probe C/libavformat — sur Linux ARM64, Node 22.23.4 et libavformat 60.16.100 : 120 mesures, médiane **30,103 ms**, p95 **31,353 ms**, moyenne **30,283 ms**, environ **33 contrôles/s**. Il s’agit d’un contrôle de validité/robustesse, pas d’une optimisation du transcodage. Cette mesure inclut le coût d’un nouveau processus et n’est pas directement comparable au précédent microbenchmark limité au sniffing.
+ 
+-Si le binaire Rust de détection est absent ou ne démarre pas, `sniffFile()` renvoie `null` et le worker poursuit actuellement le traitement sans refuser le fichier. L’image Docker prévoit de construire et copier le binaire ; il faut toutefois vérifier sa présence et son exécution dans l’image déployée, ou faire échouer le traitement si la vérification est indisponible.
++## Limites restantes
+ 
+-Le sandbox n’a ni Docker ni `gcloud` ni accès au projet Cloud Run. Les contrôles ont donc été réalisés localement sur Linux ARM64 et ne remplacent pas le build de l’image ni un test Cloud Run sur l’architecture et la charge de production.
++Le sandbox ne fournit pas Docker ni `gcloud`; les deux images n’ont donc pas été bâties localement et aucun déploiement Cloud Run n’a été lancé. Le workflow GitHub met maintenant en place les builds et smoke tests des deux images ; il faudra vérifier leur résultat sur le dépôt, puis effectuer le déploiement Cloud Run dans le projet GCP de BAARO. Le benchmark cloud devra confirmer l’impact opérationnel avant toute conclusion de performance.
+ 
+-Les commandes répétables sont dans `worker/README.md`, section « Valider et mesurer Rust » ; le benchmark conservé mesure uniquement le détecteur de signatures (`npm run bench:rust`).
++Les commandes reproductibles sont dans [`worker/README.md`](../worker/README.md), section « Valider et mesurer Rust/C ».
+diff --git a/worker/Dockerfile b/worker/Dockerfile
+index cd874f5..4d20272 100644
+--- a/worker/Dockerfile
++++ b/worker/Dockerfile
+@@ -1,6 +1,7 @@
+ # --- Étape 1 : compilation du binaire Rust (baaro-media) ---
+ FROM rust:1-bookworm AS rust-build
+ WORKDIR /build
++RUN apt-get update && apt-get install -y --no-install-recommends build-essential pkg-config libavformat-dev && rm -rf /var/lib/apt/lists/*
+ COPY rust/baaro-media/ ./
+ RUN cargo build --release --locked
+ 
+@@ -9,10 +10,11 @@ FROM node:22-bookworm-slim
+ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg python3 python3-pip ca-certificates && rm -rf /var/lib/apt/lists/*
+ COPY --from=rust-build /build/target/release/baaro-media /usr/local/bin/baaro-media
+ WORKDIR /app
+-COPY package.json ./
+-RUN npm install --omit=dev
++COPY package.json package-lock.json ./
++RUN npm ci --omit=dev
+ COPY . .
+ ENV NODE_ENV=production
+ ENV BAARO_MEDIA_BIN=/usr/local/bin/baaro-media
++ENV BAARO_WORKER_PORT=8787
+ EXPOSE 8787
+ CMD ["node", "server.mjs"]
+diff --git a/worker/README.md b/worker/README.md
+index f69242a..0d1c857 100644
+--- a/worker/README.md
++++ b/worker/README.md
+@@ -23,14 +23,15 @@ Voir `.env.example` à la racine. Les variables principales sont `R2_*`, `BAARO_
+ ```bash
+ cd worker
+ npm install
++npm run build:rust
+ npm start
+ ```
+ 
+-Le endpoint `POST /process` est protégé par `x-baaro-worker-secret`.
++Pour compiler localement, installer `build-essential`, `pkg-config`, `libavformat-dev` et FFmpeg. Le endpoint `POST /process` est protégé par `x-baaro-worker-secret`.
+ 
+-## Valider et mesurer Rust
++## Valider et mesurer Rust/C
+ 
+-Rust est conservé uniquement pour détecter le type réel d'un fichier par sa signature. Le découpage WebVTT reste en JavaScript : le détour par un processus Rust était plus lent sur les mesures locales. Le binaire Rust est construit dans l'image du worker. Pour valider le code localement :
++Rust détecte la signature du fichier ; un shim C appelle `libavformat` pour vérifier que le conteneur est réellement ouvrable et qu'il contient un flux audio ou vidéo. Le worker échoue au démarrage si le binaire natif est absent, et refuse les fichiers inconnus, malformés ou non média avant FFmpeg. Le découpage WebVTT reste en JavaScript : les mesures précédentes ne justifiaient pas un chemin Rust séparé. Aucun crate Cargo ni paquet npm supplémentaire n'est utilisé ; le build C requiert les outils système et les headers libavformat.
+ 
+ ```bash
+ cd worker
+@@ -41,13 +42,13 @@ npm run build:rust
+ BAARO_MEDIA_BIN="$PWD/rust/baaro-media/target/release/baaro-media" npm run test:rust
+ ```
+ 
+-Pour mesurer la latence du détecteur de signatures sur la même architecture que le worker déployé :
++`npm run test:rust` vérifie des fichiers WAV et MP4 vidéo réellement générés par le chemin C/libavformat, ainsi que le comportement fail-closed si le binaire est absent. Pour mesurer la latence du contrôle combiné sur la même architecture que le worker déployé :
+ 
+ ```bash
+ BAARO_MEDIA_BIN="$PWD/rust/baaro-media/target/release/baaro-media" npm run bench:rust
+ ```
+ 
+-Le rapport affiche la médiane, le p95, la moyenne et le débit du détecteur. C'est un microbenchmark local : une décision de déploiement doit aussi s'appuyer sur des mesures de Cloud Run avec la même image, la même région et une charge représentative.
++Le rapport affiche la médiane, le p95, la moyenne et le débit du contrôle. C'est un microbenchmark local : une décision de performance doit aussi s'appuyer sur des mesures de Cloud Run avec la même image, la même région et une charge représentative. Le CI compile aussi les deux images Docker et vérifie le binaire natif dans chacune.
+ 
+ ## Uploads vidéo volumineux
+ 
+diff --git a/worker/deploy/Dockerfile.cloudrun b/worker/deploy/Dockerfile.cloudrun
+index e684503..2f4eb35 100644
+--- a/worker/deploy/Dockerfile.cloudrun
++++ b/worker/deploy/Dockerfile.cloudrun
+@@ -1,8 +1,17 @@
++# --- Build Rust + C/libavformat ---
++FROM rust:1-bookworm AS native-build
++WORKDIR /build
++RUN apt-get update && apt-get install -y --no-install-recommends build-essential pkg-config libavformat-dev && rm -rf /var/lib/apt/lists/*
++COPY rust/baaro-media/ ./
++RUN cargo build --release --locked
++
++# --- Runtime Cloud Run ---
+ FROM node:22-bookworm-slim
+ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg python3 python3-pip ca-certificates && rm -rf /var/lib/apt/lists/*
++COPY --from=native-build /build/target/release/baaro-media /usr/local/bin/baaro-media
+ WORKDIR /app
+-COPY package.json ./
+-RUN npm install --omit=dev
++COPY package.json package-lock.json ./
++RUN npm ci --omit=dev
+ COPY . .
+ ENV NODE_ENV=production
+ ENV BAARO_WORKER_PORT=8080
+@@ -10,5 +19,6 @@ ENV BAARO_WORKER_TMP_DIR=/tmp/baaro-worker
+ ENV FFMPEG_BIN=ffmpeg
+ ENV FFPROBE_BIN=ffprobe
+ ENV WHISPER_BIN=whisper
++ENV BAARO_MEDIA_BIN=/usr/local/bin/baaro-media
+ EXPOSE 8080
+ CMD ["node", "server.mjs"]
+diff --git a/worker/deploy/README.md b/worker/deploy/README.md
+index 7cb0f55..d9d8771 100644
+--- a/worker/deploy/README.md
++++ b/worker/deploy/README.md
+@@ -19,7 +19,7 @@ export OPENAI_API_KEY="..."
+ ./deploy-cloudrun.sh
+ ```
+ 
+-Le script construit l'image, crée/met à jour les secrets, déploie le service avec 4 CPU / 8 Go RAM, concurrence 1, timeout 1 h et autoscaling 0–5 instances.
++Le script construit l'image multi-étape depuis `worker/Dockerfile` : Rust et le shim C/libavformat sont compilés dans l'étape native, puis seul le binaire est copié dans l'image runtime avec FFmpeg. Il crée/met à jour les secrets et déploie le service avec 4 CPU / 8 Go RAM, concurrence 1, timeout 1 h et autoscaling 0–5 instances. Le worker ne devient prêt que si le binaire annonce Rust et libavformat ; une absence du contrôle bloque le démarrage et le traitement.
+ 
+ ## Vercel
+ 
+diff --git a/worker/deploy/cloudrun.env.example b/worker/deploy/cloudrun.env.example
+index d1f3208..bb243a8 100644
+--- a/worker/deploy/cloudrun.env.example
++++ b/worker/deploy/cloudrun.env.example
+@@ -13,6 +13,7 @@ BAARO_WORKER_PORT=8080
+ BAARO_WORKER_TMP_DIR=/tmp/baaro-worker
+ FFMPEG_BIN=ffmpeg
+ FFPROBE_BIN=ffprobe
++BAARO_MEDIA_BIN=/usr/local/bin/baaro-media
+ WHISPER_BIN=whisper
+ WHISPER_MODEL=small
+ BAARO_TTS_URL=
+diff --git a/worker/deploy/cloudrun.yaml b/worker/deploy/cloudrun.yaml
+index 81a3ea0..1d66d93 100644
+--- a/worker/deploy/cloudrun.yaml
++++ b/worker/deploy/cloudrun.yaml
+@@ -25,6 +25,8 @@ spec:
+               value: ffmpeg
+             - name: FFPROBE_BIN
+               value: ffprobe
++            - name: BAARO_MEDIA_BIN
++              value: /usr/local/bin/baaro-media
+             - name: WHISPER_BIN
+               value: whisper
+             - name: WHISPER_MODEL
+diff --git a/worker/deploy/deploy-cloudrun.sh b/worker/deploy/deploy-cloudrun.sh
+index 9bb4483..1d8ad60 100755
+--- a/worker/deploy/deploy-cloudrun.sh
++++ b/worker/deploy/deploy-cloudrun.sh
+@@ -51,7 +51,7 @@ gcloud run deploy baaro-media-worker \
+   --timeout 3600 \
+   --min-instances 0 \
+   --max-instances 5 \
+-  --set-env-vars "BAARO_WORKER_PORT=8080,BAARO_WORKER_TMP_DIR=/tmp/baaro-worker,FFMPEG_BIN=ffmpeg,FFPROBE_BIN=ffprobe,WHISPER_BIN=whisper,WHISPER_MODEL=small,R2_BUCKET_NAME=${R2_BUCKET_NAME:-baaro-media},OPENAI_API_BASE=${OPENAI_API_BASE:-https://api.openai.com/v1},OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}" \
++  --set-env-vars "BAARO_WORKER_PORT=8080,BAARO_WORKER_TMP_DIR=/tmp/baaro-worker,BAARO_MEDIA_BIN=/usr/local/bin/baaro-media,FFMPEG_BIN=ffmpeg,FFPROBE_BIN=ffprobe,WHISPER_BIN=whisper,WHISPER_MODEL=small,R2_BUCKET_NAME=${R2_BUCKET_NAME:-baaro-media},OPENAI_API_BASE=${OPENAI_API_BASE:-https://api.openai.com/v1},OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}" \
+   --set-secrets "R2_ACCOUNT_ID=baaro-r2-account-id:latest,R2_ACCESS_KEY_ID=baaro-r2-access-key-id:latest,R2_SECRET_ACCESS_KEY=baaro-r2-secret-access-key:latest,R2_PUBLIC_BASE_URL=baaro-r2-public-base-url:latest,BAARO_WORKER_SECRET=baaro-worker-secret:latest,OPENAI_API_KEY=baaro-openai-api-key:latest"
+ 
+ echo "[4/4] Worker URL"
+diff --git a/worker/lib/config.mjs b/worker/lib/config.mjs
+index c453cc4..75ac553 100644
+--- a/worker/lib/config.mjs
++++ b/worker/lib/config.mjs
+@@ -5,10 +5,8 @@ export const config = {
+   ffmpeg: process.env.FFMPEG_BIN || "ffmpeg",
+   ffprobe: process.env.FFPROBE_BIN || "ffprobe",
+   whisper: process.env.WHISPER_BIN || "whisper",
+-  // Binaire Rust (worker/rust/baaro-media). Absent : le worker retombe sur le JS.
+-  mediaBin: process.env.BAARO_MEDIA_BIN || "baaro-media",
+-  // 1 : refuser aussi les fichiers dont la signature est inconnue (par défaut : seulement les types dangereux).
+-  sniffStrict: process.env.BAARO_SNIFF_STRICT === "1",
++  // Binaire Rust avec validation C/libavformat (obligatoire avant FFmpeg).
++  mediaBin: process.env.BAARO_MEDIA_BIN || "./rust/baaro-media/target/release/baaro-media",
+   r2: {
+     accountId: process.env.R2_ACCOUNT_ID || "",
+     accessKeyId: process.env.R2_ACCESS_KEY_ID || "",
+diff --git a/worker/lib/native.mjs b/worker/lib/native.mjs
+index 3f578cd..c0f38b9 100644
+--- a/worker/lib/native.mjs
++++ b/worker/lib/native.mjs
+@@ -4,36 +4,53 @@ import { config } from "./config.mjs";
+ 
+ const execFileAsync = promisify(execFile);
+ 
++export async function assertNativeReady() {
++  let stdout;
++  try {
++    ({ stdout } = await execFileAsync(config.mediaBin, ["--version"], { timeout: 5_000 }));
++  } catch (cause) {
++    throw new Error("Démarrage refusé : binaire Rust/C indisponible", { cause });
++  }
++  const version = stdout.trim();
++  if (!/^baaro-media \S+ \(libavformat \d+\.\d+\.\d+\)$/.test(version)) {
++    throw new Error("Démarrage refusé : le binaire Rust/C n’est pas lié à libavformat");
++  }
++  return version;
++}
++
+ /**
+- * Détecte le type réel d'un fichier d'après sa signature.
+- * En production (ou si BAARO_SNIFF_REQUIRED=1) on refuse de traiter
+- * si le binaire Rust est absent ou échoue.
+- *
+- * Retourne { kind, mime, media, danger, size }
++ * Détecte la signature puis valide le conteneur avec le binaire Rust/C.
++ * Toute absence, erreur ou réponse mal formée est une erreur bloquante.
+  */
+ export async function sniffFile(path) {
++  let stdout;
+   try {
+-    const { stdout } = await execFileAsync(
++    ({ stdout } = await execFileAsync(
+       config.mediaBin,
+       ["sniff", path],
+       { timeout: 10_000, maxBuffer: 64 * 1024 }
+-    );
+-    return JSON.parse(stdout);
+-  } catch (error) {
+-    const required =
+-      process.env.NODE_ENV === "production" ||
+-      process.env.BAARO_SNIFF_REQUIRED === "1";
++    ));
++  } catch (cause) {
++    const error = new Error("Contrôle Rust/C du fichier impossible", { cause });
++    error.code = "BAARO_NATIVE_UNAVAILABLE";
++    throw error;
++  }
+ 
+-    if (required) {
+-      throw new Error(
+-        `Contrôle de signature impossible (binaire ${config.mediaBin} indisponible ou en erreur) : ${error?.message || error}`
+-      );
+-    }
++  let result;
++  try {
++    result = JSON.parse(stdout);
++  } catch (cause) {
++    throw new Error("Réponse JSON invalide du contrôle Rust/C", { cause });
++  }
+ 
+-    // Mode développement uniquement
+-    console.warn(
+-      `[worker] binaire Rust \( {config.mediaBin} indisponible ( \){error?.code || error?.message}) : contrôle de signature non effectué`
+-    );
+-    return null;
++  if (
++    !result ||
++    typeof result.kind !== "string" ||
++    typeof result.media !== "boolean" ||
++    typeof result.danger !== "boolean" ||
++    typeof result.containerValid !== "boolean"
++  ) {
++    throw new Error("Réponse incomplète du contrôle Rust/C");
+   }
++  return result;
+ }
+diff --git a/worker/package.json b/worker/package.json
+index 843ab5b..9e5158a 100644
+--- a/worker/package.json
++++ b/worker/package.json
+@@ -11,7 +11,7 @@
+     "process": "node processor.mjs",
+     "cleanup:multipart": "node cleanup-multipart.mjs",
+     "build:rust": "cargo build --release --locked --manifest-path rust/baaro-media/Cargo.toml",
+-    "test:rust": "node test/rust-sniff.mjs",
++    "test:rust": "node test/rust-sniff.mjs && node test/native-fail-closed.mjs",
+     "bench:rust": "node test/benchmark-rust.mjs"
+   },
+   "dependencies": {
+diff --git a/worker/processor.mjs b/worker/processor.mjs
+index 9928046..86337a9 100644
+--- a/worker/processor.mjs
++++ b/worker/processor.mjs
+@@ -73,19 +73,17 @@ async function source(job, dir) {
+ 
+   await downloadToFile(key, input);
+ 
+-  // L'extension de la clé ne prouve rien : on vérifie la signature réelle
+-  // du fichier (binaire Rust) avant de le confier à FFmpeg.
+-  // Fail-closed : le sniff est obligatoire.
++  // L'extension de la clé ne prouve rien : Rust vérifie la signature, puis
++  // libavformat (C) confirme le conteneur et la présence d'un flux A/V.
++  // Tout échec ou type inconnu est refusé avant FFmpeg.
+   const sniffed = await sniffFile(input);
+ 
+-  if (!sniffed) {
+-    throw new Error("Contrôle de signature obligatoire : résultat absent");
+-  }
+-
+-  if (sniffed.danger || (config.sniffStrict && !sniffed.media)) {
+-    throw new Error(
+-      `Fichier source refusé : type détecté « ${sniffed.kind} »`
++  if (!sniffed || sniffed.danger || !sniffed.media || !sniffed.containerValid) {
++    const error = new Error(
++      `Fichier source refusé : type « ${sniffed?.kind || "inconnu"} », conteneur ${sniffed?.containerValid ? "valide" : "invalide ou non vérifié"}`
+     );
++    error.status = 422;
++    throw error;
+   }
+ 
+   return input;
+diff --git a/worker/rust/baaro-media/Cargo.toml b/worker/rust/baaro-media/Cargo.toml
+index 2ad4218..09cad13 100644
+--- a/worker/rust/baaro-media/Cargo.toml
++++ b/worker/rust/baaro-media/Cargo.toml
+@@ -2,7 +2,7 @@
+ name = "baaro-media"
+ version = "0.1.0"
+ edition = "2021"
+-description = "Détection de type de fichier par signature pour le worker BAARO"
++description = "Détection Rust et validation C/libavformat des médias pour le worker BAARO"
+ license = "MIT"
+ publish = false
+ 
+diff --git a/worker/rust/baaro-media/build.rs b/worker/rust/baaro-media/build.rs
+new file mode 100644
+index 0000000..ef1e3a0
+--- /dev/null
++++ b/worker/rust/baaro-media/build.rs
+@@ -0,0 +1,75 @@
++use std::env;
++use std::path::PathBuf;
++use std::process::Command;
++
++fn output(command: &str, args: &[&str]) -> String {
++    let result = Command::new(command)
++        .args(args)
++        .output()
++        .unwrap_or_else(|error| panic!("Impossible d’exécuter {command}: {error}"));
++    if !result.status.success() {
++        panic!(
++            "{command} {} a échoué: {}",
++            args.join(" "),
++            String::from_utf8_lossy(&result.stderr)
++        );
++    }
++    String::from_utf8(result.stdout)
++        .unwrap_or_else(|error| panic!("Sortie UTF-8 invalide de {command}: {error}"))
++}
++
++fn main() {
++    let manifest = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
++    let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR"));
++    let source = manifest.join("csrc/media_probe.c");
++    let object = out_dir.join("media_probe.o");
++    let archive = out_dir.join("libbaaro_media_probe.a");
++
++    println!("cargo:rerun-if-changed={}", source.display());
++    println!("cargo:rerun-if-env-changed=CC");
++    println!("cargo:rerun-if-env-changed=AR");
++    println!("cargo:rerun-if-env-changed=PKG_CONFIG");
++
++    let pkg_config = env::var("PKG_CONFIG").unwrap_or_else(|_| "pkg-config".to_owned());
++    let cflags = output(&pkg_config, &["--cflags", "libavformat"]);
++    let libs = output(
++        &pkg_config,
++        &["--libs", "libavformat", "libavcodec", "libavutil"],
++    );
++
++    let cc = env::var("CC").unwrap_or_else(|_| "cc".to_owned());
++    let mut compile = Command::new(cc);
++    compile
++        .args([
++            "-std=c11", "-O2", "-fPIC", "-Wall", "-Wextra", "-Werror", "-c",
++        ])
++        .arg(&source)
++        .arg("-o")
++        .arg(&object);
++    compile.args(cflags.split_whitespace());
++    let status = compile
++        .status()
++        .expect("Impossible de lancer le compilateur C");
++    assert!(status.success(), "La compilation du validateur C a échoué");
++
++    let ar = env::var("AR").unwrap_or_else(|_| "ar".to_owned());
++    let status = Command::new(ar)
++        .args(["crs"])
++        .arg(&archive)
++        .arg(&object)
++        .status()
++        .expect("Impossible de lancer ar");
++    assert!(status.success(), "La création de l’archive C a échoué");
++
++    println!("cargo:rustc-link-search=native={}", out_dir.display());
++    println!("cargo:rustc-link-lib=static=baaro_media_probe");
++    for flag in libs.split_whitespace() {
++        if let Some(path) = flag.strip_prefix("-L") {
++            println!("cargo:rustc-link-search=native={path}");
++        } else if let Some(name) = flag.strip_prefix("-l") {
++            println!("cargo:rustc-link-lib={name}");
++        } else if flag == "-pthread" || flag.starts_with("-Wl,") {
++            println!("cargo:rustc-link-arg={flag}");
++        }
++    }
++}
+diff --git a/worker/rust/baaro-media/csrc/media_probe.c b/worker/rust/baaro-media/csrc/media_probe.c
+new file mode 100644
+index 0000000..62390ed
+--- /dev/null
++++ b/worker/rust/baaro-media/csrc/media_probe.c
+@@ -0,0 +1,85 @@
++#include <libavformat/avformat.h>
++#include <libavutil/mathematics.h>
++
++#include <stdint.h>
++#include <string.h>
++
++typedef struct {
++    int has_video;
++    int has_audio;
++    int width;
++    int height;
++    int64_t duration_ms;
++} BaaroProbeInfo;
++
++enum {
++    BAARO_PROBE_OK = 0,
++    BAARO_PROBE_BAD_ARGUMENT = 1,
++    BAARO_PROBE_OPEN_FAILED = 2,
++    BAARO_PROBE_STREAM_INFO_FAILED = 3,
++    BAARO_PROBE_NO_MEDIA_STREAM = 4,
++    BAARO_PROBE_NO_MEMORY = 5
++};
++
++/* Called only for local files whose header matched BAARO's media allowlist. */
++int baaro_probe_media(const char *path, BaaroProbeInfo *out) {
++    AVFormatContext *format = NULL;
++    int status = BAARO_PROBE_OK;
++
++    if (path == NULL || out == NULL) {
++        return BAARO_PROBE_BAD_ARGUMENT;
++    }
++    memset(out, 0, sizeof(*out));
++    av_log_set_level(AV_LOG_QUIET);
++
++    format = avformat_alloc_context();
++    if (format == NULL) {
++        return BAARO_PROBE_NO_MEMORY;
++    }
++    /* Bound header probing; actual decoding remains isolated in ffmpeg. */
++    format->probesize = 1024 * 1024;
++    format->max_analyze_duration = 3 * AV_TIME_BASE;
++
++    if (avformat_open_input(&format, path, NULL, NULL) < 0) {
++        status = BAARO_PROBE_OPEN_FAILED;
++        goto cleanup;
++    }
++    if (avformat_find_stream_info(format, NULL) < 0) {
++        status = BAARO_PROBE_STREAM_INFO_FAILED;
++        goto cleanup;
++    }
++
++    for (unsigned int i = 0; i < format->nb_streams; i++) {
++        const AVCodecParameters *codec = format->streams[i]->codecpar;
++        if (codec->codec_type == AVMEDIA_TYPE_VIDEO &&
++            codec->width > 0 && codec->height > 0) {
++            out->has_video = 1;
++            if (out->width == 0) {
++                out->width = codec->width;
++                out->height = codec->height;
++            }
++        } else if (codec->codec_type == AVMEDIA_TYPE_AUDIO &&
++                   codec->codec_id != AV_CODEC_ID_NONE && codec->sample_rate > 0) {
++            out->has_audio = 1;
++        }
++    }
++
++    if (!out->has_audio && !out->has_video) {
++        status = BAARO_PROBE_NO_MEDIA_STREAM;
++        goto cleanup;
++    }
++    if (format->duration != AV_NOPTS_VALUE && format->duration > 0) {
++        out->duration_ms = av_rescale_q(format->duration, AV_TIME_BASE_Q,
++                                        (AVRational){1, 1000});
++    }
++
++cleanup:
++    if (format != NULL) {
++        avformat_close_input(&format);
++    }
++    return status;
++}
++
++unsigned int baaro_libavformat_version(void) {
++    return avformat_version();
++}
+diff --git a/worker/rust/baaro-media/src/main.rs b/worker/rust/baaro-media/src/main.rs
+index 569d64a..fcc5473 100644
+--- a/worker/rust/baaro-media/src/main.rs
++++ b/worker/rust/baaro-media/src/main.rs
+@@ -1,12 +1,13 @@
+-//! baaro-media — petit outil de validation de fichiers appelé par le worker Node.
++//! baaro-media — outil natif Rust/C de validation des médias du worker BAARO.
+ //!
+-//!   baaro-media sniff <fichier>   → JSON du type réel (signature des premiers octets)
++//!   baaro-media sniff <fichier>   → signature du fichier + validation C/libavformat
+ //!   baaro-media --version
+ //!
+-//! Codes de sortie : 0 succès, 1 erreur d'E/S, 2 usage ou entrée invalide.
+-//! Les messages d'erreur vont sur stderr.
++//! Codes de sortie : 0 succès de la commande, 1 erreur d'E/S, 2 usage invalide.
++//! Un conteneur invalide est retourné dans le JSON, puis refusé par Node.
+ 
+ mod json;
++mod probe;
+ mod sniff;
+ 
+ use std::fs::File;
+@@ -28,7 +29,18 @@ fn cmd_sniff(path: &str) -> ExitCode {
+     if let Err(e) = file.take(sniff::HEAD_LEN as u64).read_to_end(&mut head) {
+         return fail(1, &format!("lecture impossible : {e}"));
+     }
+-    println!("{}", sniff::to_json(&sniff::sniff(&head), size));
++
++    let detected = sniff::sniff(&head);
++    let (probe, probe_error) = if detected.media {
++        match probe::validate(path) {
++            Ok(info) => (Some(info), None),
++            Err(code) => (None, Some(code)),
++        }
++    } else {
++        (None, None)
++    };
++
++    println!("{}", sniff::to_json(&detected, size, probe, probe_error));
+     ExitCode::SUCCESS
+ }
+ 
+@@ -41,7 +53,11 @@ fn main() -> ExitCode {
+         .as_slice()
+     {
+         ["--version"] => {
+-            println!("baaro-media {}", env!("CARGO_PKG_VERSION"));
++            println!(
++                "baaro-media {} (libavformat {})",
++                env!("CARGO_PKG_VERSION"),
++                probe::libavformat_version()
++            );
+             ExitCode::SUCCESS
+         }
+         ["sniff", path] => cmd_sniff(path),
+diff --git a/worker/rust/baaro-media/src/probe.rs b/worker/rust/baaro-media/src/probe.rs
+new file mode 100644
+index 0000000..6289039
+--- /dev/null
++++ b/worker/rust/baaro-media/src/probe.rs
+@@ -0,0 +1,86 @@
++use std::ffi::CString;
++use std::os::raw::{c_char, c_int};
++
++#[repr(C)]
++#[derive(Default)]
++struct RawProbeInfo {
++    has_video: c_int,
++    has_audio: c_int,
++    width: c_int,
++    height: c_int,
++    duration_ms: i64,
++}
++
++unsafe extern "C" {
++    fn baaro_probe_media(path: *const c_char, out: *mut RawProbeInfo) -> c_int;
++    fn baaro_libavformat_version() -> u32;
++}
++
++#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
++pub struct ProbeInfo {
++    pub has_video: bool,
++    pub has_audio: bool,
++    pub width: i32,
++    pub height: i32,
++    pub duration_ms: i64,
++}
++
++/// Valide un fichier média local allowlisté par libavformat via le shim C.
++pub fn validate(path: &str) -> Result<ProbeInfo, i32> {
++    let c_path = CString::new(path).map_err(|_| 1)?;
++    let mut raw = RawProbeInfo::default();
++
++    // SAFETY: `c_path` est NUL-terminée et reste vivante pendant l’appel ;
++    // `raw` pointe vers une structure writable au layout #[repr(C)] identique.
++    let status = unsafe { baaro_probe_media(c_path.as_ptr(), &mut raw) };
++    if status != 0 {
++        return Err(status);
++    }
++
++    Ok(ProbeInfo {
++        has_video: raw.has_video != 0,
++        has_audio: raw.has_audio != 0,
++        width: raw.width.max(0),
++        height: raw.height.max(0),
++        duration_ms: raw.duration_ms.max(0),
++    })
++}
++
++pub fn libavformat_version() -> String {
++    // SAFETY: la fonction C ne prend aucun pointeur et retourne un entier ABI-safe.
++    let version = unsafe { baaro_libavformat_version() };
++    format!(
++        "{}.{}.{}",
++        version >> 16,
++        (version >> 8) & 0xff,
++        version & 0xff
++    )
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn ffi_types_are_stable_and_default_to_invalid() {
++        let raw = RawProbeInfo::default();
++        assert_eq!(raw.has_video, 0);
++        assert_eq!(raw.has_audio, 0);
++        assert_eq!(raw.duration_ms, 0);
++        assert_eq!(
++            ProbeInfo::default(),
++            ProbeInfo {
++                has_video: false,
++                has_audio: false,
++                width: 0,
++                height: 0,
++                duration_ms: 0,
++            }
++        );
++    }
++
++    #[test]
++    fn linked_libavformat_has_a_valid_version() {
++        assert!(libavformat_version().split('.').count() == 3);
++    }
++}
+diff --git a/worker/rust/baaro-media/src/sniff.rs b/worker/rust/baaro-media/src/sniff.rs
+index c13e536..6990624 100644
+--- a/worker/rust/baaro-media/src/sniff.rs
++++ b/worker/rust/baaro-media/src/sniff.rs
+@@ -4,6 +4,7 @@
+ //! de la clé R2 ne prouve rien. On regarde la signature avant de lancer FFmpeg.
+ 
+ use crate::json;
++use crate::probe::ProbeInfo;
+ 
+ /// Nombre d'octets lus au début du fichier.
+ pub const HEAD_LEN: usize = 4096;
+@@ -126,16 +127,34 @@ pub fn sniff(head: &[u8]) -> Sniffed {
+     UNKNOWN
+ }
+ 
+-/// Sortie JSON de la commande `sniff`.
+-pub fn to_json(s: &Sniffed, size: u64) -> String {
++/// Sortie JSON de `sniff`, enrichie par la validation structurelle libavformat.
++pub fn to_json(
++    s: &Sniffed,
++    size: u64,
++    probe: Option<ProbeInfo>,
++    probe_error: Option<i32>,
++) -> String {
+     let mut out = String::from("{\"kind\":");
+     json::push_str(&mut out, s.kind);
+     out.push_str(",\"mime\":");
+     json::push_str(&mut out, s.mime);
+     out.push_str(&format!(
+-        ",\"media\":{},\"danger\":{},\"size\":{}}}",
++        ",\"media\":{},\"danger\":{},\"size\":{}",
+         s.media, s.danger, size
+     ));
++    if let Some(info) = probe {
++        out.push_str(&format!(
++            ",\"containerValid\":true,\"hasVideo\":{},\"hasAudio\":{},\
++             \"width\":{},\"height\":{},\"durationMs\":{}",
++            info.has_video, info.has_audio, info.width, info.height, info.duration_ms
++        ));
++    } else {
++        out.push_str(",\"containerValid\":false");
++        if let Some(code) = probe_error {
++            out.push_str(&format!(",\"probeErrorCode\":{code}"));
++        }
++    }
++    out.push('}');
+     out
+ }
+ 
+@@ -206,8 +225,24 @@ mod tests {
+     fn json_shape() {
+         let s = sniff(&[0xFF, 0xD8, 0xFF]);
+         assert_eq!(
+-            to_json(&s, 3),
+-            "{\"kind\":\"jpg\",\"mime\":\"image/jpeg\",\"media\":true,\"danger\":false,\"size\":3}"
++            to_json(&s, 3, None, Some(2)),
++            "{\"kind\":\"jpg\",\"mime\":\"image/jpeg\",\"media\":true,\"danger\":false,\"size\":3,\"containerValid\":false,\"probeErrorCode\":2}"
+         );
+     }
++
++    #[test]
++    fn json_includes_c_probe_results() {
++        let s = sniff(b"RIFF\x24\0\0\0WAVEfmt ");
++        let probe = ProbeInfo {
++            has_video: false,
++            has_audio: true,
++            width: 0,
++            height: 0,
++            duration_ms: 250,
++        };
++        let output = to_json(&s, 100, Some(probe), None);
++        assert!(output.contains("\"containerValid\":true"));
++        assert!(output.contains("\"hasAudio\":true"));
++        assert!(output.contains("\"durationMs\":250"));
++    }
+ }
+diff --git a/worker/server.mjs b/worker/server.mjs
+index e577cc9..6fc4905 100644
+--- a/worker/server.mjs
++++ b/worker/server.mjs
+@@ -1,5 +1,6 @@
+ import http from "node:http";
+ import { config } from "./lib/config.mjs";
++import { assertNativeReady } from "./lib/native.mjs";
+ import { processJob } from "./processor.mjs";
+ import { prepareLargeVideo, signLargeVideoParts, completeLargeVideo, abortLargeVideo } from "./upload.mjs";
+ 
+@@ -66,7 +67,7 @@ const server = http.createServer(async (req, res) => {
+   }
+ 
+   if (req.method === "GET" && req.url === "/health") {
+-    return send(req, res, 200, { ok: true, service: "baaro-media-worker", time: new Date().toISOString() });
++    return send(req, res, 200, { ok: true, service: "baaro-media-worker", native: nativeVersion, time: new Date().toISOString() });
+   }
+ 
+   if (req.method === "POST" && req.url.startsWith("/upload/")) {
+@@ -110,4 +111,7 @@ const server = http.createServer(async (req, res) => {
+   }
+ });
+ 
+-server.listen(config.port, "0.0.0.0", () => console.log(`BAARO worker listening on :${config.port}`));
++const nativeVersion = await assertNativeReady();
++server.listen(config.port, "0.0.0.0", () => {
++  console.log(`BAARO worker listening on :${config.port} (${nativeVersion})`);
++});
+diff --git a/worker/test/benchmark-rust.mjs b/worker/test/benchmark-rust.mjs
+index f9af104..f7b8e04 100644
+--- a/worker/test/benchmark-rust.mjs
++++ b/worker/test/benchmark-rust.mjs
+@@ -1,6 +1,6 @@
+-// Benchmark local du détecteur de signatures Rust réellement utilisé par le worker.
++// Benchmark local du contrôle Rust + C/libavformat réellement utilisé par le worker.
+ // Usage : BAARO_MEDIA_BIN=rust/baaro-media/target/release/baaro-media node test/benchmark-rust.mjs
+-import { mkdtemp, rm, writeFile } from "node:fs/promises";
++import { mkdtemp, rm } from "node:fs/promises";
+ import { tmpdir } from "node:os";
+ import { join } from "node:path";
+ import { performance } from "node:perf_hooks";
+@@ -12,7 +12,8 @@ import { sniffFile } from "../lib/native.mjs";
+ const execFile = promisify(execFileCallback);
+ const iterations = Number(process.env.BENCH_SNIFF_ITERS || 200);
+ const warmupIterations = 10;
+-const rustBin = process.env.BAARO_MEDIA_BIN || "baaro-media";
++const rustBin = process.env.BAARO_MEDIA_BIN || "./rust/baaro-media/target/release/baaro-media";
++const ffmpegBin = process.env.FFMPEG_BIN || "ffmpeg";
+ const { stdout: versionOutput } = await execFile(rustBin, ["--version"], { timeout: 5000 });
+ const version = versionOutput.trim();
+ 
+@@ -39,23 +40,30 @@ async function measure(fn) {
+   };
+ }
+ 
+-const fixtureDir = await mkdtemp(join(tmpdir(), "baaro-rust-bench-"));
++const fixtureDir = await mkdtemp(join(tmpdir(), "baaro-native-bench-"));
+ try {
+-  const sampleFile = join(fixtureDir, "sample.mp4");
+-  await writeFile(sampleFile, Buffer.from("\0\0\0\x20ftypisom\0\0\0\0"));
++  const sampleFile = join(fixtureDir, "sample.wav");
++  await execFile(ffmpegBin, [
++    "-nostdin", "-hide_banner", "-loglevel", "error",
++    "-f", "lavfi", "-i", "sine=frequency=997:duration=0.25",
++    "-c:a", "pcm_s16le", "-y", sampleFile,
++  ], { timeout: 10_000 });
++
+   const result = await measure(async () => {
+-    const sniffed = await sniffFile(sampleFile);
+-    if (!sniffed || sniffed.kind !== "mp4") throw new Error("sniff Rust incorrect");
++    const probed = await sniffFile(sampleFile);
++    if (probed.kind !== "wav" || !probed.containerValid || !probed.hasAudio) {
++      throw new Error("Validation Rust/C incorrect");
++    }
+   });
+ 
+   console.log(JSON.stringify({
+-    benchmark: "BAARO media worker Rust signature detector",
++    benchmark: "BAARO Rust signature + C/libavformat validation",
+     timestamp: new Date().toISOString(),
+     platform: `${os.platform()} ${os.release()} (${os.arch()})`,
+     node: process.version,
+-    rust: version,
++    rustAndC: version,
+     rustBinary: rustBin,
+-    note: "Microbenchmark local; à compléter par une mesure avec l’image et la charge Cloud Run réelles.",
++    note: "Mesure du coût complet du processus CLI et du probe sur un média réel; à compléter par des mesures Cloud Run.",
+     result,
+   }, null, 2));
+ } finally {
+diff --git a/worker/test/native-fail-closed.mjs b/worker/test/native-fail-closed.mjs
+new file mode 100644
+index 0000000..06eda09
+--- /dev/null
++++ b/worker/test/native-fail-closed.mjs
+@@ -0,0 +1,18 @@
++import assert from "node:assert/strict";
++import { mkdtemp, rm, writeFile } from "node:fs/promises";
++import { tmpdir } from "node:os";
++import { join } from "node:path";
++
++const dir = await mkdtemp(join(tmpdir(), "baaro-native-missing-"));
++try {
++  process.env.BAARO_MEDIA_BIN = join(dir, "binaire-absent");
++  const { assertNativeReady, sniffFile } = await import("../lib/native.mjs");
++  const input = join(dir, "source.wav");
++  await writeFile(input, "RIFF\0\0\0\0WAVE");
++  await assert.rejects(assertNativeReady(), /Démarrage refusé/);
++  await assert.rejects(sniffFile(input), /Contrôle Rust\/C/);
++} finally {
++  await rm(dir, { recursive: true, force: true });
++}
++
++console.log("OK : l’absence de Rust/C échoue de manière fermée");
+diff --git a/worker/test/native-image-smoke.sh b/worker/test/native-image-smoke.sh
+new file mode 100644
+index 0000000..b81bb57
+--- /dev/null
++++ b/worker/test/native-image-smoke.sh
+@@ -0,0 +1,14 @@
++set -eu
++
++version="$(/usr/local/bin/baaro-media --version)"
++printf '%s\n' "$version" | grep -q 'libavformat'
++
++ffmpeg -nostdin -hide_banner -loglevel error \
++  -f lavfi -i sine=frequency=997:duration=0.25 \
++  -c:a pcm_s16le -y /tmp/baaro-native-smoke.wav
++
++result="$(/usr/local/bin/baaro-media sniff /tmp/baaro-native-smoke.wav)"
++case "$result" in
++  *'"containerValid":true'*) ;;
++  *) printf 'Validation C/Rust invalide: %s\n' "$result" >&2; exit 1 ;;
++esac
+diff --git a/worker/test/rust-sniff.mjs b/worker/test/rust-sniff.mjs
+index fe4f6b5..d09bcad 100644
+--- a/worker/test/rust-sniff.mjs
++++ b/worker/test/rust-sniff.mjs
+@@ -1,21 +1,24 @@
+-// Vérifie le résultat du détecteur Rust sur des signatures de fichiers connues.
++// Vérifie les signatures Rust et la validation structurelle C/libavformat.
+ // Usage : BAARO_MEDIA_BIN=rust/baaro-media/target/release/baaro-media node test/rust-sniff.mjs
+ import assert from "node:assert/strict";
++import { execFile as execFileCallback } from "node:child_process";
+ import { mkdtemp, writeFile, rm } from "node:fs/promises";
++import { promisify } from "node:util";
+ import { tmpdir } from "node:os";
+ import { join } from "node:path";
+ import { sniffFile } from "../lib/native.mjs";
+ 
++const execFile = promisify(execFileCallback);
+ let checks = 0;
+ const dir = await mkdtemp(join(tmpdir(), "baaro-sniff-"));
+ try {
+   const cases = [
+-    ["a.mp4", Buffer.from("\0\0\0\x20ftypisom\0\0\0\0"), { kind: "mp4", media: true, danger: false }],
+-    ["b.jpg", Buffer.from([0xff, 0xd8, 0xff, 0xe0]), { kind: "jpg", media: true, danger: false }],
+-    ["c.mp4", Buffer.from("\x7fELF\x02\x01\x01"), { kind: "elf", media: false, danger: true }],
+-    ["d.mp4", Buffer.from("<html><script>alert(1)</script>"), { kind: "html", media: false, danger: true }],
+-    ["e.mp4", Buffer.from("PK\x03\x04rest"), { kind: "zip", media: false, danger: true }],
+-    ["f.bin", Buffer.from("rien de connu"), { kind: "unknown", media: false, danger: false }],
++    ["a.mp4", Buffer.from("\0\0\0\x20ftypisom\0\0\0\0"), { kind: "mp4", media: true, danger: false, containerValid: false }],
++    ["b.jpg", Buffer.from([0xff, 0xd8, 0xff, 0xe0]), { kind: "jpg", media: true, danger: false, containerValid: false }],
++    ["c.mp4", Buffer.from("\x7fELF\x02\x01\x01"), { kind: "elf", media: false, danger: true, containerValid: false }],
++    ["d.mp4", Buffer.from("<html><script>alert(1)</script>"), { kind: "html", media: false, danger: true, containerValid: false }],
++    ["e.mp4", Buffer.from("PK\x03\x04rest"), { kind: "zip", media: false, danger: true, containerValid: false }],
++    ["f.bin", Buffer.from("rien de connu"), { kind: "unknown", media: false, danger: false, containerValid: false }],
+   ];
+ 
+   for (const [name, bytes, want] of cases) {
+@@ -23,17 +26,47 @@ try {
+     await writeFile(path, bytes);
+     const got = await sniffFile(path);
+     assert.ok(got, `sniff ${name} : pas de résultat`);
+-    assert.equal(got.kind, want.kind, `sniff ${name}`);
+-    assert.equal(got.media, want.media, `sniff ${name} media`);
+-    assert.equal(got.danger, want.danger, `sniff ${name} danger`);
++    for (const key of ["kind", "media", "danger", "containerValid"]) {
++      assert.equal(got[key], want[key], `sniff ${name} ${key}`);
++    }
+     assert.equal(got.size, bytes.length, `sniff ${name} size`);
+     checks++;
+   }
+ 
+-  assert.equal(await sniffFile(join(dir, "inexistant")), null);
++  const validWav = join(dir, "valid.wav");
++  await execFile(process.env.FFMPEG_BIN || "ffmpeg", [
++    "-nostdin", "-hide_banner", "-loglevel", "error",
++    "-f", "lavfi", "-i", "sine=frequency=997:duration=0.25",
++    "-c:a", "pcm_s16le", "-y", validWav,
++  ], { timeout: 10_000 });
++  const valid = await sniffFile(validWav);
++  assert.equal(valid.kind, "wav");
++  assert.equal(valid.containerValid, true);
++  assert.equal(valid.hasAudio, true);
++  assert.equal(valid.hasVideo, false);
++  assert.ok(valid.durationMs >= 200);
++  checks += 5;
++
++  const validMp4 = join(dir, "valid.mp4");
++  await execFile(process.env.FFMPEG_BIN || "ffmpeg", [
++    "-nostdin", "-hide_banner", "-loglevel", "error",
++    "-f", "lavfi", "-i", "testsrc=size=64x48:rate=10", "-t", "0.5",
++    "-c:v", "mpeg4", "-y", validMp4,
++  ], { timeout: 10_000 });
++  const video = await sniffFile(validMp4);
++  assert.equal(video.kind, "mp4");
++  assert.equal(video.containerValid, true);
++  assert.equal(video.hasVideo, true);
++  assert.equal(video.hasAudio, false);
++  assert.equal(video.width, 64);
++  assert.equal(video.height, 48);
++  assert.ok(video.durationMs >= 400);
++  checks += 7;
++
++  await assert.rejects(sniffFile(join(dir, "inexistant")), /Contrôle Rust\/C/);
+   checks++;
+ } finally {
+   await rm(dir, { recursive: true, force: true });
+ }
+ 
+-console.log(`OK : ${checks} vérifications de signatures Rust`);
++console.log(`OK : ${checks} vérifications Rust + C/libavformat`);
