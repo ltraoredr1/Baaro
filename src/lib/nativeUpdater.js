@@ -1,5 +1,5 @@
 import { Capacitor } from "@capacitor/core";
-import { Filesystem, Directory } from "@capacitor/filesystem";
+// Filesystem importé en dynamique plus bas (ne pas mettre en haut, sinon Vercel plante)
 import JSZip from "jszip";
 
 const UPDATE_URL = "https://baaro-xi.vercel.app/updates/manifest.json";
