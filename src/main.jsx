@@ -50,16 +50,12 @@ captureRefFromUrl();
 initPerf();
 
 // ===================================================================
-// FIX NATIF 2 : StatusBar + Updater Maison (sans Capgo)
-// - Avant : on utilisait @capgo/capacitor-updater
 // - Maintenant : on utilise src/lib/nativeUpdater.js
 //   qui vérifie sur TON serveur : https://baaro-xi.vercel.app/updates/manifest.json
-//   Sans Capgo, sans Play Store.
 // ===================================================================
 const setupNative = async () => {
   if (!Capacitor.isNativePlatform()) return;
 
-  // Updater maison EN PREMIER (remplace Capgo notifyAppReady)
   try {
     const result = await checkUpdateNative();
     if (result?.updated) {
