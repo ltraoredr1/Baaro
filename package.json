@@ -7,9 +7,9 @@
     "node": "24.x"
   },
   "scripts": {
-    "predev": "node scripts/build-stories-wasm.mjs && node scripts/copy-ort-wasm.mjs && node scripts/copy-mediapipe-wasm.mjs",
+    "predev": "node scripts/build-stories-wasm.mjs && node scripts/build-offline-wasm.mjs && node scripts/copy-ort-wasm.mjs && node scripts/copy-mediapipe-wasm.mjs",
     "dev": "vite",
-    "prebuild": "(rustup target add wasm32-unknown-unknown 2>/dev/null || true) && node scripts/build-stories-wasm.mjs && node scripts/copy-ort-wasm.mjs && node scripts/copy-mediapipe-wasm.mjs",
+    "prebuild": "(rustup target add wasm32-unknown-unknown 2>/dev/null || true) && node scripts/build-stories-wasm.mjs && node scripts/build-offline-wasm.mjs && node scripts/copy-ort-wasm.mjs && node scripts/copy-mediapipe-wasm.mjs",
     "build": "vite build",
     "preview": "vite preview",
     "check:production": "node scripts/check-production.mjs",
@@ -38,8 +38,10 @@
     "capgo:upload:beta": "npm run build && npx @capgo/cli@latest bundle upload --channel beta",
     "capgo:upload:delta": "npm run build && npx @capgo/cli@latest bundle upload --channel production --delta",
     "capgo:list": "npx @capgo/cli@latest bundle list",
-    "ci": "npm run check:lock && npm run check:production && npm run audit:security && npm run check:secrets && npm run check:upstash && npm run check:e2e && npm run check:e2e:smoke && npm run check:payout && npm run check:performance && npm run check:android && npm run build",
+    "ci": "npm run check:lock && npm run check:production && npm run audit:security && npm run check:secrets && npm run check:upstash && npm run check:e2e && npm run check:e2e:smoke && npm run check:payout && npm run check:performance && npm run check:android && npm run test:offline && npm run build",
     "test:chat-translate": "node scripts/test-chat-autotranslate.mjs",
+    "pretest:offline": "node scripts/build-offline-wasm.mjs --strict",
+    "test:offline": "node scripts/test-offline-wasm.mjs",
     "pretest:stories": "node scripts/build-stories-wasm.mjs --strict",
     "test:stories": "node --test tests/stories/*.test.mjs && node scripts/test-story-policy-rust.mjs && node scripts/test-stories-wasm.mjs"
   },

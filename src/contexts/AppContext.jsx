@@ -11,6 +11,7 @@ import { API_BASE } from "../config.js";
 import { getDeviceId } from "../device.js";
 import { wipeSecureStorage } from "../lib/messageOutbox.js";
 import { clearSmsNumbers } from "../lib/smsFallback.js";
+import { getSetting } from "../lib/appSettings.js";
 
 export const AppContext = createContext(null);
 
@@ -143,6 +144,10 @@ function toUserProfile(data) {
 // gardés (ni nom civil, ni date de naissance).
 // ---------------------------------------------------------------
 function readProfileCache(user_id) {
+  if (getSetting("local_cache") === false) {
+    safeRemove(PROFILE_CACHE_KEY);
+    return null;
+  }
   try {
     const raw = localStorage.getItem(PROFILE_CACHE_KEY);
     if (!raw) return null;
@@ -155,6 +160,10 @@ function readProfileCache(user_id) {
 }
 
 function writeProfileCache(user_id, profileData) {
+  if (getSetting("local_cache") === false) {
+    safeRemove(PROFILE_CACHE_KEY);
+    return;
+  }
   if (!user_id || !profileData) return;
   safeSet(
     PROFILE_CACHE_KEY,

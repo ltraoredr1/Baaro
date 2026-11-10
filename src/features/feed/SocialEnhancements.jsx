@@ -5,7 +5,7 @@ import { supabase } from "../../supabaseClient.js";
 import { useToast } from "../../components/ToastContext.jsx";
 import TranslatedText from "../../components/TranslatedText.jsx";
 import { checkRateLimit, rateLimitMessage } from "../../lib/rateLimit.js";
-import { runOrEnqueue } from "../../lib/offlineActions.js";
+import { isTransientOfflineError, runOrEnqueue } from "../../lib/offlineActions.js";
 import { recordFeedEvent } from "../../lib/feedEvents.js";
 
 function isValidAuthUserId(value) {
@@ -75,7 +75,7 @@ async function applyFollow(followerId, targetId, wantFollow) {
     return { changed: next !== current, following: next };
   }
 
-  if (error?.message === "SOCIAL_RATE_LIMIT") throw error;
+  if (error?.message === "SOCIAL_RATE_LIMIT" || isTransientOfflineError(error)) throw error;
 
   // Repli direct si la fonction toggle_follow est indisponible.
   if (wantFollow) {
@@ -856,6 +856,18 @@ export const SocialPostEnhancements = memo(
         }
       } catch (error) {
         console.error("[BAARO] Erreur abonnement :", error);
+
+        if (isTransientOfflineError(error)) {
+          try {
+            const queued = await runOrEnqueue(wantFollow ? "follow_user" : "unfollow_user", { followed_id: target });
+            if (queued.ok) {
+              showToast(queued.queued ? "Abonnement conservé — synchronisation au retour du réseau." : "Abonnement mis à jour.", queued.queued ? "info" : "success");
+              return;
+            }
+          } catch (queueError) {
+            error = queueError;
+          }
+        }
 
         // Retour à l'état d'avant le clic.
         onFollowChange?.(target, isFollowing === true);

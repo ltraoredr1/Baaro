@@ -11,8 +11,6 @@ export function ConnectionStatus() {
       setIsOnline(true);
       setShowBanner(true);
       setTimeout(() => setShowBanner(false), 3000);
-      // Recharger la page pour synchroniser les données
-      window.location.reload();
     };
 
     const handleOffline = () => {
@@ -57,7 +55,7 @@ export function ConnectionStatus() {
         >
           <WifiOff size={16} />
           <span className="text-xs font-bold">
-            Vous êtes hors ligne. Le contenu affiché est en cache.
+            Hors ligne : les écrans déjà chargés restent visibles ; les nouvelles données nécessitent le réseau.
           </span>
         </div>
       )}

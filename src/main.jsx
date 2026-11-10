@@ -118,11 +118,10 @@ if ("serviceWorker" in navigator) {
     navigator.serviceWorker.getRegistrations().then((regs) => {
       regs.forEach((reg) => reg.unregister());
     });
-  } else {
+  } else if (!import.meta.env.DEV) {
     window.addEventListener("load", () => {
-      if (!navigator.serviceWorker.controller) {
-        navigator.serviceWorker.register("/sw.js").catch(() => {});
-      }
+      navigator.serviceWorker.register("/sw.js", { scope: "/", updateViaCache: "none" })
+        .catch((error) => console.warn("[BAARO] Service worker indisponible :", error));
     });
   }
 }

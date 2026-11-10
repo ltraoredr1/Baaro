@@ -10,21 +10,27 @@ import {
 } from "lucide-react";
 import { COLORS } from "../../theme.js";
 import { useToast } from "../../components/ToastContext.jsx";
+import { useApp } from "../../contexts/AppContext.jsx";
 import { useNearbyChat } from "../../hooks/useNearbyChat.js";
 import { useNotificationSound } from "../../hooks/useNotificationSound.js";
 import { getCachedUsers } from "../../data/users.js";
 import {
   flushOfflineActions,
   getOfflineActionQueueSize,
+  getOfflineActionDeadLetterCount,
+  clearOfflineActionDeadLetters,
 } from "../../lib/offlineActions.js";
-import { flushOfflineEvents } from "../../lib/feedEvents.js";
+import { clearOfflineEventDeadLetters, flushOfflineEvents, getOfflineEventQueueSize, getOfflineEventDeadLetterCount } from "../../lib/feedEvents.js";
 
 export function OfflineTab() {
   const { showToast } = useToast();
+  const { user } = useApp();
   const { playNotification } = useNotificationSound();
   const [displayName, setDisplayName] = useState("Moi");
   const [p2pInput, setP2pInput] = useState("");
   const [queueSize, setQueueSize] = useState(0);
+  const [eventQueueSize, setEventQueueSize] = useState(0);
+  const [deadLetterCount, setDeadLetterCount] = useState(0);
   const [flushing, setFlushing] = useState(false);
 
   const {
@@ -51,7 +57,12 @@ export function OfflineTab() {
   }, [error, showToast]);
 
   useEffect(() => {
-    const refresh = () => setQueueSize(getOfflineActionQueueSize());
+    const refresh = () => {
+      const userId = user?.id;
+      setQueueSize(getOfflineActionQueueSize(userId));
+      setEventQueueSize(getOfflineEventQueueSize(userId));
+      setDeadLetterCount(getOfflineActionDeadLetterCount(userId) + getOfflineEventDeadLetterCount(userId));
+    };
     refresh();
     window.addEventListener("online", refresh);
     const id = setInterval(refresh, 5000);
@@ -59,24 +70,51 @@ export function OfflineTab() {
       window.removeEventListener("online", refresh);
       clearInterval(id);
     };
-  }, []);
+  }, [user?.id]);
 
   const handleFlush = async () => {
     setFlushing(true);
     try {
-      await flushOfflineEvents();
+      const events = await flushOfflineEvents();
       const r = await flushOfflineActions();
-      setQueueSize(getOfflineActionQueueSize());
+      setQueueSize(getOfflineActionQueueSize(user?.id));
+      setEventQueueSize(getOfflineEventQueueSize(user?.id));
+      const dead = getOfflineActionDeadLetterCount(user?.id) + getOfflineEventDeadLetterCount(user?.id);
+      setDeadLetterCount(dead);
+      if (events?.offline || r?.offline) {
+        showToast("Hors ligne : les éléments conservés seront synchronisés au retour du réseau.", "info");
+        return;
+      }
+      if (events?.disabled || r?.disabled) {
+        showToast("La synchronisation hors ligne est désactivée dans Réglages.", "info");
+        return;
+      }
       showToast(
-        r.flushed
-          ? `${r.flushed} action(s) synchronisée(s).`
-          : "File à jour.",
-        "success"
+        r.flushed || events?.flushed
+          ? `${r.flushed || 0} action(s) et ${events?.flushed || 0} événement(s) synchronisé(s).`
+          : dead
+            ? `${dead} élément(s) nécessitent une intervention.`
+            : "Files à jour.",
+        dead ? "info" : "success"
       );
     } catch {
       showToast("Synchronisation partielle.", "info");
     } finally {
       setFlushing(false);
+    }
+  };
+
+  const handleClearDeadLetters = async () => {
+    if (!user?.id || deadLetterCount === 0) return;
+    if (!window.confirm(`Supprimer ${deadLetterCount} élément(s) définitivement échoué(s) ? Les actions encore en attente seront conservées.`)) return;
+    try {
+      await Promise.all([clearOfflineActionDeadLetters(user.id), clearOfflineEventDeadLetters(user.id)]);
+      setQueueSize(getOfflineActionQueueSize(user.id));
+      setEventQueueSize(getOfflineEventQueueSize(user.id));
+      setDeadLetterCount(getOfflineActionDeadLetterCount(user.id) + getOfflineEventDeadLetterCount(user.id));
+      showToast("Échecs définitifs supprimés.", "success");
+    } catch {
+      showToast("Impossible de modifier les files locales.", "error");
     }
   };
 
@@ -130,8 +168,8 @@ export function OfflineTab() {
             retour du réseau si « Sync hors-ligne » est activé dans Réglages.
           </p>
           <p className="text-xs" style={{ color: COLORS.muted }}>
-            Cache profils locaux : <strong>{cacheCount}</strong> entrée(s) · File
-            actions : <strong>{queueSize}</strong>
+            Cache profils locaux : <strong>{cacheCount}</strong> entrée(s) · File actions : <strong>{queueSize}</strong> · événements : <strong>{eventQueueSize}</strong>
+            {deadLetterCount > 0 && <> · à vérifier : <strong>{deadLetterCount}</strong></>}
           </p>
           <button
             type="button"
@@ -143,6 +181,11 @@ export function OfflineTab() {
             <RefreshCw size={14} className={flushing ? "animate-spin" : ""} />
             Synchroniser maintenant
           </button>
+          {deadLetterCount > 0 && (
+            <button type="button" onClick={handleClearDeadLetters} disabled={flushing} className="text-[11px] underline disabled:opacity-50" style={{ color: COLORS.muted }}>
+              Supprimer les {deadLetterCount} échec(s) définitif(s)
+            </button>
+          )}
         </div>
 
         {import.meta.env.DEV && (
@@ -285,7 +328,8 @@ export function OfflineTab() {
             Sync différée
           </span>
           {" · "}
-          {queueSize} action(s) en file · {cacheCount} profil(s) cache
+          {queueSize} action(s) + {eventQueueSize} événement(s) en file · {cacheCount} profil(s) cache
+          {deadLetterCount > 0 && <> · {deadLetterCount} échec(s) à vérifier</>}
         </div>
         <button
           type="button"
@@ -297,6 +341,11 @@ export function OfflineTab() {
           <RefreshCw size={14} className={flushing ? "animate-spin" : ""} />
           Synchroniser
         </button>
+        {deadLetterCount > 0 && (
+          <button type="button" onClick={handleClearDeadLetters} disabled={flushing} className="text-[11px] underline disabled:opacity-50" style={{ color: COLORS.muted }}>
+            Supprimer les échecs définitifs
+          </button>
+        )}
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

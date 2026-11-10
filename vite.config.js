@@ -30,6 +30,8 @@ export default defineConfig(({ mode }) => ({
 
     VitePWA({
       registerType: 'autoUpdate',
+      // L’enregistrement est géré dans main.jsx afin de l’exclure explicitement des APK Capacitor.
+      injectRegister: null,
 
       includeAssets: [
         'favicon.ico',
@@ -72,13 +74,16 @@ export default defineConfig(({ mode }) => ({
       workbox: {
         // Cible uniquement les fichiers présents par défaut pour éviter les alertes de glob
         globPatterns: [
-          '**/*.{js,css,html,ico,png,svg}',
+          '**/*.{js,css,html,ico,png,svg,wasm}',
         ],
 
         globIgnores: [
           '**/node_modules/**/*',
           'sw.js',
           'workbox-*.js',
+          '**/ort/**',
+          '**/mediapipe/**',
+          '**/assets/ort-*.wasm',
         ],
 
         navigateFallback: 'index.html',

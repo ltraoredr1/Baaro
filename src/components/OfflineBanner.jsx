@@ -39,6 +39,10 @@ export function useOnlineStatus() {
   );
 
   useEffect(() => {
+    if (typeof navigator !== "undefined" && navigator.onLine) {
+      safeFlush(flushOfflineEvents, "events");
+      safeFlush(flushOfflineActions, "actions");
+    }
     const on = () => {
       setOnline(true);
       safeFlush(flushOfflineEvents, "events");

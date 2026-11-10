@@ -5,9 +5,14 @@
  * `id` = auth.users.id (UUID) uniquement.
  * Jamais email / handle / device id comme clé.
  */
+import { getSetting } from "../lib/appSettings.js";
 
 const CACHE_KEY = "baaro:users-cache";
 const MAX_USERS = 100;
+
+function cacheEnabled() {
+  try { return getSetting("local_cache") !== false; } catch { return true; }
+}
 
 /** auth.users.id (UUID) uniquement */
 function isValidAuthUserId(id) {
@@ -36,6 +41,10 @@ function normalizeUser(user) {
 
 export function getCachedUsers() {
   if (typeof window === "undefined") return [];
+  if (!cacheEnabled()) {
+    try { window.localStorage.removeItem(CACHE_KEY); } catch {}
+    return [];
+  }
   try {
     const raw = window.localStorage.getItem(CACHE_KEY);
     if (!raw) return [];
@@ -49,6 +58,10 @@ export function getCachedUsers() {
 
 export function setCachedUsers(users = []) {
   if (typeof window === "undefined" || !Array.isArray(users)) return;
+  if (!cacheEnabled()) {
+    try { window.localStorage.removeItem(CACHE_KEY); } catch {}
+    return;
+  }
   try {
     const uniqueUsers = new Map();
     for (const user of users.map(normalizeUser).filter(Boolean)) {
@@ -63,6 +76,10 @@ export function setCachedUsers(users = []) {
 
 export function mergeCachedUsers(users = []) {
   if (typeof window === "undefined" || !Array.isArray(users)) return getCachedUsers();
+  if (!cacheEnabled()) {
+    try { window.localStorage.removeItem(CACHE_KEY); } catch {}
+    return [];
+  }
   try {
     const existing = getCachedUsers();
     const map = new Map(existing.map((u) => [u.id, u]));
