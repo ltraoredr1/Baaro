@@ -37,6 +37,3 @@ Les corrections ci-dessous sont appliquées dans la copie de travail. Les action
 - Les tests ne se connectent pas au projet Supabase réel et ne remplacent pas un essai sur appareil Android en mode avion. Les politiques RLS et les effets secondaires serveur doivent être confirmés avec l’environnement de recette.
 - `npm ci` a signalé 11 avis de vulnérabilité dans l’arbre de dépendances (2 faibles, 9 modérés). Aucun `npm audit fix` n’a été lancé ; ces mises à niveau sortent du périmètre de l’audit offline.
 
-## État Git
-
-Les modifications sont dans la copie de travail locale `/tmp/Baaro`. Aucun commit ni push GitHub n’a été effectué. Le patch joint est destiné à être appliqué à un checkout correspondant du dépôt.
