@@ -52,7 +52,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { Capacitor } from "@capacitor/core";
-import { CapacitorUpdater } from "@capgo/capacitor-updater";
+import { checkUpdateNative } from "../../lib/nativeUpdater.js";
 import { COLORS } from "../../theme.js";
 import { setAppLanguage, SUPPORTED_LANGUAGES } from "../../../i18n.js";
 import { supabase } from "../../supabaseClient.js";
@@ -696,7 +696,7 @@ export default function SettingsTab({
     }
   };
 
-  // Recherche une mise à jour Capgo, la télécharge puis propose de redémarrer.
+  // Recherche une mise à jour Updater Maison, la télécharge puis propose de redémarrer.
   const handleCheckUpdate = async () => {
     if (updateBusy) return;
     if (!Capacitor.isNativePlatform()) {
@@ -706,35 +706,15 @@ export default function SettingsTab({
     setUpdateBusy(true);
     setMessage("");
     try {
-      const latest = await CapacitorUpdater.getLatest();
-      const current = await CapacitorUpdater.current();
-
-      if (latest.major) {
-        setMessage(t("update_store"));
-        return;
-      }
-      if (
-        latest.error ||
-        !latest.url ||
-        !latest.version ||
-        latest.version === current.bundle.version
-      ) {
-        setMessage(t("update_none"));
-        return;
-      }
-
-      const bundle = await CapacitorUpdater.download({
-        url: latest.url,
-        version: latest.version,
-        sessionKey: latest.sessionKey,
-        checksum: (latest as { checksum?: string }).checksum,
-      });
-
-      if (window.confirm(t("update_apply_confirm"))) {
-        await CapacitorUpdater.set({ id: bundle.id }); // recharge l'application
-      } else {
-        await CapacitorUpdater.next({ id: bundle.id });
+      const result = await checkUpdateNative();
+      if (result === "updated") {
         setMessage(t("update_later"));
+      } else if (result === "up-to-date") {
+        setMessage(t("update_none"));
+      } else if (result === "not-native") {
+        setMessage(t("update_web"));
+      } else {
+        setMessage(t("update_none"));
       }
     } catch (err) {
       console.warn("[settings] update:", err);
