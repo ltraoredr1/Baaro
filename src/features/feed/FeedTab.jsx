@@ -29,6 +29,7 @@ import { insertStory } from "@/features/stories/api/storiesApi.js";
 import { callSocial } from "@/lib/notifyInteraction.js";
 import { FEED_REFRESH_EVENT } from "@/lib/feedTabRefresh.jsx";
 import { useCursorFeed } from "@/hooks/useCursorFeed.js";
+import { getCachedSavedPublications } from "@/lib/offlineContentCache.js";
 
 import { PollCard, SocialPostEnhancements, SocialSuggestions } from "./SocialEnhancements.jsx";
 import RichTextComposer from "@/components/RichTextComposer.jsx";
@@ -531,7 +532,6 @@ export function FeedTab({
   });
 
   const posts = useMemo(() => rawPosts.map(formatPost), [rawPosts]);
-  const loadPosts = useCallback((opts) => reload(opts), [reload]);
   const [sharedPostId, setSharedPostId] = useState(() =>
     typeof window !== "undefined"
       ? new URLSearchParams(window.location.search).get("post")
@@ -597,6 +597,33 @@ export function FeedTab({
   const autoLoadsRef = useRef(0);
 
   const activeUserId = currentUserId || propUserId || null;
+  const offlinePostObjectUrlsRef = useRef([]);
+  const releaseOfflinePostUrls = useCallback(() => {
+    offlinePostObjectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+    offlinePostObjectUrlsRef.current = [];
+  }, []);
+  const loadPosts = useCallback(async (opts) => {
+    const rows = await reload(opts);
+    if (rows !== null) {
+      releaseOfflinePostUrls();
+      return rows;
+    }
+    if (!activeUserId) return rows;
+    try {
+      const cached = await getCachedSavedPublications(activeUserId);
+      if (!cached.length) return rows;
+      releaseOfflinePostUrls();
+      offlinePostObjectUrlsRef.current = cached.flatMap((post) =>
+        (post.media_urls || []).map((media) => media.url).filter((url) => url?.startsWith("blob:"))
+      );
+      setPosts(cached);
+      return cached;
+    } catch (error) {
+      console.warn("[offline-content] Impossible de lire les publications enregistrées :", error);
+      return rows;
+    }
+  }, [activeUserId, reload, releaseOfflinePostUrls, setPosts]);
+  useEffect(() => () => releaseOfflinePostUrls(), [releaseOfflinePostUrls]);
 
   const storyComposer = useStoryComposer({
     userId: activeUserId,

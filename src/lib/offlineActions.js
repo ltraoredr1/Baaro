@@ -104,6 +104,9 @@ async function enqueue(userId, type, payload) {
   await withOfflineQueueLock(`offline-actions:${userId}`, async () => {
     const queue = loadQueue(userId);
     if (queue.length >= MAX_QUEUE) throw new Error("File offline pleine : synchronisez-la avant d’ajouter d’autres actions.");
+    const duplicate = queue.find((entry) => entry?.status !== "dead" && entry?.type === type &&
+      JSON.stringify(entry.payload) === JSON.stringify(item.payload));
+    if (duplicate) return;
     queue.push(item);
     saveQueue(userId, queue);
   });
@@ -195,7 +198,8 @@ async function performFlush() {
         remaining.push({ ...item, attempts, status: "dead", last_error: String(error?.message || "sync_failed").slice(0, 180) });
         dead += 1;
       } else {
-        const delay = await retryDelayMs(attempts - 1);
+        const baseDelay = await retryDelayMs(attempts - 1);
+        const delay = Math.round(baseDelay * (0.85 + Math.random() * 0.3));
         remaining.push({ ...item, attempts, next_attempt_at: Date.now() + delay, last_error: String(error?.message || "network_error").slice(0, 180) });
         nextDelay = Math.min(nextDelay, delay);
       }
@@ -223,6 +227,24 @@ export function getOfflineActionQueueSize(userId) {
 export function getOfflineActionDeadLetterCount(userId) {
   if (!userId) return 0;
   return loadQueue(userId).filter((item) => item?.status === "dead").length;
+}
+export function getOfflineActionDeadLetters(userId) {
+  if (!userId) return [];
+  return loadQueue(userId).filter((item) => item?.status === "dead");
+}
+export async function retryOfflineActionDeadLetters(userId) {
+  if (!userId) return 0;
+  return withOfflineQueueLock(`offline-actions:${userId}`, async () => {
+    const queue = loadQueue(userId);
+    let retried = 0;
+    const next = queue.map((item) => {
+      if (item?.status !== "dead") return item;
+      retried += 1;
+      return { ...item, status: "pending", attempts: 0, next_attempt_at: 0, last_error: null };
+    });
+    saveQueue(userId, next);
+    return retried;
+  });
 }
 export async function clearOfflineActionDeadLetters(userId) {
   if (!userId) return 0;

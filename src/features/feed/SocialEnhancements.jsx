@@ -7,6 +7,7 @@ import TranslatedText from "../../components/TranslatedText.jsx";
 import { checkRateLimit, rateLimitMessage } from "../../lib/rateLimit.js";
 import { isTransientOfflineError, runOrEnqueue } from "../../lib/offlineActions.js";
 import { recordFeedEvent } from "../../lib/feedEvents.js";
+import { cacheSavedPublication, hasCachedSavedPublication, removeCachedPublication } from "../../lib/offlineContentCache.js";
 
 function isValidAuthUserId(value) {
   if (typeof value !== "string" || !value.trim()) return false;
@@ -588,8 +589,14 @@ export const SocialPostEnhancements = memo(
             : null
         );
         setSaved(!!bookmarkResult.data);
+        if (bookmarkResult.data && isValidAuthUserId(user_id)) {
+          void cacheSavedPublication(user_id, post).catch(() => {});
+        }
         setShareCount(sharesResult.count || 0);
       } catch (error) {
+        if (isValidAuthUserId(user_id) && post?.id) {
+          void hasCachedSavedPublication(user_id, post.id).then(setSaved).catch(() => {});
+        }
         console.error(
           "[BAARO] Erreur chargement interactions :",
           error
@@ -703,6 +710,7 @@ export const SocialPostEnhancements = memo(
           if (error) throw error;
 
           setSaved(false);
+          void removeCachedPublication(user_id, post.id).catch(() => {});
         } else {
           const { error } = await supabase
             .from("post_bookmarks")
@@ -715,6 +723,20 @@ export const SocialPostEnhancements = memo(
 
           setSaved(true);
           onSaved?.(post.id);
+          showToast("Favori enregistré. Préparation de sa copie hors ligne…", "info");
+          void cacheSavedPublication(user_id, post)
+            .then((result) => {
+              if (!result.saved) {
+                showToast("Favori conservé, mais la publication dépasse la limite du cache. Augmente la limite dans Hors-ligne.", "info");
+              } else if (result.skippedPhotos) {
+                showToast(`Publication mise en cache ; ${result.cachedPhotos} photo(s) téléchargée(s), ${result.skippedPhotos} ignorée(s) (réseau, format ou limite).`, "info");
+              } else if (!result.cachedPhotos) {
+                showToast("Publication enregistrée hors ligne ; aucune photo associée.", "success");
+              } else {
+                showToast(`Publication et ${result.cachedPhotos} photo(s) enregistrées hors ligne.`, "success");
+              }
+            })
+            .catch((cacheError) => showToast(cacheError?.message || "Favori enregistré, mais le cache hors ligne a échoué.", "info"));
         }
       } catch (error) {
         console.error("[BAARO] Erreur favori :", error);

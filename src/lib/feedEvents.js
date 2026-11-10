@@ -109,7 +109,8 @@ async function performFlush() {
         remaining.push({ ...item, attempts, status: "dead", last_error: String(error?.message || "sync_failed").slice(0, 180) });
         dead += 1;
       } else {
-        const delay = Math.min(300_000, 1_000 * (2 ** (attempts - 1)));
+        const baseDelay = Math.min(300_000, 1_000 * (2 ** (attempts - 1)));
+        const delay = Math.round(baseDelay * (0.85 + Math.random() * 0.3));
         remaining.push({ ...item, attempts, next_attempt_at: Date.now() + delay, last_error: String(error?.message || "network_error").slice(0, 180) });
         nextDelay = Math.min(nextDelay, delay);
       }
@@ -165,6 +166,24 @@ export function getOfflineEventQueueSize(userId) {
 export function getOfflineEventDeadLetterCount(userId) {
   if (!userId) return 0;
   return loadQueue(userId).filter((item) => item?.status === "dead").length;
+}
+export function getOfflineEventDeadLetters(userId) {
+  if (!userId) return [];
+  return loadQueue(userId).filter((item) => item?.status === "dead");
+}
+export async function retryOfflineEventDeadLetters(userId) {
+  if (!userId) return 0;
+  return withOfflineQueueLock(`offline-feed-events:${userId}`, async () => {
+    const queue = loadQueue(userId);
+    let retried = 0;
+    const next = queue.map((item) => {
+      if (item?.status !== "dead") return item;
+      retried += 1;
+      return { ...item, status: "pending", attempts: 0, next_attempt_at: 0, last_error: null };
+    });
+    saveQueue(userId, next);
+    return retried;
+  });
 }
 export async function clearOfflineEventDeadLetters(userId) {
   if (!userId) return 0;

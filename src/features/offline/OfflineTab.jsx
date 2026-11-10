@@ -21,6 +21,7 @@ import {
   clearOfflineActionDeadLetters,
 } from "../../lib/offlineActions.js";
 import { clearOfflineEventDeadLetters, flushOfflineEvents, getOfflineEventQueueSize, getOfflineEventDeadLetterCount } from "../../lib/feedEvents.js";
+import { OfflineSyncDashboard } from "./OfflineSyncDashboard.jsx";
 
 export function OfflineTab() {
   const { showToast } = useToast();
@@ -128,6 +129,7 @@ export function OfflineTab() {
 
   const offlineFallback = (
     <div className="flex flex-col gap-4 max-w-4xl mx-auto w-full pb-20 p-4">
+      <OfflineSyncDashboard userId={user?.id} />
       <div
         className="rounded-3xl border p-6 space-y-3"
         style={{ borderColor: COLORS.border, background: COLORS.surface }}
@@ -154,39 +156,6 @@ export function OfflineTab() {
             </div>
           </div>
         )}
-
-        <div
-          className="rounded-2xl border p-4 space-y-2"
-          style={{ borderColor: COLORS.border }}
-        >
-          <div className="flex items-center gap-2 text-sm font-bold" style={{ color: COLORS.ivory }}>
-            <Inbox size={16} style={{ color: COLORS.teal }} />
-            Résilience hors ligne (web)
-          </div>
-          <p className="text-xs" style={{ color: COLORS.muted }}>
-            File d’actions (like, follow…) et événements feed : synchronisés au
-            retour du réseau si « Sync hors-ligne » est activé dans Réglages.
-          </p>
-          <p className="text-xs" style={{ color: COLORS.muted }}>
-            Cache profils locaux : <strong>{cacheCount}</strong> entrée(s) · File actions : <strong>{queueSize}</strong> · événements : <strong>{eventQueueSize}</strong>
-            {deadLetterCount > 0 && <> · à vérifier : <strong>{deadLetterCount}</strong></>}
-          </p>
-          <button
-            type="button"
-            onClick={handleFlush}
-            disabled={flushing}
-            className="mt-1 flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold disabled:opacity-50"
-            style={{ background: COLORS.teal, color: COLORS.bg }}
-          >
-            <RefreshCw size={14} className={flushing ? "animate-spin" : ""} />
-            Synchroniser maintenant
-          </button>
-          {deadLetterCount > 0 && (
-            <button type="button" onClick={handleClearDeadLetters} disabled={flushing} className="text-[11px] underline disabled:opacity-50" style={{ color: COLORS.muted }}>
-              Supprimer les {deadLetterCount} échec(s) définitif(s)
-            </button>
-          )}
-        </div>
 
         {import.meta.env.DEV && (
           <pre
@@ -231,6 +200,7 @@ export function OfflineTab() {
 
   return (
     <div className="flex flex-col gap-6 max-w-4xl mx-auto w-full pb-20">
+      <OfflineSyncDashboard userId={user?.id} />
       <div
         className="glass-card rounded-3xl p-6 border shadow-2xl relative overflow-hidden"
         style={{
@@ -316,36 +286,6 @@ export function OfflineTab() {
             sensibles via P2P.
           </span>
         </div>
-      </div>
-
-      {/* File de sync même en mode P2P disponible */}
-      <div
-        className="rounded-2xl border p-4 flex flex-wrap items-center justify-between gap-3"
-        style={{ borderColor: COLORS.border, background: COLORS.surface }}
-      >
-        <div className="text-xs" style={{ color: COLORS.muted }}>
-          <span className="font-bold" style={{ color: COLORS.ivory }}>
-            Sync différée
-          </span>
-          {" · "}
-          {queueSize} action(s) + {eventQueueSize} événement(s) en file · {cacheCount} profil(s) cache
-          {deadLetterCount > 0 && <> · {deadLetterCount} échec(s) à vérifier</>}
-        </div>
-        <button
-          type="button"
-          onClick={handleFlush}
-          disabled={flushing}
-          className="flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold disabled:opacity-50"
-          style={{ background: COLORS.teal, color: COLORS.bg }}
-        >
-          <RefreshCw size={14} className={flushing ? "animate-spin" : ""} />
-          Synchroniser
-        </button>
-        {deadLetterCount > 0 && (
-          <button type="button" onClick={handleClearDeadLetters} disabled={flushing} className="text-[11px] underline disabled:opacity-50" style={{ color: COLORS.muted }}>
-            Supprimer les échecs définitifs
-          </button>
-        )}
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
