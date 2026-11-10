@@ -1,17 +1,18 @@
-
-name: Publier BAARO sur Capgo
+name: Publier BAARO - Updater Maison
 
 on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   deploy:
     name: Publication manuelle BAARO
-    runs-on: ubuntu-latest
-
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      CLANG: clang-18
     steps:
       - name: Vérifier la branche
         run: |
@@ -22,15 +23,28 @@ jobs:
 
       - name: Récupérer le code
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Installer Node.js
+      - name: Install Rust 1.99.1
+        uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install Clang 18 and LLD 18
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y clang-18 lld-18
+
+      - name: Installer Node.js 24.22.2
         uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: 24.22.2
           cache: npm
 
       - name: Installer les dépendances
-        run: npm ci
+        run: npm ci --prefer-offline --no-audit
 
       - name: Générer une version unique
         run: |
@@ -52,10 +66,13 @@ jobs:
           VITE_VAPID_PUBLIC_KEY: ${{ secrets.VITE_VAPID_PUBLIC_KEY }}
           VITE_BAARO_MEDIA_WORKER_URL: ${{ secrets.VITE_BAARO_MEDIA_WORKER_URL }}
 
-      - name: Publier sur Capgo Production
-        env:
-          CAPGO_TOKEN: ${{ secrets.CAPGO_TOKEN }}
+      - name: Créer le bundle Updater Maison
+        run: node scripts/build-update.mjs
+
+      - name: Publier la mise à jour pour tous
         run: |
-          npx @capgo/cli@latest bundle upload \
-            --channel production \
-            --apikey "$CAPGO_TOKEN"
+          git config user.name "baaro-release-bot"
+          git config user.email "release@baaro.app"
+          git add package.json package-lock.json public/updates/
+          git commit -m "release: publie la version $(node -p "require('./package.json').version") pour tous les utilisateurs" || echo "Rien à publier"
+          git push
