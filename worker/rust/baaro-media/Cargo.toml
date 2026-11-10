@@ -2,7 +2,7 @@
 name = "baaro-media"
 version = "0.1.0"
 edition = "2021"
-description = "Détection de type de fichier par signature pour le worker BAARO"
+description = "Détection Rust et validation C/libavformat des médias pour le worker BAARO"
 license = "MIT"
 publish = false
 

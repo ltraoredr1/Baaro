@@ -19,7 +19,7 @@ export OPENAI_API_KEY="..."
 ./deploy-cloudrun.sh
 ```
 
-Le script construit l'image, crée/met à jour les secrets, déploie le service avec 4 CPU / 8 Go RAM, concurrence 1, timeout 1 h et autoscaling 0–5 instances.
+Le script construit l'image multi-étape depuis `worker/Dockerfile` : Rust et le shim C/libavformat sont compilés dans l'étape native, puis seul le binaire est copié dans l'image runtime avec FFmpeg. Il crée/met à jour les secrets et déploie le service avec 4 CPU / 8 Go RAM, concurrence 1, timeout 1 h et autoscaling 0–5 instances. Le worker ne devient prêt que si le binaire annonce Rust et libavformat ; une absence du contrôle bloque le démarrage et le traitement.
 
 ## Vercel
 

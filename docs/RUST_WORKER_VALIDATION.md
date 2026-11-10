@@ -1,33 +1,40 @@
-# Nettoyage et validation du worker Rust BAARO
+# Intégration et validation du worker Rust/C BAARO
 
-**Date :** 9 novembre 2026  
-**Périmètre :** worker média de `ltraoredr1/Baaro`. Aucun déploiement distant ni push GitHub n’a été effectué.
+**Date :** 10 novembre 2026
+**Périmètre :** worker média de `ltraoredr1/Baaro`. Le pipeline principal conserve FFmpeg/Node ; Rust et C interviennent dans le contrôle des sources, sans réécrire le transcodage.
 
-## Nettoyage effectué
+## Changements
 
-Rust est conservé pour la détection du type réel des fichiers par signature. Le parsing WebVTT est désormais réalisé uniquement en JavaScript : le module `worker/rust/baaro-media/src/vtt.rs`, la commande CLI `vtt-parse`, son adaptateur `spawnSync`, ses tests de parité et le patch historique redondant `BAARO-rust-worker.patch` ont été supprimés. Le helper JSON pour tableaux, inutilisé après cette suppression, a également été retiré.
+- Rust classe les fichiers selon leur signature ; les formats inconnus et les types dangereux ne sont pas acceptés.
+- Un shim C appelle `libavformat` pour ouvrir les fichiers allowlistés et vérifier la présence d’un flux audio avec codec/fréquence détectés ou d’un flux vidéo avec dimensions détectées. Le résultat expose les informations audio/vidéo, dimensions, durée et état du probe.
+- Node refuse un conteneur invalide, inconnu ou non vérifié avant FFmpeg. L’absence, le timeout ou l’échec du binaire ne déclenche aucun fallback permissif ; un média rejeté reçoit un statut HTTP 422.
+- Le worker vérifie au démarrage que le binaire natif se charge et annonce sa version libavformat ; `/health` inclut cette version.
+- Les deux recettes Docker compilent Rust+C dans un stage natif et installent FFmpeg dans l’image runtime. Le workflow CI construit les deux images et exécute le validateur dans chacune.
+- Aucune dépendance Cargo ou npm supplémentaire. La compilation système requiert `build-essential`, `pkg-config` et `libavformat-dev`; le runtime dépend des bibliothèques FFmpeg apportées par le paquet `ffmpeg`.
 
-Le manifeste Cargo ne déclarait déjà aucun crate externe. Son bloc `[dependencies]` vide a été supprimé ; le `Cargo.lock` reste en place pour préserver les builds `--locked`. Aucun paquet npm n’a été ajouté ou supprimé.
+Le probe vérifie l’ouverture du conteneur et la découverte des flux ; il ne décode pas l’intégralité du média ni ne garantit l’absence de corruption plus loin dans le fichier. FFmpeg reste responsable du décodage et du transcodage.
 
-## Contrôles après nettoyage
+## Vérifications exécutées localement
 
 | Contrôle | Résultat |
 |---|---|
 | `cargo fmt --check` | Réussi |
-| `cargo clippy --locked -- -D warnings` | Réussi, aucun code mort |
-| `cargo test --locked` | 7 tests réussis, 0 échec |
-| Compilation release | Réussie avec Rust 1.99.1 |
-| Test Node des signatures | 7 vérifications réussies |
-| Parsing WebVTT JavaScript | Syntaxe et test fonctionnel réussis |
-| Benchmark du détecteur de signature | 120 mesures : médiane 1,818 ms, p95 2,176 ms, moyenne 1,856 ms |
-| Smoke test du worker | Démarrage et `/health` réussis |
+| `cargo clippy --locked -- -D warnings` | Réussi, aucun avertissement |
+| `cargo test --locked` | 10 tests Rust réussis |
+| Build release Rust/C | Réussi avec Rust 1.99.1 |
+| Tests Node natifs | 19 vérifications : signatures sûres/dangereuses/inconnues, WAV réel et MP4 vidéo réel avec dimensions, et fichier absent |
+| Test fail-closed | Réussi : binaire absent → refus au démarrage et lors du contrôle |
+| Smoke `/health` | Réussi ; réponse annonce `baaro-media 0.1.0 (libavformat 60.16.100)` |
+| `ldd` du binaire | Toutes les bibliothèques partagées résolues sur Linux ARM64 |
+| Syntaxe Node/shell | Réussie |
+| Installation npm | 27 paquets existants installés, 0 vulnérabilité signalée |
 
-Le benchmark WebVTT précédent motivait la suppression : le parsing JS médian mesuré était de 0,003 ms pour 1 cue, 0,054 ms pour 100 cues et 1,022 ms pour 2 000 cues ; les appels Rust par processus étaient respectivement de 1,698 ms, 1,993 ms et 6,230 ms.
+## Mesure locale
 
-## Point à vérifier avant production
+Le benchmark révisé mesure le chemin complet sur un WAV valide — processus CLI, signature Rust et probe C/libavformat — sur Linux ARM64, Node 22.23.4 et libavformat 60.16.100 : 120 mesures, médiane **30,103 ms**, p95 **31,353 ms**, moyenne **30,283 ms**, environ **33 contrôles/s**. Il s’agit d’un contrôle de validité/robustesse, pas d’une optimisation du transcodage. Cette mesure inclut le coût d’un nouveau processus et n’est pas directement comparable au précédent microbenchmark limité au sniffing.
 
-Si le binaire Rust de détection est absent ou ne démarre pas, `sniffFile()` renvoie `null` et le worker poursuit actuellement le traitement sans refuser le fichier. L’image Docker prévoit de construire et copier le binaire ; il faut toutefois vérifier sa présence et son exécution dans l’image déployée, ou faire échouer le traitement si la vérification est indisponible.
+## Limites restantes
 
-Le sandbox n’a ni Docker ni `gcloud` ni accès au projet Cloud Run. Les contrôles ont donc été réalisés localement sur Linux ARM64 et ne remplacent pas le build de l’image ni un test Cloud Run sur l’architecture et la charge de production.
+Le sandbox ne fournit pas Docker ni `gcloud`; les deux images n’ont donc pas été bâties localement et aucun déploiement Cloud Run n’a été lancé. Le workflow GitHub met maintenant en place les builds et smoke tests des deux images ; il faudra vérifier leur résultat sur le dépôt, puis effectuer le déploiement Cloud Run dans le projet GCP de BAARO. Le benchmark cloud devra confirmer l’impact opérationnel avant toute conclusion de performance.
 
-Les commandes répétables sont dans `worker/README.md`, section « Valider et mesurer Rust » ; le benchmark conservé mesure uniquement le détecteur de signatures (`npm run bench:rust`).
+Les commandes reproductibles sont dans [`worker/README.md`](../worker/README.md), section « Valider et mesurer Rust/C ».

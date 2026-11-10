@@ -23,14 +23,15 @@ Voir `.env.example` à la racine. Les variables principales sont `R2_*`, `BAARO_
 ```bash
 cd worker
 npm install
+npm run build:rust
 npm start
 ```
 
-Le endpoint `POST /process` est protégé par `x-baaro-worker-secret`.
+Pour compiler localement, installer `build-essential`, `pkg-config`, `libavformat-dev` et FFmpeg. Le endpoint `POST /process` est protégé par `x-baaro-worker-secret`.
 
-## Valider et mesurer Rust
+## Valider et mesurer Rust/C
 
-Rust est conservé uniquement pour détecter le type réel d'un fichier par sa signature. Le découpage WebVTT reste en JavaScript : le détour par un processus Rust était plus lent sur les mesures locales. Le binaire Rust est construit dans l'image du worker. Pour valider le code localement :
+Rust détecte la signature du fichier ; un shim C appelle `libavformat` pour vérifier que le conteneur est réellement ouvrable et qu'il contient un flux audio ou vidéo. Le worker échoue au démarrage si le binaire natif est absent, et refuse les fichiers inconnus, malformés ou non média avant FFmpeg. Le découpage WebVTT reste en JavaScript : les mesures précédentes ne justifiaient pas un chemin Rust séparé. Aucun crate Cargo ni paquet npm supplémentaire n'est utilisé ; le build C requiert les outils système et les headers libavformat.
 
 ```bash
 cd worker
@@ -41,13 +42,13 @@ npm run build:rust
 BAARO_MEDIA_BIN="$PWD/rust/baaro-media/target/release/baaro-media" npm run test:rust
 ```
 
-Pour mesurer la latence du détecteur de signatures sur la même architecture que le worker déployé :
+`npm run test:rust` vérifie des fichiers WAV et MP4 vidéo réellement générés par le chemin C/libavformat, ainsi que le comportement fail-closed si le binaire est absent. Pour mesurer la latence du contrôle combiné sur la même architecture que le worker déployé :
 
 ```bash
 BAARO_MEDIA_BIN="$PWD/rust/baaro-media/target/release/baaro-media" npm run bench:rust
 ```
 
-Le rapport affiche la médiane, le p95, la moyenne et le débit du détecteur. C'est un microbenchmark local : une décision de déploiement doit aussi s'appuyer sur des mesures de Cloud Run avec la même image, la même région et une charge représentative.
+Le rapport affiche la médiane, le p95, la moyenne et le débit du contrôle. C'est un microbenchmark local : une décision de performance doit aussi s'appuyer sur des mesures de Cloud Run avec la même image, la même région et une charge représentative. Le CI compile aussi les deux images Docker et vérifie le binaire natif dans chacune.
 
 ## Uploads vidéo volumineux
 

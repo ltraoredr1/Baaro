@@ -1,5 +1,6 @@
 import http from "node:http";
 import { config } from "./lib/config.mjs";
+import { assertNativeReady } from "./lib/native.mjs";
 import { processJob } from "./processor.mjs";
 import { prepareLargeVideo, signLargeVideoParts, completeLargeVideo, abortLargeVideo } from "./upload.mjs";
 
@@ -66,7 +67,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === "GET" && req.url === "/health") {
-    return send(req, res, 200, { ok: true, service: "baaro-media-worker", time: new Date().toISOString() });
+    return send(req, res, 200, { ok: true, service: "baaro-media-worker", native: nativeVersion, time: new Date().toISOString() });
   }
 
   if (req.method === "POST" && req.url.startsWith("/upload/")) {
@@ -110,4 +111,7 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(config.port, "0.0.0.0", () => console.log(`BAARO worker listening on :${config.port}`));
+const nativeVersion = await assertNativeReady();
+server.listen(config.port, "0.0.0.0", () => {
+  console.log(`BAARO worker listening on :${config.port} (${nativeVersion})`);
+});

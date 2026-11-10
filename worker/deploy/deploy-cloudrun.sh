@@ -51,7 +51,7 @@ gcloud run deploy baaro-media-worker \
   --timeout 3600 \
   --min-instances 0 \
   --max-instances 5 \
-  --set-env-vars "BAARO_WORKER_PORT=8080,BAARO_WORKER_TMP_DIR=/tmp/baaro-worker,FFMPEG_BIN=ffmpeg,FFPROBE_BIN=ffprobe,WHISPER_BIN=whisper,WHISPER_MODEL=small,R2_BUCKET_NAME=${R2_BUCKET_NAME:-baaro-media},OPENAI_API_BASE=${OPENAI_API_BASE:-https://api.openai.com/v1},OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}" \
+  --set-env-vars "BAARO_WORKER_PORT=8080,BAARO_WORKER_TMP_DIR=/tmp/baaro-worker,BAARO_MEDIA_BIN=/usr/local/bin/baaro-media,FFMPEG_BIN=ffmpeg,FFPROBE_BIN=ffprobe,WHISPER_BIN=whisper,WHISPER_MODEL=small,R2_BUCKET_NAME=${R2_BUCKET_NAME:-baaro-media},OPENAI_API_BASE=${OPENAI_API_BASE:-https://api.openai.com/v1},OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}" \
   --set-secrets "R2_ACCOUNT_ID=baaro-r2-account-id:latest,R2_ACCESS_KEY_ID=baaro-r2-access-key-id:latest,R2_SECRET_ACCESS_KEY=baaro-r2-secret-access-key:latest,R2_PUBLIC_BASE_URL=baaro-r2-public-base-url:latest,BAARO_WORKER_SECRET=baaro-worker-secret:latest,OPENAI_API_KEY=baaro-openai-api-key:latest"
 
 echo "[4/4] Worker URL"

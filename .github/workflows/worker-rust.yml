@@ -1,4 +1,4 @@
-name: Worker média — Rust
+name: Worker média — Rust/C
 on:
   push:
     branches: [main, develop]
@@ -6,24 +6,34 @@ on:
       - 'worker/rust/**'
       - 'worker/lib/**'
       - 'worker/test/**'
+      - 'worker/processor.mjs'
+      - 'worker/server.mjs'
+      - 'worker/package.json'
+      - 'worker/package-lock.json'
       - 'worker/Dockerfile'
+      - 'worker/deploy/**'
       - '.github/workflows/worker-rust.yml'
   pull_request:
     paths:
       - 'worker/rust/**'
       - 'worker/lib/**'
       - 'worker/test/**'
+      - 'worker/processor.mjs'
+      - 'worker/server.mjs'
+      - 'worker/package.json'
+      - 'worker/package-lock.json'
       - 'worker/Dockerfile'
+      - 'worker/deploy/**'
       - '.github/workflows/worker-rust.yml'
   workflow_dispatch:
 concurrency:
-  group: worker-rust-${{ github.ref }}
+  group: worker-rust-c-${{ github.ref }}
   cancel-in-progress: true
 jobs:
-  rust:
-    name: baaro-media (fmt, clippy, tests signatures)
+  rust-c:
+    name: worker Rust/C, tests et images
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: worker
@@ -38,10 +48,24 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: worker/rust/baaro-media
+      - name: Install FFmpeg C headers and test binary
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends build-essential pkg-config ffmpeg libavformat-dev
       - run: cargo fmt --check --manifest-path rust/baaro-media/Cargo.toml
       - run: cargo clippy --locked --manifest-path rust/baaro-media/Cargo.toml -- -D warnings
       - run: cargo test --locked --manifest-path rust/baaro-media/Cargo.toml
       - run: npm run build:rust
+      - run: ldd rust/baaro-media/target/release/baaro-media | tee /tmp/baaro-media-ldd.txt && ! grep -q 'not found' /tmp/baaro-media-ldd.txt
       - run: npm run test:rust
         env:
           BAARO_MEDIA_BIN: ${{ github.workspace }}/worker/rust/baaro-media/target/release/baaro-media
+      - name: Build both production images
+        run: |
+          docker build --file Dockerfile --tag baaro-media-worker:ci .
+          docker build --file deploy/Dockerfile.cloudrun --tag baaro-media-worker-cloudrun:ci .
+      - name: Smoke-test Rust/C inside both images
+        run: |
+          for image in baaro-media-worker:ci baaro-media-worker-cloudrun:ci; do
+            docker run --rm --entrypoint sh "$image" -ec "$(cat test/native-image-smoke.sh)"
+          done

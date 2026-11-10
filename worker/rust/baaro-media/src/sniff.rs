@@ -4,6 +4,7 @@
 //! de la clé R2 ne prouve rien. On regarde la signature avant de lancer FFmpeg.
 
 use crate::json;
+use crate::probe::ProbeInfo;
 
 /// Nombre d'octets lus au début du fichier.
 pub const HEAD_LEN: usize = 4096;
@@ -126,16 +127,34 @@ pub fn sniff(head: &[u8]) -> Sniffed {
     UNKNOWN
 }
 
-/// Sortie JSON de la commande `sniff`.
-pub fn to_json(s: &Sniffed, size: u64) -> String {
+/// Sortie JSON de `sniff`, enrichie par la validation structurelle libavformat.
+pub fn to_json(
+    s: &Sniffed,
+    size: u64,
+    probe: Option<ProbeInfo>,
+    probe_error: Option<i32>,
+) -> String {
     let mut out = String::from("{\"kind\":");
     json::push_str(&mut out, s.kind);
     out.push_str(",\"mime\":");
     json::push_str(&mut out, s.mime);
     out.push_str(&format!(
-        ",\"media\":{},\"danger\":{},\"size\":{}}}",
+        ",\"media\":{},\"danger\":{},\"size\":{}",
         s.media, s.danger, size
     ));
+    if let Some(info) = probe {
+        out.push_str(&format!(
+            ",\"containerValid\":true,\"hasVideo\":{},\"hasAudio\":{},\
+             \"width\":{},\"height\":{},\"durationMs\":{}",
+            info.has_video, info.has_audio, info.width, info.height, info.duration_ms
+        ));
+    } else {
+        out.push_str(",\"containerValid\":false");
+        if let Some(code) = probe_error {
+            out.push_str(&format!(",\"probeErrorCode\":{code}"));
+        }
+    }
+    out.push('}');
     out
 }
 
@@ -206,8 +225,24 @@ mod tests {
     fn json_shape() {
         let s = sniff(&[0xFF, 0xD8, 0xFF]);
         assert_eq!(
-            to_json(&s, 3),
-            "{\"kind\":\"jpg\",\"mime\":\"image/jpeg\",\"media\":true,\"danger\":false,\"size\":3}"
+            to_json(&s, 3, None, Some(2)),
+            "{\"kind\":\"jpg\",\"mime\":\"image/jpeg\",\"media\":true,\"danger\":false,\"size\":3,\"containerValid\":false,\"probeErrorCode\":2}"
         );
+    }
+
+    #[test]
+    fn json_includes_c_probe_results() {
+        let s = sniff(b"RIFF\x24\0\0\0WAVEfmt ");
+        let probe = ProbeInfo {
+            has_video: false,
+            has_audio: true,
+            width: 0,
+            height: 0,
+            duration_ms: 250,
+        };
+        let output = to_json(&s, 100, Some(probe), None);
+        assert!(output.contains("\"containerValid\":true"));
+        assert!(output.contains("\"hasAudio\":true"));
+        assert!(output.contains("\"durationMs\":250"));
     }
 }

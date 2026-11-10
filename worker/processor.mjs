@@ -73,19 +73,17 @@ async function source(job, dir) {
 
   await downloadToFile(key, input);
 
-  // L'extension de la clé ne prouve rien : on vérifie la signature réelle
-  // du fichier (binaire Rust) avant de le confier à FFmpeg.
-  // Fail-closed : le sniff est obligatoire.
+  // L'extension de la clé ne prouve rien : Rust vérifie la signature, puis
+  // libavformat (C) confirme le conteneur et la présence d'un flux A/V.
+  // Tout échec ou type inconnu est refusé avant FFmpeg.
   const sniffed = await sniffFile(input);
 
-  if (!sniffed) {
-    throw new Error("Contrôle de signature obligatoire : résultat absent");
-  }
-
-  if (sniffed.danger || (config.sniffStrict && !sniffed.media)) {
-    throw new Error(
-      `Fichier source refusé : type détecté « ${sniffed.kind} »`
+  if (!sniffed || sniffed.danger || !sniffed.media || !sniffed.containerValid) {
+    const error = new Error(
+      `Fichier source refusé : type « ${sniffed?.kind || "inconnu"} », conteneur ${sniffed?.containerValid ? "valide" : "invalide ou non vérifié"}`
     );
+    error.status = 422;
+    throw error;
   }
 
   return input;

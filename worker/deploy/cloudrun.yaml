@@ -25,6 +25,8 @@ spec:
               value: ffmpeg
             - name: FFPROBE_BIN
               value: ffprobe
+            - name: BAARO_MEDIA_BIN
+              value: /usr/local/bin/baaro-media
             - name: WHISPER_BIN
               value: whisper
             - name: WHISPER_MODEL

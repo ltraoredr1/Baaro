@@ -11,7 +11,7 @@
     "process": "node processor.mjs",
     "cleanup:multipart": "node cleanup-multipart.mjs",
     "build:rust": "cargo build --release --locked --manifest-path rust/baaro-media/Cargo.toml",
-    "test:rust": "node test/rust-sniff.mjs",
+    "test:rust": "node test/rust-sniff.mjs && node test/native-fail-closed.mjs",
     "bench:rust": "node test/benchmark-rust.mjs"
   },
   "dependencies": {

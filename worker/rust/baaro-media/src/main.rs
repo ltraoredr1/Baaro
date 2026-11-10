@@ -1,12 +1,13 @@
-//! baaro-media — petit outil de validation de fichiers appelé par le worker Node.
+//! baaro-media — outil natif Rust/C de validation des médias du worker BAARO.
 //!
-//!   baaro-media sniff <fichier>   → JSON du type réel (signature des premiers octets)
+//!   baaro-media sniff <fichier>   → signature du fichier + validation C/libavformat
 //!   baaro-media --version
 //!
-//! Codes de sortie : 0 succès, 1 erreur d'E/S, 2 usage ou entrée invalide.
-//! Les messages d'erreur vont sur stderr.
+//! Codes de sortie : 0 succès de la commande, 1 erreur d'E/S, 2 usage invalide.
+//! Un conteneur invalide est retourné dans le JSON, puis refusé par Node.
 
 mod json;
+mod probe;
 mod sniff;
 
 use std::fs::File;
@@ -28,7 +29,18 @@ fn cmd_sniff(path: &str) -> ExitCode {
     if let Err(e) = file.take(sniff::HEAD_LEN as u64).read_to_end(&mut head) {
         return fail(1, &format!("lecture impossible : {e}"));
     }
-    println!("{}", sniff::to_json(&sniff::sniff(&head), size));
+
+    let detected = sniff::sniff(&head);
+    let (probe, probe_error) = if detected.media {
+        match probe::validate(path) {
+            Ok(info) => (Some(info), None),
+            Err(code) => (None, Some(code)),
+        }
+    } else {
+        (None, None)
+    };
+
+    println!("{}", sniff::to_json(&detected, size, probe, probe_error));
     ExitCode::SUCCESS
 }
 
@@ -41,7 +53,11 @@ fn main() -> ExitCode {
         .as_slice()
     {
         ["--version"] => {
-            println!("baaro-media {}", env!("CARGO_PKG_VERSION"));
+            println!(
+                "baaro-media {} (libavformat {})",
+                env!("CARGO_PKG_VERSION"),
+                probe::libavformat_version()
+            );
             ExitCode::SUCCESS
         }
         ["sniff", path] => cmd_sniff(path),

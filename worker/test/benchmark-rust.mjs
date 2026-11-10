@@ -1,6 +1,6 @@
-// Benchmark local du détecteur de signatures Rust réellement utilisé par le worker.
+// Benchmark local du contrôle Rust + C/libavformat réellement utilisé par le worker.
 // Usage : BAARO_MEDIA_BIN=rust/baaro-media/target/release/baaro-media node test/benchmark-rust.mjs
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
@@ -12,7 +12,8 @@ import { sniffFile } from "../lib/native.mjs";
 const execFile = promisify(execFileCallback);
 const iterations = Number(process.env.BENCH_SNIFF_ITERS || 200);
 const warmupIterations = 10;
-const rustBin = process.env.BAARO_MEDIA_BIN || "baaro-media";
+const rustBin = process.env.BAARO_MEDIA_BIN || "./rust/baaro-media/target/release/baaro-media";
+const ffmpegBin = process.env.FFMPEG_BIN || "ffmpeg";
 const { stdout: versionOutput } = await execFile(rustBin, ["--version"], { timeout: 5000 });
 const version = versionOutput.trim();
 
@@ -39,23 +40,30 @@ async function measure(fn) {
   };
 }
 
-const fixtureDir = await mkdtemp(join(tmpdir(), "baaro-rust-bench-"));
+const fixtureDir = await mkdtemp(join(tmpdir(), "baaro-native-bench-"));
 try {
-  const sampleFile = join(fixtureDir, "sample.mp4");
-  await writeFile(sampleFile, Buffer.from("\0\0\0\x20ftypisom\0\0\0\0"));
+  const sampleFile = join(fixtureDir, "sample.wav");
+  await execFile(ffmpegBin, [
+    "-nostdin", "-hide_banner", "-loglevel", "error",
+    "-f", "lavfi", "-i", "sine=frequency=997:duration=0.25",
+    "-c:a", "pcm_s16le", "-y", sampleFile,
+  ], { timeout: 10_000 });
+
   const result = await measure(async () => {
-    const sniffed = await sniffFile(sampleFile);
-    if (!sniffed || sniffed.kind !== "mp4") throw new Error("sniff Rust incorrect");
+    const probed = await sniffFile(sampleFile);
+    if (probed.kind !== "wav" || !probed.containerValid || !probed.hasAudio) {
+      throw new Error("Validation Rust/C incorrect");
+    }
   });
 
   console.log(JSON.stringify({
-    benchmark: "BAARO media worker Rust signature detector",
+    benchmark: "BAARO Rust signature + C/libavformat validation",
     timestamp: new Date().toISOString(),
     platform: `${os.platform()} ${os.release()} (${os.arch()})`,
     node: process.version,
-    rust: version,
+    rustAndC: version,
     rustBinary: rustBin,
-    note: "Microbenchmark local; à compléter par une mesure avec l’image et la charge Cloud Run réelles.",
+    note: "Mesure du coût complet du processus CLI et du probe sur un média réel; à compléter par des mesures Cloud Run.",
     result,
   }, null, 2));
 } finally {
