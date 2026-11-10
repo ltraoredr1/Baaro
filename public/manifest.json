@@ -1,14 +1,14 @@
 {
-  "name": "BAARO",
+  "name": "BAARO — Réseau Social",
   "short_name": "BAARO",
+  "description": "Réseau social nouvelle génération avec feed, live, marketplace et IA",
   "id": "/",
   "scope": "/",
-  "start_url": "/?source=pwa",
+  "start_url": "/",
   "display": "standalone",
-  "background_color": "#0B1526",
-  "theme_color": "#0B1526",
   "orientation": "portrait",
-  "description": "Réseau social mondial avec points, crypto et assistant IA intégré.",
+  "background_color": "#FAF7F0",
+  "theme_color": "#C99A2E",
   "categories": ["social", "entertainment"],
   "icons": [
     {
