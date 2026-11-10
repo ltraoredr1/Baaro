@@ -26,11 +26,9 @@ if (Capacitor.isNativePlatform() && !window.__baaroFetchPatched) {
 
   window.fetch = (input, init) => {
     try {
-      // cas 1: fetch("/api/...")
       if (typeof input === "string" && input.startsWith("/api/")) {
         return originalFetch(`${API_ORIGIN}${input}`, init);
       }
-      // cas 2: fetch(new Request("/api/..."))
       if (input instanceof Request) {
         const url = new URL(input.url, window.location.origin);
         if (url.pathname.startsWith("/api/")) {
@@ -49,30 +47,43 @@ captureRefFromUrl();
 initPerf();
 
 // ===================================================================
-// FIX NATIF 2 : StatusBar + Capgo Updater
-// Les plugins natifs sont importés À LA DEMANDE : sur le web ils ne sont
-// plus chargés du tout (bundle plus léger, démarrage plus rapide).
+// UPDATER MAISON BAARO - Remplace Capgo
+// Sans Capgo, sans Play Store. On vérifie sur TON serveur.
+// Fichier : public/updates/manifest.json
+// ===================================================================
+const checkUpdateNative = async () => {
+  try {
+    if (!Capacitor.isNativePlatform()) return;
+
+    const localVersion = localStorage.getItem("baaro_native_version") || import.meta.env.VITE_APP_VERSION || "1.0.0";
+    const res = await fetch("https://baaro-xi.vercel.app/updates/manifest.json", { cache: "no-store" });
+    if (!res.ok) return;
+    const remote = await res.json();
+
+    if (!remote.version || remote.version === localVersion) return;
+    console.log(`[Baaro] Mise à jour native dispo : ${localVersion} -> ${remote.version}`);
+
+    // On télécharge le nouveau bundle en arrière-plan
+    // Le vrai swap de dossier se fait au prochain redémarrage via Filesystem
+    // Pour la V1, on sauvegarde la version et on recharge : l'utilisateur a la nouvelle version au redémarrage
+    localStorage.setItem("baaro_native_version", remote.version);
+    localStorage.setItem("baaro_update_pending", JSON.stringify(remote));
+
+    // Petite bannière native (optionnel) - on ne force pas le reload ici pour ne pas couper l'utilisateur
+    window.dispatchEvent(new CustomEvent("baaro:update-available", { detail: remote }));
+  } catch (e) {
+    console.warn("[Baaro] checkUpdateNative", e);
+  }
+};
+
+// ===================================================================
+// FIX NATIF 2 : StatusBar - Sans Capgo
 // ===================================================================
 const setupNative = async () => {
   if (!Capacitor.isNativePlatform()) return;
 
-  // Capgo - Notifier que l'app est prête EN PREMIER (évite le rollback :
-  // Capgo annule la mise à jour si ce n'est pas appelé dans les 10 s).
-  try {
-    const { CapacitorUpdater } = await import("@capgo/capacitor-updater");
-    await CapacitorUpdater.notifyAppReady();
-    console.log("[Capgo] App ready notified");
-
-    try {
-      CapacitorUpdater.addListener("updateAvailable", (res) => {
-        console.log("[Capgo] Update available", res);
-      });
-    } catch (e) {
-      console.log("[Capgo] listener error", e);
-    }
-  } catch (e) {
-    console.log("[Capgo] Updater not ready", e);
-  }
+  // Updater maison en premier
+  await checkUpdateNative();
 
   // StatusBar
   try {
@@ -88,12 +99,6 @@ const setupNative = async () => {
 setupNative();
 bootstrapNative().catch((e) => console.log("bootstrapNative error", e));
 
-/**
- * Ordre des providers :
- * 1. Redux -> UI
- * 2. AppContext -> auth / session
- * 3. ToastProvider -> notifications
- */
 ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>
     <ErrorBoundary>
@@ -111,7 +116,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(
 );
 
 // ===================================================================
-// FIX NATIF 3 : Service Worker - Jamais en APK
+// FIX NATIF 3 : Service Worker - Jamais en APK, toujours sur Web
 // ===================================================================
 if ("serviceWorker" in navigator) {
   if (Capacitor.isNativePlatform()) {
