@@ -33,6 +33,11 @@ export default defineConfig(({ mode }) => ({
       // L’enregistrement est géré dans main.jsx afin de l’exclure explicitement des APK Capacitor.
       injectRegister: null,
 
+      // CORRIGÉ : On utilise public/manifest.json, pas un 2e manifest généré.
+      // Avant, tu avais 2 manifests qui se battaient (public/manifest.json sombre + celui-ci clair).
+      // Maintenant il n'y en a qu'un seul : public/manifest.json
+      manifest: false,
+
       includeAssets: [
         'favicon.ico',
         'robots.txt',
@@ -40,36 +45,6 @@ export default defineConfig(({ mode }) => ({
         'icon-192.png',
         'icon-512.png',
       ],
-
-      manifest: {
-        name: 'BAARO — Réseau Social',
-        short_name: 'BAARO',
-        description:
-          'Réseau social nouvelle génération avec feed, live, marketplace et IA',
-        theme_color: '#C99A2E',
-        background_color: '#FAF7F0',
-        display: 'standalone',
-        orientation: 'portrait',
-
-        // Configuration PWA pour un site hébergé à la racine.
-        scope: '/',
-        start_url: '/',
-
-        icons: [
-          {
-            src: '/icon-192.png',
-            sizes: '192x192',
-            type: 'image/png',
-            purpose: 'any',
-          },
-          {
-            src: '/icon-512.png',
-            sizes: '512x512',
-            type: 'image/png',
-            purpose: 'maskable',
-          },
-        ],
-      },
 
       workbox: {
         // Cible uniquement les fichiers présents par défaut pour éviter les alertes de glob
