@@ -43,10 +43,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y clang-18 lld-18
 
-      - name: Setup Node.js 24.22.2
+      - name: Setup Node.js 22.23.4
         uses: actions/setup-node@v4
         with:
-          node-version: 24.22.2
+          node-version: 22.23.4
           cache: npm
 
       - name: Setup Java

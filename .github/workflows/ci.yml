@@ -35,10 +35,10 @@ jobs:
           sudo apt-get install -y clang-18 lld-18
 
       # Node.js version pinned to the locally verified version.
-      - name: Setup Node.js 24.22.2
+      - name: Setup Node.js 22.23.4
         uses: actions/setup-node@v4
         with:
-          node-version: 24.22.2
+          node-version: 22.23.4
           cache: npm
 
       # Fail early if the CI environment differs from Codespaces.
@@ -48,7 +48,7 @@ jobs:
 
           echo "===== NODE ====="
           node --version
-          test "$(node --version)" = "v24.22.2"
+          test "$(node --version)" = "v22.23.4"
 
           echo "===== NPM ====="
           npm --version
