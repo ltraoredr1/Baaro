@@ -250,16 +250,31 @@ export function MainShell() {
       debounce = setTimeout(refreshCounters, 400);
     };
 
+    // Un même événement peut créer une ligne « messages » ET une ligne
+    // « notifications » : on ne joue le son qu'une fois par rafale (1,5 s).
+    let lastSoundAt = 0;
+    const playIncomingSound = () => {
+      const now = Date.now();
+      if (now - lastSoundAt < 1500) return;
+      lastSoundAt = now;
+      // Sans argument : utilise le son choisi dans Réglages → Notifications.
+      playRef.current?.();
+    };
+
     const first = setTimeout(refreshCounters, 2000);
 
     const channel = supabase
       .channel(`global-baaro-events:${id}`)
       .on("postgres_changes", { event: "*", schema: "public", table: "messages", filter: `recipient_id=eq.${id}` }, (payload) => {
         // Son uniquement pour un NOUVEAU message (pas quand on marque « lu »).
-        if (payload?.eventType === "INSERT") playRef.current?.("baaro_pulse");
+        if (payload?.eventType === "INSERT") playIncomingSound();
         scheduleRefresh();
       })
-      .on("postgres_changes", { event: "*", schema: "public", table: "notifications", filter: `user_id=eq.${id}` }, () => scheduleRefresh())
+      .on("postgres_changes", { event: "*", schema: "public", table: "notifications", filter: `user_id=eq.${id}` }, (payload) => {
+        // Son pour toute NOUVELLE notification (like, commentaire, abonné…).
+        if (payload?.eventType === "INSERT") playIncomingSound();
+        scheduleRefresh();
+      })
       .subscribe();
 
     return () => {
