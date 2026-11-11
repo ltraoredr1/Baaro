@@ -4,7 +4,7 @@
   "version": "0.2.3",
   "type": "module",
   "engines": {
-    "node": "22.x"
+    "node": "24.x"
   },
   "scripts": {
     "predev": "node scripts/build-stories-wasm.mjs && node scripts/build-offline-wasm.mjs && node scripts/build-messaging-crypto.mjs && node scripts/copy-ort-wasm.mjs && node scripts/copy-mediapipe-wasm.mjs",
