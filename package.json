@@ -99,5 +99,10 @@
     "vite": "^8.3.5",
     "vite-plugin-pwa": "^0.21.1"
   },
-  "overrides": {}
+  "overrides": {},
+  "allowScripts": {
+    "onnxruntime-node@1.30.0": true,
+    "protobufjs@7.6.6": true,
+    "@google/genai@2.32.0": true
+  }
 }
