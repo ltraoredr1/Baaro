@@ -1,0 +1,2226 @@
+diff --git a/package.json b/package.json
+index 0f5c891..7376b9b 100644
+--- a/package.json
++++ b/package.json
+@@ -34,14 +34,14 @@
+     "validate:upgrade": "node scripts/validate_upgrade.mjs",
+     "cap:sync": "npx cap sync",
+     "cap:open": "npx cap open android",
+-    "ci": "npm run check:lock && npm run check:production && npm run audit:security && npm run check:secrets && npm run check:upstash && npm run check:e2e && npm run check:e2e:smoke && npm run test:messaging-crypto && npm run check:messaging-rust && npm run check:payout && npm run check:performance && npm run check:android && npm run test:offline && npm run build",
++    "ci": "npm run check:lock && npm run check:production && npm run audit:security && npm run check:secrets && npm run check:upstash && npm run check:e2e && npm run check:e2e:smoke && npm run test:messaging-crypto && npm run check:messaging-rust && npm run test:stories && npm run check:payout && npm run check:performance && npm run check:android && npm run test:offline && npm run build",
+     "test:chat-translate": "node scripts/test-chat-autotranslate.mjs",
+     "test:messaging-crypto": "node --test tests/messaging/*.test.mjs",
+     "test:messaging-rust": "cargo test --locked --manifest-path src/features/messaging/native/Cargo.toml",
+     "check:messaging-rust": "cargo fmt --manifest-path src/features/messaging/native/Cargo.toml -- --check && cargo test --locked --manifest-path src/features/messaging/native/Cargo.toml && cargo clippy --locked --manifest-path src/features/messaging/native/Cargo.toml -- -D warnings && cargo check --locked --manifest-path src/features/messaging/native/Cargo.toml --target wasm32-unknown-unknown",
+     "build:messaging-crypto": "node scripts/build-messaging-crypto.mjs",
+     "pretest:offline": "node scripts/build-offline-wasm.mjs --strict",
+-    "test:offline": "node scripts/test-offline-wasm.mjs && npm run test:offline-cache",
++    "test:offline": "node scripts/test-offline-core-rust.mjs && node scripts/test-offline-wasm.mjs && npm run test:offline-cache",
+     "test:offline-cache": "node --test tests/offline/*.test.mjs",
+     "pretest:stories": "node scripts/build-stories-wasm.mjs --strict",
+     "test:stories": "node --test tests/stories/*.test.mjs && node scripts/test-story-policy-rust.mjs && node scripts/test-stories-wasm.mjs"
+diff --git a/src/features/messaging/native/Cargo.lock b/src/features/messaging/native/Cargo.lock
+index 993e8ad..132ff06 100644
+--- a/src/features/messaging/native/Cargo.lock
++++ b/src/features/messaging/native/Cargo.lock
+@@ -8,7 +8,7 @@ version = "0.5.2"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "d122413f284cf2d62fb1b7db97e02edb8cda96d769b16e443a4f6195e35662b0"
+ dependencies = [
+- "crypto-common",
++ "crypto-common 0.1.7",
+  "generic-array",
+ ]
+ 
+@@ -20,7 +20,7 @@ checksum = "b169f7a6d4742236a0a00c541b845991d0ac43e546831af1249753ab4c3aa3a0"
+ dependencies = [
+  "cfg-if",
+  "cipher",
+- "cpufeatures",
++ "cpufeatures 0.2.17",
+ ]
+ 
+ [[package]]
+@@ -37,22 +37,79 @@ dependencies = [
+  "subtle",
+ ]
+ 
++[[package]]
++name = "aho-corasick"
++version = "1.1.5"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "c982642fa9e8606056828ee9a8505737230110bb1099153c79efe865c59d12ba"
++dependencies = [
++ "memchr",
++]
++
++[[package]]
++name = "autocfg"
++version = "1.5.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
++
+ [[package]]
+ name = "baaro-messaging-crypto"
+ version = "0.1.0"
+ dependencies = [
+  "aes-gcm",
+- "getrandom",
+- "hkdf",
++ "getrandom 0.2.17",
++ "hkdf 0.12.4",
+  "js-sys",
+- "rand_core",
+- "sha2",
++ "openmls",
++ "openmls_basic_credential",
++ "openmls_rust_crypto",
++ "rand_core 0.6.4",
++ "sha2 0.10.9",
+  "subtle",
++ "tls_codec",
+  "wasm-bindgen",
+- "x25519-dalek",
++ "x25519-dalek 2.0.1",
+  "zeroize",
+ ]
+ 
++[[package]]
++name = "base16ct"
++version = "0.2.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "4c7f02d4ea65f2c1853089ffd8d2787bdbc63de2f0d29dedbcf8ccdfa0ccd4cf"
++
++[[package]]
++name = "base64ct"
++version = "1.8.3"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
++
++[[package]]
++name = "bindgen"
++version = "0.72.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "993776b509cfb49c750f11b8f07a46fa23e0a1386ffc01fb1e7d343efc387895"
++dependencies = [
++ "bitflags",
++ "cexpr",
++ "clang-sys",
++ "itertools",
++ "log",
++ "prettyplease",
++ "proc-macro2",
++ "quote",
++ "regex",
++ "rustc-hash",
++ "shlex 1.3.0",
++ "syn 2.0.119",
++]
++
++[[package]]
++name = "bitflags"
++version = "2.13.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "3ded4057c258ba199e2d26386d3af3780957ecaee6c4ef4041c6b4b8b97c0b06"
++
+ [[package]]
+ name = "block-buffer"
+ version = "0.10.4"
+@@ -62,26 +119,130 @@ dependencies = [
+  "generic-array",
+ ]
+ 
++[[package]]
++name = "block-buffer"
++version = "0.12.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "d2f6c7dbe95a6ed67ad9f18e57daf93a2f034c524b99fd2b76d18fdfeb6660aa"
++dependencies = [
++ "hybrid-array",
++]
++
+ [[package]]
+ name = "bumpalo"
+ version = "3.20.3"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
+ 
++[[package]]
++name = "cc"
++version = "1.11.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "4ff2a8126fff0f8c839080d619675a585e61720bb12d2baceae45769fd66f155"
++dependencies = [
++ "find-msvc-tools",
++ "shlex 2.0.1",
++]
++
++[[package]]
++name = "cexpr"
++version = "0.6.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "6fac387a98bb7c37292057cffc56d62ecb629900026402633ae9160df93a8766"
++dependencies = [
++ "nom",
++]
++
+ [[package]]
+ name = "cfg-if"
+ version = "1.0.5"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
+ 
++[[package]]
++name = "chacha20"
++version = "0.9.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "c3613f74bd2eac03dad61bd53dbe620703d4371614fe0bc3b9f04dd36fe4e818"
++dependencies = [
++ "cfg-if",
++ "cipher",
++ "cpufeatures 0.2.17",
++]
++
++[[package]]
++name = "chacha20"
++version = "0.10.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "65c35e4b699c7e15ccbe7ee35c005e4fc0a278d22238a2857e6ce2dadeda1b06"
++dependencies = [
++ "cfg-if",
++ "cpufeatures 0.3.1",
++ "rand_core 0.10.1",
++]
++
++[[package]]
++name = "chacha20poly1305"
++version = "0.10.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "10cd79432192d1c0f4e1a0fef9527696cc039165d729fb41b3f4f4f354c2dc35"
++dependencies = [
++ "aead",
++ "chacha20 0.9.1",
++ "cipher",
++ "poly1305",
++ "zeroize",
++]
++
+ [[package]]
+ name = "cipher"
+ version = "0.4.4"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "773f3b9af64447d2ce9850330c473515014aa235e6a783b02db81ff39e4a3dad"
+ dependencies = [
+- "crypto-common",
++ "crypto-common 0.1.7",
+  "inout",
++ "zeroize",
++]
++
++[[package]]
++name = "clang-sys"
++version = "1.9.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "157a8ba7b480713b56f4c09fd13fc3e0a22a5dfab8097ba61cbc5feef950788a"
++dependencies = [
++ "glob",
++ "libc",
++ "libloading",
++]
++
++[[package]]
++name = "cmov"
++version = "0.5.4"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "0c9ea0ac24bc397ab3c98583a3c9ba74fa56b09a4449bbe172b9b1ddb016027a"
++
++[[package]]
++name = "const-oid"
++version = "0.9.6"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "c2459377285ad874054d797f3ccebf984978aa39129f6eafde5cdc8315b612f8"
++
++[[package]]
++name = "const-oid"
++version = "0.10.3"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "be95d4a884358a21a199689323c29e9256b4a1b315e22f183d155422041d3a9a"
++
++[[package]]
++name = "core-models"
++version = "0.0.7"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "ee3344d349528f449816cfa85e558c439bdca5a6d8a738cfb21e69f0b2b1952f"
++dependencies = [
++ "hax-lib",
++ "pastey",
++ "rand",
+ ]
+ 
+ [[package]]
+@@ -93,6 +254,63 @@ dependencies = [
+  "libc",
+ ]
+ 
++[[package]]
++name = "cpufeatures"
++version = "0.3.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "5ca28b0ae3115b884660db4118d803791fd6756b6e88f39c0f3f7859060d7566"
++dependencies = [
++ "libc",
++]
++
++[[package]]
++name = "crabgrind"
++version = "0.2.6"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "cc7459e07732f6de74001fcf73a3fdfbb0f368e4fd8e2392f4a2206a065e6e95"
++dependencies = [
++ "bindgen",
++ "cc",
++ "pkg-config",
++]
++
++[[package]]
++name = "crossbeam-deque"
++version = "0.8.8"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "622f3fc73690be383c7214310406f28a90e6edeadc3cea882f9d71e495b9711a"
++dependencies = [
++ "crossbeam-epoch",
++ "crossbeam-utils",
++]
++
++[[package]]
++name = "crossbeam-epoch"
++version = "0.9.21"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "dc74980687109a3b14c72fd458107bf0baa1da1a1a805e178d15501ba9b86d9d"
++dependencies = [
++ "crossbeam-utils",
++]
++
++[[package]]
++name = "crossbeam-utils"
++version = "0.8.23"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "a31eee39dddec8330830986fcd7625edb5a24ec90ea038215273bbc3adb08ac6"
++
++[[package]]
++name = "crypto-bigint"
++version = "0.5.5"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "0dc92fb57ca44df6db8059111ab3af99a63d5d0f8375d9972e319a379c6bab76"
++dependencies = [
++ "generic-array",
++ "rand_core 0.6.4",
++ "subtle",
++ "zeroize",
++]
++
+ [[package]]
+ name = "crypto-common"
+ version = "0.1.7"
+@@ -100,10 +318,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "78c8292055d1c1df0cce5d180393dc8cce0abec0a7102adb6c7b1eef6016d60a"
+ dependencies = [
+  "generic-array",
+- "rand_core",
++ "rand_core 0.6.4",
+  "typenum",
+ ]
+ 
++[[package]]
++name = "crypto-common"
++version = "0.2.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "ce6e4c961d6cd6c9a86db418387425e8bdeaf05b3c8bc1411e6dca4c252f1453"
++dependencies = [
++ "getrandom 0.4.3",
++ "hybrid-array",
++ "rand_core 0.10.1",
++]
++
+ [[package]]
+ name = "ctr"
+ version = "0.9.2"
+@@ -113,6 +342,15 @@ dependencies = [
+  "cipher",
+ ]
+ 
++[[package]]
++name = "ctutils"
++version = "0.4.8"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "261af4dc7a06ea8a527a8717d8cbba3417530d6ea14e1edb3de6b67806be474f"
++dependencies = [
++ "cmov",
++]
++
+ [[package]]
+ name = "curve25519-dalek"
+ version = "4.1.3"
+@@ -120,14 +358,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "97fb8b7c4503de7d6ae7b42ab72a5a59857b4c937ec27a3d4539dba95b5ab2be"
+ dependencies = [
+  "cfg-if",
+- "cpufeatures",
++ "cpufeatures 0.2.17",
+  "curve25519-dalek-derive",
+- "fiat-crypto",
++ "digest 0.10.7",
++ "fiat-crypto 0.2.9",
+  "rustc_version",
+  "subtle",
+  "zeroize",
+ ]
+ 
++[[package]]
++name = "curve25519-dalek"
++version = "5.0.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "b5eed333089e2e1c1ac8c6c0398e5e2497b4c9926ca6d0365ed1e099afa5bc23"
++dependencies = [
++ "cfg-if",
++ "cpufeatures 0.3.1",
++ "curve25519-dalek-derive",
++ "fiat-crypto 0.3.0",
++ "rustc_version",
++ "subtle",
++]
++
+ [[package]]
+ name = "curve25519-dalek-derive"
+ version = "0.1.1"
+@@ -139,175 +392,1162 @@ dependencies = [
+  "syn 2.0.119",
+ ]
+ 
++[[package]]
++name = "der"
++version = "0.7.10"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "e7c1832837b905bbfb5101e07cc24c8deddf52f93225eee6ead5f4d63d53ddcb"
++dependencies = [
++ "const-oid 0.9.6",
++ "pem-rfc7468",
++ "zeroize",
++]
++
++[[package]]
++name = "der"
++version = "0.8.3"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "6a996a108feb8b427a6e12fcf6af4aa83409b79d72c15337d7741368131ee004"
++dependencies = [
++ "const-oid 0.10.3",
++ "zeroize",
++]
++
+ [[package]]
+ name = "digest"
+ version = "0.10.7"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"
+ dependencies = [
+- "block-buffer",
+- "crypto-common",
++ "block-buffer 0.10.4",
++ "const-oid 0.9.6",
++ "crypto-common 0.1.7",
++ "subtle",
++]
++
++[[package]]
++name = "digest"
++version = "0.11.3"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "f1dd6dbb5841937940781866fa1281a1ff7bd3bf827091440879f9994983d5c2"
++dependencies = [
++ "block-buffer 0.12.1",
++ "const-oid 0.10.3",
++ "crypto-common 0.2.2",
++ "ctutils",
++]
++
++[[package]]
++name = "ecdsa"
++version = "0.16.9"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "ee27f32b5c5292967d2d4a9d7f1e0b0aed2c15daded5a60300e4abb9d8020bca"
++dependencies = [
++ "der 0.7.10",
++ "digest 0.10.7",
++ "elliptic-curve",
++ "rfc6979",
++ "signature 2.2.0",
++ "spki 0.7.3",
++]
++
++[[package]]
++name = "ed25519"
++version = "2.2.3"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "115531babc129696a58c64a4fef0a8bf9e9698629fb97e9e40767d235cfbcd53"
++dependencies = [
++ "pkcs8 0.10.2",
++ "signature 2.2.0",
++]
++
++[[package]]
++name = "ed25519-dalek"
++version = "2.2.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "70e796c081cee67dc755e1a36a0a172b897fab85fc3f6bc48307991f64e4eca9"
++dependencies = [
++ "curve25519-dalek 4.1.3",
++ "ed25519",
++ "rand_core 0.6.4",
++ "serde",
++ "sha2 0.10.9",
++ "subtle",
++ "zeroize",
++]
++
++[[package]]
++name = "either"
++version = "1.19.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "0e9c71c2167ca323c882b99918929403426e2373ea17242ff5653e0d5e1058be"
++
++[[package]]
++name = "elliptic-curve"
++version = "0.13.8"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "b5e6043086bf7973472e0c7dff2142ea0b680d30e18d9cc40f267efbf222bd47"
++dependencies = [
++ "base16ct",
++ "crypto-bigint",
++ "digest 0.10.7",
++ "ff",
++ "generic-array",
++ "group",
++ "hkdf 0.12.4",
++ "pem-rfc7468",
++ "pkcs8 0.10.2",
++ "rand_core 0.6.4",
++ "sec1",
++ "subtle",
++ "zeroize",
++]
++
++[[package]]
++name = "ff"
++version = "0.13.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "c0b50bfb653653f9ca9095b427bed08ab8d75a137839d9ad64eb11810d5b6393"
++dependencies = [
++ "rand_core 0.6.4",
+  "subtle",
+ ]
+ 
+ [[package]]
+-name = "fiat-crypto"
+-version = "0.2.9"
++name = "fiat-crypto"
++version = "0.2.9"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "28dea519a9695b9977216879a3ebfddf92f1c08c05d984f8996aecd6ecdc811d"
++
++[[package]]
++name = "fiat-crypto"
++version = "0.3.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "64cd1e32ddd350061ae6edb1b082d7c54915b5c672c389143b9a63403a109f24"
++
++[[package]]
++name = "find-msvc-tools"
++version = "0.1.15"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "1c66915cc5391097de7a2b0b972e8505aa33c0df401fd3a6811dbdb32881ba48"
++
++[[package]]
++name = "futures-core"
++version = "0.3.34"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "92d699e522242e69e3003b94ecc1f960f3a5e015aa7c5d7486e65ad01dd94f5e"
++
++[[package]]
++name = "futures-task"
++version = "0.3.34"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "cd417de3d1d015fc3bfd2b1ea46dfc7bab72ef86f1cc7cc9c78e728b34a6d1fd"
++
++[[package]]
++name = "futures-util"
++version = "0.3.34"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "0d50a92467f8ba5dd6e3ee5d4bd04d73ab2e4e1c44474a0674821dfce14b79bc"
++dependencies = [
++ "futures-core",
++ "futures-task",
++ "pin-project-lite",
++ "slab",
++]
++
++[[package]]
++name = "generic-array"
++version = "0.14.7"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "85649ca51fd72272d7821adaf274ad91c288277713d9c18820d8499a7ff69e9a"
++dependencies = [
++ "typenum",
++ "version_check",
++ "zeroize",
++]
++
++[[package]]
++name = "getrandom"
++version = "0.2.17"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "ff2abc00be7fca6ebc474524697ae276ad847ad0a6b3faa4bcb027e9a4614ad0"
++dependencies = [
++ "cfg-if",
++ "js-sys",
++ "libc",
++ "wasi",
++ "wasm-bindgen",
++]
++
++[[package]]
++name = "getrandom"
++version = "0.4.3"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "300e883d756b2e4ec94e02791f39b04b522276138852cfc41d9fb7e904106099"
++dependencies = [
++ "cfg-if",
++ "libc",
++ "r-efi",
++ "rand_core 0.10.1",
++]
++
++[[package]]
++name = "ghash"
++version = "0.5.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "f0d8a4362ccb29cb0b265253fb0a2728f592895ee6854fd9bc13f2ffda266ff1"
++dependencies = [
++ "opaque-debug",
++ "polyval",
++]
++
++[[package]]
++name = "glob"
++version = "0.3.4"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
++
++[[package]]
++name = "group"
++version = "0.13.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "f0f9ef7462f7c099f518d754361858f86d8a07af53ba9af0fe635bbccb151a63"
++dependencies = [
++ "ff",
++ "rand_core 0.6.4",
++ "subtle",
++]
++
++[[package]]
++name = "hax-lib"
++version = "0.3.7"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "01a33cb227f97ee5c419064c31d7c55a7d895f28d8019ccdadc311cc036500c4"
++dependencies = [
++ "hax-lib-macros",
++ "num-bigint",
++ "num-traits",
++]
++
++[[package]]
++name = "hax-lib-macros"
++version = "0.3.7"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "28da835a5f153e9f3d0cc1f42ee605a1cfa9093c93348193793d60a1b0908b51"
++dependencies = [
++ "hax-lib-macros-types",
++ "proc-macro-error2",
++ "proc-macro2",
++ "quote",
++ "syn 2.0.119",
++]
++
++[[package]]
++name = "hax-lib-macros-types"
++version = "0.3.7"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "eed327e9a28d6ee018a4a9ba842d4ee27e378c8a591d2beb6f42f32b24a02fcb"
++dependencies = [
++ "proc-macro2",
++ "quote",
++ "serde",
++ "serde_json",
++ "uuid",
++]
++
++[[package]]
++name = "hkdf"
++version = "0.12.4"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "7b5f8eb2ad728638ea2c7d47a21db23b7b58a72ed6a38256b8a1849f15fbbdf7"
++dependencies = [
++ "hmac 0.12.1",
++]
++
++[[package]]
++name = "hkdf"
++version = "0.13.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "4aaa26c720c68b866f2c96ef5c1264b3e6f473fe5d4ce61cd44bbe913e553018"
++dependencies = [
++ "hmac 0.13.0",
++]
++
++[[package]]
++name = "hmac"
++version = "0.12.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "6c49c37c09c17a53d937dfbb742eb3a961d65a994e6bcdcf37e7399d0cc8ab5e"
++dependencies = [
++ "digest 0.10.7",
++]
++
++[[package]]
++name = "hmac"
++version = "0.13.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "6303bc9732ae41b04cb554b844a762b4115a61bfaa81e3e83050991eeb56863f"
++dependencies = [
++ "digest 0.11.3",
++]
++
++[[package]]
++name = "hpke-rs"
++version = "0.7.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "812de62ab573b876c6c40d7553bae9402ae3bad95b64af06f964388eecb9b7b1"
++dependencies = [
++ "hpke-rs-crypto",
++ "hpke-rs-libcrux",
++ "hpke-rs-rust-crypto",
++ "libcrux-sha3",
++ "log",
++ "serde",
++ "subtle",
++ "tls_codec",
++ "zeroize",
++]
++
++[[package]]
++name = "hpke-rs-crypto"
++version = "0.7.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "d2c461da2e0c9c93d875b597f0c78214fb0d2d5c57834b2ef2a2fa057fa20e24"
++dependencies = [
++ "rand",
++ "zeroize",
++]
++
++[[package]]
++name = "hpke-rs-libcrux"
++version = "0.7.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "4c1ace95ef11fbbd84527eada5fc1304f66720fc4c008db30d888d62d3c52613"
++dependencies = [
++ "hpke-rs-crypto",
++ "libcrux-aead",
++ "libcrux-ecdh",
++ "libcrux-hkdf",
++ "libcrux-kem",
++ "libcrux-traits",
++ "rand",
++ "rand_chacha 0.10.0",
++ "rand_core 0.10.1",
++ "zeroize",
++]
++
++[[package]]
++name = "hpke-rs-rust-crypto"
++version = "0.7.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "3a606ac19851da841862ef5f39d26d6227bfcfb4047417801a66c1f6e6652d71"
++dependencies = [
++ "aes-gcm",
++ "chacha20poly1305",
++ "hkdf 0.13.0",
++ "hpke-rs-crypto",
++ "k256",
++ "ml-kem",
++ "p256",
++ "p384",
++ "rand",
++ "rand_chacha 0.10.0",
++ "rand_core 0.10.1",
++ "sha2 0.11.1",
++ "subtle",
++ "x-wing",
++ "x25519-dalek 2.0.1",
++ "zeroize",
++]
++
++[[package]]
++name = "hybrid-array"
++version = "0.4.15"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "27f864f10dfb56725ce5ce5472bc52252c8f93a4ab86327122cebf62c5f59a17"
++dependencies = [
++ "ctutils",
++ "typenum",
++]
++
++[[package]]
++name = "inout"
++version = "0.1.4"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "879f10e63c20629ecabbb64a8010319738c66a5cd0c29b02d63d272b03751d01"
++dependencies = [
++ "generic-array",
++]
++
++[[package]]
++name = "itertools"
++version = "0.13.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "413ee7dfc52ee1a4949ceeb7dbc8a33f2d6c088194d9f922fb8318faf1f01186"
++dependencies = [
++ "either",
++]
++
++[[package]]
++name = "itoa"
++version = "1.0.19"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "3bd1574e617a9a6c1f8f8181bd7e841e1f20e4277607ef28945765188d6284d4"
++
++[[package]]
++name = "js-sys"
++version = "0.3.107"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "8dc09d2154098bbf4ef54eab6b117a3c24cbbffe94046b16ee6d6d4510584d3a"
++dependencies = [
++ "cfg-if",
++ "futures-util",
++ "wasm-bindgen",
++]
++
++[[package]]
++name = "k256"
++version = "0.13.4"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "f6e3919bbaa2945715f0bb6d3934a173d1e9a59ac23767fbaaef277265a7411b"
++dependencies = [
++ "cfg-if",
++ "elliptic-curve",
++]
++
++[[package]]
++name = "keccak"
++version = "0.2.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "d8f198d1db720e4940b5a493201d199d9f24f568f8f746bd13706243a2f71598"
++dependencies = [
++ "cfg-if",
++ "cpufeatures 0.3.1",
++]
++
++[[package]]
++name = "kem"
++version = "0.3.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "01737161ba802849cfd486b5bd209d38ba4943494c249a8126005170c7621edd"
++dependencies = [
++ "crypto-common 0.2.2",
++ "rand_core 0.10.1",
++]
++
++[[package]]
++name = "libc"
++version = "0.2.191"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
++
++[[package]]
++name = "libcrux-aead"
++version = "0.0.9"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "22acbe68be84b7b41aaba6e39b87036fc4324dee628d94773750bf3d7e906d69"
++dependencies = [
++ "libcrux-aes",
++ "libcrux-chacha20poly1305",
++ "libcrux-secrets",
++ "libcrux-traits",
++]
++
++[[package]]
++name = "libcrux-aes"
++version = "0.0.9"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "57cc95b11dbc797b1e169467b1fc4205c4e6ee2ce516a035ad7342ce5f6ae971"
++dependencies = [
++ "libcrux-intrinsics",
++ "libcrux-platform",
++ "libcrux-secrets",
++ "libcrux-traits",
++]
++
++[[package]]
++name = "libcrux-chacha20poly1305"
++version = "0.0.9"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "537e6eee5cdc9a980014d058784b0be09614f0596df789b114f7833aa9f35d75"
++dependencies = [
++ "libcrux-hacl-rs",
++ "libcrux-macros",
++ "libcrux-poly1305",
++ "libcrux-secrets",
++ "libcrux-traits",
++]
++
++[[package]]
++name = "libcrux-curve25519"
++version = "0.0.8"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "e4f3cfd5e31cb9745e290ee061222c380ec42884654b09fc7d12a5b0ed63e028"
++dependencies = [
++ "libcrux-hacl-rs",
++ "libcrux-macros",
++ "libcrux-secrets",
++ "libcrux-traits",
++]
++
++[[package]]
++name = "libcrux-ecdh"
++version = "0.0.8"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "4a227590b89ff55ce7cd97b5a7468c82d231db8f3b890bb4d4fb6d271e7524d7"
++dependencies = [
++ "libcrux-curve25519",
++ "libcrux-p256",
++ "rand",
++ "tls_codec",
++]
++
++[[package]]
++name = "libcrux-hacl-rs"
++version = "0.0.5"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "66106db376ae249af86911aee048cf73ea1f394d6653026fc988dd22cf2a4ace"
++dependencies = [
++ "libcrux-macros",
++]
++
++[[package]]
++name = "libcrux-hkdf"
++version = "0.0.8"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "dc94e651dca4d47edbcdd88bb2428ce16a2bd86b7a4e7170da87b505478f9839"
++dependencies = [
++ "libcrux-hacl-rs",
++ "libcrux-hmac",
++ "libcrux-secrets",
++]
++
++[[package]]
++name = "libcrux-hmac"
++version = "0.0.8"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "500ad9b32c715161b594172ca1fb11503a1c033b393ff4c0c33505ce51c1943c"
++dependencies = [
++ "libcrux-hacl-rs",
++ "libcrux-macros",
++ "libcrux-sha2",
++ "libcrux-traits",
++]
++
++[[package]]
++name = "libcrux-intrinsics"
++version = "0.0.8"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "98a0c574d4eb81d0814bc2b91e4a433d7e0b35851b1d62eb5dd95c064f1f76d0"
++dependencies = [
++ "core-models",
++ "hax-lib",
++]
++
++[[package]]
++name = "libcrux-kem"
++version = "0.0.9"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "541a7377fb35060892e0620982e224e47419f10da8c212453bf642dafe529691"
++dependencies = [
++ "libcrux-curve25519",
++ "libcrux-ecdh",
++ "libcrux-ml-kem",
++ "libcrux-p256",
++ "libcrux-sha3",
++ "libcrux-traits",
++ "rand",
++]
++
++[[package]]
++name = "libcrux-macros"
++version = "0.0.3"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "ffd6aa2dcd5be681662001b81d493f1569c6d49a32361f470b0c955465cd0338"
++dependencies = [
++ "quote",
++ "syn 2.0.119",
++]
++
++[[package]]
++name = "libcrux-ml-kem"
++version = "0.0.10"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "1d8160f7d64fd2716b4fd05cc886a042f8dcda18d9206c0d506e2c67bdf97daa"
++dependencies = [
++ "hax-lib",
++ "libcrux-intrinsics",
++ "libcrux-platform",
++ "libcrux-secrets",
++ "libcrux-sha3",
++ "libcrux-traits",
++ "rand",
++ "tls_codec",
++]
++
++[[package]]
++name = "libcrux-p256"
++version = "0.0.8"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "3400732702d578be622257b98cec85e9b0cd34a67f1f06d3ebe9ae34963cdf02"
++dependencies = [
++ "libcrux-hacl-rs",
++ "libcrux-macros",
++ "libcrux-secrets",
++ "libcrux-sha2",
++ "libcrux-traits",
++]
++
++[[package]]
++name = "libcrux-platform"
++version = "0.0.3"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "1d9e21d7ed31a92ac539bd69a8c970b183ee883872d2d19ce27036e24cb8ecc4"
++dependencies = [
++ "libc",
++]
++
++[[package]]
++name = "libcrux-poly1305"
++version = "0.0.6"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "76a9144949845813a0b8787d08cbba47baabe59c83f3043e558e6e92385c40cc"
++dependencies = [
++ "libcrux-hacl-rs",
++ "libcrux-macros",
++]
++
++[[package]]
++name = "libcrux-secrets"
++version = "0.0.6"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "79054fc9037cb70d6a546cf094cea7d7df06af5e49d230ba24103d27ccc886f1"
++dependencies = [
++ "crabgrind",
++ "hax-lib",
++]
++
++[[package]]
++name = "libcrux-sha2"
++version = "0.0.8"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "960e46e1be0b77098cc6ce82137864936ecad3a1b9fd4303dd51202ca140dd1e"
++dependencies = [
++ "libcrux-hacl-rs",
++ "libcrux-macros",
++ "libcrux-traits",
++]
++
++[[package]]
++name = "libcrux-sha3"
++version = "0.0.10"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "c09f5c39afae0528e1f70a3c1e3c6ee649ec1f19dda26fc9b6ea91108fb879ef"
++dependencies = [
++ "hax-lib",
++ "libcrux-intrinsics",
++ "libcrux-platform",
++ "libcrux-traits",
++]
++
++[[package]]
++name = "libcrux-traits"
++version = "0.0.8"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "3fa7a21e8c2e8baa8b40f0b176740f2ca4baadd79d1b00e48d6b1e363c42085a"
++dependencies = [
++ "libcrux-secrets",
++ "rand",
++]
++
++[[package]]
++name = "libloading"
++version = "0.8.9"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "d7c4b02199fee7c5d21a5ae7d8cfa79a6ef5bb2fc834d6e9058e89c825efdc55"
++dependencies = [
++ "cfg-if",
++ "windows-link",
++]
++
++[[package]]
++name = "log"
++version = "0.4.35"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
++
++[[package]]
++name = "memchr"
++version = "2.8.3"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
++
++[[package]]
++name = "minimal-lexical"
++version = "0.2.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
++
++[[package]]
++name = "ml-dsa"
++version = "0.1.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "6f6d49c3f3f0e10e18ca975ffda66f8da0ec36521c1d911adcbc521bf0743f5c"
++dependencies = [
++ "const-oid 0.10.3",
++ "crypto-common 0.2.2",
++ "ctutils",
++ "hybrid-array",
++ "module-lattice",
++ "pkcs8 0.11.0",
++ "shake",
++ "signature 3.0.0",
++]
++
++[[package]]
++name = "ml-kem"
++version = "0.3.4"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "84ca78b66f46050d49fa21693ae8adab2081d8101b65d8067316b6b70b64a0d1"
++dependencies = [
++ "hybrid-array",
++ "kem",
++ "module-lattice",
++ "rand_core 0.10.1",
++ "sha3",
++ "shake",
++]
++
++[[package]]
++name = "module-lattice"
++version = "0.2.4"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "c4a1e412c8ee83a1c678f427806219c49c96b2511b9f07497514f0e43fb26155"
++dependencies = [
++ "ctutils",
++ "hybrid-array",
++ "num-traits",
++]
++
++[[package]]
++name = "nom"
++version = "7.1.3"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "d273983c5a657a70a3e8f2a01329822f3b8c8172b73826411a55751e404a0a4a"
++dependencies = [
++ "memchr",
++ "minimal-lexical",
++]
++
++[[package]]
++name = "num-bigint"
++version = "0.4.8"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "c89e69e7e0f03bea5ef08013795c25018e101932225a656383bd384495ecc367"
++dependencies = [
++ "num-integer",
++ "num-traits",
++]
++
++[[package]]
++name = "num-integer"
++version = "0.1.47"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "7ce2d95d4b3734dc35aa2f45e1aa22cd416814592a4f9d9205e11affd5b8e10b"
++dependencies = [
++ "num-traits",
++]
++
++[[package]]
++name = "num-traits"
++version = "0.2.19"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
++dependencies = [
++ "autocfg",
++]
++
++[[package]]
++name = "opaque-debug"
++version = "0.3.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
++
++[[package]]
++name = "openmls"
++version = "0.9.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "ce4173f914cbc2dd28d9499f19e92f3e1bfebd9eea1607889924a77ca63d3ffc"
++dependencies = [
++ "log",
++ "openmls_serialization_helpers",
++ "openmls_traits",
++ "rayon",
++ "serde",
++ "serde_bytes",
++ "thiserror",
++ "tls_codec",
++ "zeroize",
++]
++
++[[package]]
++name = "openmls_basic_credential"
++version = "0.6.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "dbd3f0c3422e7c7a8496f042b547b0c28d0793f8ba97feb401966e58196a1e40"
++dependencies = [
++ "ed25519-dalek",
++ "ml-dsa",
++ "openmls_traits",
++ "p256",
++ "p384",
++ "rand_core 0.6.4",
++ "serde",
++ "tls_codec",
++ "zeroize",
++]
++
++[[package]]
++name = "openmls_memory_storage"
++version = "0.6.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "ce927945a16eaa19302ed5ccef052f01ba68f2ba7ae67e4ac4ff2fc661445364"
++dependencies = [
++ "log",
++ "openmls_traits",
++ "serde",
++ "serde_json",
++ "thiserror",
++]
++
++[[package]]
++name = "openmls_rust_crypto"
++version = "0.6.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "36bf3fe824ead6e81d22f49a9cd7feffca3494979fac14c1248e19516e3625f1"
++dependencies = [
++ "aes-gcm",
++ "chacha20poly1305",
++ "ed25519-dalek",
++ "hkdf 0.13.0",
++ "hmac 0.13.0",
++ "hpke-rs",
++ "hpke-rs-crypto",
++ "hpke-rs-rust-crypto",
++ "ml-dsa",
++ "openmls_memory_storage",
++ "openmls_traits",
++ "p256",
++ "p384",
++ "rand_chacha 0.3.1",
++ "rand_core 0.10.1",
++ "rand_core 0.6.4",
++ "sha2 0.11.1",
++ "thiserror",
++ "tls_codec",
++]
++
++[[package]]
++name = "openmls_serialization_helpers"
++version = "0.1.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "0e2cf2193541e83ce1a89aaa44c2fd4783abd54853823075a32b60ef032284c0"
++dependencies = [
++ "proc-macro2",
++ "quote",
++ "syn 2.0.119",
++ "thiserror",
++]
++
++[[package]]
++name = "openmls_traits"
++version = "0.6.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "ac13edad8698eb1917cbc1dab99591fa1594d84320904fe3fc5121854f95831c"
++dependencies = [
++ "serde",
++ "tls_codec",
++]
++
++[[package]]
++name = "p256"
++version = "0.13.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "c9863ad85fa8f4460f9c48cb909d38a0d689dba1f6f6988a5e3e0d31071bcd4b"
++dependencies = [
++ "ecdsa",
++ "elliptic-curve",
++ "primeorder",
++ "sha2 0.10.9",
++]
++
++[[package]]
++name = "p384"
++version = "0.13.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "fe42f1670a52a47d448f14b6a5c61dd78fce51856e68edaa38f7ae3a46b8d6b6"
++dependencies = [
++ "ecdsa",
++ "elliptic-curve",
++ "primeorder",
++ "sha2 0.10.9",
++]
++
++[[package]]
++name = "pastey"
++version = "0.2.3"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "2ee67f1008b1ba2321834326597b8e186293b049a023cdef258527550b9935b4"
++
++[[package]]
++name = "pem-rfc7468"
++version = "0.7.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "88b39c9bfcfc231068454382784bb460aae594343fb030d46e9f50a645418412"
++dependencies = [
++ "base64ct",
++]
++
++[[package]]
++name = "pin-project-lite"
++version = "0.2.17"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
++
++[[package]]
++name = "pkcs8"
++version = "0.10.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "f950b2377845cebe5cf8b5165cb3cc1a5e0fa5cfa3e1f7f55707d8fd82e0a7b7"
++dependencies = [
++ "der 0.7.10",
++ "spki 0.7.3",
++]
++
++[[package]]
++name = "pkcs8"
++version = "0.11.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "451913da69c775a56034ea8d9003d27ee8948e12443eae7c038ba100a4f21cb7"
++dependencies = [
++ "der 0.8.3",
++ "spki 0.8.1",
++]
++
++[[package]]
++name = "pkg-config"
++version = "0.3.34"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
++
++[[package]]
++name = "poly1305"
++version = "0.8.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "8159bd90725d2df49889a078b54f4f79e87f1f8a8444194cdca81d38f5393abf"
++dependencies = [
++ "cpufeatures 0.2.17",
++ "opaque-debug",
++ "universal-hash",
++]
++
++[[package]]
++name = "polyval"
++version = "0.6.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "9d1fe60d06143b2430aa532c94cfe9e29783047f06c0d7fd359a9a51b729fa25"
++dependencies = [
++ "cfg-if",
++ "cpufeatures 0.2.17",
++ "opaque-debug",
++ "universal-hash",
++]
++
++[[package]]
++name = "ppv-lite86"
++version = "0.2.21"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "28dea519a9695b9977216879a3ebfddf92f1c08c05d984f8996aecd6ecdc811d"
++checksum = "85eae3c4ed2f50dcfe72643da4befc30deadb458a9b590d720cde2f2b1e97da9"
++dependencies = [
++ "zerocopy",
++]
+ 
+ [[package]]
+-name = "futures-core"
+-version = "0.3.34"
++name = "prettyplease"
++version = "0.2.37"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "92d699e522242e69e3003b94ecc1f960f3a5e015aa7c5d7486e65ad01dd94f5e"
++checksum = "479ca8adacdd7ce8f1fb39ce9ecccbfe93a3f1344b3d0d97f20bc0196208f62b"
++dependencies = [
++ "proc-macro2",
++ "syn 2.0.119",
++]
+ 
+ [[package]]
+-name = "futures-task"
+-version = "0.3.34"
++name = "primeorder"
++version = "0.13.6"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "cd417de3d1d015fc3bfd2b1ea46dfc7bab72ef86f1cc7cc9c78e728b34a6d1fd"
++checksum = "353e1ca18966c16d9deb1c69278edbc5f194139612772bd9537af60ac231e1e6"
++dependencies = [
++ "elliptic-curve",
++]
+ 
+ [[package]]
+-name = "futures-util"
+-version = "0.3.34"
++name = "proc-macro-error-attr2"
++version = "2.0.0"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "0d50a92467f8ba5dd6e3ee5d4bd04d73ab2e4e1c44474a0674821dfce14b79bc"
++checksum = "96de42df36bb9bba5542fe9f1a054b8cc87e172759a1868aa05c1f3acc89dfc5"
+ dependencies = [
+- "futures-core",
+- "futures-task",
+- "pin-project-lite",
+- "slab",
++ "proc-macro2",
++ "quote",
+ ]
+ 
+ [[package]]
+-name = "generic-array"
+-version = "0.14.7"
++name = "proc-macro-error2"
++version = "2.0.1"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "85649ca51fd72272d7821adaf274ad91c288277713d9c18820d8499a7ff69e9a"
++checksum = "11ec05c52be0a07b08061f7dd003e7d7092e0472bc731b4af7bb1ef876109802"
+ dependencies = [
+- "typenum",
+- "version_check",
++ "proc-macro-error-attr2",
++ "proc-macro2",
++ "quote",
++ "syn 2.0.119",
+ ]
+ 
+ [[package]]
+-name = "getrandom"
+-version = "0.2.17"
++name = "proc-macro2"
++version = "1.0.107"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "ff2abc00be7fca6ebc474524697ae276ad847ad0a6b3faa4bcb027e9a4614ad0"
++checksum = "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
+ dependencies = [
+- "cfg-if",
+- "js-sys",
+- "libc",
+- "wasi",
+- "wasm-bindgen",
++ "unicode-ident",
+ ]
+ 
+ [[package]]
+-name = "ghash"
+-version = "0.5.1"
++name = "quote"
++version = "1.0.47"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "f0d8a4362ccb29cb0b265253fb0a2728f592895ee6854fd9bc13f2ffda266ff1"
++checksum = "1fbf4db142a473a8d80c26bbf18454ed458bf8d26c8219c331daecfdbd079001"
+ dependencies = [
+- "opaque-debug",
+- "polyval",
++ "proc-macro2",
+ ]
+ 
+ [[package]]
+-name = "hkdf"
+-version = "0.12.4"
++name = "r-efi"
++version = "6.0.0"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "7b5f8eb2ad728638ea2c7d47a21db23b7b58a72ed6a38256b8a1849f15fbbdf7"
+-dependencies = [
+- "hmac",
+-]
++checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
+ 
+ [[package]]
+-name = "hmac"
+-version = "0.12.1"
++name = "rand"
++version = "0.10.3"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "6c49c37c09c17a53d937dfbb742eb3a961d65a994e6bcdcf37e7399d0cc8ab5e"
++checksum = "65c9fb96cbc91e3478eaae79a69fcd3f1ae4ad052e471fe6732fff548984b4af"
+ dependencies = [
+- "digest",
++ "chacha20 0.10.2",
++ "getrandom 0.4.3",
++ "rand_core 0.10.1",
+ ]
+ 
+ [[package]]
+-name = "inout"
+-version = "0.1.4"
++name = "rand_chacha"
++version = "0.3.1"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "879f10e63c20629ecabbb64a8010319738c66a5cd0c29b02d63d272b03751d01"
++checksum = "e6c10a63a0fa32252be49d21e7709d4d4baf8d231c2dbce1eaa8141b9b127d88"
+ dependencies = [
+- "generic-array",
++ "ppv-lite86",
++ "rand_core 0.6.4",
+ ]
+ 
+ [[package]]
+-name = "js-sys"
+-version = "0.3.107"
++name = "rand_chacha"
++version = "0.10.0"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "8dc09d2154098bbf4ef54eab6b117a3c24cbbffe94046b16ee6d6d4510584d3a"
++checksum = "3e6af7f3e25ded52c41df4e0b1af2d047e45896c2f3281792ed68a1c243daedb"
+ dependencies = [
+- "cfg-if",
+- "futures-util",
+- "wasm-bindgen",
++ "ppv-lite86",
++ "rand_core 0.10.1",
+ ]
+ 
+ [[package]]
+-name = "libc"
+-version = "0.2.191"
++name = "rand_core"
++version = "0.6.4"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
++checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
++dependencies = [
++ "getrandom 0.2.17",
++]
+ 
+ [[package]]
+-name = "opaque-debug"
+-version = "0.3.1"
++name = "rand_core"
++version = "0.10.1"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
++checksum = "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
+ 
+ [[package]]
+-name = "pin-project-lite"
+-version = "0.2.17"
++name = "rayon"
++version = "1.12.0"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
++checksum = "fb39b166781f92d482534ef4b4b1b2568f42613b53e5b6c160e24cfbfa30926d"
++dependencies = [
++ "either",
++ "rayon-core",
++]
+ 
+ [[package]]
+-name = "polyval"
+-version = "0.6.2"
++name = "rayon-core"
++version = "1.13.0"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "9d1fe60d06143b2430aa532c94cfe9e29783047f06c0d7fd359a9a51b729fa25"
++checksum = "22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91"
+ dependencies = [
+- "cfg-if",
+- "cpufeatures",
+- "opaque-debug",
+- "universal-hash",
++ "crossbeam-deque",
++ "crossbeam-utils",
+ ]
+ 
+ [[package]]
+-name = "proc-macro2"
+-version = "1.0.107"
++name = "regex"
++version = "1.13.1"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
++checksum = "f020237b6c8eed93db2e2cb53c00c60a8e1bc73da7d073199a1180401450218d"
+ dependencies = [
+- "unicode-ident",
++ "aho-corasick",
++ "memchr",
++ "regex-automata",
++ "regex-syntax",
+ ]
+ 
+ [[package]]
+-name = "quote"
+-version = "1.0.47"
++name = "regex-automata"
++version = "0.4.18"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "1fbf4db142a473a8d80c26bbf18454ed458bf8d26c8219c331daecfdbd079001"
++checksum = "ad8553b9b26413251cbf30e620595c7a41b3887f03da04579c0e6b0d6a06b4b2"
+ dependencies = [
+- "proc-macro2",
++ "aho-corasick",
++ "memchr",
++ "regex-syntax",
+ ]
+ 
+ [[package]]
+-name = "rand_core"
+-version = "0.6.4"
++name = "regex-syntax"
++version = "0.8.11"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
++checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
++
++[[package]]
++name = "rfc6979"
++version = "0.4.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "f8dd2a808d456c4a54e300a23e9f5a67e122c3024119acbfd73e3bf664491cb2"
+ dependencies = [
+- "getrandom",
++ "hmac 0.12.1",
++ "subtle",
+ ]
+ 
++[[package]]
++name = "rustc-hash"
++version = "2.1.3"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "6b1e7f9a428571be2dc5bc0505c13fb6bf936822b894ec87abf8a08a4e51742d"
++
+ [[package]]
+ name = "rustc_version"
+ version = "0.4.1"
+@@ -323,6 +1563,20 @@ version = "1.0.23"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
+ 
++[[package]]
++name = "sec1"
++version = "0.7.3"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "d3e97a565f76233a6003f9f5c54be1d9c5bdfa3eccfb189469f11ec4901c47dc"
++dependencies = [
++ "base16ct",
++ "der 0.7.10",
++ "generic-array",
++ "pkcs8 0.10.2",
++ "subtle",
++ "zeroize",
++]
++
+ [[package]]
+ name = "semver"
+ version = "1.0.28"
+@@ -339,6 +1593,16 @@ dependencies = [
+  "serde_derive",
+ ]
+ 
++[[package]]
++name = "serde_bytes"
++version = "0.11.19"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "a5d440709e79d88e51ac01c4b72fc6cb7314017bb7da9eeff678aa94c10e3ea8"
++dependencies = [
++ "serde",
++ "serde_core",
++]
++
+ [[package]]
+ name = "serde_core"
+ version = "1.0.229"
+@@ -359,6 +1623,19 @@ dependencies = [
+  "syn 3.0.10",
+ ]
+ 
++[[package]]
++name = "serde_json"
++version = "1.0.154"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "e7e9cc8b1b85264074fbcc02a88680c4096b1e47df8f739dceb03bf482f04bd6"
++dependencies = [
++ "itoa",
++ "memchr",
++ "serde",
++ "serde_core",
++ "zmij",
++]
++
+ [[package]]
+ name = "sha2"
+ version = "0.10.9"
+@@ -366,8 +1643,73 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "a7507d819769d01a365ab707794a4084392c824f54a7a6a7862f8c3d0892b283"
+ dependencies = [
+  "cfg-if",
+- "cpufeatures",
+- "digest",
++ "cpufeatures 0.2.17",
++ "digest 0.10.7",
++]
++
++[[package]]
++name = "sha2"
++version = "0.11.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "47d7069beb7d6ac7b9acd1039986e73443f24234f41074da099d6f994ac9ad19"
++dependencies = [
++ "cfg-if",
++ "cpufeatures 0.3.1",
++ "digest 0.11.3",
++]
++
++[[package]]
++name = "sha3"
++version = "0.12.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "bc9bad02c26382724b2d2692c6f179285e4b54eeecd7968f52a50059c3c11759"
++dependencies = [
++ "digest 0.11.3",
++ "keccak",
++ "sponge-cursor",
++]
++
++[[package]]
++name = "shake"
++version = "0.1.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "09057cb2149ad4cbd2da1e26b351f9a4c354219421229c69c3063e6f61947c4a"
++dependencies = [
++ "digest 0.11.3",
++ "keccak",
++ "sponge-cursor",
++]
++
++[[package]]
++name = "shlex"
++version = "1.3.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
++
++[[package]]
++name = "shlex"
++version = "2.0.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
++
++[[package]]
++name = "signature"
++version = "2.2.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "77549399552de45a898a580c1b41d445bf730df867cc44e6c0233bbc4b8329de"
++dependencies = [
++ "digest 0.10.7",
++ "rand_core 0.6.4",
++]
++
++[[package]]
++name = "signature"
++version = "3.0.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "28d567dcbaf0049cb8ac2608a76cd95ff9e4412e1899d389ee400918ca7537f5"
++dependencies = [
++ "digest 0.11.3",
++ "rand_core 0.10.1",
+ ]
+ 
+ [[package]]
+@@ -376,6 +1718,32 @@ version = "0.4.12"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
+ 
++[[package]]
++name = "spki"
++version = "0.7.3"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "d91ed6c858b01f942cd56b37a94b3e0a1798290327d1236e4d9cf4eaca44d29d"
++dependencies = [
++ "base64ct",
++ "der 0.7.10",
++]
++
++[[package]]
++name = "spki"
++version = "0.8.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "7ef958a98b9d5da290cfc78946e9f3e61e1e62a18db0d92cac0b83cc161491a9"
++dependencies = [
++ "base64ct",
++ "der 0.8.3",
++]
++
++[[package]]
++name = "sponge-cursor"
++version = "0.1.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "3a0219bd7d979d58245a4f41f695e1ac9f8befdffadd7f61f1bae9e39abc6620"
++
+ [[package]]
+ name = "subtle"
+ version = "2.6.1"
+@@ -404,6 +1772,49 @@ dependencies = [
+  "unicode-ident",
+ ]
+ 
++[[package]]
++name = "thiserror"
++version = "2.0.21"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "09e52cb86a36cede5cb101bf8908837b3e4c6e5e59fe7fd85c23fb56200d189e"
++dependencies = [
++ "thiserror-impl",
++]
++
++[[package]]
++name = "thiserror-impl"
++version = "2.0.21"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "fe5197923287db20a58125f0bc85c062f7f2c892de97b18c356f9efb14b28524"
++dependencies = [
++ "proc-macro2",
++ "quote",
++ "syn 3.0.10",
++]
++
++[[package]]
++name = "tls_codec"
++version = "0.5.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "18cc98286004cea38f717e2b03d990fc774fbfd38a82720de40e5c94365067c8"
++dependencies = [
++ "serde",
++ "serde_bytes",
++ "tls_codec_derive",
++ "zeroize",
++]
++
++[[package]]
++name = "tls_codec_derive"
++version = "0.5.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "674f41dd95f76cdeb005c83f9444e20cf43daebef37cde9e49a9ca6f4e87b423"
++dependencies = [
++ "proc-macro2",
++ "quote",
++ "syn 2.0.119",
++]
++
+ [[package]]
+ name = "typenum"
+ version = "1.20.1"
+@@ -422,10 +1833,21 @@ version = "0.5.1"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "fc1de2c688dc15305988b563c3854064043356019f97a4b46276fe734c4f07ea"
+ dependencies = [
+- "crypto-common",
++ "crypto-common 0.1.7",
+  "subtle",
+ ]
+ 
++[[package]]
++name = "uuid"
++version = "1.29.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "bed99139f7dac9b5cfe5f17be4d66dc7079a34dee1d74bcc77217119240e267c"
++dependencies = [
++ "getrandom 0.4.3",
++ "js-sys",
++ "wasm-bindgen",
++]
++
+ [[package]]
+ name = "version_check"
+ version = "0.9.5"
+@@ -482,18 +1904,67 @@ dependencies = [
+  "unicode-ident",
+ ]
+ 
++[[package]]
++name = "windows-link"
++version = "0.2.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"
++
++[[package]]
++name = "x-wing"
++version = "0.1.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "01576e56599d01d75c5efcd5b30fa5de29e776f5a225e43fbf8c92c7302d4c8b"
++dependencies = [
++ "kem",
++ "ml-kem",
++ "sha3",
++ "shake",
++ "x25519-dalek 3.0.0",
++]
++
+ [[package]]
+ name = "x25519-dalek"
+ version = "2.0.1"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "c7e468321c81fb07fa7f4c636c3972b9100f0346e5b6a9f2bd0603a52f7ed277"
+ dependencies = [
+- "curve25519-dalek",
+- "rand_core",
++ "curve25519-dalek 4.1.3",
++ "rand_core 0.6.4",
+  "serde",
+  "zeroize",
+ ]
+ 
++[[package]]
++name = "x25519-dalek"
++version = "3.0.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "e7e8131a03190127fb2263afc72b322ecadae46b6ff8c6f399ff5d02f5559af6"
++dependencies = [
++ "curve25519-dalek 5.0.0",
++ "rand_core 0.10.1",
++]
++
++[[package]]
++name = "zerocopy"
++version = "0.8.63"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "e5fe1f8f1b06191a00962174c61aa5005e0bb391a6d80d07e24d115c01a92ed8"
++dependencies = [
++ "zerocopy-derive",
++]
++
++[[package]]
++name = "zerocopy-derive"
++version = "0.8.63"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "863ad3ac83293fb4d740aedbfdc9240dd8d1a50c1099acd76ce80ce7c7230c7f"
++dependencies = [
++ "proc-macro2",
++ "quote",
++ "syn 2.0.119",
++]
++
+ [[package]]
+ name = "zeroize"
+ version = "1.9.1"
+@@ -513,3 +1984,9 @@ dependencies = [
+  "quote",
+  "syn 2.0.119",
+ ]
++
++[[package]]
++name = "zmij"
++version = "1.0.23"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
+diff --git a/src/features/messaging/native/Cargo.toml b/src/features/messaging/native/Cargo.toml
+index 85b3296..aec89b7 100644
+--- a/src/features/messaging/native/Cargo.toml
++++ b/src/features/messaging/native/Cargo.toml
+@@ -19,6 +19,12 @@ wasm-bindgen = "0.2"
+ x25519-dalek = { version = "2", features = ["static_secrets", "zeroize"] }
+ zeroize = { version = "1", features = ["zeroize_derive"] }
+ 
++[dev-dependencies]
++openmls = "=0.9.2"
++openmls_basic_credential = "=0.6.0"
++openmls_rust_crypto = "=0.6.0"
++tls_codec = { version = "0.5", features = ["mls"] }
++
+ [profile.release]
+ opt-level = 3
+ lto = true
+diff --git a/src/features/messaging/native/README.md b/src/features/messaging/native/README.md
+index 0b6c6a4..10efb97 100644
+--- a/src/features/messaging/native/README.md
++++ b/src/features/messaging/native/README.md
+@@ -18,6 +18,10 @@ L'enveloppe binaire expérimentale est `BAR3 | ephemeral_public_key[32] | salt[3
+ - Le format BAR3 n'est pas accepté par les clients actuels; ne jamais émettre de payload BAR3 en production avant déploiement coordonné de la lecture, persistance de clés, récupération, versionnement, et tests d'interopérabilité.
+ - Cette tranche ne chiffre pas les médias et n'ajoute pas de code C dédié : les primitives cryptographiques C maison augmenteraient la surface de risque sans bénéfice démontré.
+ 
++## Prototype OpenMLS (tests uniquement)
++
++OpenMLS `0.9.2` est ajouté uniquement comme dépendance de développement. `tests/openmls_candidate.rs` vérifie un échange de test à deux clients, incluant l’ajout au groupe, le Welcome et les messages TLS sérialisés. OpenMLS n’est pas lié au WASM ni au flux applicatif; les clients continuent d’utiliser le chiffrement RSA historique. Ce test ne valide pas l’authentification de production, le service Supabase de livraison, le stockage persistant ou l’exécution dans le navigateur. Ne pas activer avant l’intégration de ces services et une revue de sécurité.
++
+ ## Vérification
+ 
+ Depuis la racine du dépôt :
+diff --git a/docs/E2E_MLS_MIGRATION.md b/docs/E2E_MLS_MIGRATION.md
+new file mode 100644
+index 0000000..8f7ba2e
+--- /dev/null
++++ b/docs/E2E_MLS_MIGRATION.md
+@@ -0,0 +1,60 @@
++# Migration E2E de BAARO vers MLS — recherche et plan d’implémentation
++
++**État :** un premier prototype OpenMLS isolé est implémenté et testé côté hôte; aucune suite cryptographique nouvelle n’est activée dans les messages de production.
++
++## Tranche implémentée dans cette copie de travail
++
++- `openmls = 0.9.2`, `openmls_rust_crypto = 0.6.0`, `openmls_basic_credential = 0.6.0` et `tls_codec` ont été ajoutés **uniquement en dépendances de développement** du crate Rust messagerie. Le verrou Cargo est mis à jour. OpenMLS n’est donc pas ajouté au binaire WASM qui sert au frontend.
++- `src/features/messaging/native/tests/openmls_candidate.rs` exerce un scénario de deux clients avec un KeyPackage local de test, l’ajout du second client, les octets TLS du Commit et du Welcome, puis la sérialisation/désérialisation et le traitement d’un message applicatif MLS.
++- Validation réussie sur cette copie : `cargo fmt --check`, les 8 tests Rust existants et le nouveau test OpenMLS (9 tests au total), `cargo clippy --all-targets -- -D warnings`, et `cargo check --target wasm32-unknown-unknown` du crate de production existant.
++
++Cette tranche prouve seulement que la bibliothèque peut exécuter le chemin cryptographique de base sur l’hôte et que les dépendances de test ne contaminent pas le build WASM existant. Le test utilise le provider OpenMLS RustCrypto, des identités fictives et un stockage en mémoire; ce choix est un smoke test, pas une décision de provider de production. Il ne valide ni identité de production, ni serveur de livraison, ni persistance, ni exécution OpenMLS dans le navigateur/WebView. Il ne modifie ni `useMessaging.js`, ni le format des messages envoyés, ni les clés RSA historiques. Elle ne doit pas être interprétée comme une activation E2E MLS en production.
++
++## Décision provisoire sur la bibliothèque
++
++La fondation Rust `BAR3` existante ne doit pas être raccordée au flux applicatif : elle ne fournit pas le protocole de session, l’authentification de l’expéditeur, la gestion des appareils ni la rotation et la récupération des clés. Le README du crate la qualifie d’expérimentale et interdit explicitement son émission en production [1].
++
++La piste retenue pour le prototype est **OpenMLS**, implémentation Rust de MLS (RFC 9420), plutôt que le crate `BAR3`. La version vérifiée sur crates.io au 11 novembre 2026 est `openmls 0.9.2`, sous licence MIT, avec Rust 1.91 minimum [15]. Le dépôt contient un module WebAssembly et documente une fonctionnalité JavaScript; son manuel précise toutefois que WASM doit fournir une source d’aléa sûre et l’heure via les API JavaScript du runtime [2][3]. Le target WASM a été vérifié pour le crate BAARO existant, mais OpenMLS lui-même n’a pas encore été compilé ni testé en WebAssembly.
++
++L’audit indépendant d’OpenMLS publié par Phoenix R&D rapporte huit constats SRLabs : un de sévérité élevée, sept corrigés dans les versions 0.8.1 et 0.7.3, et un constat de faible sévérité qui restait en cours de traitement à la date de l’article, le 27 mai 2026 [4]. Avant toute intégration runtime, il faut confirmer dans les notes de version et le rapport complet le statut de ce dernier constat pour la version retenue. La politique de sécurité OpenMLS précise que sa couverture porte sur le crate principal et exclut plusieurs composants externes, dont le provider cryptographique et le stockage fournis par l’application [5]. Cette auditabilité réduit le risque de réinventer un protocole, mais ne constitue pas une certification du produit BAARO.
++
++`libsignal` n’est pas retenu comme dépendance provisoire : son dépôt officiel indique une licence AGPL-3.0, précise que l’utilisation hors des clients Signal n’est pas prise en charge et publie surtout des bibliothèques Java, Swift et TypeScript avec des couches natives dont les interfaces peuvent évoluer [6]. Toute adoption nécessiterait d’abord une revue juridique et d’intégration dédiée.
++
++## Ce que MLS implique pour BAARO
++
++MLS est conçu pour des groupes de deux clients comme pour des groupes plus larges; l’architecture de la RFC 9750 distingue un service d’authentification et un service de livraison [7]. Un client MLS est un appareil/client, pas seulement un compte utilisateur; BAARO doit donc définir explicitement comment plusieurs appareils d’un même compte sont ajoutés et retirés.
++
++Pour un échange asynchrone, les appareils publient des KeyPackages. Le service de livraison doit permettre d’en récupérer un et garantir qu’un KeyPackage à usage unique ne soit consommé qu’une fois [8]. Les opérations de groupe produisent des messages de contrôle (propositions, commits et welcomes) qui doivent être authentifiés, livrés et traités dans le bon groupe et dans un ordre cohérent [9]. MLS est une couche de chiffrement, pas un protocole complet de messagerie : le produit doit toujours fournir l’identité, l’autorisation d’ajout/retrait, la livraison et les règles de récupération [7].
++
++L’état persistant OpenMLS contient des secrets. Son `StorageProvider` doit supprimer irrévocablement les clés consommées; OpenMLS traite ce stockage comme fiable et ne revalide pas l’intégrité de l’état rechargé. Le backend local BAARO devra donc garantir l’atomicité et protéger l’intégrité des états, par exemple avec chiffrement authentifié et clé liée à l’appareil [10]. Une simple sérialisation JSON dans `localStorage` ne convient pas.
++
++Dans l’état actuel du dépôt, `profiles.public_key` et `useCryptoKeys.js` sont orientés vers une seule clé RSA par compte; `useMessaging.js` chiffre les messages vers le destinataire et vers l’expéditeur, puis stocke la charge utile dans `messages.text`. Aucun schéma SQL de service de clés MLS / appareils n’est présent dans cette copie de travail. La migration ne doit donc pas inventer des RPC ou politiques RLS et ne peut pas être déclarée terminée avant inspection et test du schéma réel Supabase.
++
++## Portes restantes avant activation
++
++1. **Pinner et vérifier la dépendance.** Confirmer le statut du rapport SRLabs et les correctifs de la version retenue. Compiler OpenMLS avec sa fonctionnalité JS sur `wasm32-unknown-unknown`; exécuter des tests interopérables et des tests navigateur/WebView. Le dépôt OpenMLS indique que le target WASM est construit en CI, mais qu’il n’est pas dans sa liste des cibles à la fois construites et testées [2].
++2. **Créer un cœur MLS isolé et non sélectionnable en production.** Étendre le test vers un adaptateur MLS versionné, avec une API étroite pour initialiser un groupe, traiter un Welcome, créer un message applicatif et traiter les messages entrants. Ne jamais exposer les secrets MLS dans les logs, erreurs, URLs ou données Supabase.
++3. **Concevoir le service d’appareils et de livraison.** Définir avec le schéma Supabase réellement déployé les identifiants de clients/appareils, credentials MLS liés aux utilisateurs, KeyPackages, consommation atomique des pré-clés, livraison et ordre des commits, ainsi que retrait/révocation d’appareil. Aucun payload MLS ne doit être émis avant que tous les clients de la conversation sachent le traiter.
++4. **Persister l’état de façon sûre.** Concevoir un stockage d’état chiffré et intègre dans IndexedDB/WebView, avec transactions atomiques et verrouillage inter-onglets. Définir la sauvegarde/récupération : ne pas envoyer l’état ou les clés MLS au serveur en clair. Tester perte de stockage, restauration sur nouvel appareil et suppression d’un ancien appareil.
++5. **Migration sans perte d’historique.** Maintenir la lecture des payloads RSA v1/v2 existants. Un groupe MLS nouvellement initialisé ne déchiffre pas rétroactivement ces anciens messages; il faudra conserver la lecture historique RSA et basculer une conversation uniquement après négociation de capacités et approbation explicite des clients concernés. La version de production doit continuer à écrire RSA tant que l’option MLS est fermée.
++6. **Tests, audit et activation.** Ajouter tests Rust unitaires, WASM, interopérabilité et intégration de deux comptes/deux appareils; couvrir rejeu, désordre, duplication, message invalide, commit divergent, retrait d’appareil, rollback et changements de version. Effectuer une revue indépendante du protocole applicatif et de son stockage. Garder le feature flag désactivé jusqu’à réussite de ces portes et accord de mise en production.
++
++Aucun chiffrement « maison » C/Rust supplémentaire n’est prévu : le rôle de BAARO est d’intégrer correctement l’implémentation de protocole et ses services auxiliaires, pas de réimplémenter ses primitives.
++
++## Sources
++
++[1]: https://github.com/ltraoredr1/Baaro/blob/main/src/features/messaging/native/README.md "Limites du prototype Rust BAR3 de BAARO"
++[2]: https://github.com/openmls/openmls "Dépôt officiel OpenMLS"
++[3]: https://book.openmls.tech/user_manual/wasm.html "Documentation officielle OpenMLS WebAssembly"
++[4]: https://blog.phnx.im/openmls-independent-security-audit/ "Résultats de l’audit indépendant OpenMLS publié par Phoenix R&D"
++[5]: https://github.com/openmls/openmls/blob/main/SECURITY.md "Politique de sécurité OpenMLS"
++[6]: https://github.com/signalapp/libsignal "Dépôt officiel libsignal et conditions d’usage"
++[7]: https://www.rfc-editor.org/rfc/rfc9750.html "RFC 9750 — Architecture MLS"
++[8]: https://book.openmls.tech/user_manual/create_key_package.html "Guide OpenMLS — KeyPackages et livraison"
++[9]: https://book.openmls.tech/user_manual/processing.html "Guide OpenMLS — traitement des messages de protocole"
++[10]: https://book.openmls.tech/user_manual/persistence.html "Guide OpenMLS — persistance, secret et intégrité de l’état"
++[11]: https://datatracker.ietf.org/doc/html/rfc9420 "RFC 9420 — protocole Messaging Layer Security"
++[12]: https://book.openmls.tech/user_manual/migration.html "Guide OpenMLS — migration de version du stockage"
++[13]: https://signal.org/docs/specifications/x3dh/ "Spécification Signal X3DH"
++[14]: https://signal.org/docs/specifications/doubleratchet/ "Spécification Signal Double Ratchet"
++[15]: https://crates.io/crates/openmls/0.9.2 "Version et licence OpenMLS 0.9.2"
+diff --git a/scripts/test-offline-core-rust.mjs b/scripts/test-offline-core-rust.mjs
+new file mode 100644
+index 0000000..52f0ef7
+--- /dev/null
++++ b/scripts/test-offline-core-rust.mjs
+@@ -0,0 +1,35 @@
++import { mkdtemp, rm } from 'node:fs/promises';
++import { homedir, tmpdir } from 'node:os';
++import { join, resolve } from 'node:path';
++import { spawnSync } from 'node:child_process';
++import { fileURLToPath } from 'node:url';
++
++const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
++const rustc = process.env.RUSTC || join(
++  process.env.CARGO_HOME || join(homedir(), '.cargo'),
++  'bin',
++  `rustc${process.platform === 'win32' ? '.exe' : ''}`,
++);
++const source = resolve(root, 'src/features/offline/native/offline_core.rs');
++const tempDir = await mkdtemp(join(tmpdir(), 'baaro-offline-core-'));
++const binary = join(tempDir, `offline-core-tests${process.platform === 'win32' ? '.exe' : ''}`);
++
++try {
++  const compile = spawnSync(rustc, [
++    '--edition=2021',
++    '--test',
++    source,
++    '-o',
++    binary,
++  ], { cwd: root, stdio: 'inherit' });
++  if (compile.error || compile.status !== 0) {
++    throw new Error('Compilation des tests unitaires Rust offline impossible.');
++  }
++
++  const test = spawnSync(binary, [], { cwd: root, stdio: 'inherit' });
++  if (test.error || test.status !== 0) {
++    throw new Error('Les tests unitaires Rust offline ont échoué.');
++  }
++} finally {
++  await rm(tempDir, { recursive: true, force: true });
++}
+diff --git a/src/features/messaging/native/tests/openmls_candidate.rs b/src/features/messaging/native/tests/openmls_candidate.rs
+new file mode 100644
+index 0000000..69de96d
+--- /dev/null
++++ b/src/features/messaging/native/tests/openmls_candidate.rs
+@@ -0,0 +1,119 @@
++//! Test de faisabilité OpenMLS uniquement. Ce code n'est pas compilé dans le binaire WASM
++//! et n'est pas appelé par le flux de messagerie BAARO.
++
++use openmls::credentials::BasicCredential;
++use openmls::prelude::*;
++use openmls_basic_credential::SignatureKeyPair;
++use openmls_rust_crypto::OpenMlsRustCrypto;
++use tls_codec::{Deserialize, Serialize};
++
++const CIPHERSUITE: Ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519;
++
++fn client_material(
++    identity: &[u8],
++    provider: &OpenMlsRustCrypto,
++) -> (SignatureKeyPair, CredentialWithKey, KeyPackageBundle) {
++    let credential = BasicCredential::new(identity.to_vec());
++    let signer = SignatureKeyPair::new(CIPHERSUITE.signature_algorithm())
++        .expect("generate test signing key");
++    signer
++        .store(provider.storage())
++        .expect("store test signing key");
++
++    let credential_with_key = CredentialWithKey {
++        credential: credential.into(),
++        signature_key: signer.to_public_vec().into(),
++    };
++    let key_package = KeyPackage::builder()
++        .build(CIPHERSUITE, provider, &signer, credential_with_key.clone())
++        .expect("build test KeyPackage");
++
++    (signer, credential_with_key, key_package)
++}
++
++#[test]
++fn openmls_two_clients_join_and_exchange_a_wire_encoded_message() {
++    let alice_provider = OpenMlsRustCrypto::default();
++    let bob_provider = OpenMlsRustCrypto::default();
++    let (alice_signer, alice_credential, _alice_key_package) =
++        client_material(b"test-user-alice-device-1", &alice_provider);
++    let (_bob_signer, _bob_credential, bob_key_package) =
++        client_material(b"test-user-bob-device-1", &bob_provider);
++
++    let create_config = MlsGroupCreateConfig::builder()
++        .ciphersuite(CIPHERSUITE)
++        .build();
++    let mut alice_group = MlsGroup::new(
++        &alice_provider,
++        &alice_signer,
++        &create_config,
++        alice_credential,
++    )
++    .expect("create Alice's MLS group");
++
++    // Prototype only: in production this public KeyPackage must come from an authenticated,
++    // one-time Delivery Service and the credential-to-user binding must be verified.
++    let (commit, welcome, _) = alice_group
++        .add_members(
++            &alice_provider,
++            &alice_signer,
++            std::slice::from_ref(bob_key_package.key_package()),
++        )
++        .expect("add Bob to the test group");
++    alice_group
++        .merge_pending_commit(&alice_provider)
++        .expect("merge Alice's pending commit");
++    let _commit_wire = commit
++        .tls_serialize_detached()
++        .expect("serialize commit for delivery");
++    let parsed_commit =
++        MlsMessageIn::tls_deserialize_exact(&_commit_wire).expect("parse the serialized Commit");
++    let _commit_protocol = parsed_commit
++        .try_into_protocol_message()
++        .expect("extract the MLS Commit");
++
++    let welcome_wire = welcome
++        .tls_serialize_detached()
++        .expect("serialize Welcome for delivery");
++    let welcome =
++        MlsMessageIn::tls_deserialize_exact(&welcome_wire).expect("parse the serialized Welcome");
++    let welcome = match welcome.extract() {
++        MlsMessageBodyIn::Welcome(welcome) => welcome,
++        _ => panic!("expected a Welcome message"),
++    };
++    let mut bob_group = StagedWelcome::new_from_welcome(
++        &bob_provider,
++        create_config.join_config(),
++        welcome,
++        Some(alice_group.export_ratchet_tree().into()),
++    )
++    .expect("stage Bob's join from Welcome")
++    .into_group(&bob_provider)
++    .expect("create Bob's group state");
++
++    assert_eq!(alice_group.members().count(), 2);
++    assert_eq!(bob_group.members().count(), 2);
++
++    let plaintext = b"MLS prototype: authenticated application message";
++    let outbound = alice_group
++        .create_message(&alice_provider, &alice_signer, plaintext)
++        .expect("create MLS application message");
++    let wire = outbound
++        .tls_serialize_detached()
++        .expect("serialize MLS message for transport");
++    let inbound =
++        MlsMessageIn::tls_deserialize_exact(&wire).expect("parse the serialized MLS message");
++    let protocol_message = inbound
++        .try_into_protocol_message()
++        .expect("extract the MLS protocol message");
++    let processed = bob_group
++        .process_message(&bob_provider, protocol_message)
++        .expect("authenticate and process the MLS message");
++
++    match processed.into_content() {
++        ProcessedMessageContent::ApplicationMessage(message) => {
++            assert_eq!(message.into_bytes(), plaintext);
++        }
++        other => panic!("expected an application message, got {other:?}"),
++    }
++}

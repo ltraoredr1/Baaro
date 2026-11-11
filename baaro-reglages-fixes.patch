@@ -1,0 +1,327 @@
+diff --git a/src/features/settings/constants.ts b/src/features/settings/constants.ts
+index 4ab8b2b..852e45a 100644
+--- a/src/features/settings/constants.ts
++++ b/src/features/settings/constants.ts
+@@ -17,8 +17,6 @@ export const THEMES = [
+ 
+ export type CustomTheme = { bgImage?: string | null; bgColor: string; accent: string; fg?: string };
+ 
+-
+-
+ /** Taille max de l'image de fond perso (envoyée sur R2, seule l'URL est gardée dans les réglages). */
+ export const MAX_CUSTOM_IMAGE_BYTES = 10 * 1024 * 1024;
+ 
+@@ -71,8 +69,3 @@ export const AI_REGIONS = [
+   { id: "global", labelKey: "ai_global" },
+ ] as const;
+ 
+-export const RTL = new Set(["ar", "nqo"]);
+-
+-// Traductions en cours de validation par des locuteurs
+-
+-
+diff --git a/src/features/settings/index.tsx b/src/features/settings/index.tsx
+index ae74c62..702749a 100644
+--- a/src/features/settings/index.tsx
++++ b/src/features/settings/index.tsx
+@@ -222,6 +222,13 @@ export default function SettingsTab({
+     [lang]
+   );
+ 
++  /** t() avec remplacement de {placeholders}. */
++  const tf = (key: string, vars: Record<string, string>) =>
++    Object.entries(vars).reduce(
++      (out, [k, v]) => out.split(`{${k}}`).join(v),
++      t(key)
++    );
++
+   const toggleSection = (id: string) =>
+     setOpenSections((s) => ({ ...s, [id]: !s[id] }));
+ 
+@@ -421,6 +428,16 @@ export default function SettingsTab({
+     setMessage("");
+     try {
+       const name = editName.trim() || displayName;
++
++      if (editBirthDate) {
++        const limit = new Date();
++        limit.setFullYear(limit.getFullYear() - 13);
++        if (new Date(editBirthDate).getTime() > limit.getTime()) {
++          setMessage(t("birth_date_too_young"));
++          setProfileLoading(false);
++          return;
++        }
++      }
+       const desired = normalizeHandle(editHandle, name);
+ 
+       const availability = await checkHandleAvailable(supabase, desired, user.id);
+@@ -439,7 +456,7 @@ export default function SettingsTab({
+           conflictNote =
+             resolved.message ||
+             (availability.suggestion
+-              ? `${desired} est pris. Identifiant utilisé : ${finalHandle}`
++              ? tf("handle_taken", { h: desired, u: finalHandle })
+               : availability.reason || "");
+         } else if (availability.reason && !availability.suggestion) {
+           setMessage("❌ " + availability.reason);
+@@ -500,7 +517,7 @@ export default function SettingsTab({
+             .single();
+           if (err2) throw err2;
+           finalHandle = resolved.handle;
+-          conflictNote = `Identifiant déjà pris — attribué : ${finalHandle}`;
++          conflictNote = tf("handle_assigned", { u: finalHandle });
+         } else {
+           throw error;
+         }
+@@ -523,14 +540,14 @@ export default function SettingsTab({
+       setIsEditing(false);
+       setMessage(
+         conflictNote
+-          ? `✅ Profil mis à jour. ${conflictNote}`
++          ? tf("profile_updated_note", { n: conflictNote })
+           : t("profile_saved")
+       );
+     } catch (err) {
+       console.error(err);
+       setMessage(
+         isHandleUniqueViolation(err)
+-          ? "❌ Cet identifiant vient d'être pris. Choisis-en un autre."
++          ? t("handle_taken_now")
+           : t("profile_error")
+       );
+     } finally {
+@@ -551,11 +568,7 @@ export default function SettingsTab({
+       });
+       if (error) {
+         if (error.message?.toLowerCase().includes("already been registered")) {
+-          setSecureMessage(
+-            lang === "fr"
+-              ? "⚠️ Un compte existe déjà avec cet e-mail."
+-              : "⚠️ An account already exists with this email."
+-          );
++          setSecureMessage(t("account_exists"));
+           setShowLoginFallback(true);
+           return;
+         }
+@@ -687,7 +700,10 @@ export default function SettingsTab({
+       Object.keys(localStorage)
+         .filter((k) => k.startsWith("baaro_cache_"))
+         .forEach((k) => localStorage.removeItem(k));
+-      sessionStorage.clear();
++      // On garde le déverrouillage biométrique de la session en cours.
++      Object.keys(sessionStorage)
++        .filter((k) => k !== "baaro_bio_ok")
++        .forEach((k) => sessionStorage.removeItem(k));
+       setMessage(t("clear_cache_done"));
+     } catch {
+       setMessage(t("action_error"));
+@@ -706,13 +722,13 @@ export default function SettingsTab({
+     setUpdateBusy(true);
+     setMessage("");
+     try {
++      // checkUpdateNative renvoie { updated, version?, error? } (la page se
++      // recharge d'elle-même quand une mise à jour est installée).
+       const result = await checkUpdateNative();
+-      if (result === "updated") {
++      if (result?.updated) {
+         setMessage(t("update_later"));
+-      } else if (result === "up-to-date") {
+-        setMessage(t("update_none"));
+-      } else if (result === "not-native") {
+-        setMessage(t("update_web"));
++      } else if (result?.error) {
++        setMessage(t("update_error"));
+       } else {
+         setMessage(t("update_none"));
+       }
+@@ -1029,7 +1045,7 @@ export default function SettingsTab({
+       <div className="relative">
+         <Search
+           size={16}
+-          className="absolute left-3 top-1/2 -translate-y-1/2"
++          className="absolute start-3 top-1/2 -translate-y-1/2"
+           style={{ color: COLORS.muted }}
+         />
+         <input
+@@ -1037,7 +1053,7 @@ export default function SettingsTab({
+           value={query}
+           onChange={(e) => setQuery(e.target.value)}
+           placeholder={t("search_placeholder")}
+-          className="w-full rounded-xl pl-10 pr-3 py-2.5 text-sm outline-none border"
++          className="w-full rounded-xl ps-10 pe-3 py-2.5 text-sm outline-none border"
+           style={inputStyle}
+         />
+       </div>
+@@ -1181,7 +1197,7 @@ export default function SettingsTab({
+                             "⚠️ " +
+                               result.reason +
+                               (result.suggestion
+-                                ? ` Suggestion : ${result.suggestion}`
++                                ? ` ${t("handle_suggestion")} : ${result.suggestion}`
+                                 : "")
+                           );
+                         }
+@@ -1197,7 +1213,7 @@ export default function SettingsTab({
+                 </div>
+               </div>
+               <div className="rounded-xl border px-3 py-2.5 text-sm" style={{ ...inputStyle, opacity: 0.9 }}>
+-                {t("flag_emoji")}: {editFlag || "🌍"} — automatiquement lié au pays actuel
++                {t("flag_emoji")}: {editFlag || "🌍"} — {t("flag_auto")}
+               </div>
+               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                 <div>
+@@ -1235,10 +1251,10 @@ export default function SettingsTab({
+                 />
+                 <p className="text-[11px] mt-1" style={{ color: COLORS.muted }}>
+                   {user?.email
+-                    ? "E-mail d'authentification du compte, géré par Supabase Auth."
++                    ? t("auth_email_note")
+                     : user?.phone
+-                    ? "Numéro de téléphone d'authentification du compte, géré par Supabase Auth."
+-                    : "Aucune méthode d'authentification stable détectée sur ce compte."}
++                    ? t("auth_phone_note")
++                    : t("auth_none_note")}
+                 </p>
+               </div>
+ 
+@@ -1299,7 +1315,7 @@ export default function SettingsTab({
+               id="contacts"
+               icon={Globe2}
+               title={t("contacts_links")}
+-              desc="WhatsApp, liens, téléphone"
++              desc={t("contacts_links_desc")}
+               accent={COLORS.teal}
+               open={openSections.contacts || !!q}
+               onToggle={() => toggleSection("contacts")}
+@@ -1488,7 +1504,7 @@ export default function SettingsTab({
+                   {selected && (
+                     <Check
+                       size={12}
+-                      className="inline ml-1"
++                      className="inline ms-1"
+                       style={{ color: COLORS.gold }}
+                     />
+                   )}
+@@ -1686,7 +1702,7 @@ export default function SettingsTab({
+                     save({ country: c.code });
+                     setCountryOpen(false);
+                   }}
+-                  className="text-left text-xs px-2 py-2 rounded-lg"
++                  className="text-start text-xs px-2 py-2 rounded-lg"
+                   style={{
+                     background:
+                       settings.country === c.code
+@@ -1762,11 +1778,17 @@ export default function SettingsTab({
+             enabled={settings.sms_fallback}
+             onChange={async (v) => {
+               if (v) {
+-                const { requestSmsPermission } = await import("../../lib/smsFallback.js");
+-                const ok = await requestSmsPermission();
+-                if (!ok) return; // permission refusée ou non disponible : on n'active pas
++                try {
++                  const { requestSmsPermission } = await import("../../lib/smsFallback.js");
++                  const ok = await requestSmsPermission();
++                  if (!ok) return; // permission refusée ou non disponible : on n'active pas
++                } catch (err) {
++                  console.warn("[settings] sms permission:", err);
++                  setMessage(t("action_error"));
++                  return;
++                }
+               }
+-              save({ sms_fallback: v });
++              void save({ sms_fallback: v });
+             }}
+           />
+         </CollapsibleSection>
+diff --git a/src/features/settings/strings.ts b/src/features/settings/strings.ts
+index 8748865..944371a 100644
+--- a/src/features/settings/strings.ts
++++ b/src/features/settings/strings.ts
+@@ -211,6 +211,25 @@ download_data_error: "❌ Impossible d'exporter les données",
+ 	update_error: "❌ Impossible de vérifier les mises à jour",
+ 	update_apply_confirm: "Mise à jour téléchargée. Redémarrer BAARO maintenant ?",
+ 	update_later: "✅ La mise à jour sera appliquée au prochain démarrage",
++    action_error: "❌ Action impossible, réessaie.",
++    invite_friends: "Inviter des amis",
++    invite_text: "Rejoins-moi sur BAARO, le réseau social des marchés émergents !",
++    clear_cache: "Vider le cache",
++    clear_cache_confirm: "Vider le cache de l'application ? Tes réglages et ta session sont conservés.",
++    clear_cache_done: "✅ Cache vidé",
++    help_support: "Aide & support",
++    handle_taken: "{h} est pris. Identifiant utilisé : {u}",
++    handle_taken_now: "❌ Cet identifiant vient d'être pris. Choisis-en un autre.",
++    handle_assigned: "Identifiant déjà pris — attribué : {u}",
++    profile_updated_note: "✅ Profil mis à jour. {n}",
++    handle_suggestion: "Suggestion",
++    flag_auto: "automatiquement lié au pays actuel",
++    auth_email_note: "E-mail d'authentification du compte, géré par Supabase Auth.",
++    auth_phone_note: "Numéro de téléphone d'authentification du compte, géré par Supabase Auth.",
++    auth_none_note: "Aucune méthode d'authentification stable détectée sur ce compte.",
++    account_exists: "⚠️ Un compte existe déjà avec cet e-mail.",
++    contacts_links_desc: "WhatsApp, liens, téléphone",
++    birth_date_too_young: "❌ Tu dois avoir au moins 13 ans.",
+   },
+   en: {
+     title: "Settings",
+@@ -411,6 +430,25 @@ download_data_error: "❌ Could not export your data",
+ 	update_error: "❌ Could not check for updates",
+ 	update_apply_confirm: "Update downloaded. Restart BAARO now?",
+ 	update_later: "✅ The update will be applied at the next launch",
++    action_error: "❌ Action failed, please try again.",
++    invite_friends: "Invite friends",
++    invite_text: "Join me on BAARO, the social network for emerging markets!",
++    clear_cache: "Clear cache",
++    clear_cache_confirm: "Clear the app cache? Your settings and session are kept.",
++    clear_cache_done: "✅ Cache cleared",
++    help_support: "Help & support",
++    handle_taken: "{h} is taken. Username used: {u}",
++    handle_taken_now: "❌ That username was just taken. Please choose another.",
++    handle_assigned: "Username already taken — assigned: {u}",
++    profile_updated_note: "✅ Profile updated. {n}",
++    handle_suggestion: "Suggestion",
++    flag_auto: "automatically linked to the current country",
++    auth_email_note: "Account sign-in email, managed by Supabase Auth.",
++    auth_phone_note: "Account sign-in phone number, managed by Supabase Auth.",
++    auth_none_note: "No stable sign-in method detected on this account.",
++    account_exists: "⚠️ An account already exists with this email.",
++    contacts_links_desc: "WhatsApp, links, phone",
++    birth_date_too_young: "❌ You must be at least 13 years old.",
+   },
+   ar: {
+     title: "الإعدادات",
+@@ -589,6 +627,15 @@ download_data_error: "❌ تعذّر تصدير بياناتك",
+ 	update_error: "❌ تعذّر التحقق من التحديثات",
+ 	update_apply_confirm: "تم تنزيل التحديث. إعادة تشغيل BAARO الآن؟",
+ 	update_later: "✅ سيتم تطبيق التحديث عند التشغيل التالي",
++    action_error: "❌ تعذّر تنفيذ الإجراء، حاول مجددًا.",
++    invite_friends: "دعوة الأصدقاء",
++    invite_text: "انضم إليّ على BAARO، الشبكة الاجتماعية للأسواق الناشئة!",
++    clear_cache: "مسح ذاكرة التخزين المؤقت",
++    clear_cache_confirm: "مسح ذاكرة التطبيق المؤقتة؟ تبقى إعداداتك وجلستك كما هي.",
++    clear_cache_done: "✅ تم مسح الذاكرة المؤقتة",
++    help_support: "المساعدة والدعم",
++    account_exists: "⚠️ يوجد حساب بهذا البريد الإلكتروني بالفعل.",
++    birth_date_too_young: "❌ يجب ألا يقل عمرك عن 13 سنة.",
+   },
+   bm: {
+     title: "Sɛbɛnniw",
+diff --git a/src/lib/nativeUpdater.js b/src/lib/nativeUpdater.js
+index 5561534..43d2501 100644
+--- a/src/lib/nativeUpdater.js
++++ b/src/lib/nativeUpdater.js
+@@ -1,5 +1,5 @@
+ import { Capacitor } from "@capacitor/core";
+-// Filesystem importé en dynamique plus bas (ne pas mettre en haut, sinon Vercel plante)
++// Filesystem est importé en dynamique dans checkUpdateNative (un import statique casse le build web)
+ import JSZip from "jszip";
+ 
+ const UPDATE_URL = "https://baaro-xi.vercel.app/updates/manifest.json";
+@@ -9,6 +9,8 @@ export async function checkUpdateNative() {
+   if (!Capacitor.isNativePlatform()) return { updated: false };
+ 
+   try {
++    // Import dynamique : un import statique casse le build web (Vercel).
++    const { Filesystem, Directory } = await import("@capacitor/filesystem");
+     const localVersion = localStorage.getItem("baaro_native_version") || "1.0.0";
+ 
+     const res = await fetch(UPDATE_URL, { cache: "no-store" });
