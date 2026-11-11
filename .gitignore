@@ -38,4 +38,5 @@ supabase/.temp/
 
 # Rust
 target/
+src/features/messaging/native/pkg/
 !public/wasm/

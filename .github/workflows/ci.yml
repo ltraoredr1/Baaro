@@ -26,6 +26,7 @@ jobs:
         uses: dtolnay/rust-toolchain@1.99.1
         with:
           targets: wasm32-unknown-unknown
+          components: rustfmt, clippy
 
       # Pin the Ubuntu runner to keep the compiler environment stable.
       - name: Install Clang 18 and LLD 18
@@ -97,6 +98,34 @@ jobs:
 
       - name: E2E smoke checks
         run: npm run check:e2e:smoke
+
+      - name: Messaging E2E crypto compatibility tests
+        run: npm run test:messaging-crypto
+
+      - name: Messaging Rust formatting, tests and lint
+        run: |
+          cargo fmt --manifest-path src/features/messaging/native/Cargo.toml -- --check
+          cargo test --locked --manifest-path src/features/messaging/native/Cargo.toml
+          cargo clippy --locked --manifest-path src/features/messaging/native/Cargo.toml -- -D warnings
+          cargo check --locked --manifest-path src/features/messaging/native/Cargo.toml --target wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --version 0.15.1 --locked
+
+      - name: Build messaging crypto WASM
+        run: npm run build:messaging-crypto -- --strict
+
+      - name: Verify committed messaging WASM artifacts
+        run: |
+          set -euo pipefail
+          test -s public/wasm/messaging_crypto.js
+          test -s public/wasm/messaging_crypto_bg.wasm
+          git status --short -- public/wasm/messaging_crypto.js public/wasm/messaging_crypto_bg.wasm
+          if [[ -n "$(git status --porcelain -- public/wasm/messaging_crypto.js public/wasm/messaging_crypto_bg.wasm)" ]]; then
+            echo "::error::Messaging crypto WASM artifacts differ from the committed versions."
+            echo "::error::Run npm run build:messaging-crypto and commit both files in public/wasm."
+            exit 1
+          fi
 
       - name: Payout checks
         run: npm run check:payout
