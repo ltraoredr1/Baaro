@@ -1,7 +1,7 @@
 {
   "name": "baaro",
   "private": true,
-  "version": "0.2.5",
+  "version": "0.2.3",
   "type": "module",
   "engines": {
     "node": "22.x"
