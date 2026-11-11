@@ -17,8 +17,6 @@ export const THEMES = [
 
 export type CustomTheme = { bgImage?: string | null; bgColor: string; accent: string; fg?: string };
 
-
-
 /** Taille max de l'image de fond perso (envoyée sur R2, seule l'URL est gardée dans les réglages). */
 export const MAX_CUSTOM_IMAGE_BYTES = 10 * 1024 * 1024;
 
@@ -70,9 +68,4 @@ export const AI_REGIONS = [
   { id: "west_africa", labelKey: "ai_west_africa" },
   { id: "global", labelKey: "ai_global" },
 ] as const;
-
-export const RTL = new Set(["ar", "nqo"]);
-
-// Traductions en cours de validation par des locuteurs
-
 

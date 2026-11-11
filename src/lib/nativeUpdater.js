@@ -1,5 +1,5 @@
 import { Capacitor } from "@capacitor/core";
-// Filesystem importé en dynamique plus bas (ne pas mettre en haut, sinon Vercel plante)
+// Filesystem est importé en dynamique dans checkUpdateNative (un import statique casse le build web)
 import JSZip from "jszip";
 
 const UPDATE_URL = "https://baaro-xi.vercel.app/updates/manifest.json";
@@ -9,6 +9,8 @@ export async function checkUpdateNative() {
   if (!Capacitor.isNativePlatform()) return { updated: false };
 
   try {
+    // Import dynamique : un import statique casse le build web (Vercel).
+    const { Filesystem, Directory } = await import("@capacitor/filesystem");
     const localVersion = localStorage.getItem("baaro_native_version") || "1.0.0";
 
     const res = await fetch(UPDATE_URL, { cache: "no-store" });
