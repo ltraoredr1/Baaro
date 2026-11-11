@@ -16,6 +16,8 @@ jobs:
     name: Production Checks
     runs-on: ubuntu-24.04
     timeout-minutes: 25
+    env:
+      CLANG: clang-18
 
     steps:
       - name: Checkout repository
@@ -163,6 +165,24 @@ jobs:
           fi
 
           echo "Stories WASM artifacts are synchronized."
+
+      # Compile and test both offline WASM components from their Rust/C sources.
+      - name: Offline tests and Rust/C WASM compilation
+        run: npm run test:offline
+
+      # Ensure deployed offline binaries cannot silently drift from their sources.
+      - name: Verify committed offline WASM
+        run: |
+          set -euo pipefail
+          test -s public/wasm/offline_core.wasm
+          test -s public/wasm/offline_payload.wasm
+          if [[ -n "$(git status --porcelain -- public/wasm/offline_core.wasm public/wasm/offline_payload.wasm)" ]]; then
+            echo "::error::Offline WASM artifacts differ from the committed versions."
+            echo "::error::Run npm run test:offline and commit both generated files in public/wasm."
+            git status --short -- public/wasm/offline_core.wasm public/wasm/offline_payload.wasm
+            exit 1
+          fi
+          echo "Offline WASM artifacts are synchronized."
 
       - name: Production build
         run: npm run build
