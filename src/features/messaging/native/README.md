@@ -18,6 +18,10 @@ L'enveloppe binaire expérimentale est `BAR3 | ephemeral_public_key[32] | salt[3
 - Le format BAR3 n'est pas accepté par les clients actuels; ne jamais émettre de payload BAR3 en production avant déploiement coordonné de la lecture, persistance de clés, récupération, versionnement, et tests d'interopérabilité.
 - Cette tranche ne chiffre pas les médias et n'ajoute pas de code C dédié : les primitives cryptographiques C maison augmenteraient la surface de risque sans bénéfice démontré.
 
+## Prototype OpenMLS (tests uniquement)
+
+OpenMLS `0.9.2` est ajouté uniquement comme dépendance de développement. `tests/openmls_candidate.rs` vérifie un échange de test à deux clients, incluant l’ajout au groupe, le Welcome et les messages TLS sérialisés. OpenMLS n’est pas lié au WASM ni au flux applicatif; les clients continuent d’utiliser le chiffrement RSA historique. Ce test ne valide pas l’authentification de production, le service Supabase de livraison, le stockage persistant ou l’exécution dans le navigateur. Ne pas activer avant l’intégration de ces services et une revue de sécurité.
+
 ## Vérification
 
 Depuis la racine du dépôt :
