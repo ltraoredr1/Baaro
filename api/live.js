@@ -1063,17 +1063,28 @@ async function handleCreateRoom(req, res, user, admin) {
         .insert(insertPayload);
 
       if (error) {
-        logWarn("live", "insert calls failed", {
-          message: error.message,
-        });
-      } else {
-        logInfo("live", "calls inserted", {
+        logError("live", error, {
+          action: "insert call record",
           daily_room_name: dailyRoom.name,
+          caller_id: user.id,
+        });
+
+        return res.status(500).json({
+          error: "La salle existe, mais l'enregistrement de l'appel a échoué.",
         });
       }
+
+      logInfo("live", "calls inserted", {
+        daily_room_name: dailyRoom.name,
+      });
     } catch (err) {
-      logWarn("live", "calls insert exception", {
-        message: err.message,
+      logError("live", err, {
+        action: "insert call record",
+        daily_room_name: dailyRoom.name,
+      });
+
+      return res.status(500).json({
+        error: "Impossible d'enregistrer cet appel.",
       });
     }
 
@@ -1235,18 +1246,11 @@ async function handleToken(req, res, user, admin) {
   // les privilèges propriétaire par une valeur envoyée dans le body.
   if (liveId.startsWith("call-")) {
     try {
-      let callDailyRoom = null;
-
-      try {
-        callDailyRoom = await createDailyRoom(liveId, {
-          maxParticipants: 2,
-          expHours: 2,
-        });
-      } catch (err) {
-        logWarn("live", "call room ensure failed", {
-          message: err.message,
-        });
-      }
+      // La salle doit être confirmée par Daily avant de délivrer un token.
+      const callDailyRoom = await createDailyRoom(liveId, {
+        maxParticipants: 2,
+        expHours: 2,
+      });
 
       let callRecord = null;
 
@@ -1259,10 +1263,23 @@ async function handleToken(req, res, user, admin) {
           .eq("daily_room_name", liveId)
           .maybeSingle();
 
-        if (!error) callRecord = data;
+        if (error) throw error;
+        callRecord = data;
       } catch (err) {
-        logWarn("live", "call lookup failed", {
-          message: err.message,
+        logError("live", err, {
+          action: "lookup call",
+          liveId,
+        });
+
+        throw Object.assign(
+          new Error("Impossible de vérifier cet appel. Réessaie."),
+          { status: 503 }
+        );
+      }
+
+      if (!callRecord) {
+        return res.status(404).json({
+          error: "Cet appel n'existe plus ou a expiré.",
         });
       }
 

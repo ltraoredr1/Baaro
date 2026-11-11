@@ -206,26 +206,41 @@ export function ChatCallModal({
   }, []);
 
   const endCall = useCallback(
-    async (finalStatus = "ended") => {
+    (finalStatus = "ended") => {
       if (endedRef.current) return;
       endedRef.current = true;
+
       stopAllSounds();
-      clearInterval(timerRef.current);
+
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+
       const dur = startedAtRef.current
         ? Math.floor((Date.now() - startedAtRef.current) / 1000)
         : 0;
-      try {
-        await leaveCall();
-      } catch {}
-      if (callRecord?.id) {
-        updateCallStatus(callRecord.id, {
-          status: finalStatus,
-          ended_at: new Date().toISOString(),
-          duration_seconds: dur,
-        }).catch(() => {});
-      }
+
+      // Libérer immédiatement l'interface et les médias.
       cleanupMedia();
+
       if (mountedRef.current) setStatus("ended");
+
+      // Ne pas laisser le réseau bloquer le bouton raccrocher.
+      Promise.resolve()
+        .then(() => leaveCall())
+        .catch((e) => console.warn("Déconnexion Daily :", e));
+
+      if (callRecord?.id) {
+        Promise.resolve()
+          .then(() => updateCallStatus(callRecord.id, {
+            status: finalStatus,
+            ended_at: new Date().toISOString(),
+            duration_seconds: dur,
+          }))
+          .catch((e) => console.warn("Statut de l'appel :", e));
+      }
+
       onCloseRef.current?.();
     },
     [callRecord?.id, cleanupMedia, stopAllSounds]
@@ -411,16 +426,20 @@ export function ChatCallModal({
     onAcceptedRef.current?.();
   };
 
-  const rejectIncoming = async () => {
+  const rejectIncoming = () => {
     if (endedRef.current) return;
     endedRef.current = true;
+
     stopAllSounds();
+    cleanupMedia();
+
     if (callRecord?.id) {
-      await updateCallStatus(callRecord.id, {
+      updateCallStatus(callRecord.id, {
         status: "rejected",
         ended_at: new Date().toISOString(),
-      }).catch(() => {});
+      }).catch((e) => console.warn("Refus de l'appel :", e));
     }
+
     onRejectedRef.current?.();
     onCloseRef.current?.();
   };
