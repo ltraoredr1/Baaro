@@ -28,6 +28,12 @@ import {
   rateLimitAsync,
 } from "./_shared.js";
 import { sendPushToUsers } from "./_lib/push.js";
+import {
+  buildInteractionNotificationKey,
+  insertNotificationOnce,
+  insertNotificationsOnce,
+} from "./_lib/notification-idempotency.js";
+import { interactionHappened } from "./_lib/notification-interactions.js";
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -96,57 +102,12 @@ async function loadContent(admin, contentType, id) {
   };
 }
 
-// Vérifie que l'action a réellement eu lieu (anti-fausses notifications)
-async function interactionHappened(
-  admin,
-  { contentType, interactionType, actorId, targetId, recipientId }
-) {
-  if (contentType === "user") {
-    const { data: sent } = await admin
-      .from("follows")
-      .select("status, is_friend")
-      .eq("follower_id", actorId)
-      .eq("followed_id", recipientId)
-      .maybeSingle();
-
-    const { data: received } = await admin
-      .from("follows")
-      .select("status, is_friend")
-      .eq("follower_id", recipientId)
-      .eq("followed_id", actorId)
-      .maybeSingle();
-
-    if (interactionType === "friend_request") {
-      return (
-        (sent?.is_friend === true && sent?.status === "pending") ||
-        (received?.is_friend === true && received?.status === "pending")
-      );
-    }
-    return (
-      (received?.is_friend === true && received?.status === "accepted") ||
-      (sent?.is_friend === true && sent?.status === "accepted")
-    );
-  }
-
-  if (interactionType === "like") {
-    const table = contentType === "post" ? "post_likes" : "video_likes";
-    const column = contentType === "post" ? "post_id" : "video_id";
-    const { data } = await admin
-      .from(table)
-      .select("user_id")
-      .eq(column, targetId)
-      .eq("user_id", actorId)
-      .maybeSingle();
-    return !!data;
-  }
-  return true;
-}
-
 async function insertNotificationAndPush(admin, {
   recipientId,
   actorId,
   rule,
   sourceId,
+  idempotencyKey,
   preview,
   contentType,
   targetId,
@@ -165,16 +126,14 @@ async function insertNotificationAndPush(admin, {
     actor_id: actorId,
     type: rule.type,
     source_id: sourceId,
+    idempotency_key: idempotencyKey,
     message: `${actorName} ${rule.verb}`,
   };
 
-  let insert = await admin
-    .from("notifications")
-    .insert({ ...row, preview: preview || null });
-  if (insert.error && /preview/i.test(insert.error.message || "")) {
-    insert = await admin.from("notifications").insert(row);
-  }
-  if (insert.error) throw insert.error;
+  const inserted = await insertNotificationOnce(admin, {
+    ...row,
+    preview: preview || null,
+  });
 
   const url =
     contentType === "video"
@@ -192,6 +151,7 @@ async function insertNotificationAndPush(admin, {
     category: "social",
     tag: `social-${rule.type}-${sourceId}`,
     sound: "baaro_pulse.mp3",
+    idempotencyKey: `notification:${idempotencyKey}`,
     data: { 
       type: rule.type, 
       source_id: sourceId, 
@@ -199,6 +159,7 @@ async function insertNotificationAndPush(admin, {
       sound: "baaro_pulse.mp3" 
     },
   }).catch((err) => console.warn("[social] push", err?.message || err));
+  return inserted.inserted;
 }
 
 async function handleNotifyInteraction(admin, user, body) {
@@ -239,12 +200,14 @@ async function handleNotifyInteraction(admin, user, body) {
     };
   }
 
+  const eventId = String(body.comment_id || body.event_id || "");
   const happened = await interactionHappened(admin, {
     contentType,
     interactionType,
     actorId: user.id,
     targetId,
     recipientId,
+    eventId,
   });
   if (!happened) {
     return {
@@ -253,40 +216,35 @@ async function handleNotifyInteraction(admin, user, body) {
     };
   }
 
-  if (interactionType !== "comment" && interactionType !== "share") {
-    let dupQuery = admin
-      .from("notifications")
-      .select("notification_id")
-      .eq("user_id", recipientId)
-      .eq("actor_id", user.id)
-      .eq("type", rule.type)
-      .eq("source_id", sourceId);
-    if (contentType === "user") {
-      dupQuery = dupQuery.gte(
-        "created_at",
-        new Date(Date.now() - 10 * 60_000).toISOString()
-      );
-    }
-    const { data: dup } = await dupQuery.limit(1);
-    if (dup?.length) {
-      return {
-        status: 200,
-        body: { ok: true, notified: false, reason: "duplicate" },
-      };
-    }
-  }
+  const idempotencyKey =
+    interactionType === "comment" && isUuid(eventId)
+      ? `comment:${contentType}:${eventId}`
+      : buildInteractionNotificationKey({
+            type: rule.type,
+            recipientId,
+            actorId: user.id,
+            sourceId,
+          });
 
-  await insertNotificationAndPush(admin, {
+  const inserted = await insertNotificationAndPush(admin, {
     recipientId,
     actorId: user.id,
     rule,
     sourceId,
+    idempotencyKey,
     preview,
     contentType,
     targetId,
   });
 
-  return { status: 200, body: { ok: true, notified: true } };
+  return {
+    status: 200,
+    body: {
+      ok: true,
+      notified: inserted,
+      ...(inserted ? {} : { reason: "duplicate" }),
+    },
+  };
 }
 
 async function handleMessageSent(admin, user, body) {
@@ -325,20 +283,6 @@ async function handleMessageSent(admin, user, body) {
     return { status: 403, body: { ok: false, error: "Conversation invalide" } };
   }
 
-  // Le message_id est une clé idempotente pour éviter les pushes en double
-  // lorsque le client réessaie une requête après une coupure réseau.
-  const { data: existing } = await admin
-    .from("notifications")
-    .select("notification_id")
-    .eq("user_id", message.recipient_id)
-    .eq("actor_id", user.id)
-    .eq("type", "message")
-    .eq("source_id", message.id)
-    .limit(1);
-  if (existing?.length) {
-    return { status: 200, body: { ok: true, notified: false, reason: "duplicate" } };
-  }
-
   const { data: actor } = await admin
     .from("profiles")
     .select("display_name, handle")
@@ -348,14 +292,15 @@ async function handleMessageSent(admin, user, body) {
     clip(actor?.display_name, 40) ||
     (actor?.handle ? `@${String(actor.handle).replace(/^@/, "")}` : "Quelqu'un");
 
-  const { error: notificationError } = await admin.from("notifications").insert({
+  const idempotencyKey = `message:${message.id}`;
+  const insertion = await insertNotificationOnce(admin, {
     user_id: message.recipient_id,
     actor_id: user.id,
     type: "message",
     source_id: message.id,
+    idempotency_key: idempotencyKey,
     message: `${actorName} vous a envoyé un message`,
   });
-  if (notificationError) throw notificationError;
 
   await sendPushToUsers(admin, {
     userIds: [message.recipient_id],
@@ -363,6 +308,7 @@ async function handleMessageSent(admin, user, body) {
     body: "Vous avez reçu un nouveau message",
     url: "/?open_message=1",
     category: "message",
+    idempotencyKey: `notification:${idempotencyKey}`,
     tag: `message-${message.conversation_id}`,
     sound: "baaro_pulse.mp3",
     data: {
@@ -373,7 +319,14 @@ async function handleMessageSent(admin, user, body) {
     },
   });
 
-  return { status: 200, body: { ok: true, notified: true } };
+  return {
+    status: 200,
+    body: {
+      ok: true,
+      notified: insertion.inserted,
+      ...(insertion.inserted ? {} : { reason: "duplicate" }),
+    },
+  };
 }
 
 async function handleComment(admin, user, body) {
@@ -419,6 +372,7 @@ async function handleComment(admin, user, body) {
         actorId: user.id,
         rule,
         sourceId: postId,
+        idempotencyKey: `comment:post:${data.id}`,
         preview: clip(text, 120),
         contentType: "post",
         targetId: postId,
@@ -457,6 +411,7 @@ async function handleComment(admin, user, body) {
         actorId: user.id,
         rule,
         sourceId: videoId,
+        idempotencyKey: `comment:video:${data.id}`,
         preview: clip(text, 120),
         contentType: "video",
         targetId: videoId,
@@ -475,15 +430,6 @@ async function handleComment(admin, user, body) {
 }
 
 async function notifyStoryAudience(admin, authorId, storyId) {
-  const { data: done } = await admin
-    .from("notifications")
-    .select("notification_id")
-    .eq("type", "new_story")
-    .eq("actor_id", authorId)
-    .eq("source_id", storyId)
-    .limit(1);
-  if (done?.length) return { notified: false, reason: "duplicate" };
-
   const { data: rows, error } = await admin
     .from("follows")
     .select("follower_id")
@@ -506,18 +452,19 @@ async function notifyStoryAudience(admin, authorId, storyId) {
     clip(actor?.display_name, 40) ||
     (actor?.handle ? `@${String(actor.handle).replace(/^@/, "")}` : "Quelqu'un");
 
+  let insertedCount = 0;
   for (let i = 0; i < userIds.length; i += 500) {
     const chunk = userIds.slice(i, i + 500);
-    const { error: insertError } = await admin.from("notifications").insert(
-      chunk.map((uid) => ({
+    const notificationRows = chunk.map((uid) => ({
         user_id: uid,
         actor_id: authorId,
         type: "new_story",
         source_id: storyId,
+        idempotency_key: `story:${storyId}:${authorId}:${uid}`,
         message: `${name} a publié une nouvelle story`,
-      }))
-    );
-    if (insertError) throw insertError;
+      }));
+    const inserted = await insertNotificationsOnce(admin, notificationRows);
+    insertedCount += inserted.length;
 
     // Envoi du Push story avec instruction explicite du son BAARO
     await sendPushToUsers(admin, {
@@ -526,6 +473,7 @@ async function notifyStoryAudience(admin, authorId, storyId) {
       body: "a publié une nouvelle story",
       url: "/",
       category: "social",
+      idempotencyKey: `notification:story:${storyId}:${authorId}`,
       tag: `story-${storyId}`,
       sound: "baaro_pulse.mp3",
       data: { 
@@ -537,7 +485,11 @@ async function notifyStoryAudience(admin, authorId, storyId) {
     }).catch((err) => console.warn("[social] story push", err?.message || err));
   }
 
-  return { notified: true, count: userIds.length };
+  return {
+    notified: insertedCount > 0,
+    count: userIds.length,
+    ...(insertedCount ? {} : { reason: "duplicate" }),
+  };
 }
 
 async function handleDebateStarted(admin, user, body) {
@@ -564,18 +516,6 @@ async function handleDebateStarted(admin, user, body) {
   }
 
   const type = room.mode === "text" ? "new_debate" : "new_live";
-  const { data: existing } = await admin
-    .from("notifications")
-    .select("notification_id")
-    .eq("type", type)
-    .eq("actor_id", user.id)
-    .eq("source_id", room.id)
-    .limit(1);
-
-  if (existing?.length) {
-    return { status: 200, body: { ok: true, notified: false, reason: "duplicate" } };
-  }
-
   const [followersResult, friendsOutResult, friendsInResult] = await Promise.all([
     admin
       .from("follows")
@@ -628,19 +568,20 @@ async function handleDebateStarted(admin, user, body) {
     : `${actorName} a démarré un débat : ${title}`;
   const url = `/?open_debate=${encodeURIComponent(room.id)}`;
 
+  let insertedCount = 0;
   for (let i = 0; i < userIds.length; i += 500) {
     const chunk = userIds.slice(i, i + 500);
-    const { error: insertError } = await admin.from("notifications").insert(
-      chunk.map((recipientId) => ({
+    const notificationRows = chunk.map((recipientId) => ({
         user_id: recipientId,
         actor_id: user.id,
         type,
         source_id: room.id,
+        idempotency_key: `debate:${type}:${room.id}:${user.id}:${recipientId}`,
         message,
         preview: clip(room.topic, 120) || null,
-      }))
-    );
-    if (insertError) throw insertError;
+      }));
+    const inserted = await insertNotificationsOnce(admin, notificationRows);
+    insertedCount += inserted.length;
 
     await sendPushToUsers(admin, {
       userIds: chunk,
@@ -648,6 +589,7 @@ async function handleDebateStarted(admin, user, body) {
       body: message,
       url,
       category: "live",
+      idempotencyKey: `notification:debate:${type}:${room.id}:${user.id}`,
       tag: `debate-${room.id}`,
       sound: "baaro_pulse.mp3",
       data: {
@@ -660,7 +602,15 @@ async function handleDebateStarted(admin, user, body) {
     }).catch((err) => console.warn("[social] debate push", err?.message || err));
   }
 
-  return { status: 200, body: { ok: true, notified: true, count: userIds.length } };
+  return {
+    status: 200,
+    body: {
+      ok: true,
+      notified: insertedCount > 0,
+      count: userIds.length,
+      ...(insertedCount ? {} : { reason: "duplicate" }),
+    },
+  };
 }
 
 async function handleStoryPublished(admin, user, body) {
