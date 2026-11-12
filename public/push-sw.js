@@ -8,8 +8,27 @@
 
 const DEFAULT_ICON = "/icons/icon-192.png";
 const DEFAULT_BADGE = "/icons/icon-192.png";
-/** Son par défaut (fichier dans public/sounds/) */
-const DEFAULT_SOUND = "/sounds/baaro_pulse.mp3";
+/**
+ * COMPORTEMENT DU SON (Web Push)
+ * ─────────────────────────────────────────────────────────────────────────
+ * Le navigateur ne permet PAS de jouer un fichier audio personnalisé depuis
+ * une notification : l'option `sound` de showNotification() n'est pas
+ * standard et est ignorée. Un service worker ne peut pas non plus jouer de
+ * son lui-même, et un message envoyé à une page suspendue n'est pas garanti.
+ * On distingue donc quatre situations :
+ *
+ *  1. App ouverte et visible  → l'app joue le son choisi (son, volume,
+ *     silencieux de BAARO). La notification système est affichée SANS son,
+ *     pour ne pas doubler.
+ *  2. App en arrière-plan, suspendue ou fermée → seul le son système par
+ *     défaut de la notification est possible (pas de son BAARO personnalisé,
+ *     pas de volume BAARO). Aucun message n'est envoyé à la page : elle
+ *     pourrait se réveiller plus tard et jouer un son périmé.
+ *  3. Mode silencieux BAARO (payload.silent / sound "none") → notification
+ *     muette, aucun son nulle part.
+ *  4. Téléphone en mode silencieux / Ne pas déranger → c'est l'OS qui
+ *     décide ; BAARO ne le contourne jamais.
+ */
 
 function getSafeSameOriginUrl(value) {
   if (typeof value !== "string" || !value.trim()) return "/";
@@ -40,27 +59,38 @@ function readPushPayload(event) {
 }
 
 /**
- * Résout le chemin du son.
- * - payload.sound / data.sound : chemin absolu ou nom de fichier
- * - silent: true → pas de son
- * - sinon DEFAULT_SOUND
+ * Vrai si la notification doit faire du bruit (sous une forme ou une autre).
+ * Faux si le serveur a demandé le silence (préférence « silencieux » de
+ * l'utilisateur) : payload.silent, ou sound "none" / "false" / "silent".
+ * Le chemin du son envoyé par le serveur n'est pas lu : l'app utilise son
+ * propre réglage.
  */
-function resolveSound(payload, data) {
-  if (payload.silent === true || data.silent === true) return undefined;
+function wantsSound(payload, data) {
+  if (payload.silent === true || data.silent === true) return false;
 
-  const raw =
+  const raw = (
     (typeof payload.sound === "string" && payload.sound.trim()) ||
     (typeof data.sound === "string" && data.sound.trim()) ||
-    "";
+    ""
+  ).toLowerCase();
 
-  if (!raw) return DEFAULT_SOUND;
-  if (raw === "default" || raw === "true") return DEFAULT_SOUND;
-  if (raw === "none" || raw === "false" || raw === "silent") return undefined;
+  return !(raw === "none" || raw === "false" || raw === "silent");
+}
 
-  // Chemin déjà absolu
-  if (raw.startsWith("/")) return raw;
-  // Nom seul → dossier sounds
-  return `/sounds/${raw.replace(/^sounds\//, "")}`;
+/**
+ * Qui fait le bruit ?
+ * - "none"   : silence demandé.
+ * - "app"    : une fenêtre BAARO est visible, l'app joue le son choisi.
+ * - "system" : app en arrière-plan ou fermée, son système par défaut.
+ */
+function pickSoundMode(windowClients, soundWanted) {
+  if (!soundWanted) return "none";
+
+  const appIsVisible = (windowClients || []).some(
+    (client) => client && client.visibilityState === "visible"
+  );
+
+  return appIsVisible ? "app" : "system";
 }
 
 self.addEventListener("push", (event) => {
@@ -83,7 +113,12 @@ self.addEventListener("push", (event) => {
             ? data.body.slice(0, 500)
             : "Vous avez une nouvelle notification.";
 
-      const sound = resolveSound(payload, data);
+      const windowClients = await self.clients.matchAll({
+        type: "window",
+        includeUncontrolled: true,
+      });
+
+      const mode = pickSoundMode(windowClients, wantsSound(payload, data));
 
       const options = {
         body,
@@ -97,29 +132,26 @@ self.addEventListener("push", (event) => {
             ? payload.tag.slice(0, 100)
             : "baaro-notification",
         renotify: true,
-        silent: !sound,
+        // Seul le mode "system" laisse l'OS faire son bruit. En mode "app"
+        // c'est l'app qui joue ; en mode "none" tout est muet.
+        // (Pas d'option `sound` : non standard, ignorée par les navigateurs.)
+        silent: mode !== "system",
       };
 
-      if (sound) {
-        options.sound = sound;
-      }
-
-      // 1. Envoyer l'ordre de jouer le son aux fenêtres ouvertes de BAARO
-      if (sound) {
-        const windowClients = await self.clients.matchAll({
-          type: "window",
-          includeUncontrolled: true,
-        });
-
+      // 1. App visible : lui demander de jouer le son choisi. `sentAt` permet
+      //    à la page d'ignorer un message tardif (page réveillée après coup).
+      if (mode === "app") {
         for (const client of windowClients) {
+          if (client.visibilityState !== "visible") continue;
+
           client.postMessage({
             type: "PLAY_SOUND",
-            sound,
+            sentAt: Date.now(),
           });
         }
       }
 
-      // 2. Afficher la notification visuelle
+      // 2. Afficher la notification système
       await self.registration.showNotification(title, options);
     })()
   );
