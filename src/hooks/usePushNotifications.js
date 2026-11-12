@@ -4,9 +4,12 @@ import {
   getPermissionStateAsync,
 } from "../lib/pushNotifications.js";
 import { getSetting } from "../lib/appSettings.js";
+// Import pour effet de bord : garantit que l'unique écouteur PLAY_SOUND
+// (qui respecte silence / volume) est enregistré dès que les push sont actifs.
+import "./useNotificationSound.js";
 
 /**
- * BAARO — Activation des notifications push et gestion des sons.
+ * BAARO — Activation des notifications push.
  *
  * - Si la permission est déjà accordée : rien à faire ici. La synchronisation
  *   silencieuse du jeton est assurée par src/lib/pushNotifications.js
@@ -15,8 +18,8 @@ import { getSetting } from "../lib/appSettings.js";
  *   par appareil, quelques secondes après l'ouverture de l'app.
  * - Si l'utilisateur a refusé ou désactivé les notifications : on ne
  *   redemande jamais automatiquement (il peut les réactiver dans les Réglages).
- * - Écoute des messages du Service Worker pour jouer le son de notification
- *   lorsque l'application est ouverte ou en arrière-plan.
+ * - Le son de notification est joué par useNotificationSound.js (préférences
+ *   BAARO respectées).
  */
 
 const PROMPTED_KEY = "baaro_push_prompted";
@@ -39,38 +42,11 @@ function markPrompted() {
 }
 
 export function usePushNotifications(id) {
-  // 1. Écouteur pour jouer le son lorsque le Service Worker envoie le message PLAY_SOUND
-  useEffect(() => {
-    if (!("serviceWorker" in navigator)) return;
+  // Le son (message PLAY_SOUND du Service Worker) n'est PAS géré ici :
+  // l'unique écouteur est dans useNotificationSound.js, qui applique les
+  // préférences BAARO (son activé, mode silencieux, volume, son choisi).
 
-    const handleServiceWorkerMessage = (event) => {
-      if (event.data && event.data.type === "PLAY_SOUND") {
-        const soundUrl = event.data.sound || "/sounds/baaro_pulse.mp3";
-        const audio = new Audio(soundUrl);
-
-        audio.play().catch((err) => {
-          console.warn(
-            "[push] Lecture du son bloquée (nécessite une interaction utilisateur préalable) :",
-            err
-          );
-        });
-      }
-    };
-
-    navigator.serviceWorker.addEventListener(
-      "message",
-      handleServiceWorkerMessage
-    );
-
-    return () => {
-      navigator.serviceWorker.removeEventListener(
-        "message",
-        handleServiceWorkerMessage
-      );
-    };
-  }, []);
-
-  // 2. Gestion de la demande de permission Push
+  // Gestion de la demande de permission Push
   useEffect(() => {
     if (!id) return undefined;
 
