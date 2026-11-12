@@ -67,7 +67,7 @@ const ALLOWED_LANGS = new Set([
   "fr", "en", "es", "pt", "ar", "zh", "hi", "ru", "ja", "de",
   "sw", "it", "ko", "tr", "nl", "pl", "uk", "vi", "id", "th",
   "bn", "ha", "yo", "ig", "am", "zu", "af", "fa", "he", "sv",
-  "bm",
+  "bm", "wo", "fuc", "dyu", "snk",
 ]);
 
 const LANG_NAMES = {
@@ -101,7 +101,11 @@ const LANG_NAMES = {
   fa: "فارسی",
   he: "עברית",
   sv: "svenska",
-  bm: "bambara (bamanankan)",
+  bm: "bamanan (bamanankan/bambara)",
+  wo: "wolof",
+  fuc: "pulaar (peul)",
+  dyu: "dioula (dyula/jula)",
+  snk: "soninké",
 };
 
 function jsonError(res, status, message) {
@@ -399,7 +403,7 @@ export default async function handler(req, res) {
   }
 
   // ==========================================================
-  // BRANCHE 2 : TRADUCTION DE TEXTE VIA GROQ
+  // BRANCHE 2 : TRADUCTION DE TEXTE (Gemini prioritaire pour les langues locales)
   // ==========================================================
 
   if (
@@ -431,9 +435,14 @@ export default async function handler(req, res) {
   // cache partagé content_translations, car ces messages sont chiffrés de bout en bout.
   const isPrivate = body.private === true;
 
-  // Le bambara (cible ou source probable) passe par Gemini ; Groq en repli.
+  // Les langues locales moins dotées passent par Gemini ; Groq reste le repli.
   const involvesBambara =
     targetLang === "bm" || sourceLang === "bm" || body.preferBambara === true;
+  const involvesWolof = targetLang === "wo" || sourceLang === "wo";
+  const involvesPulaar = targetLang === "fuc" || sourceLang === "fuc";
+  const involvesDioula = targetLang === "dyu" || sourceLang === "dyu";
+  const involvesSoninke = targetLang === "snk" || sourceLang === "snk";
+  const involvesLocalLanguage = involvesBambara || involvesWolof || involvesPulaar || involvesDioula || involvesSoninke;
 
   let contentHash = "";
 
@@ -487,9 +496,37 @@ export default async function handler(req, res) {
     "Si le texte est déjà dans la langue cible, renvoie-le tel quel, sans le modifier.",
     ...(involvesBambara
       ? [
-          "Le bambara (bamanankan, Mali) s'écrit en alphabet latin avec les lettres ɛ ɔ ɲ ŋ.",
+          "Le bamanan (bamanankan, aussi appelé bambara, notamment au Mali) s'écrit en alphabet latin avec les lettres ɛ ɔ ɲ ŋ.",
           "Comprends l'écriture familière et les messages sans accents ni caractères spéciaux.",
           "Si un mot ou une expression n'a pas d'équivalent sûr, garde-le tel quel plutôt que d'inventer.",
+        ]
+      : []),
+    ...(involvesWolof
+      ? [
+          "Le wolof est une langue ouest-africaine, parlée notamment au Sénégal et en Gambie, généralement écrite en alphabet latin.",
+          "Respecte l'orthographe wolof, notamment les lettres ë et ñ, ainsi que les expressions idiomatiques.",
+          "Privilégie un wolof naturel et courant; si une expression est incertaine, garde-la plutôt que d'inventer.",
+        ]
+      : []),
+    ...(involvesPulaar
+      ? [
+          "Le Pulaar (Peul, code fuc) est une langue peule distincte; privilégie la variété Pulaar d'Afrique de l'Ouest plutôt que le Pular de Guinée ou une autre variété de Fulfulde.",
+          "Respecte l'orthographe Pulaar et ses lettres spéciales, notamment ɓ, ɗ, ƴ, ñ et ŋ.",
+          "Si une expression Pulaar est incertaine, garde-la ou traduis-la avec prudence sans inventer de forme dialectale.",
+        ]
+      : []),
+    ...(involvesDioula
+      ? [
+          "Le Dioula (Dyula/Jula, code dyu) est une langue mandé parlée notamment en Côte d'Ivoire, au Burkina Faso et au Mali.",
+          "Traduis en dioula naturel et courant; conserve les lettres utiles comme ɛ, ɔ et ɲ lorsqu'elles sont employées.",
+          "Ne confonds pas le dioula avec le bambara, même si ces langues sont apparentées.",
+        ]
+      : []),
+    ...(involvesSoninke
+      ? [
+          "Le soninké (soninke, code snk) est une langue mandé d'Afrique de l'Ouest, notamment parlée au Mali, au Sénégal et en Mauritanie.",
+          "Respecte l'orthographe soninkée usuelle et privilégie une formulation naturelle; les conventions écrites peuvent varier selon les communautés.",
+          "Si une expression est incertaine, conserve-la ou traduis-la prudemment plutôt que d'inventer une forme dialectale.",
         ]
       : []),
     "",
@@ -514,7 +551,7 @@ export default async function handler(req, res) {
     let result = null;
     let provider = "groq";
 
-    if (involvesBambara) {
+    if (involvesLocalLanguage) {
       try {
         result = await invokeGeminiTranslation(requestPayload);
         if (result) provider = "gemini";
