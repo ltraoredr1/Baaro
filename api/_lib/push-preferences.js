@@ -5,8 +5,9 @@
  * Règles :
  * - Une erreur Supabase bloque les envois.
  * - Une absence de préférences utilise les valeurs par défaut.
- * - Les notifications marketing sont désactivées par défaut.
+ * - push_enabled === false bloque toutes les notifications.
  * - Les préférences individuelles sont toujours respectées.
+ * - Les notifications marketing nécessitent un opt-in explicite.
  */
 
 const CATEGORY_COLUMNS = Object.freeze({
@@ -20,6 +21,7 @@ const CATEGORY_COLUMNS = Object.freeze({
 });
 
 const DEFAULT_PREFERENCES = Object.freeze({
+  push_enabled: true,
   messages: true,
   social: true,
   live: true,
@@ -41,12 +43,6 @@ function normalizeUserIds(userIds) {
 
 /**
  * Charge les préférences des utilisateurs.
- *
- * Retour :
- * {
- *   preferences: Map<userId, preferenceRow>,
- *   error: null | Error
- * }
  */
 export async function loadPrefs(admin, userIds) {
   const preferences = new Map();
@@ -95,8 +91,7 @@ export async function loadPrefs(admin, userIds) {
 /**
  * Sélectionne les appareils autorisés à recevoir une notification.
  *
- * Une erreur de lecture des préférences bloque volontairement
- * tous les envois : aucun contournement en cas de panne Supabase.
+ * Une erreur de lecture des préférences bloque tous les envois.
  */
 export function selectNotificationTargets({
   userIds,
@@ -128,9 +123,10 @@ export function selectNotificationTargets({
       ? prefsResult.preferences
       : new Map();
 
-  const column = CATEGORY_COLUMNS[String(category || "").toLowerCase()];
+  const column = CATEGORY_COLUMNS[
+    String(category || "").toLowerCase()
+  ];
 
-  // Une catégorie inconnue est bloquée par sécurité.
   if (!column) {
     return {
       targets: [],
@@ -143,11 +139,26 @@ export function selectNotificationTargets({
 
   for (const userId of ids) {
     const preference = preferences.get(userId);
+
+    // Le blocage global est prioritaire sur toutes les catégories.
+    // Une absence de ligne ou de propriété conserve le défaut true.
+    if (
+      preference &&
+      Object.prototype.hasOwnProperty.call(
+        preference,
+        "push_enabled"
+      ) &&
+      preference.push_enabled === false
+    ) {
+      skipped += 1;
+      continue;
+    }
+
     const defaultValue = DEFAULT_PREFERENCES[column];
 
-    // Marketing nécessite toujours un opt-in explicite.
     const enabled =
-      preference && Object.prototype.hasOwnProperty.call(preference, column)
+      preference &&
+      Object.prototype.hasOwnProperty.call(preference, column)
         ? preference[column] === true
         : defaultValue;
 
@@ -156,9 +167,10 @@ export function selectNotificationTargets({
       continue;
     }
 
-    const userTokens = tokensByUser instanceof Map
-      ? tokensByUser.get(userId)
-      : null;
+    const userTokens =
+      tokensByUser instanceof Map
+        ? tokensByUser.get(userId)
+        : null;
 
     if (!Array.isArray(userTokens) || userTokens.length === 0) {
       skipped += 1;
