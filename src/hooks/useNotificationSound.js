@@ -1,114 +1,27 @@
 import { useState, useEffect, useCallback } from "react";
+import {
+  BAARO_SOUNDS,
+  DEFAULT_SOUND_ID,
+  clampVolume,
+  isSilent,
+  normalizeSoundId,
+} from "../lib/notificationSounds.js";
+import {
+  getSoundPrefs,
+  subscribeSoundPrefs,
+  updateSoundPrefs,
+} from "../lib/notificationSoundStore.js";
 
-const STORAGE_KEY = "baaro:notification-sound";
+// Rétro-compatibilité : l'ancien import { BAARO_SOUNDS } continue de marcher.
+export { BAARO_SOUNDS };
 
-/** Catalogue des 7 sons BAARO Original (chemins publics) */
-export const BAARO_SOUNDS = {
-  baaro_pulse: {
-    id: "baaro_pulse",
-    name: "Baaro Pulse",
-    path: "/sounds/baaro_pulse.mp3",
-    category: "notification",
-  },
-  sahel_beat: {
-    id: "sahel_beat",
-    name: "Sahel Beat",
-    path: "/sounds/sahel_beat.mp3",
-    category: "studio",
-  },
-  nko_glow: {
-    id: "nko_glow",
-    name: "N'Ko Glow",
-    path: "/sounds/nko_glow.mp3",
-    category: "studio",
-  },
-  market_hustle: {
-    id: "market_hustle",
-    name: "Market Hustle",
-    path: "/sounds/market_hustle.mp3",
-    category: "studio",
-  },
-  live_drop: {
-    id: "live_drop",
-    name: "Live Drop",
-    path: "/sounds/live_drop.mp3",
-    category: "notification",
-  },
-  creator_rise: {
-    id: "creator_rise",
-    name: "Creator Rise",
-    path: "/sounds/creator_rise.mp3",
-    category: "studio",
-  },
-  baaro_signature: {
-    id: "baaro_signature",
-    name: "Baaro Signature",
-    path: "/sounds/baaro_signature.mp3",
-    category: "brand",
-  },
-};
-
-const DEFAULT_SOUND_ID = "baaro_pulse";
-
-const DEFAULT_PREFS = {
-  enabled: true,
-  muted: false,
-  volume: 70,
-  soundId: DEFAULT_SOUND_ID,
-};
-
-function loadPrefs() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-
-    if (!raw) return { ...DEFAULT_PREFS };
-
-    const parsed = JSON.parse(raw);
-
-    return {
-      enabled: parsed.enabled !== false,
-      muted: !!parsed.muted,
-      volume: typeof parsed.volume === "number" ? parsed.volume : 70,
-      soundId:
-        parsed.soundId && BAARO_SOUNDS[parsed.soundId]
-          ? parsed.soundId
-          : DEFAULT_SOUND_ID,
-    };
-  } catch {
-    return { ...DEFAULT_PREFS };
-  }
-}
-
-function savePrefs(prefs) {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(prefs));
-  } catch {
-    /* ignore */
-  }
-}
-
-// -----------------------------------------------------------------------------
-// État partagé : toutes les instances du hook voient les mêmes réglages.
-// -----------------------------------------------------------------------------
-
-let sharedPrefs = loadPrefs();
-const subscribers = new Set();
-
-function updateSharedPrefs(patch) {
-  sharedPrefs = { ...sharedPrefs, ...patch };
-  savePrefs(sharedPrefs);
-  subscribers.forEach((notify) => notify(sharedPrefs));
-}
-
-// Synchronisation entre onglets / fenêtres.
-if (typeof window !== "undefined") {
-  window.addEventListener("storage", (event) => {
-    if (event.key !== STORAGE_KEY) return;
-
-    sharedPrefs = loadPrefs();
-    subscribers.forEach((notify) => notify(sharedPrefs));
-  });
-}
+/**
+ * BAARO — Lecture des sons de notification DANS L'APPLICATION.
+ *
+ * Les préférences vivent dans src/lib/notificationSoundStore.js (source
+ * unique). Ce fichier ne fait que jouer le son et exposer le hook React.
+ * Règles par plateforme : voir src/lib/notificationSounds.js.
+ */
 
 // -----------------------------------------------------------------------------
 // Lecture audio
@@ -161,32 +74,47 @@ function getAudio(path) {
   return audio;
 }
 
-function playSoundFile(soundIdOrPath, volumePercent) {
-  if (!sharedPrefs.enabled || sharedPrefs.muted) return;
+/**
+ * Anti-doublon : un même événement peut arriver par plusieurs voies à la fois
+ * (temps réel Supabase + message PLAY_SOUND du service worker). Un seul son
+ * est joué par fenêtre de 1,5 s.
+ */
+const DEDUPE_WINDOW_MS = 1500;
+let lastPlayedAt = 0;
 
-  // Détermine s'il s'agit d'une clé (ex: "baaro_pulse") ou d'un chemin (ex: "/sounds/baaro_pulse.mp3")
-  let targetPath = soundIdOrPath;
+/**
+ * Joue un son BAARO en appliquant TOUJOURS les préférences actuelles
+ * (son activé, mode silencieux, volume). Seuls les identifiants du
+ * catalogue sont acceptés : un chemin venu du réseau n'est jamais lu.
+ */
+function playSoundFile(soundId, { force = false } = {}) {
+  const prefs = getSoundPrefs();
 
-  if (BAARO_SOUNDS[soundIdOrPath]) {
-    targetPath = BAARO_SOUNDS[soundIdOrPath].path;
-  } else if (!targetPath || typeof targetPath !== "string") {
-    const soundKey = sharedPrefs.soundId || DEFAULT_SOUND_ID;
-    targetPath = BAARO_SOUNDS[soundKey]?.path || BAARO_SOUNDS[DEFAULT_SOUND_ID].path;
-  }
+  if (isSilent(prefs)) return;
+
+  const now = Date.now();
+
+  if (!force && now - lastPlayedAt < DEDUPE_WINDOW_MS) return;
+
+  lastPlayedAt = now;
+
+  const id = normalizeSoundId(soundId) || prefs.soundId || DEFAULT_SOUND_ID;
+  const path = (BAARO_SOUNDS[id] || BAARO_SOUNDS[DEFAULT_SOUND_ID]).path;
+  const volume = clampVolume(prefs.volume);
 
   try {
-    const audio = getAudio(targetPath);
+    const audio = getAudio(path);
 
-    audio.volume = Math.max(0, Math.min(1, (volumePercent ?? sharedPrefs.volume ?? 70) / 100));
+    audio.volume = volume / 100;
     audio.currentTime = 0;
 
     const promise = audio.play();
 
     if (promise && typeof promise.catch === "function") {
-      promise.catch(() => playBeep(volumePercent ?? sharedPrefs.volume));
+      promise.catch(() => playBeep(volume));
     }
   } catch {
-    playBeep(volumePercent ?? sharedPrefs.volume);
+    playBeep(volume);
   }
 }
 
@@ -207,7 +135,7 @@ function primeAudioOnFirstGesture() {
     window.removeEventListener("keydown", prime, true);
 
     try {
-      const meta = BAARO_SOUNDS[sharedPrefs.soundId] || BAARO_SOUNDS[DEFAULT_SOUND_ID];
+      const meta = BAARO_SOUNDS[getSoundPrefs().soundId] || BAARO_SOUNDS[DEFAULT_SOUND_ID];
       const audio = getAudio(meta.path);
 
       audio.muted = true;
@@ -242,15 +170,37 @@ function primeAudioOnFirstGesture() {
 primeAudioOnFirstGesture();
 
 // -----------------------------------------------------------------------------
-// Écoute des messages venant du Service Worker pour les Push Notifications
+// Messages du Service Worker (Web Push)
+//
+// UNIQUE écouteur PLAY_SOUND de l'application. Le son envoyé par le serveur
+// est ignoré : le son choisi par l'utilisateur, le mode silencieux et le
+// volume BAARO s'appliquent toujours.
 // -----------------------------------------------------------------------------
+
+/**
+ * Le service worker n'envoie PLAY_SOUND que si l'app est visible. Par
+ * sécurité, la page ignore aussi un message périmé (page suspendue puis
+ * réveillée) ou reçu alors qu'elle est masquée : pas de son surprise.
+ */
+const PLAY_SOUND_MAX_AGE_MS = 5000;
+
+function shouldHandlePlaySound(data, now = Date.now()) {
+  if (!data || data.type !== "PLAY_SOUND") return false;
+
+  if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+    return false;
+  }
+
+  // Ancien service worker sans horodatage : on joue (comportement historique).
+  if (typeof data.sentAt !== "number") return true;
+
+  return now - data.sentAt <= PLAY_SOUND_MAX_AGE_MS;
+}
 
 if (typeof window !== "undefined" && "serviceWorker" in navigator) {
   navigator.serviceWorker.addEventListener("message", (event) => {
-    if (event.data && event.data.type === "PLAY_SOUND") {
-      // Joue le son reçu ou le son configuré par défaut dans les préférences
-      const soundToPlay = event.data.sound || sharedPrefs.soundId;
-      playSoundFile(soundToPlay, sharedPrefs.volume);
+    if (shouldHandlePlaySound(event.data)) {
+      playSoundFile(getSoundPrefs().soundId);
     }
   });
 }
@@ -260,49 +210,42 @@ if (typeof window !== "undefined" && "serviceWorker" in navigator) {
 // -----------------------------------------------------------------------------
 
 export function useNotificationSound() {
-  const [prefs, setPrefs] = useState(sharedPrefs);
+  const [prefs, setPrefs] = useState(getSoundPrefs);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    subscribers.add(setPrefs);
+    const unsubscribe = subscribeSoundPrefs(setPrefs);
 
-    setPrefs(sharedPrefs);
+    setPrefs(getSoundPrefs());
     setLoading(false);
 
-    return () => {
-      subscribers.delete(setPrefs);
-    };
+    return unsubscribe;
   }, []);
 
   const { enabled, muted, volume, soundId } = prefs;
 
-  const setEnabled = useCallback((v) => updateSharedPrefs({ enabled: !!v }), []);
-  const setMuted = useCallback((v) => updateSharedPrefs({ muted: !!v }), []);
+  const setEnabled = useCallback((v) => updateSoundPrefs({ enabled: !!v }), []);
+  const setMuted = useCallback((v) => updateSoundPrefs({ muted: !!v }), []);
 
   const setVolume = useCallback((v) => {
-    const n = Number(v);
-
-    updateSharedPrefs({
-      volume: Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : 70,
-    });
+    updateSoundPrefs({ volume: clampVolume(v) });
   }, []);
 
   const setSoundId = useCallback((id) => {
-    if (BAARO_SOUNDS[id]) updateSharedPrefs({ soundId: id });
+    if (normalizeSoundId(id)) updateSoundPrefs({ soundId: id });
   }, []);
 
+  // Test : l'utilisateur écoute explicitement, pas d'anti-doublon.
   const playTest = useCallback(() => {
-    if (!enabled || muted) return;
-    playSoundFile(soundId, volume);
-  }, [enabled, muted, volume, soundId]);
+    playSoundFile(getSoundPrefs().soundId, { force: true });
+  }, []);
 
-  const playNotification = useCallback(
-    (overrideSoundId) => {
-      if (!enabled || muted) return;
-      playSoundFile(overrideSoundId || soundId, volume);
-    },
-    [enabled, muted, volume, soundId]
-  );
+  // Sans argument : joue le son choisi dans les Réglages. Un identifiant du
+  // catalogue peut être passé pour un cas particulier, mais les réglages
+  // (silencieux, volume) restent appliqués.
+  const playNotification = useCallback((overrideSoundId) => {
+    playSoundFile(overrideSoundId || getSoundPrefs().soundId);
+  }, []);
 
   return {
     enabled,
