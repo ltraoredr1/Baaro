@@ -20,11 +20,23 @@ export function useCursorFeed({ onError } = {}) {
 
   const cursorRef = useRef(null);
   const busyRef = useRef(false);
+  const pendingResetRef = useRef(null);
   const onErrorRef = useRef(onError);
   onErrorRef.current = onError;
 
   const load = useCallback(async ({ reset = false, silent = false } = {}) => {
-    if (busyRef.current) return null;
+    if (busyRef.current) {
+      // Ne pas perdre un refresh demandé pendant le chargement d'une page.
+      if (reset) {
+        return new Promise((resolve) => {
+          const pending = pendingResetRef.current || { silent, waiters: [] };
+          pending.silent = pending.silent && silent;
+          pending.waiters.push(resolve);
+          pendingResetRef.current = pending;
+        });
+      }
+      return null;
+    }
     if (!reset && !cursorRef.current) return null;
 
     busyRef.current = true;
@@ -56,6 +68,13 @@ export function useCursorFeed({ onError } = {}) {
       busyRef.current = false;
       setLoading(false);
       setLoadingMore(false);
+      const pendingReset = pendingResetRef.current;
+      pendingResetRef.current = null;
+      if (pendingReset) {
+        void load({ reset: true, silent: pendingReset.silent }).then((rows) => {
+          pendingReset.waiters.forEach((resolve) => resolve(rows));
+        });
+      }
     }
   }, []);
 
