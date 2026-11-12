@@ -19,7 +19,17 @@ const DEFAULT_LABELS = {
   volume: "Volume",
   sound: "Son BAARO",
   test: "Tester le son",
+  systemHint:
+    "Quand BAARO est fermée ou en arrière-plan, le volume suit celui de ton téléphone. Le son choisi et le mode silencieux restent appliqués.",
 };
+
+function isNativeApp() {
+  try {
+    return Boolean(window.Capacitor?.isNativePlatform?.());
+  } catch {
+    return false;
+  }
+}
 
 export default function NotificationSoundSettings({ C, labels }) {
   const tx = { ...DEFAULT_LABELS, ...(labels || {}) };
@@ -175,6 +185,12 @@ export default function NotificationSoundSettings({ C, labels }) {
       >
         <Play size={14} /> {tx.test}
       </button>
+
+      {isNativeApp() && (
+        <p className="text-xs" style={{ color: C.muted }}>
+          {tx.systemHint}
+        </p>
+      )}
     </div>
   );
 }
