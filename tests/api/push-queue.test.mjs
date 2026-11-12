@@ -291,3 +291,31 @@ test("une erreur d’écriture du job n’est pas comptée comme succès", async
   assert.equal(result.sent, 0);
   assert.equal(result.errors, 1);
 });
+
+test("l'envoi reçoit les préférences de l'utilisateur (son choisi)", async () => {
+  const admin = makeAdmin({
+    preferences: [
+      {
+        user_id: tokenRow.user_id,
+        social: true,
+        sound_id: "sahel_beat",
+        sound_silent: false,
+      },
+    ],
+  });
+  let received = null;
+
+  const result = await processPushQueue(
+    admin,
+    async (token, payload, context) => {
+      received = { token, payload, context };
+      return { ok: true };
+    },
+    { now: () => 100_000 },
+  );
+
+  assert.equal(result.sent, 1);
+  assert.equal(received.token.id, tokenRow.id);
+  assert.equal(received.context.preferences.sound_id, "sahel_beat");
+  assert.equal(received.context.preferences.sound_silent, false);
+});
