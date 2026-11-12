@@ -1,3 +1,4 @@
+
 import { createClient } from '@supabase/supabase-js';
 import crypto from 'node:crypto';
 import {
@@ -7,13 +8,16 @@ import {
   rateLimitAsync,
   logError,
   logWarn,
+  getAdminClient,
 } from './_shared.js';
+import { processPushNotificationQueue } from './_lib/push.js';
 
 const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const CINETPAY_API_KEY = process.env.CINETPAY_API_KEY;
 const CINETPAY_SITE_ID = process.env.CINETPAY_SITE_ID;
 const SEND_SMS_HOOK_SECRET = process.env.SEND_SMS_HOOK_SECRET;
+const CRON_SECRET = process.env.CRON_SECRET || '';
 
 const PAYPAL_CLIENT_ID = process.env.PAYPAL_CLIENT_ID || '';
 const PAYPAL_CLIENT_SECRET = process.env.PAYPAL_CLIENT_SECRET || '';
@@ -32,6 +36,12 @@ const PAYPAL_NATIVE_CURRENCIES = ['USD', 'EUR', 'GBP', 'CAD', 'AUD', 'CHF'];
 
 function admin() {
   return createClient(supabaseUrl, supabaseServiceKey);
+}
+
+function safeEqual(left, right) {
+  const a = Buffer.from(String(left || ''));
+  const b = Buffer.from(String(right || ''));
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
 export const config = {
@@ -121,6 +131,45 @@ async function failWebhookEvent(supabase, provider, eventId, error) {
 
 export default async function handler(req, res) {
   if (applyCors(req, res)) return;
+
+  // Worker de notifications push : route interne protégée par CRON_SECRET.
+  if (req.query?.route === 'process-push-queue') {
+    if (req.method !== 'GET') {
+      return res.status(405).json({ error: 'Méthode non autorisée' });
+    }
+
+    if (!CRON_SECRET) {
+      logError('push-queue', new Error('CRON_SECRET manquant'));
+      return res.status(503).json({ error: 'Worker non configuré' });
+    }
+
+    if (!safeEqual(req.headers.authorization, `Bearer ${CRON_SECRET}`)) {
+      return res.status(401).json({ error: 'Non autorisé' });
+    }
+
+    try {
+      const pushAdmin = getAdminClient();
+      const result = await processPushNotificationQueue(pushAdmin);
+
+      if (!result.ok || result.errors > 0) {
+        logError('push-queue', new Error('Traitement incomplet'), result);
+        return res.status(500).json({
+          ok: false,
+          claimed: result.claimed || 0,
+          errors: result.errors || 0,
+          error: result.error || 'Certains jobs n’ont pas pu être finalisés.',
+        });
+      }
+
+      return res.status(200).json(result);
+    } catch (error) {
+      logError('push-queue', error);
+      return res.status(500).json({
+        error: 'Échec du traitement de la file',
+      });
+    }
+  }
+
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Methode non autorisee' });
   }
