@@ -19,12 +19,31 @@
 
 import { supabase } from "../supabaseClient.js";
 import { callSocial } from "./notifyInteraction.js";
+import {
+  allAndroidChannels,
+  toServerSoundPrefs,
+} from "./notificationSounds.js";
+import {
+  getSoundPrefs,
+  hasStoredSoundPrefs,
+  replaceSoundPrefs,
+  subscribeSoundPrefs,
+} from "./notificationSoundStore.js";
+import {
+  fetchServerSoundPreferences,
+  saveSoundPreferences,
+} from "./notificationPreferences.js";
 
 const VAPID_PUBLIC = import.meta.env.VITE_VAPID_PUBLIC_KEY || "";
 
 const NATIVE_REGISTRATION_TIMEOUT_MS = 20000;
 const SW_READY_TIMEOUT_MS = 10000;
 const SERVICE_WORKER_URL = "/sw.js";
+/**
+ * Canal historique : utilisé par le serveur tant que l'app n'a pas synchronisé
+ * le son choisi. Les canaux par son (baaro_notifications_v3_<son>) et le canal
+ * muet sont définis dans src/lib/notificationSounds.js.
+ */
 const ANDROID_CHANNEL_ID = "baaro_notifications_v2";
 /** Nom du fichier dans android/app/src/main/res/raw/ (sans extension) */
 const ANDROID_CHANNEL_SOUND = "baaro_pulse";
@@ -422,11 +441,19 @@ async function ensureNativeListeners(PushNotifications) {
   return nativeListenersPromise;
 }
 
+/**
+ * Android 8+ : le son appartient au CANAL et ne peut plus être changé après
+ * sa création. Pour respecter le son choisi dans les Réglages, on crée donc
+ * un canal par son + un canal muet ; le serveur cible le bon d'après le
+ * réglage synchronisé. MainActivity.java crée les mêmes canaux au démarrage
+ * (ids identiques) ; la création est idempotente.
+ */
 async function ensureAndroidChannel(PushNotifications) {
   if (nativePlatform !== "android") return;
 
-  try {
-    await PushNotifications.createChannel({
+  const channels = [
+    // Canal historique (appareils pas encore synchronisés).
+    {
       id: ANDROID_CHANNEL_ID,
       name: "Notifications BAARO",
       description: "Abonnés, messages, lives et activité de votre compte",
@@ -436,9 +463,39 @@ async function ensureAndroidChannel(PushNotifications) {
       // Fichier : android/app/src/main/res/raw/baaro_pulse.wav (ou .mp3)
       // → nom SANS extension
       sound: ANDROID_CHANNEL_SOUND,
-    });
-  } catch (error) {
-    console.warn("[push] Création du canal Android :", error?.message || error);
+    },
+    ...allAndroidChannels().map((channel) =>
+      channel.soundId
+        ? {
+            id: channel.id,
+            name: channel.name,
+            description: "Abonnés, messages, lives et activité de votre compte",
+            importance: 5,
+            visibility: 1,
+            vibration: true,
+            sound: channel.soundId,
+          }
+        : {
+            // Canal muet : importance basse = aucun son ni vibration.
+            id: channel.id,
+            name: channel.name,
+            description: "Notifications sans son",
+            importance: 2,
+            visibility: 1,
+            vibration: false,
+          }
+    ),
+  ];
+
+  for (const channel of channels) {
+    try {
+      await PushNotifications.createChannel(channel);
+    } catch (error) {
+      console.warn(
+        `[push] Création du canal Android ${channel.id} :`,
+        error?.message || error
+      );
+    }
   }
 }
 
@@ -628,6 +685,90 @@ export async function syncPushForCurrentUser() {
   }
 }
 
+// -----------------------------------------------------------------------------
+// Son des notifications : synchronisation serveur + canaux Android
+// -----------------------------------------------------------------------------
+
+let soundSyncTimer = null;
+let soundSyncInFlight = null;
+
+/**
+ * Envoie le son choisi au serveur. Sur Android, les canaux sont créés AVANT :
+ * sinon le serveur pourrait cibler un canal inexistant (son système par défaut).
+ */
+async function pushSoundPrefsToServer() {
+  try {
+    if (await isNativePlatform()) {
+      const { PushNotifications } = await import("@capacitor/push-notifications");
+
+      await ensureNativeListeners(PushNotifications);
+      await ensureAndroidChannel(PushNotifications);
+    }
+
+    const result = await saveSoundPreferences(toServerSoundPrefs(getSoundPrefs()));
+
+    if (!result.ok) {
+      console.warn("[push] Synchronisation du son :", result.error);
+    } else if (result.synced === false) {
+      console.warn(
+        "[push] Son non synchronisé : appliquer docs/sql/2026-11-notification-sound-prefs.sql."
+      );
+    }
+
+    return result;
+  } catch (error) {
+    console.warn("[push] Synchronisation du son :", error?.message || error);
+    return { ok: false, error: error?.message };
+  }
+}
+
+/** Regroupe les changements rapides (curseur, interrupteurs) en un seul envoi. */
+export function scheduleSoundPrefsSync(delayMs = 800) {
+  clearTimeout(soundSyncTimer);
+
+  soundSyncTimer = setTimeout(() => {
+    soundSyncInFlight = pushSoundPrefsToServer().finally(() => {
+      soundSyncInFlight = null;
+    });
+  }, delayMs);
+}
+
+/**
+ * À la connexion : sur un appareil sans réglage local, on reprend celui du
+ * serveur (évite d'écraser le choix de l'utilisateur par les valeurs par
+ * défaut) ; sinon on pousse le réglage local vers le serveur.
+ */
+export async function reconcileSoundPrefs() {
+  try {
+    if (soundSyncInFlight) await soundSyncInFlight;
+
+    if (!hasStoredSoundPrefs()) {
+      const server = await fetchServerSoundPreferences();
+
+      if (server?.sound_id) {
+        replaceSoundPrefs({
+          ...getSoundPrefs(),
+          soundId: server.sound_id,
+          muted: server.sound_silent,
+        });
+        // Les canaux Android doivent exister sur cet appareil aussi.
+        if (await isNativePlatform()) {
+          const { PushNotifications } = await import("@capacitor/push-notifications");
+
+          await ensureNativeListeners(PushNotifications);
+          await ensureAndroidChannel(PushNotifications);
+        }
+        return { ok: true, adopted: "server" };
+      }
+    }
+
+    return await pushSoundPrefsToServer();
+  } catch (error) {
+    console.warn("[push] Réconciliation du son :", error?.message || error);
+    return { ok: false, error: error?.message };
+  }
+}
+
 let authSyncStarted = false;
 let lastSync = { userId: null, at: 0 };
 
@@ -636,6 +777,9 @@ export function initPushSync() {
   if (authSyncStarted || typeof window === "undefined") return;
 
   authSyncStarted = true;
+
+  // Chaque changement de réglage de son est répercuté sur le serveur.
+  subscribeSoundPrefs(() => scheduleSoundPrefsSync());
 
   supabase.auth.onAuthStateChange((event, session) => {
     const userId = session?.user?.id;
@@ -654,6 +798,7 @@ export function initPushSync() {
     // Hors du callback : évite les blocages d'appels Supabase imbriqués.
     setTimeout(() => {
       void syncPushForCurrentUser();
+      void reconcileSoundPrefs();
     }, 1500);
   });
 }

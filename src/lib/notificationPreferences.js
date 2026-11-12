@@ -99,6 +99,55 @@ export async function saveNotificationPreferences(patch) {
 }
 
 /**
+ * Son des notifications : synchronisation avec le serveur.
+ * Le serveur choisit le canal Android / le son Web d'après ces valeurs.
+ * Le volume n'est PAS synchronisé (non applicable aux sons système).
+ *
+ * @param {{ sound_id: string, sound_silent: boolean }} soundPrefs
+ * @returns {Promise<{ ok: boolean, synced?: boolean, skipped?: boolean, error?: string }>}
+ */
+export async function saveSoundPreferences(soundPrefs) {
+  try {
+    const result = await callSocial("save_preferences", {
+      preferences: {
+        sound_id: soundPrefs.sound_id,
+        sound_silent: Boolean(soundPrefs.sound_silent),
+      },
+    });
+
+    // Non connecté : rien à synchroniser.
+    if (!result) return { ok: true, skipped: true };
+
+    if (!result.ok) {
+      return { ok: false, error: result.body?.error || `HTTP ${result.status}` };
+    }
+
+    // sound_synced === false : migration SQL pas encore appliquée côté serveur.
+    return { ok: true, synced: result.body?.sound_synced !== false };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+/** Lit le son enregistré sur le serveur ; null si indisponible. */
+export async function fetchServerSoundPreferences() {
+  try {
+    const result = await callSocial("get_preferences");
+
+    if (!result || !result.ok) return null;
+
+    const data = result.body?.data || {};
+
+    return {
+      sound_id: typeof data.sound_id === "string" ? data.sound_id : null,
+      sound_silent: data.sound_silent === true,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * @param {object} preferences
  * @param {"message"|"social"|"live"|"earnings"|"marketing"|string} category
  */
