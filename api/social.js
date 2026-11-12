@@ -28,6 +28,7 @@ import {
   rateLimitAsync,
 } from "./_shared.js";
 import { sendPushToUsers } from "./_lib/push.js";
+import { normalizeSoundId } from "./_lib/push-sounds.js";
 import {
   buildInteractionNotificationKey,
   insertNotificationOnce,
@@ -681,7 +682,21 @@ function normalizePreferences(row) {
   for (const key of PREFERENCE_KEYS) {
     if (typeof source[key] === "boolean") out[key] = source[key];
   }
+  // Son des notifications (colonnes sound_id / sound_silent). Absentes tant
+  // que la migration SQL n'est pas appliquée : on renvoie alors null.
+  out.sound_id = normalizeSoundId(source.sound_id);
+  out.sound_silent =
+    typeof source.sound_silent === "boolean" ? source.sound_silent : false;
   return out;
+}
+
+/** Erreur Postgres/PostgREST « colonne inconnue » (migration non appliquée). */
+function isMissingSoundColumnError(error) {
+  if (!error) return false;
+  const text = `${error.code || ""} ${error.message || ""}`;
+  return (
+    /42703|PGRST204/.test(text) || /sound_(id|silent)/.test(text)
+  );
 }
 
 async function handleGetPreferences(admin, user) {
@@ -716,18 +731,56 @@ async function handleSavePreferences(admin, user, body) {
   if ("wallet" in patch && !("earnings" in safe)) {
     safe.earnings = Boolean(patch.wallet);
   }
-  if (Object.keys(safe).length === 0) {
+
+  // Son : seul un identifiant du catalogue est accepté (jamais un chemin).
+  const soundPatch = {};
+  if ("sound_id" in patch) {
+    const soundId = normalizeSoundId(patch.sound_id);
+    if (!soundId) {
+      return { status: 400, body: { ok: false, error: "Son invalide" } };
+    }
+    soundPatch.sound_id = soundId;
+  }
+  if ("sound_silent" in patch) {
+    soundPatch.sound_silent = Boolean(patch.sound_silent);
+  }
+
+  if (Object.keys(safe).length === 0 && Object.keys(soundPatch).length === 0) {
     return { status: 400, body: { ok: false, error: "Aucune préférence valide" } };
   }
 
-  const { data, error } = await admin
-    .from("notification_preferences")
-    .upsert(
-      { user_id: user.id, ...safe, updated_at: new Date().toISOString() },
-      { onConflict: "user_id" }
-    )
-    .select("*")
-    .maybeSingle();
+  const upsertRow = (fields) =>
+    admin
+      .from("notification_preferences")
+      .upsert(
+        { user_id: user.id, ...fields, updated_at: new Date().toISOString() },
+        { onConflict: "user_id" }
+      )
+      .select("*")
+      .maybeSingle();
+
+  let { data, error } = await upsertRow({ ...safe, ...soundPatch });
+  let soundSynced = Object.keys(soundPatch).length > 0;
+
+  // Migration SQL pas encore appliquée : on enregistre quand même les
+  // préférences classiques, et on signale que le son n'a pas été synchronisé.
+  if (error && soundSynced && isMissingSoundColumnError(error)) {
+    console.warn(
+      "[social] save_preferences : colonnes sound_* absentes, migration SQL à appliquer."
+    );
+    soundSynced = false;
+    if (Object.keys(safe).length === 0) {
+      return {
+        status: 200,
+        body: {
+          ok: true,
+          sound_synced: false,
+          data: { user_id: user.id, ...normalizePreferences(null) },
+        },
+      };
+    }
+    ({ data, error } = await upsertRow(safe));
+  }
   if (error) {
     console.error("[social] save_preferences", error.message || error);
     return {
@@ -739,7 +792,11 @@ async function handleSavePreferences(admin, user, body) {
     status: 200,
     body: {
       ok: true,
-      data: { user_id: user.id, ...normalizePreferences(data || safe) },
+      sound_synced: soundSynced,
+      data: {
+        user_id: user.id,
+        ...normalizePreferences(data || { ...safe, ...soundPatch }),
+      },
     },
   };
 }
