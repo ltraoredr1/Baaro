@@ -1,133 +1,185 @@
-import test from "node:test";
-import assert from "node:assert/strict";
-import {
-  loadPrefs,
-  selectNotificationTargets,
-} from "../../api/_lib/push-preferences.js";
 
-const userIds = ["user-identifier-001"];
-const token = {
-  id: "token-1",
-  user_id: userIds[0],
-  token: "push-token",
-  platform: "android",
-};
+/**
+ * BAARO — Préférences de notifications push
+ *
+ * Règles :
+ * - Une erreur Supabase bloque les envois.
+ * - Une absence de préférences utilise les valeurs par défaut.
+ * - Les notifications marketing sont désactivées par défaut.
+ * - Les préférences individuelles sont toujours respectées.
+ */
 
-function createAdmin(result) {
-  return {
-    from(table) {
-      assert.equal(table, "notification_preferences");
-      return {
-        select(columns) {
-          assert.equal(columns, "*");
-          return {
-            in(column, requestedIds) {
-              assert.equal(column, "user_id");
-              assert.deepEqual(requestedIds, userIds);
-              return Promise.resolve(result);
-            },
-          };
-        },
-      };
-    },
-  };
+const CATEGORY_COLUMNS = Object.freeze({
+  message: "messages",
+  messages: "messages",
+  social: "social",
+  live: "live",
+  earnings: "earnings",
+  wallet: "earnings",
+  marketing: "marketing",
+});
+
+const DEFAULT_PREFERENCES = Object.freeze({
+  messages: true,
+  social: true,
+  live: true,
+  earnings: true,
+  marketing: false,
+});
+
+function normalizeUserIds(userIds) {
+  if (!Array.isArray(userIds)) return [];
+
+  return [
+    ...new Set(
+      userIds.filter(
+        (id) => typeof id === "string" && id.trim().length > 0
+      )
+    ),
+  ];
 }
 
-test("une erreur Supabase reste distincte d'une absence de préférences", async () => {
-  const error = { message: "database unavailable" };
-  const prefsResult = await loadPrefs(
-    createAdmin({ data: null, error }),
-    userIds,
-  );
+/**
+ * Charge les préférences des utilisateurs.
+ *
+ * Retour :
+ * {
+ *   preferences: Map<userId, preferenceRow>,
+ *   error: null | Error
+ * }
+ */
+export async function loadPrefs(admin, userIds) {
+  const preferences = new Map();
+  const ids = normalizeUserIds(userIds);
 
-  assert.equal(prefsResult.error, error);
-  assert.equal(prefsResult.preferences.size, 0);
+  if (!admin || typeof admin.from !== "function") {
+    return {
+      preferences,
+      error: new Error("Client Supabase admin invalide."),
+    };
+  }
 
-  const selection = selectNotificationTargets({
-    userIds,
-    prefsResult,
-    tokensByUser: new Map([[userIds[0], [token]]]),
-    category: "social",
-  });
-  assert.deepEqual(selection.targets, []);
-  assert.equal(selection.skipped, userIds.length);
-  assert.equal(selection.error, error);
-});
+  if (!ids.length) {
+    return { preferences, error: null };
+  }
 
-test("une exception pendant la lecture bloque aussi toutes les catégories", async () => {
-  const error = new Error("connection lost");
-  const admin = {
-    from() {
-      return {
-        select() {
-          return {
-            in() {
-              throw error;
-            },
-          };
-        },
-      };
-    },
+  try {
+    const { data, error } = await admin
+      .from("notification_preferences")
+      .select("*")
+      .in("user_id", ids);
+
+    if (error) {
+      return { preferences, error };
+    }
+
+    for (const row of Array.isArray(data) ? data : []) {
+      if (
+        row &&
+        typeof row.user_id === "string" &&
+        ids.includes(row.user_id)
+      ) {
+        preferences.set(row.user_id, row);
+      }
+    }
+
+    return { preferences, error: null };
+  } catch (error) {
+    return {
+      preferences: new Map(),
+      error,
+    };
+  }
+}
+
+/**
+ * Sélectionne les appareils autorisés à recevoir une notification.
+ *
+ * Une erreur de lecture des préférences bloque volontairement
+ * tous les envois : aucun contournement en cas de panne Supabase.
+ */
+export function selectNotificationTargets({
+  userIds,
+  prefsResult,
+  tokensByUser,
+  category,
+} = {}) {
+  const ids = normalizeUserIds(userIds);
+  const targets = [];
+
+  if (!ids.length) {
+    return {
+      targets,
+      skipped: 0,
+      error: prefsResult?.error || null,
+    };
+  }
+
+  if (prefsResult?.error) {
+    return {
+      targets: [],
+      skipped: ids.length,
+      error: prefsResult.error,
+    };
+  }
+
+  const preferences =
+    prefsResult?.preferences instanceof Map
+      ? prefsResult.preferences
+      : new Map();
+
+  const column = CATEGORY_COLUMNS[String(category || "").toLowerCase()];
+
+  // Une catégorie inconnue est bloquée par sécurité.
+  if (!column) {
+    return {
+      targets: [],
+      skipped: ids.length,
+      error: new Error("Catégorie de notification inconnue."),
+    };
+  }
+
+  let skipped = 0;
+
+  for (const userId of ids) {
+    const preference = preferences.get(userId);
+    const defaultValue = DEFAULT_PREFERENCES[column];
+
+    // Marketing nécessite toujours un opt-in explicite.
+    const enabled =
+      preference && Object.prototype.hasOwnProperty.call(preference, column)
+        ? preference[column] === true
+        : defaultValue;
+
+    if (!enabled) {
+      skipped += 1;
+      continue;
+    }
+
+    const userTokens = tokensByUser instanceof Map
+      ? tokensByUser.get(userId)
+      : null;
+
+    if (!Array.isArray(userTokens) || userTokens.length === 0) {
+      skipped += 1;
+      continue;
+    }
+
+    for (const token of userTokens) {
+      if (
+        token &&
+        token.user_id === userId &&
+        typeof token.token === "string" &&
+        token.token.trim().length > 0
+      ) {
+        targets.push(token);
+      }
+    }
+  }
+
+  return {
+    targets,
+    skipped,
+    error: null,
   };
-  const prefsResult = await loadPrefs(admin, userIds);
-
-  assert.equal(prefsResult.error, error);
-  for (const category of ["message", "social", "live", "earnings", "marketing"]) {
-    const selection = selectNotificationTargets({
-      userIds,
-      prefsResult,
-      tokensByUser: new Map([[userIds[0], [token]]]),
-      category,
-    });
-    assert.deepEqual(selection.targets, [], `${category} doit être bloquée`);
-  }
-});
-
-test("une lecture réussie sans ligne n'est pas une erreur et marketing reste opt-in", async () => {
-  const prefsResult = await loadPrefs(
-    createAdmin({ data: [], error: null }),
-    userIds,
-  );
-  const tokensByUser = new Map([[userIds[0], [token]]]);
-
-  assert.equal(prefsResult.error, null);
-  assert.equal(prefsResult.preferences.has(userIds[0]), false);
-
-  const social = selectNotificationTargets({
-    userIds,
-    prefsResult,
-    tokensByUser,
-    category: "social",
-  });
-  assert.deepEqual(social.targets, [token]);
-
-  const marketing = selectNotificationTargets({
-    userIds,
-    prefsResult,
-    tokensByUser,
-    category: "marketing",
-  });
-  assert.deepEqual(marketing.targets, []);
-  assert.equal(marketing.skipped, 1);
-});
-
-test("une préférence de catégorie désactivée continue à bloquer son envoi", async () => {
-  const prefsResult = await loadPrefs(
-    createAdmin({
-      data: [{ user_id: userIds[0], messages: false, marketing: false }],
-      error: null,
-    }),
-    userIds,
-  );
-  const tokensByUser = new Map([[userIds[0], [token]]]);
-
-  for (const category of ["message", "marketing"]) {
-    const selection = selectNotificationTargets({
-      userIds,
-      prefsResult,
-      tokensByUser,
-      category,
-    });
-    assert.deepEqual(selection.targets, [], `${category} doit être bloquée`);
-  }
-});
+}
