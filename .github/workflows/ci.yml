@@ -104,6 +104,14 @@ jobs:
       - name: Messaging E2E crypto compatibility tests
         run: npm run test:messaging-crypto
 
+      # Notification configuration check (service worker, push handler, sounds).
+      # The VAPID public key is not a secret; a dummy value with a valid format
+      # is enough to validate the configuration logic in CI.
+      - name: Notifications configuration check
+        run: npm run check:notifications
+        env:
+          VITE_VAPID_PUBLIC_KEY: BCI0dummyVapidPublicKeyForCiOnly0000000000000000000000000000000000000000000000000000
+
       # Notification system tests (previously missing from CI).
       - name: Push preferences tests
         run: npm run test:push-preferences
