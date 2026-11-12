@@ -1,3 +1,4 @@
+
 {
   "functions": {
     "api/translate.js": {
@@ -5,6 +6,10 @@
     }
   },
   "rewrites": [
+    {
+      "source": "/api/process-push-queue",
+      "destination": "/api/webhooks?route=process-push-queue"
+    },
     {
       "source": "/api/ad-revenue",
       "destination": "/api/payout-webhook?route=ad-revenue"
