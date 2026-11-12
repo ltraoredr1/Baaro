@@ -43,7 +43,7 @@ if (!publicKey) {
 // 2. VAPID private (backend only)
 const privateKey = process.env.VAPID_PRIVATE_KEY || "";
 if (!privateKey) {
-  warn("VAPID_PRIVATE_KEY absente (requis pour /api/send-push)");
+  warn("VAPID_PRIVATE_KEY absente (requis pour api/_lib/push.js)");
 } else {
   ok("VAPID private key présente");
 }
@@ -56,16 +56,19 @@ if (!subject) {
 }
 
 // 3. Fichiers critiques
+// Note : le service worker réellement enregistré est /sw.js, généré au build
+// par vite-plugin-pwa (vérifié en section 6). public/service-worker.js est
+// LEGACY et n'est plus exigé. L'envoi push côté serveur vit dans
+// api/_lib/push.js (api/send-push.js n'existe plus).
 const critical = [
   "src/lib/pushNotifications.js",
   "src/lib/notificationPreferences.js",
   "src/lib/notificationSounds.js",
   "src/lib/notificationSoundStore.js",
+  "api/_lib/push.js",
   "api/_lib/push-sounds.js",
   "src/hooks/useNotificationSound.js",
   "src/hooks/usePushNotifications.js",
-  "public/service-worker.js",
-  "api/send-push.js",
 ];
 
 for (const rel of critical) {
@@ -120,9 +123,9 @@ try {
 }
 
 // 6. SW push handler
+// Le service worker réellement enregistré est /sw.js, généré par
+// vite-plugin-pwa ; il charge public/push-sw.js via workbox.importScripts.
 try {
-  // Le service worker réellement enregistré est /sw.js, généré par
-  // vite-plugin-pwa ; il charge public/push-sw.js via workbox.importScripts.
   const sw = resolve(root, "public/push-sw.js");
   if (existsSync(sw)) {
     const src = readFileSync(sw, "utf8");
@@ -143,8 +146,18 @@ try {
   } else {
     fail("vite.config.js ne charge pas push-sw.js (workbox.importScripts)");
   }
-} catch {
-  /* ignore */
+
+  // /sw.js n'existe qu'après `npm run build` : vérifié seulement s'il est là.
+  const builtSw = resolve(root, "dist/sw.js");
+  if (existsSync(builtSw)) {
+    const builtSrc = readFileSync(builtSw, "utf8");
+    if (builtSrc.includes("push-sw.js")) ok("dist/sw.js importe push-sw.js");
+    else fail("dist/sw.js n'importe pas push-sw.js");
+  } else {
+    console.log("  ℹ️  dist/sw.js absent (généré au build) — vérification ignorée");
+  }
+} catch (err) {
+  fail(`vérification du service worker impossible : ${err.message}`);
 }
 
 console.log("\n────────────────────────────────");
