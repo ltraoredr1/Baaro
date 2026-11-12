@@ -59,6 +59,9 @@ if (!subject) {
 const critical = [
   "src/lib/pushNotifications.js",
   "src/lib/notificationPreferences.js",
+  "src/lib/notificationSounds.js",
+  "src/lib/notificationSoundStore.js",
+  "api/_lib/push-sounds.js",
   "src/hooks/useNotificationSound.js",
   "src/hooks/usePushNotifications.js",
   "public/service-worker.js",
@@ -93,6 +96,13 @@ for (const id of soundIds) {
   } else {
     warn(`son manquant: ${id}.mp3 (placer dans public/sounds/)`);
   }
+}
+
+// 4b. Sons Android : un fichier res/raw par son (canaux de notification)
+for (const id of soundIds) {
+  const wav = resolve(root, `android/app/src/main/res/raw/${id}.wav`);
+  if (existsSync(wav)) ok(`android raw ${id}.wav`);
+  else fail(`android: res/raw/${id}.wav manquant (canal de notification)`);
 }
 
 // 5. Préférences — wallet présent ?
