@@ -32,7 +32,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 24.22.2.23.4
+          node-version: 24.22.2
 
       - name: Install dependencies and generate lockfile
         run: |
