@@ -25,6 +25,11 @@ import {
   enqueuePushNotifications,
   processPushQueue as processQueue,
 } from "./push-queue.js";
+import {
+  applyWebSound,
+  fcmSoundFields,
+  readSoundPreference,
+} from "./push-sounds.js";
 
 const VAPID_PUBLIC =
   process.env.VAPID_PUBLIC_KEY ||
@@ -362,7 +367,7 @@ function toStringMap(value) {
   return result;
 }
 
-async function sendFcm(token, payload) {
+async function sendFcm(token, payload, soundPreference) {
   if (typeof token !== "string" || !token.trim()) {
     return {
       ok: false,
@@ -383,12 +388,23 @@ async function sendFcm(token, payload) {
   try {
     const accessToken = await getFcmAccessToken(serviceAccount);
 
+    // Son : celui choisi par l'utilisateur (préférence synchronisée), sinon
+    // comportement historique. Voir api/_lib/push-sounds.js.
+    const soundFields = fcmSoundFields(soundPreference);
+    const androidChannelId = soundPreference?.synced
+      ? soundFields.androidChannelId
+      : ANDROID_CHANNEL_ID;
+
     const data = toStringMap({
       ...(payload.data || {}),
       url: payload.url || "/",
       category: payload.category || "",
       tag: payload.tag || "",
-      sound: payload.sound || DEFAULT_PUSH_SOUND,
+      sound: soundPreference?.synced
+        ? soundPreference.silent
+          ? "none"
+          : soundPreference.soundId
+        : payload.sound || DEFAULT_PUSH_SOUND,
     });
 
     const response = await fetch(
@@ -416,8 +432,10 @@ async function sendFcm(token, payload) {
                   : "NORMAL",
               notification: {
                 tag: payload.tag || undefined,
-                channel_id: ANDROID_CHANNEL_ID,
-                sound: "baaro_pulse",
+                // Android 8+ : le son appartient au canal (un canal par son
+                // + un canal muet). `sound` ne sert qu'à Android < 8.
+                channel_id: androidChannelId,
+                sound: soundFields.androidSound,
               },
             },
             apns: {
@@ -425,9 +443,10 @@ async function sendFcm(token, payload) {
                 "apns-priority": "10",
               },
               payload: {
-                aps: {
-                  sound: "baaro_pulse.wav",
-                },
+                // Sans clé `sound`, iOS n'émet aucun son (mode silencieux).
+                aps: soundFields.apnsSound
+                  ? { sound: soundFields.apnsSound }
+                  : {},
               },
             },
           },
@@ -487,12 +506,18 @@ async function sendFcm(token, payload) {
 
 /* ---------------- Envoi et file persistante ---------------- */
 
-async function sendToken(tokenRow, payload) {
+/**
+ * `context.preferences` est la ligne notification_preferences de
+ * l'utilisateur (fournie par la file) : elle décide du son par plateforme.
+ */
+async function sendToken(tokenRow, payload, context = {}) {
+  const soundPreference = readSoundPreference(context?.preferences);
+
   if (tokenRow.platform === "web") {
-    return sendWebPush(tokenRow.token, payload);
+    return sendWebPush(tokenRow.token, applyWebSound(payload, soundPreference));
   }
   if (tokenRow.platform === "android" || tokenRow.platform === "ios") {
-    return sendFcm(tokenRow.token, payload);
+    return sendFcm(tokenRow.token, payload, soundPreference);
   }
   return {
     ok: false,

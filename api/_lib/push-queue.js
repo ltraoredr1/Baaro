@@ -485,7 +485,10 @@ export async function processPushQueue(admin, sendToken, options = {}) {
         let delivery;
 
         try {
-          delivery = await sendToken(tokenRow, job.payload || {});
+          // 3e argument : préférences de l'utilisateur (son choisi, silencieux).
+          delivery = await sendToken(tokenRow, job.payload || {}, {
+            preferences: preferences || null,
+          });
         } catch (error) {
           delivery = {
             ok: false,
