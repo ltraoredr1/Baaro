@@ -76,7 +76,9 @@ for (const marker of [".from(\"profiles\")", 'onConflict: "id"', "updated_at", "
 }
 
 const social = read("api/social.js");
-for (const marker of ["handleComment", "handleNotifyInteraction", 'from("comments")', "notification_id", "source_id", "actor_id"]) {
+// `notification_id` a été remplacé par `idempotency_key` (déduplication des
+// notifications via api/_lib/notification-idempotency.js).
+for (const marker of ["handleComment", "handleNotifyInteraction", 'from("comments")', "idempotency_key", "source_id", "actor_id"]) {
   social.includes(marker) ? ok(`social contract: ${marker}`) : fail(`social contract missing: ${marker}`);
 }
 // comments_count est mis à jour côté client (feed), pas dans api/social.js.
