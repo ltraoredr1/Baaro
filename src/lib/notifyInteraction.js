@@ -43,13 +43,32 @@ export async function callSocial(action, payload = {}) {
  *   interactionType : like | comment | share | repost | friend_request | friend_accepted
  *   targetId : id du contenu, ou id de l'autre personne pour contentType "user"
  */
-export async function notifyInteraction({ contentType, interactionType, targetId }) {
+function newIdempotencyKey() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (character) => {
+    const random = Math.floor(Math.random() * 16);
+    const value = character === "x" ? random : (random & 0x3) | 0x8;
+    return value.toString(16);
+  });
+}
+
+export async function notifyInteraction({
+  contentType,
+  interactionType,
+  targetId,
+  commentId,
+  idempotencyKey,
+}) {
   if (!contentType || !interactionType || !targetId) return;
   try {
+    const requestKey =
+      idempotencyKey || (interactionType === "share" ? newIdempotencyKey() : undefined);
     const result = await callSocial("notify_interaction", {
       content_type: contentType,
       interaction_type: interactionType,
       target_id: targetId,
+      ...(commentId ? { comment_id: commentId } : {}),
+      ...(requestKey ? { idempotency_key: requestKey } : {}),
     });
     if (result && !result.ok) {
       console.warn(
