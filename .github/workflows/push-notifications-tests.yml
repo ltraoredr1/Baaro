@@ -1,0 +1,49 @@
+
+name: BAARO — Push notification tests
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - "api/_lib/push-queue.js"
+      - "api/_lib/push-preferences.js"
+      - "tests/api/push-queue.test.mjs"
+      - "tests/api/push-preferences.mjs"
+      - ".github/workflows/push-notifications-tests.yml"
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - "api/_lib/push-queue.js"
+      - "api/_lib/push-preferences.js"
+      - "tests/api/push-queue.test.mjs"
+      - "tests/api/push-preferences.mjs"
+      - ".github/workflows/push-notifications-tests.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: push-notifications-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  push-notification-tests:
+    name: Push queue and preferences
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.22.2
+
+      - name: Verify Node.js
+        run: node --version
+
+      - name: Test push preferences and queue
+        run: node --test tests/api/push-preferences.mjs tests/api/push-queue.test.mjs
