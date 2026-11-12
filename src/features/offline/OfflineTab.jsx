@@ -50,7 +50,8 @@ export function OfflineTab() {
   useEffect(() => {
     if (!messages.length) return;
     const last = messages[messages.length - 1];
-    if (!last?.isMe) playNotification("baaro_pulse");
+    // Sans argument : respecte le son choisi dans Réglages → Notifications.
+    if (!last?.isMe) playNotification();
   }, [messages.length, playNotification]);
 
   useEffect(() => {
