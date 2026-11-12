@@ -104,6 +104,19 @@ jobs:
       - name: Messaging E2E crypto compatibility tests
         run: npm run test:messaging-crypto
 
+      # Notification system tests (previously missing from CI).
+      - name: Push preferences tests
+        run: npm run test:push-preferences
+
+      - name: Push queue tests
+        run: npm run test:push-queue
+
+      - name: Notification idempotency tests
+        run: npm run test:notification-idempotency
+
+      - name: Notification sounds and push service worker tests
+        run: npm run test:notification-sounds
+
       - name: Messaging Rust formatting, tests and lint
         run: |
           cargo fmt --manifest-path src/features/messaging/native/Cargo.toml -- --check
