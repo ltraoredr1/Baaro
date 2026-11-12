@@ -2,9 +2,8 @@
  * BAARO — Notifications push
  * Web Push (VAPID) + FCM HTTP v1 (Android/iOS)
  *
- * Tables utilisées :
- * - push_tokens
- * - notification_preferences
+ * Tables utilisées : push_tokens, notification_preferences,
+ * push_notification_jobs et push_notification_dead_letters.
  *
  * Variables serveur :
  * - VAPID_PUBLIC_KEY ou VITE_VAPID_PUBLIC_KEY
@@ -13,13 +12,19 @@
  * - FIREBASE_SERVICE_ACCOUNT (JSON complet)
  * - FCM_ANDROID_CHANNEL_ID (facultatif)
  *
- * Changements : les abonnements Web Push refusés (401/403, ex. ancienne clé
- * VAPID) et les jetons FCM SENDER_ID_MISMATCH sont maintenant supprimés.
- * Aucun changement SQL prévu par ce fichier.
+ * Les envois sont acceptés dans une file durable puis traités par le cron.
  */
 
 import webpush from "web-push";
 import crypto from "node:crypto";
+import {
+  loadPrefs,
+  selectNotificationTargets,
+} from "./push-preferences.js";
+import {
+  enqueuePushNotifications,
+  processPushQueue as processQueue,
+} from "./push-queue.js";
 
 const VAPID_PUBLIC =
   process.env.VAPID_PUBLIC_KEY ||
@@ -67,81 +72,29 @@ function initWebPush() {
 
 /* ---------------- Préférences ---------------- */
 
-function allowsCategory(prefs, category) {
-  if (!prefs) return true;
-  if (prefs.push_enabled === false) return false;
-
-  const earnings =
-    prefs.earnings !== undefined ? prefs.earnings : prefs.wallet;
-
-  switch (category) {
-    case "message":
-      return prefs.messages !== false;
-
-    case "social":
-      return prefs.social !== false;
-
-    case "live":
-      return prefs.live !== false;
-
-    case "earnings":
-    case "wallet":
-      return earnings !== false;
-
-    case "marketing":
-      return prefs.marketing === true;
-
-    default:
-      return true;
-  }
-}
-
-async function loadPrefs(admin, userIds) {
-  const map = new Map();
-
-  if (!userIds.length) return map;
-
-  const { data, error } = await admin
-    .from("notification_preferences")
-    .select("*")
-    .in("user_id", userIds);
-
-  if (error) {
-    console.warn("[push][prefs]", error.message);
-    return map;
-  }
-
-  for (const row of data || []) {
-    map.set(row.user_id, row);
-  }
-
-  return map;
-}
-
 async function loadTokens(admin, userIds) {
   const map = new Map();
 
-  if (!userIds.length) return map;
+  if (!userIds.length) return { tokensByUser: map, error: null };
 
-  const { data, error } = await admin
-    .from("push_tokens")
-    .select("id, user_id, token, platform")
-    .in("user_id", userIds);
+  try {
+    const { data, error } = await admin
+      .from("push_tokens")
+      .select("id, user_id, token, platform")
+      .in("user_id", userIds);
 
-  if (error) {
-    console.warn("[push][tokens]", error.message);
-    return map;
-  }
+    if (error) return { tokensByUser: map, error };
 
-  for (const row of data || []) {
-    if (!map.has(row.user_id)) {
-      map.set(row.user_id, []);
+    for (const row of data || []) {
+      if (!map.has(row.user_id)) {
+        map.set(row.user_id, []);
+      }
+      map.get(row.user_id).push(row);
     }
-
-    map.get(row.user_id).push(row);
+    return { tokensByUser: map, error: null };
+  } catch (error) {
+    return { tokensByUser: map, error };
   }
-
-  return map;
 }
 
 /* ---------------- Validation des données ---------------- */
@@ -532,69 +485,36 @@ async function sendFcm(token, payload) {
   }
 }
 
-/* ---------------- Envoi par lots ---------------- */
+/* ---------------- Envoi et file persistante ---------------- */
 
-async function deliver(tokens, payload) {
-  let sent = 0;
-
-  const dead = [];
-  const errors = [];
-
-  for (let index = 0; index < tokens.length; index += 20) {
-    const chunk = tokens.slice(index, index + 20);
-
-    const results = await Promise.all(
-      chunk.map((tokenRow) => {
-        if (tokenRow.platform === "web") {
-          return sendWebPush(tokenRow.token, payload);
-        }
-
-        if (
-          tokenRow.platform === "android" ||
-          tokenRow.platform === "ios"
-        ) {
-          return sendFcm(tokenRow.token, payload);
-        }
-
-        return Promise.resolve({
-          ok: false,
-          error: `Plateforme inconnue : ${tokenRow.platform}`,
-        });
-      })
-    );
-
-    results.forEach((result, resultIndex) => {
-      if (result.ok) {
-        sent += 1;
-        return;
-      }
-
-      if (result.dead) {
-        dead.push(chunk[resultIndex].id);
-      } else if (result.error) {
-        errors.push(result.error);
-      }
-    });
+async function sendToken(tokenRow, payload) {
+  if (tokenRow.platform === "web") {
+    return sendWebPush(tokenRow.token, payload);
   }
-
-  if (errors.length) {
-    console.warn(
-      "[push][deliver] Erreurs :",
-      [...new Set(errors)].join(" | ")
-    );
+  if (tokenRow.platform === "android" || tokenRow.platform === "ios") {
+    return sendFcm(tokenRow.token, payload);
   }
-
   return {
-    sent,
-    dead: [...new Set(dead)],
+    ok: false,
+    dead: true,
+    error: `Plateforme inconnue : ${tokenRow.platform}`,
   };
+}
+
+/** Traite un lot persisté ; les leases expirées sont récupérées par le RPC. */
+export async function processPushNotificationQueue(admin, options = {}) {
+  if (!admin) {
+    return { ok: false, error: "Client Supabase admin requis.", claimed: 0 };
+  }
+  return processQueue(admin, sendToken, options);
 }
 
 /* ---------------- API principale ---------------- */
 
 /**
- * Envoie une notification aux utilisateurs ciblés.
- * Respecte leurs préférences et nettoie les jetons expirés.
+ * Place une notification durablement dans la file pour chaque appareil cible.
+ * `ok: true` signifie ici que la file a accepté l'envoi, pas que l'appareil
+ * l'a déjà reçue. Utiliser `idempotencyKey` pour rendre un appel rejouable.
  */
 export async function sendPushToUsers(admin, opts = {}) {
   if (!admin) {
@@ -621,51 +541,82 @@ export async function sendPushToUsers(admin, opts = {}) {
     };
   }
 
-  const [preferences, tokensByUser] = await Promise.all([
+  const [prefsResult, tokensResult] = await Promise.all([
     loadPrefs(admin, userIds),
     loadTokens(admin, userIds),
   ]);
-
-  let skipped = 0;
-  const targets = [];
-
-  for (const userId of userIds) {
-    if (!allowsCategory(preferences.get(userId), payload.category)) {
-      skipped += 1;
-      continue;
-    }
-
-    const tokens = tokensByUser.get(userId);
-
-    if (!tokens?.length) {
-      skipped += 1;
-      continue;
-    }
-
-    targets.push(...tokens);
+  if (tokensResult.error) {
+    console.warn("[push][tokens]", tokensResult.error.message);
+    return {
+      ok: false,
+      error: "Impossible de récupérer les appareils de notification.",
+    };
+  }
+  const selection = selectNotificationTargets({
+    userIds,
+    prefsResult,
+    tokensByUser: tokensResult.tokensByUser,
+    category: payload.category,
+  });
+  if (selection.error) {
+    console.warn("[push][prefs]", selection.error.message);
+    return {
+      ok: false,
+      error: "Impossible de vérifier les préférences de notification.",
+    };
+  }
+  if (!selection.targets.length) {
+    return {
+      ok: true,
+      deliveryStatus: "skipped",
+      accepted: 0,
+      queued: 0,
+      sent: 0,
+      skipped: selection.skipped,
+    };
   }
 
-  const { sent, dead } = await deliver(targets, payload);
-
-  let pruneError = null;
-
-  if (dead.length) {
-    const { error } = await admin
-      .from("push_tokens")
-      .delete()
-      .in("id", dead);
-
-    if (error) {
-      pruneError = error.message;
-      console.warn("[push] Nettoyage des jetons expirés :", error.message);
-    }
+  const idempotencyKey =
+    typeof opts.idempotencyKey === "string" &&
+    opts.idempotencyKey.trim().length > 0 &&
+    opts.idempotencyKey.length <= 200
+      ? opts.idempotencyKey.trim()
+      : crypto.randomUUID();
+  const enqueueResult = await enqueuePushNotifications(
+    admin,
+    selection.targets,
+    payload,
+    idempotencyKey,
+  );
+  if (!enqueueResult.ok) {
+    console.error(
+      "[push][queue] Impossible d'enregistrer les jobs :",
+      enqueueResult.error?.message || enqueueResult.error,
+    );
+    return {
+      ok: false,
+      error: "Impossible d'enregistrer les notifications dans la file.",
+    };
   }
+
+  let deliveryStatus = "unknown";
+  if (enqueueResult.queued > 0) deliveryStatus = "queued";
+  else if (enqueueResult.sent > 0) deliveryStatus = "sent";
+  else if (enqueueResult.deadLettered > 0) deliveryStatus = "dead";
+  else if (enqueueResult.cancelled > 0) deliveryStatus = "cancelled";
+  const acceptedForDelivery = enqueueResult.queued > 0 || enqueueResult.sent > 0;
 
   return {
-    ok: true,
-    sent,
-    skipped,
-    pruned: dead.length,
-    ...(pruneError ? { pruneError } : {}),
+    ok: acceptedForDelivery,
+    deliveryStatus,
+    batchId: idempotencyKey,
+    accepted: enqueueResult.accepted,
+    queued: enqueueResult.queued,
+    sent: enqueueResult.sent,
+    deadLettered: enqueueResult.deadLettered,
+    skipped: selection.skipped,
+    ...(!acceptedForDelivery
+      ? { error: "Aucun job en attente ou confirmé; consulter la dead-letter queue." }
+      : {}),
   };
 }
