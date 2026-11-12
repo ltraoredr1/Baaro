@@ -10,13 +10,15 @@
  *
  * RPC :
  * - claim_push_notification_jobs(p_limit integer)
+ *
+ * Compatible avec le SQL déjà installé dans Supabase.
  */
 
 export const PUSH_QUEUE_BATCH_SIZE = 40;
 export const PUSH_QUEUE_MAX_DELAY_MS = 6 * 60 * 60 * 1000;
 export const PUSH_QUEUE_MAX_ATTEMPTS = 8;
 
-const CATEGORY_COLUMNS = {
+const CATEGORY_COLUMNS = Object.freeze({
   message: "messages",
   messages: "messages",
   social: "social",
@@ -24,15 +26,16 @@ const CATEGORY_COLUMNS = {
   earnings: "earnings",
   wallet: "earnings",
   marketing: "marketing",
-};
+});
 
-const DEFAULT_PREFERENCES = {
+const DEFAULT_PREFERENCES = Object.freeze({
+  push_enabled: true,
   messages: true,
   social: true,
   live: true,
   earnings: true,
   marketing: false,
-};
+});
 
 function safeError(value, maxLength = 500) {
   const message =
@@ -85,12 +88,10 @@ function normalizePayload(payload) {
   return JSON.parse(serialized);
 }
 
-/**
- * Délai exponentiel avec jitter.
- * Tentative 1 : entre 2,5 et 5 secondes.
- * Le délai est plafonné à six heures.
- */
-export function exponentialBackoffWithJitter(attempt, random = Math.random) {
+export function exponentialBackoffWithJitter(
+  attempt,
+  random = Math.random
+) {
   const safeAttempt = Math.max(
     1,
     Math.min(30, Math.floor(Number(attempt) || 1))
@@ -104,6 +105,7 @@ export function exponentialBackoffWithJitter(attempt, random = Math.random) {
   let randomValue = Number(random());
 
   if (!Number.isFinite(randomValue)) randomValue = 0;
+
   randomValue = Math.max(0, Math.min(1, randomValue));
 
   return Math.min(
@@ -121,17 +123,36 @@ function getPreference(row, category) {
     return DEFAULT_PREFERENCES[column];
   }
 
+  if (row.push_enabled === false) {
+    return false;
+  }
+
   const value = row[column];
 
-  if (typeof value === "boolean") return value;
+  return typeof value === "boolean"
+    ? value
+    : DEFAULT_PREFERENCES[column];
+}
 
-  return DEFAULT_PREFERENCES[column];
+function isCategoryAllowed(preferences, category) {
+  const column = CATEGORY_COLUMNS[category];
+
+  if (!column) return false;
+
+  if (preferences?.push_enabled === false) {
+    return false;
+  }
+
+  return getPreference(preferences, category);
 }
 
 async function updateJob(admin, job, patch) {
   const { data, error } = await admin
     .from("push_notification_jobs")
-    .update(patch)
+    .update({
+      ...patch,
+      updated_at: new Date().toISOString(),
+    })
     .eq("id", job.id)
     .eq("claim_token", job.claim_token)
     .select("id");
@@ -145,6 +166,11 @@ async function updateJob(admin, job, patch) {
   return data[0];
 }
 
+/**
+ * Archive compatible avec le SQL existant :
+ * source_job_id, batch_id, user_id, token_id,
+ * payload, attempts, last_error, dead_at.
+ */
 async function archiveDeadLetter(admin, job, errorMessage) {
   const row = {
     source_job_id: job.id,
@@ -153,8 +179,8 @@ async function archiveDeadLetter(admin, job, errorMessage) {
     token_id: job.token_id,
     payload: job.payload || {},
     last_error: safeError(errorMessage),
-    attempts: Number(job.attempts) || 0,
-    created_at: new Date().toISOString(),
+    attempts: Math.max(0, Number(job.attempts) || 0),
+    dead_at: new Date().toISOString(),
   };
 
   const { error } = await admin
@@ -215,14 +241,6 @@ async function loadJobPreferences(admin, userIds) {
   return { rows, error: null };
 }
 
-function isCategoryAllowed(preferences, category) {
-  const column = CATEGORY_COLUMNS[category];
-
-  if (!column) return false;
-
-  return getPreference(preferences, category);
-}
-
 function emptyResult() {
   return {
     ok: true,
@@ -238,7 +256,7 @@ function emptyResult() {
 /**
  * Ajoute les notifications à la file durable.
  *
- * Le token push n'est jamais enregistré dans push_notification_jobs.
+ * Le token push n'est jamais enregistré dans les jobs.
  * L'idempotence est assurée par batch_id + token_id.
  */
 export async function enqueuePushNotifications(
@@ -248,11 +266,17 @@ export async function enqueuePushNotifications(
   batchId
 ) {
   if (!admin) {
-    return { ok: false, error: new Error("Client Supabase requis.") };
+    return {
+      ok: false,
+      error: new Error("Client Supabase requis."),
+    };
   }
 
   if (!validId(batchId) || batchId.length > 200) {
-    return { ok: false, error: new Error("Identifiant de lot invalide.") };
+    return {
+      ok: false,
+      error: new Error("Identifiant de lot invalide."),
+    };
   }
 
   let safePayload;
@@ -326,9 +350,8 @@ export async function enqueuePushNotifications(
 /**
  * Réclame et traite un lot de jobs.
  *
- * Le RPC doit verrouiller les lignes et attribuer un claim_token unique.
- * Les mises à jour sont conditionnées par ce claim_token afin d'éviter
- * qu'un ancien worker écrase le travail d'un autre.
+ * Le RPC attribue un claim_token unique.
+ * Les écritures sont protégées par ce claim_token.
  */
 export async function processPushQueue(admin, sendToken, options = {}) {
   const result = emptyResult();
@@ -341,13 +364,15 @@ export async function processPushQueue(admin, sendToken, options = {}) {
     };
   }
 
-  const now = typeof options.now === "function"
-    ? options.now
-    : Date.now;
+  const now =
+    typeof options.now === "function"
+      ? options.now
+      : Date.now;
 
-  const random = typeof options.random === "function"
-    ? options.random
-    : Math.random;
+  const random =
+    typeof options.random === "function"
+      ? options.random
+      : Math.random;
 
   try {
     const { data: jobs, error: claimError } = await admin.rpc(
@@ -358,6 +383,7 @@ export async function processPushQueue(admin, sendToken, options = {}) {
     if (claimError) throw claimError;
 
     const claimedJobs = Array.isArray(jobs) ? jobs : [];
+
     result.claimed = claimedJobs.length;
 
     if (!claimedJobs.length) return result;
@@ -372,9 +398,10 @@ export async function processPushQueue(admin, sendToken, options = {}) {
 
     const preferencesResult = await loadJobPreferences(admin, userIds);
 
-    // En cas d'erreur de lecture, aucun envoi n'est autorisé.
+    // En cas d'erreur, aucun envoi n'est autorisé.
     if (preferencesResult.error) {
       result.errors += claimedJobs.length;
+
       return {
         ...result,
         ok: false,
@@ -384,19 +411,30 @@ export async function processPushQueue(admin, sendToken, options = {}) {
 
     for (const job of claimedJobs) {
       try {
-        if (!job?.id || !job?.claim_token || !job?.user_id || !job?.token_id) {
+        if (
+          !job?.id ||
+          !job?.claim_token ||
+          !validId(job?.user_id) ||
+          !validId(job?.token_id)
+        ) {
           throw new Error("Job incomplet ou claim_token manquant.");
         }
 
-        const category = job.payload?.category;
+        const category = String(
+          job.payload?.category || ""
+        ).toLowerCase();
+
         const preferences = preferencesResult.rows.get(job.user_id);
 
-        // Vérification des préférences à nouveau juste avant l'envoi.
+        // Vérification globale et individuelle juste avant l'envoi.
         if (!isCategoryAllowed(preferences, category)) {
           await updateJob(admin, job, {
             status: "cancelled",
+            cancelled_at: new Date(now()).toISOString(),
+            cancel_reason: "Notification désactivée dans les préférences.",
             last_error: "Notification désactivée dans les préférences.",
-            completed_at: new Date(now()).toISOString(),
+            claim_token: null,
+            locked_at: null,
           });
 
           result.cancelled += 1;
@@ -412,8 +450,10 @@ export async function processPushQueue(admin, sendToken, options = {}) {
 
           await updateJob(admin, job, {
             status: "dead",
+            dead_at: new Date(now()).toISOString(),
             last_error: message,
-            completed_at: new Date(now()).toISOString(),
+            claim_token: null,
+            locked_at: null,
           });
 
           result.deadLettered += 1;
@@ -432,8 +472,10 @@ export async function processPushQueue(admin, sendToken, options = {}) {
 
           await updateJob(admin, job, {
             status: "dead",
+            dead_at: new Date(now()).toISOString(),
             last_error: message,
-            completed_at: new Date(now()).toISOString(),
+            claim_token: null,
+            locked_at: null,
           });
 
           result.deadLettered += 1;
@@ -456,7 +498,8 @@ export async function processPushQueue(admin, sendToken, options = {}) {
             status: "sent",
             sent_at: new Date(now()).toISOString(),
             last_error: null,
-            completed_at: new Date(now()).toISOString(),
+            claim_token: null,
+            locked_at: null,
           });
 
           result.sent += 1;
@@ -467,7 +510,11 @@ export async function processPushQueue(admin, sendToken, options = {}) {
           delivery?.error || "Échec d'envoi de la notification."
         );
 
-        const attempts = Math.max(0, Number(job.attempts) || 0);
+        const attempts = Math.max(
+          0,
+          Number(job.attempts) || 0
+        );
+
         const maxAttempts = Math.max(
           1,
           Number(job.max_attempts) || PUSH_QUEUE_MAX_ATTEMPTS
@@ -485,8 +532,10 @@ export async function processPushQueue(admin, sendToken, options = {}) {
 
           await updateJob(admin, job, {
             status: "dead",
+            dead_at: new Date(now()).toISOString(),
             last_error: message,
-            completed_at: new Date(now()).toISOString(),
+            claim_token: null,
+            locked_at: null,
           });
 
           result.deadLettered += 1;
@@ -498,19 +547,22 @@ export async function processPushQueue(admin, sendToken, options = {}) {
           random
         );
 
-        const availableAt = new Date(now() + delay).toISOString();
+        const availableAt = new Date(
+          now() + delay
+        ).toISOString();
 
         await updateJob(admin, job, {
           status: "queued",
           available_at: availableAt,
           last_error: message,
+          claim_token: null,
+          locked_at: null,
         });
 
         result.retryScheduled += 1;
       } catch (error) {
         result.errors += 1;
 
-        // Ne jamais considérer une erreur d'écriture comme un succès.
         console.error(
           "[push-queue] Échec de traitement du job :",
           safeError(error)
