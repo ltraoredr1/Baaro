@@ -673,7 +673,7 @@ export default function SettingsTab({
   // ---- Actions générales ----
 
   const handleInvite = async () => {
-    const url = window.location.origin;
+    const url = "https://baaro-xi.vercel.app";
     const text = t("invite_text");
     try {
       if (navigator.share) {
