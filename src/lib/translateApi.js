@@ -7,7 +7,7 @@
 import { supabase } from "../supabaseClient.js";
 import { API_BASE } from "../config.js";
 
-// Liste des 30 langues supportées
+// Langues disponibles pour la traduction de texte et de médias.
 export const TRANSLATE_LANGS = [
   { code: "fr", label: "Français" },
   { code: "en", label: "English" },
@@ -39,7 +39,11 @@ export const TRANSLATE_LANGS = [
   { code: "fa", label: "فارسی" },
   { code: "he", label: "עברית" },
   { code: "sv", label: "Svenska" },
-  { code: "bm", label: "Bamanankan (Bambara)" },
+  { code: "bm", label: "Bamanankan (Bambara/Bamanan)" },
+  { code: "wo", label: "Wolof" },
+  { code: "fuc", label: "Peul (Pulaar)" },
+  { code: "dyu", label: "Dioula (Dyula/Jula)" },
+  { code: "snk", label: "Soninké" },
 ];
 
 const LANG_CODES = new Set(TRANSLATE_LANGS.map((l) => l.code));
@@ -68,7 +72,10 @@ export function isRtl(code) {
 }
 
 function normalizeLang(code) {
-  return String(code || "").trim().toLowerCase().slice(0, 2);
+  const normalized = String(code || "").trim().toLowerCase().replace(/_/g, "-");
+  const primary = normalized.split("-")[0];
+  if (LANG_CODES.has(primary)) return primary;
+  return primary.slice(0, 2);
 }
 
 function assertTargetLang(targetLang) {
