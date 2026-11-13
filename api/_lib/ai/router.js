@@ -2,10 +2,14 @@
  * BAARO AI Router — Configuration des fournisseurs et Circuit Breaker
  *
  * Priorité configurable :
- * BAARO_AI_PROVIDER_ORDER=groq,mistral,gemini
+ * BAARO_AI_PROVIDER_ORDER=lumen,groq,mistral,gemini
  *
- * Fournisseurs : Groq → Mistral → Gemini
- * Gemini par défaut : gemini-3.8-flash
+ * Fournisseurs : Lumen (auto-hébergé) → Groq → Mistral → Gemini
+ *
+ * Lumen (variables serveur, jamais préfixées par VITE_) :
+ *   LUMEN_API_KEY=...
+ *   LUMEN_BASE_URL=https://xxxx.trycloudflare.com/v1
+ *   LUMEN_MODEL=lumen            (optionnel)
  */
 
 const failures = new Map();
@@ -17,6 +21,7 @@ const GEMINI_BASE =
   "https://generativelanguage.googleapis.com/v1beta";
 
 const DEFAULT_MODELS = {
+  lumen: "lumen",
   groq: "openai/gpt-oss-20b",
   mistral: "ministral-3b-latest",
   gemini: "gemini-3.8-flash",
@@ -29,6 +34,7 @@ const DEFAULT_PROVIDER_ORDER = [
 ];
 
 const VALID_PROVIDERS = new Set([
+  "lumen",
   "groq",
   "mistral",
   "gemini",
@@ -143,6 +149,24 @@ export function normalizeCountry(value) {
  */
 export function providerConfig(provider) {
   switch (provider) {
+    case "lumen": {
+      const key = process.env.LUMEN_API_KEY;
+      const base = String(process.env.LUMEN_BASE_URL || "")
+        .trim()
+        .replace(/\/+$/, "");
+
+      if (!key || !base) return null;
+
+      return {
+        key,
+        base,
+        model: getFirstModel(
+          process.env.LUMEN_MODEL,
+          DEFAULT_MODELS.lumen
+        ),
+      };
+    }
+
     case "groq": {
       const key = process.env.GROQ_API_KEY;
 
@@ -218,7 +242,7 @@ export function providerConfig(provider) {
  * Lit et valide l'ordre configuré dans l'environnement.
  *
  * Exemple :
- * BAARO_AI_PROVIDER_ORDER=groq,mistral,gemini
+ * BAARO_AI_PROVIDER_ORDER=lumen,groq,mistral,gemini
  *
  * Les noms invalides et les doublons sont ignorés.
  * Si aucune valeur valide n'est fournie, l'ordre par défaut est utilisé.
