@@ -1,0 +1,29 @@
+name: db-baseline
+on: [workflow_dispatch]
+permissions:
+  contents: write
+jobs:
+  dump:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      - name: Exporter le schéma (sans données)
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+        run: |
+          set -euo pipefail
+          mkdir -p supabase/migrations
+          supabase link --project-ref "${{ secrets.SUPABASE_PROJECT_REF }}" --password "$SUPABASE_DB_PASSWORD"
+          supabase db dump --linked --password "$SUPABASE_DB_PASSWORD" \
+            -f supabase/migrations/20261113000000_baseline.sql
+      - name: Committer
+        run: |
+          git config user.name "baaro-release-bot"
+          git config user.email "release@baaro.app"
+          git add supabase/migrations/
+          git commit -m "chore(db): migration de base (schéma actuel)"
+          git pull --rebase origin main && git push
