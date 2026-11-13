@@ -8,8 +8,18 @@ export interface NearbyChatPlugin {
   accept(options: { endpointId: string; authenticationConfirmed: boolean }): Promise<{ success: boolean }>;
   reject(options: { endpointId: string }): Promise<{ success: boolean }>;
   getAndroidSdkVersion(): Promise<{ sdkVersion: number }>;
-  checkPermissions(): Promise<{ nearby: string; location: string }>;
-  requestPermissions(options?: { permissions?: string[] }): Promise<{ nearby: string; location: string }>;
+  checkPermissions(): Promise<{
+    bluetooth: string;
+    nearbyWifi: string;
+    locationCoarse: string;
+    locationFine: string;
+  }>;
+  requestPermissions(options?: { permissions?: string[] }): Promise<{
+    bluetooth: string;
+    nearbyWifi: string;
+    locationCoarse: string;
+    locationFine: string;
+  }>;
   addListener(
     eventName: 'nearbyEvent',
     listenerFunc: (event: NearbyEvent) => void

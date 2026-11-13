@@ -1,5 +1,6 @@
 
 import { Capacitor } from "@capacitor/core";
+import { NearbyChat } from "../../native-plugins/nearby/src/index.ts";
 
 const SERVICE_NAME = "com.baaro.app.nearby";
 
@@ -9,26 +10,12 @@ let isStopping = false;
 
 const connectedEndpoints = new Set();
 
-function getPlugins() {
-  try {
-    return Capacitor.Plugins || {};
-  } catch {
-    return {};
-  }
-}
-
 function getPlugin() {
-  const plugins = getPlugins();
-  return plugins.NearbyChat || plugins.NearbyConnections || null;
+  return NearbyChat;
 }
 
 function getPluginName() {
-  const plugins = getPlugins();
-
-  if (plugins.NearbyChat) return "NearbyChat";
-  if (plugins.NearbyConnections) return "NearbyConnections";
-
-  return null;
+  return "NearbyChat";
 }
 
 function getErrorMessage(error) {
@@ -73,18 +60,50 @@ function normalizePermission(value) {
   return "unknown";
 }
 
-function normalizePermissions(status) {
+function combinePermissions(...values) {
+  if (values.every((value) => value === "granted")) return "granted";
+  if (values.includes("unknown")) return "unknown";
+  return "denied";
+}
+
+function normalizePermissions(status, sdkVersion) {
   if (!status || typeof status !== "object") {
-    return { nearby: "unknown", location: "unknown" };
+    return {
+      nearby: "unknown",
+      bluetooth: "unknown",
+      nearbyWifi: "unknown",
+      location: "unknown",
+      sdkVersion,
+    };
   }
 
+  const bluetooth = normalizePermission(status.bluetooth);
+  const nearbyWifi = normalizePermission(status.nearbyWifi);
+  const locationCoarse = normalizePermission(status.locationCoarse);
+  const locationFine = normalizePermission(status.locationFine);
+  const nearby =
+    sdkVersion == null || sdkVersion < 31
+      ? "granted"
+      : sdkVersion >= 33
+        ? combinePermissions(bluetooth, nearbyWifi)
+        : bluetooth;
+  const location =
+    sdkVersion == null
+      ? "unknown"
+      : sdkVersion >= 33
+        ? "granted"
+        : sdkVersion >= 29
+          ? combinePermissions(locationCoarse, locationFine)
+          : locationCoarse;
+
   return {
-    nearby: normalizePermission(
-      status.nearby ?? status.bluetooth ?? status.bluetoothScan
-    ),
-    location: normalizePermission(
-      status.location ?? status.locationPermission
-    ),
+    nearby,
+    bluetooth,
+    nearbyWifi,
+    location,
+    locationCoarse,
+    locationFine,
+    sdkVersion,
     raw: status,
   };
 }
@@ -121,13 +140,25 @@ function assertAndroid() {
 }
 
 function assertPermissionsGranted(permissions) {
-  if (
-    permissions?.nearby !== "granted" ||
-    ((permissions?.sdkVersion == null || permissions.sdkVersion < 33) &&
-      permissions?.location !== "granted")
-  ) {
+  const sdkVersion = permissions?.sdkVersion;
+  if (!Number.isInteger(sdkVersion) || sdkVersion < 24) {
+    throw new Error("Impossible de déterminer la version Android pour Nearby.");
+  }
+
+  const missing = [];
+  if (sdkVersion >= 31 && permissions.bluetooth !== "granted") {
+    missing.push("Bluetooth : appareils à proximité");
+  }
+  if (sdkVersion >= 33 && permissions.nearbyWifi !== "granted") {
+    missing.push("Wi-Fi : appareils à proximité");
+  }
+  if (sdkVersion < 33 && permissions.location !== "granted") {
+    missing.push("localisation");
+  }
+
+  if (missing.length > 0) {
     throw new Error(
-      "Les permissions Nearby nécessaires ne sont pas confirmées. Vérifie les autorisations Bluetooth et appareils à proximité dans les paramètres de l’application."
+      `Permissions Android Nearby manquantes (${missing.join(", ")}). Autorise-les dans les paramètres de BAARO puis réessaie.`
     );
   }
 }
@@ -172,19 +203,30 @@ export async function checkNearbyPermissions() {
   const plugin = getPlugin();
 
   if (!plugin || typeof plugin.checkPermissions !== "function") {
-    return { nearby: "unknown", location: "unknown" };
+    return {
+      nearby: "unknown",
+      bluetooth: "unknown",
+      nearbyWifi: "unknown",
+      location: "unknown",
+    };
   }
 
   try {
+    const sdkVersion = await getAndroidSdkVersion(plugin);
     const status = await plugin.checkPermissions();
-    return normalizePermissions(status);
+    return normalizePermissions(status, sdkVersion);
   } catch (error) {
     console.warn(
       "Vérification des permissions Nearby impossible:",
       error
     );
 
-    return { nearby: "unknown", location: "unknown" };
+    return {
+      nearby: "unknown",
+      bluetooth: "unknown",
+      nearbyWifi: "unknown",
+      location: "unknown",
+    };
   }
 }
 
@@ -205,7 +247,12 @@ export async function requestNearbyPermissions() {
   const plugin = getPlugin();
 
   if (!plugin) {
-    return { nearby: "unknown", location: "unknown" };
+    return {
+      nearby: "unknown",
+      bluetooth: "unknown",
+      nearbyWifi: "unknown",
+      location: "unknown",
+    };
   }
 
   if (typeof plugin.requestPermissions !== "function") {
@@ -214,16 +261,26 @@ export async function requestNearbyPermissions() {
 
   try {
     const sdkVersion = await getAndroidSdkVersion(plugin);
-    const permissions =
-      sdkVersion !== null && sdkVersion >= 33
-        ? ["nearby"]
-        : ["nearby", "location"];
+    if (sdkVersion === null) {
+      throw new Error("Impossible de déterminer la version Android.");
+    }
+
+    const permissions = [];
+    if (sdkVersion >= 31) permissions.push("bluetooth");
+    if (sdkVersion >= 33) {
+      permissions.push("nearbyWifi");
+    } else {
+      permissions.push("locationCoarse");
+      if (sdkVersion >= 29) permissions.push("locationFine");
+    }
+
     await plugin.requestPermissions({ permissions });
   } catch (error) {
     console.warn(
       "Demande de permissions Nearby impossible:",
       error
     );
+    throw new Error(getErrorMessage(error));
   }
 
   return checkNearbyPermissions();
@@ -270,15 +327,19 @@ export async function startNearby(displayName = "BAARO User") {
 
   try {
     const sdkVersion = await getAndroidSdkVersion();
-    const requiresLocation = sdkVersion === null || sdkVersion < 33;
+    if (sdkVersion === null) {
+      throw new Error("Impossible de déterminer la version Android pour Nearby.");
+    }
+
     let permissions = {
       ...(await checkNearbyPermissions()),
       sdkVersion,
     };
 
     if (
-      permissions.nearby !== "granted" ||
-      (requiresLocation && permissions.location !== "granted")
+      (sdkVersion >= 31 && permissions.bluetooth !== "granted") ||
+      (sdkVersion >= 33 && permissions.nearbyWifi !== "granted") ||
+      (sdkVersion < 33 && permissions.location !== "granted")
     ) {
       permissions = {
         ...(await requestNearbyPermissions()),

@@ -7,6 +7,7 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 
+import com.baaro.nearby.NearbyChatPlugin;
 import com.getcapacitor.BridgeActivity;
 
 public class MainActivity extends BridgeActivity {
@@ -41,6 +42,7 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(BaaroSmsPlugin.class);
+        registerPlugin(NearbyChatPlugin.class);
         super.onCreate(savedInstanceState);
         createBaaroNotificationChannels();
     }

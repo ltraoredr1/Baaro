@@ -29,14 +29,21 @@ import android.os.Build
             strings = [
                 Manifest.permission.BLUETOOTH_SCAN,
                 Manifest.permission.BLUETOOTH_CONNECT,
-                Manifest.permission.BLUETOOTH_ADVERTISE,
-                Manifest.permission.NEARBY_WIFI_DEVICES
+                Manifest.permission.BLUETOOTH_ADVERTISE
             ],
-            alias = "nearby"
+            alias = "bluetooth"
+        ),
+        Permission(
+            strings = [Manifest.permission.NEARBY_WIFI_DEVICES],
+            alias = "nearbyWifi"
+        ),
+        Permission(
+            strings = [Manifest.permission.ACCESS_COARSE_LOCATION],
+            alias = "locationCoarse"
         ),
         Permission(
             strings = [Manifest.permission.ACCESS_FINE_LOCATION],
-            alias = "location"
+            alias = "locationFine"
         )
     ]
 )
