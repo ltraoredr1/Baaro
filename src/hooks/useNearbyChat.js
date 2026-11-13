@@ -11,21 +11,12 @@ import {
   onNearbyEvent,
   acceptNearbyConnection,
   rejectNearbyConnection,
-  checkNearbyPermissions,
-  requestNearbyPermissions,
 } from "../nearby.js";
 
 function getErrorMessage(error) {
   if (error instanceof Error) return error.message;
   if (typeof error === "string") return error;
   return "Une erreur inattendue est survenue avec Nearby.";
-}
-
-function hasRequiredPermissions(permissions) {
-  return (
-    permissions?.nearby === "granted" &&
-    permissions?.location === "granted"
-  );
 }
 
 function normalizeEndpointId(event) {
@@ -217,20 +208,6 @@ export function useNearbyChat(displayName = "Utilisateur BAARO") {
       if (!isNearbyAvailable()) {
         throw new Error(
           "Le plugin Nearby n'est pas disponible sur cet appareil."
-        );
-      }
-
-      let permissions = await checkNearbyPermissions();
-
-      if (!hasRequiredPermissions(permissions)) {
-        permissions = await requestNearbyPermissions();
-      }
-
-      // Ne pas démarrer si une permission nécessaire est refusée,
-      // absente ou inconnue.
-      if (!hasRequiredPermissions(permissions)) {
-        throw new Error(
-          "Les permissions Bluetooth et localisation nécessaires ne sont pas accordées."
         );
       }
 

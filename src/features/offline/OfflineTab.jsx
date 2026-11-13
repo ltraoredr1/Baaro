@@ -180,11 +180,8 @@ export function OfflineTab() {
       try {
         await start();
         showToast("Recherche d'appareils BAARO à proximité…", "info");
-      } catch (err) {
-        showToast(
-          err.message || "Impossible de démarrer la détection.",
-          "error"
-        );
+      } catch {
+        // L’erreur est déjà affichée par le toast lié à l’état du hook.
       }
     }
   };

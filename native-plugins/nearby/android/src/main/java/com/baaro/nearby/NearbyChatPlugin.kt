@@ -20,6 +20,7 @@ import com.google.android.gms.nearby.connection.PayloadCallback
 import com.google.android.gms.nearby.connection.PayloadTransferUpdate
 import com.google.android.gms.nearby.connection.Strategy
 import android.Manifest
+import android.os.Build
 import java.io.File
 
 @CapacitorPlugin(
@@ -57,6 +58,11 @@ class NearbyChatPlugin : Plugin() {
     private var isStarted = false
     private var isStopping = false
     private var displayName = DEFAULT_DISPLAY_NAME
+
+    @PluginMethod
+    fun getAndroidSdkVersion(call: PluginCall) {
+        call.resolve(JSObject().apply { put("sdkVersion", Build.VERSION.SDK_INT) })
+    }
 
     private fun client(): ConnectionsClient {
         if (!::connectionsClient.isInitialized) {

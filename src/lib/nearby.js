@@ -123,10 +123,11 @@ function assertAndroid() {
 function assertPermissionsGranted(permissions) {
   if (
     permissions?.nearby !== "granted" ||
-    permissions?.location !== "granted"
+    ((permissions?.sdkVersion == null || permissions.sdkVersion < 33) &&
+      permissions?.location !== "granted")
   ) {
     throw new Error(
-      "Les permissions Nearby nécessaires ne sont pas confirmées. Vérifie les autorisations Bluetooth et localisation dans les paramètres de l’application."
+      "Les permissions Nearby nécessaires ne sont pas confirmées. Vérifie les autorisations Bluetooth et appareils à proximité dans les paramètres de l’application."
     );
   }
 }
@@ -187,6 +188,19 @@ export async function checkNearbyPermissions() {
   }
 }
 
+async function getAndroidSdkVersion(plugin = getPlugin()) {
+  if (typeof plugin?.getAndroidSdkVersion !== "function") return null;
+
+  try {
+    const result = await plugin.getAndroidSdkVersion();
+    const version = Number(result?.sdkVersion);
+    return Number.isInteger(version) && version > 0 ? version : null;
+  } catch (error) {
+    console.warn("Version Android indisponible pour Nearby:", error);
+    return null;
+  }
+}
+
 export async function requestNearbyPermissions() {
   const plugin = getPlugin();
 
@@ -199,7 +213,12 @@ export async function requestNearbyPermissions() {
   }
 
   try {
-    await plugin.requestPermissions();
+    const sdkVersion = await getAndroidSdkVersion(plugin);
+    const permissions =
+      sdkVersion !== null && sdkVersion >= 33
+        ? ["nearby"]
+        : ["nearby", "location"];
+    await plugin.requestPermissions({ permissions });
   } catch (error) {
     console.warn(
       "Demande de permissions Nearby impossible:",
@@ -250,13 +269,21 @@ export async function startNearby(displayName = "BAARO User") {
   isStarting = true;
 
   try {
-    let permissions = await checkNearbyPermissions();
+    const sdkVersion = await getAndroidSdkVersion();
+    const requiresLocation = sdkVersion === null || sdkVersion < 33;
+    let permissions = {
+      ...(await checkNearbyPermissions()),
+      sdkVersion,
+    };
 
     if (
       permissions.nearby !== "granted" ||
-      permissions.location !== "granted"
+      (requiresLocation && permissions.location !== "granted")
     ) {
-      permissions = await requestNearbyPermissions();
+      permissions = {
+        ...(await requestNearbyPermissions()),
+        sdkVersion,
+      };
     }
 
     assertPermissionsGranted(permissions);
