@@ -398,6 +398,17 @@ export async function stopNearby() {
   }
 }
 
+export async function requestNearbyConnection(endpointId) {
+  endpointId = requireEndpointId(endpointId);
+  const plugin = requirePlugin();
+
+  if (typeof plugin.requestConnection !== "function") {
+    throw new Error("Le plugin Nearby ne permet pas de demander une connexion.");
+  }
+
+  await plugin.requestConnection({ endpointId });
+}
+
 export async function sendNearbyMessage(text, endpointId = null) {
   const plugin = requirePlugin();
 
@@ -455,15 +466,18 @@ export async function sendNearbyMessage(text, endpointId = null) {
   );
 }
 
-export async function acceptNearbyConnection(endpointId) {
+export async function acceptNearbyConnection(endpointId, authenticationConfirmed = false) {
   endpointId = requireEndpointId(endpointId);
+  if (authenticationConfirmed !== true) {
+    throw new Error("Confirme que le code Nearby correspond sur les deux appareils.");
+  }
 
   const plugin = requirePlugin();
 
   if (typeof plugin.accept === "function") {
-    await plugin.accept({ endpointId });
+    await plugin.accept({ endpointId, authenticationConfirmed: true });
   } else if (typeof plugin.acceptConnection === "function") {
-    await plugin.acceptConnection({ endpointId });
+    await plugin.acceptConnection({ endpointId, authenticationConfirmed: true });
   } else {
     throw new Error(
       "Le plugin Nearby ne fournit aucune méthode d'acceptation de connexion."
@@ -516,11 +530,17 @@ function normalizeEvent(event) {
       };
 
     case "CONNECTION_REQUESTED":
-      return { type, endpointId, deviceName };
+      return {
+        type,
+        endpointId,
+        deviceName,
+        authToken: typeof event.authToken === "string" ? event.authToken : null,
+      };
 
     case "ERROR":
       return {
         type,
+        endpointId,
         message: event.message || "Erreur du service Nearby.",
       };
 

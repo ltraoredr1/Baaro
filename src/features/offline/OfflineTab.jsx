@@ -33,6 +33,7 @@ export function OfflineTab() {
   const [eventQueueSize, setEventQueueSize] = useState(0);
   const [deadLetterCount, setDeadLetterCount] = useState(0);
   const [flushing, setFlushing] = useState(false);
+  const [verifiedConnectionIds, setVerifiedConnectionIds] = useState(() => new Set());
 
   const {
     isAvailable,
@@ -40,11 +41,15 @@ export function OfflineTab() {
     debug,
     isScanning,
     devices,
+    pendingConnections,
     messages,
     error,
     start,
     stop,
     sendMessage,
+    requestConnection,
+    acceptConnection,
+    rejectConnection,
   } = useNearbyChat(displayName);
 
   useEffect(() => {
@@ -278,10 +283,10 @@ export function OfflineTab() {
         >
           <ShieldCheck size={14} className="mt-0.5 shrink-0" style={{ color: COLORS.gold }} />
           <span>
-            Les messages de proximité transitent en clair sur le canal local
-            (Bluetooth / Wi‑Fi Direct). Ce n’est <strong>pas</strong> la
-            messagerie E2E chiffrée de BAARO. N’échangez pas de secrets
-            sensibles via P2P.
+            Nearby chiffre le transport entre appareils, mais BAARO n’ajoute
+            pas de chiffrement de bout en bout ni de protection des messages
+            après réception. Compare le code affiché sur les deux appareils
+            avant d’accepter une connexion et évite les informations sensibles.
           </span>
         </div>
       </div>
@@ -308,10 +313,24 @@ export function OfflineTab() {
               {devices.map((d) => (
                 <li
                   key={d.endpointId}
-                  className="text-xs rounded-lg px-2 py-1.5 border"
+                  className="flex items-center justify-between gap-2 text-xs rounded-lg px-2 py-1.5 border"
                   style={{ borderColor: COLORS.border, color: COLORS.ivory }}
                 >
-                  {d.name || d.endpointId}
+                  <span>{d.name || d.endpointId}</span>
+                  {d.status === "connected" ? (
+                    <span className="text-[10px]" style={{ color: COLORS.teal }}>Connecté</span>
+                  ) : d.status === "connecting" ? (
+                    <span className="text-[10px]" style={{ color: COLORS.muted }}>Demande envoyée…</span>
+                  ) : (
+                    <button
+                      type="button"
+                      className="rounded-lg px-2 py-1 text-[10px] font-bold"
+                      style={{ background: COLORS.teal, color: COLORS.bg }}
+                      onClick={() => requestConnection(d.endpointId).catch(() => {})}
+                    >
+                      Demander connexion
+                    </button>
+                  )}
                 </li>
               ))}
             </ul>
@@ -368,6 +387,81 @@ export function OfflineTab() {
           </form>
         </div>
       </div>
+
+      {pendingConnections.length > 0 && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/70 p-4">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="nearby-auth-title"
+            className="w-full max-w-md rounded-2xl border p-5 shadow-2xl"
+            style={{ borderColor: COLORS.borderTeal, background: COLORS.surface }}
+          >
+            <h3 id="nearby-auth-title" className="text-lg font-bold" style={{ color: COLORS.ivory }}>
+              Confirmer la connexion Nearby
+            </h3>
+            <p className="mt-2 text-sm" style={{ color: COLORS.muted }}>
+              Comparez le code avec l’autre personne par un canal indépendant. N’accepte pas si les codes diffèrent.
+            </p>
+            <div className="mt-4 space-y-4">
+              {pendingConnections.map((request) => {
+                const verificationKey = `${request.endpointId}:${request.requestId}`;
+                const verified = verifiedConnectionIds.has(verificationKey);
+                return (
+                  <section key={request.endpointId} className="rounded-xl border p-3" style={{ borderColor: COLORS.border }}>
+                    <p className="text-sm font-semibold" style={{ color: COLORS.ivory }}>{request.deviceName}</p>
+                    <p className="my-3 text-center font-mono text-2xl tracking-[0.25em]" style={{ color: COLORS.gold }}>
+                      {request.authToken || "Code indisponible"}
+                    </p>
+                    <label className="flex items-start gap-2 text-xs" style={{ color: COLORS.muted }}>
+                      <input
+                        type="checkbox"
+                        checked={verified}
+                        disabled={!request.authToken}
+                        onChange={(event) => {
+                          setVerifiedConnectionIds((previous) => {
+                            const next = new Set(previous);
+                            if (event.target.checked) next.add(verificationKey);
+                            else next.delete(verificationKey);
+                            return next;
+                          });
+                        }}
+                      />
+                      J’ai comparé le code et il correspond exactement sur les deux appareils.
+                    </label>
+                    <div className="mt-3 flex justify-end gap-2">
+                      <button
+                        type="button"
+                        className="rounded-lg border px-3 py-2 text-xs"
+                        style={{ borderColor: COLORS.border, color: COLORS.ivory }}
+                        onClick={() => {
+                          setVerifiedConnectionIds((previous) => {
+                            const next = new Set(previous);
+                            next.delete(verificationKey);
+                            return next;
+                          });
+                          rejectConnection(request.endpointId).catch(() => {});
+                        }}
+                      >
+                        Refuser
+                      </button>
+                      <button
+                        type="button"
+                        disabled={!verified}
+                        className="rounded-lg px-3 py-2 text-xs font-bold disabled:opacity-40"
+                        style={{ background: COLORS.teal, color: COLORS.bg }}
+                        onClick={() => acceptConnection(request.endpointId, true).catch(() => {})}
+                      >
+                        Accepter le code vérifié
+                      </button>
+                    </div>
+                  </section>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
 
       {import.meta.env.DEV && (
         <pre

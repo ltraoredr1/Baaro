@@ -4,10 +4,12 @@ export interface NearbyChatPlugin {
   start(options: { displayName: string }): Promise<{ success: boolean }>;
   stop(): Promise<{ success: boolean }>;
   send(options: { text: string; endpointId?: string }): Promise<{ success: boolean }>;
-  accept(options: { endpointId: string }): Promise<{ success: boolean }>;
+  requestConnection(options: { endpointId: string }): Promise<{ success: boolean }>;
+  accept(options: { endpointId: string; authenticationConfirmed: boolean }): Promise<{ success: boolean }>;
   reject(options: { endpointId: string }): Promise<{ success: boolean }>;
+  getAndroidSdkVersion(): Promise<{ sdkVersion: number }>;
   checkPermissions(): Promise<{ nearby: string; location: string }>;
-  requestPermissions(): Promise<{ nearby: string; location: string }>;
+  requestPermissions(options?: { permissions?: string[] }): Promise<{ nearby: string; location: string }>;
   addListener(
     eventName: 'nearbyEvent',
     listenerFunc: (event: NearbyEvent) => void
@@ -24,6 +26,7 @@ export interface NearbyEvent {
     | 'ERROR';
   endpointId?: string;
   deviceName?: string;
+  authToken?: string | null;
   senderName?: string;
   text?: string;
   serviceId?: string;

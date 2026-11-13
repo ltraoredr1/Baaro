@@ -21,7 +21,6 @@ import com.google.android.gms.nearby.connection.PayloadTransferUpdate
 import com.google.android.gms.nearby.connection.Strategy
 import android.Manifest
 import android.os.Build
-import java.io.File
 
 @CapacitorPlugin(
     name = "NearbyChat",
@@ -46,14 +45,19 @@ class NearbyChatPlugin : Plugin() {
     companion object {
         private const val SERVICE_ID = "com.baaro.app.nearby"
         private const val DEFAULT_DISPLAY_NAME = "Utilisateur BAARO"
+        private const val MAX_MESSAGE_BYTES = 32 * 1024
+        private const val MAX_FILE_BYTES = 20L * 1024L * 1024L
+        private const val MAX_PENDING_CONNECTIONS = 3
     }
 
     private lateinit var connectionsClient: ConnectionsClient
     private val strategy = Strategy.P2P_CLUSTER
     private val endpointNames = mutableMapOf<String, String>()
     private val pendingEndpoints = mutableSetOf<String>()
+    private val requestingEndpoints = mutableSetOf<String>()
+    private val rejectedByUser = mutableSetOf<String>()
     private val connectedEndpoints = mutableMapOf<String, String>()
-    private val filePayloads = mutableMapOf<Long, String>() // payloadId -> fileName
+    private val cancelingPayloads = mutableSetOf<Long>()
     private var isStarting = false
     private var isStarted = false
     private var isStopping = false
@@ -84,12 +88,13 @@ class NearbyChatPlugin : Plugin() {
             when (payload.type) {
                 Payload.Type.BYTES -> {
                     val bytes = payload.asBytes()?: return
-                    val message = String(bytes, Charsets.UTF_8)
-                    // Si c'est un header fichier: FILE:filename
-                    if (message.startsWith("FILE_HEADER:")) {
-                        // On attend le prochain payload FILE
+                    if (bytes.size > MAX_MESSAGE_BYTES) {
+                        emit("ERROR", endpointId) {
+                            put("message", "Message Nearby refusé : taille maximale dépassée.")
+                        }
                         return
                     }
+                    val message = String(bytes, Charsets.UTF_8)
                     emit("MESSAGE_RECEIVED", endpointId) {
                         put("senderName", connectedEndpoints[endpointId]?: "Inconnu")
                         put("text", message)
@@ -99,11 +104,12 @@ class NearbyChatPlugin : Plugin() {
                 Payload.Type.FILE -> {
                     val file = payload.asFile()?.asJavaFile()
                     if (file!= null) {
-                        emit("FILE_RECEIVED", endpointId) {
-                            put("senderName", connectedEndpoints[endpointId]?: "Inconnu")
-                            put("filePath", file.absolutePath)
-                            put("fileName", file.name)
-                            put("payloadId", payload.id)
+                        // Les transferts de fichiers ne sont pas pris en charge par l'interface.
+                        // Supprimer immédiatement la copie temporaire au lieu de l'exposer au WebView.
+                        client().cancelPayload(payload.id)
+                        file.delete()
+                        emit("ERROR", endpointId) {
+                            put("message", "Les transferts de fichiers Nearby ne sont pas activés.")
                         }
                     }
                 }
@@ -112,8 +118,23 @@ class NearbyChatPlugin : Plugin() {
         }
 
         override fun onPayloadTransferUpdate(endpointId: String, update: PayloadTransferUpdate) {
+            if (
+                update.status == PayloadTransferUpdate.Status.IN_PROGRESS &&
+                update.totalBytes > MAX_FILE_BYTES
+            ) {
+                if (cancelingPayloads.add(update.payloadId)) {
+                    client().cancelPayload(update.payloadId)
+                    emit("ERROR", endpointId) {
+                        put("message", "Transfert Nearby annulé : taille maximale de fichier dépassée.")
+                    }
+                }
+                return
+            }
+            if (update.status != PayloadTransferUpdate.Status.IN_PROGRESS) {
+                cancelingPayloads.remove(update.payloadId)
+            }
+
             if (update.status == PayloadTransferUpdate.Status.SUCCESS) {
-                filePayloads.remove(update.payloadId)
                 emit("TRANSFER_UPDATE", endpointId) {
                     put("payloadId", update.payloadId)
                     put("status", "SUCCESS")
@@ -132,6 +153,14 @@ class NearbyChatPlugin : Plugin() {
 
     private val connectionLifecycleCallback = object : ConnectionLifecycleCallback() {
         override fun onConnectionInitiated(endpointId: String, connectionInfo: ConnectionInfo) {
+            if (pendingEndpoints.size >= MAX_PENDING_CONNECTIONS) {
+                rejectedByUser.add(endpointId)
+                client().rejectConnection(endpointId)
+                emit("ERROR", endpointId) {
+                    put("message", "Trop de demandes Nearby en attente. Réessaie plus tard.")
+                }
+                return
+            }
             endpointNames[endpointId] = connectionInfo.endpointName
             pendingEndpoints.add(endpointId)
             emit("CONNECTION_REQUESTED", endpointId) {
@@ -142,15 +171,18 @@ class NearbyChatPlugin : Plugin() {
 
         override fun onConnectionResult(endpointId: String, result: ConnectionResolution) {
             pendingEndpoints.remove(endpointId)
+            requestingEndpoints.remove(endpointId)
+            val wasRejectedLocally = rejectedByUser.remove(endpointId)
             if (result.status.isSuccess) {
                 val name = endpointNames[endpointId]?: "Appareil distant"
                 connectedEndpoints[endpointId] = name
                 emit("DEVICE_CONNECTED", endpointId) { put("deviceName", name) }
             } else {
                 connectedEndpoints.remove(endpointId)
-                emit("ERROR") {
-                    put("message", "La connexion avec ${endpointNames[endpointId]?: "l'appareil distant"} a échoué.")
-                    put("endpointId", endpointId)
+                if (!wasRejectedLocally) {
+                    emit("ERROR", endpointId) {
+                        put("message", "La connexion avec ${endpointNames[endpointId]?: "l'appareil distant"} a échoué.")
+                    }
                 }
                 endpointNames.remove(endpointId)
             }
@@ -160,6 +192,7 @@ class NearbyChatPlugin : Plugin() {
             val name = endpointNames[endpointId]
             connectedEndpoints.remove(endpointId)
             pendingEndpoints.remove(endpointId)
+            rejectedByUser.remove(endpointId)
             endpointNames.remove(endpointId)
             emit("DEVICE_LOST", endpointId) { if (name!= null) put("deviceName", name) }
         }
@@ -176,9 +209,35 @@ class NearbyChatPlugin : Plugin() {
         override fun onEndpointLost(endpointId: String) {
             if (!connectedEndpoints.containsKey(endpointId) &&!pendingEndpoints.contains(endpointId)) {
                 endpointNames.remove(endpointId)
+                requestingEndpoints.remove(endpointId)
             }
             emit("DEVICE_LOST", endpointId)
         }
+    }
+
+    @PluginMethod
+    fun requestConnection(call: PluginCall) {
+        val endpointId = call.getString("endpointId")?.trim()
+        if (endpointId.isNullOrEmpty()) { call.reject("endpointId manquant."); return }
+        if (!isStarted || isStopping) { call.reject("Nearby n'est pas démarré."); return }
+        if (!endpointNames.containsKey(endpointId)) { call.reject("Cet appareil n'est plus disponible."); return }
+        if (connectedEndpoints.containsKey(endpointId)) {
+            call.resolve(JSObject().apply { put("success", true); put("alreadyConnected", true) })
+            return
+        }
+        if (!requestingEndpoints.add(endpointId) || pendingEndpoints.contains(endpointId)) {
+            call.reject("Une demande de connexion est déjà en cours pour cet appareil.")
+            return
+        }
+
+        client().requestConnection(displayName, endpointId, connectionLifecycleCallback)
+            .addOnSuccessListener {
+                call.resolve(JSObject().apply { put("success", true) })
+            }
+            .addOnFailureListener { error ->
+                requestingEndpoints.remove(endpointId)
+                call.reject("Impossible de demander la connexion : ${error.message}")
+            }
     }
 
     @PluginMethod
@@ -222,7 +281,7 @@ class NearbyChatPlugin : Plugin() {
         try { client().stopAdvertising() } catch (_: Exception) {}
         try { client().stopDiscovery() } catch (_: Exception) {}
 
-        val endpoints = (connectedEndpoints.keys + pendingEndpoints).toSet()
+        val endpoints = (connectedEndpoints.keys + pendingEndpoints + requestingEndpoints).toSet()
         endpoints.forEach { endpointId ->
             try { client().disconnectFromEndpoint(endpointId) } catch (_: Exception) {}
         }
@@ -234,7 +293,7 @@ class NearbyChatPlugin : Plugin() {
     }
 
     private fun clearConnectionState() {
-        connectedEndpoints.clear(); pendingEndpoints.clear(); endpointNames.clear(); filePayloads.clear()
+        connectedEndpoints.clear(); pendingEndpoints.clear(); requestingEndpoints.clear(); rejectedByUser.clear(); endpointNames.clear(); cancelingPayloads.clear()
     }
 
     @PluginMethod
@@ -252,6 +311,10 @@ class NearbyChatPlugin : Plugin() {
         if (targets.isEmpty()) { call.reject("Aucun appareil Nearby n'est connecté."); return }
 
         val payload = Payload.fromBytes(text.toByteArray(Charsets.UTF_8))
+        if ((payload.asBytes()?.size ?: 0) > MAX_MESSAGE_BYTES) {
+            call.reject("Le message Nearby dépasse la taille maximale de 32 Ko.")
+            return
+        }
         var failed = 0
         var completed = 0
 
@@ -273,40 +336,13 @@ class NearbyChatPlugin : Plugin() {
     }
 
     @PluginMethod
-    fun sendFile(call: PluginCall) {
-        val filePath = call.getString("filePath")
-        val endpointId = call.getString("endpointId")
-
-        if (filePath.isNullOrBlank()) { call.reject("filePath manquant."); return }
-        if (endpointId.isNullOrBlank()) { call.reject("endpointId manquant."); return }
-        if (!connectedEndpoints.containsKey(endpointId)) { call.reject("Appareil non connecté."); return }
-
-        val file = File(filePath)
-        if (!file.exists()) { call.reject("Fichier introuvable: $filePath"); return }
-
-        try {
-            val filePayload = Payload.fromFile(file)
-            client().sendPayload(endpointId, filePayload)
-               .addOnSuccessListener {
-                    filePayloads[filePayload.id] = file.name
-                    call.resolve(JSObject().apply {
-                        put("success", true)
-                        put("payloadId", filePayload.id)
-                        put("fileName", file.name)
-                    })
-                }
-               .addOnFailureListener { error ->
-                    call.reject("Échec envoi fichier: ${error.message}")
-                }
-        } catch (e: Exception) {
-            call.reject("Erreur fichier: ${e.message}")
-        }
-    }
-
-    @PluginMethod
     fun accept(call: PluginCall) {
         val endpointId = call.getString("endpointId")
         if (endpointId.isNullOrBlank()) { call.reject("endpointId manquant."); return }
+        if (call.getBoolean("authenticationConfirmed", false) != true) {
+            call.reject("Confirme d'abord que le code Nearby correspond sur les deux appareils.")
+            return
+        }
         if (!pendingEndpoints.contains(endpointId)) { call.reject("Aucune demande en attente pour cet appareil."); return }
 
         client().acceptConnection(endpointId, payloadCallback)
@@ -320,12 +356,16 @@ class NearbyChatPlugin : Plugin() {
         if (endpointId.isNullOrBlank()) { call.reject("endpointId manquant."); return }
         if (!pendingEndpoints.contains(endpointId)) { call.reject("Aucune demande en attente pour cet appareil."); return }
 
+        rejectedByUser.add(endpointId)
         client().rejectConnection(endpointId)
            .addOnSuccessListener {
                 pendingEndpoints.remove(endpointId); connectedEndpoints.remove(endpointId); endpointNames.remove(endpointId)
                 call.resolve(JSObject().apply { put("success", true) })
             }
-           .addOnFailureListener { error -> call.reject("Impossible de refuser : ${error.message}") }
+           .addOnFailureListener { error ->
+                rejectedByUser.remove(endpointId)
+                call.reject("Impossible de refuser : ${error.message}")
+            }
     }
 
     @PluginMethod

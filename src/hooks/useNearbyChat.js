@@ -8,6 +8,7 @@ import {
   startNearby,
   stopNearby,
   sendNearbyMessage,
+  requestNearbyConnection,
   onNearbyEvent,
   acceptNearbyConnection,
   rejectNearbyConnection,
@@ -35,6 +36,7 @@ export function useNearbyChat(displayName = "Utilisateur BAARO") {
   const [debug, setDebug] = useState(() => getNearbyDebug());
   const [isScanning, setIsScanning] = useState(false);
   const [devices, setDevices] = useState([]);
+  const [pendingConnections, setPendingConnections] = useState([]);
   const [messages, setMessages] = useState([]);
   const [error, setError] = useState(null);
 
@@ -101,6 +103,9 @@ export function useNearbyChat(displayName = "Utilisateur BAARO") {
 
           case "DEVICE_CONNECTED": {
             if (!endpointId) return;
+            setPendingConnections((previous) =>
+              previous.filter((request) => request.endpointId !== endpointId)
+            );
 
             setDevices((previous) => {
               const existing = previous.some(
@@ -133,6 +138,9 @@ export function useNearbyChat(displayName = "Utilisateur BAARO") {
 
           case "DEVICE_LOST": {
             if (!endpointId) return;
+            setPendingConnections((previous) =>
+              previous.filter((request) => request.endpointId !== endpointId)
+            );
 
             setDevices((previous) =>
               previous.filter(
@@ -157,12 +165,30 @@ export function useNearbyChat(displayName = "Utilisateur BAARO") {
             break;
           }
 
-          case "CONNECTION_REQUESTED":
-            // La décision d'accepter ou de refuser doit rester explicite.
-            // L'interface peut utiliser acceptConnection/rejectConnection.
+          case "CONNECTION_REQUESTED": {
+            if (!endpointId) return;
+            setPendingConnections((previous) => [
+              ...previous.filter((request) => request.endpointId !== endpointId),
+              {
+                endpointId,
+                requestId: `${endpointId}-${Date.now()}-${Math.random()}`,
+                deviceName: event.deviceName || "Appareil inconnu",
+                authToken: event.authToken || null,
+              },
+            ]);
             break;
+          }
 
           case "ERROR":
+            if (endpointId) {
+              setDevices((previous) =>
+                previous.map((device) =>
+                  device.endpointId === endpointId && device.status === "connecting"
+                    ? { ...device, status: "available" }
+                    : device
+                )
+              );
+            }
             setError(
               typeof event.message === "string"
                 ? event.message
@@ -245,6 +271,7 @@ export function useNearbyChat(displayName = "Utilisateur BAARO") {
       scanningRef.current = false;
       setIsScanning(false);
       setDevices([]);
+      setPendingConnections([]);
       refreshStatus();
     } catch (err) {
       const message = getErrorMessage(err);
@@ -289,14 +316,37 @@ export function useNearbyChat(displayName = "Utilisateur BAARO") {
     }
   }, []);
 
-  const acceptConnection = useCallback(async (endpointId) => {
+  const requestConnection = useCallback(async (endpointId) => {
+    if (!endpointId) throw new Error("Identifiant de l’appareil manquant.");
+
+    try {
+      setError(null);
+      await requestNearbyConnection(endpointId);
+      setDevices((previous) =>
+        previous.map((device) =>
+          device.endpointId === endpointId && device.status !== "connected"
+            ? { ...device, status: "connecting" }
+            : device
+        )
+      );
+    } catch (err) {
+      const message = getErrorMessage(err);
+      setError(message);
+      throw err instanceof Error ? err : new Error(message);
+    }
+  }, []);
+
+  const acceptConnection = useCallback(async (endpointId, authenticationConfirmed) => {
     if (!endpointId) {
       throw new Error("Identifiant de connexion manquant.");
     }
 
     try {
       setError(null);
-      await acceptNearbyConnection(endpointId);
+      await acceptNearbyConnection(endpointId, authenticationConfirmed);
+      setPendingConnections((previous) =>
+        previous.filter((request) => request.endpointId !== endpointId)
+      );
     } catch (err) {
       const message = getErrorMessage(err);
       setError(message);
@@ -312,6 +362,9 @@ export function useNearbyChat(displayName = "Utilisateur BAARO") {
     try {
       setError(null);
       await rejectNearbyConnection(endpointId);
+      setPendingConnections((previous) =>
+        previous.filter((request) => request.endpointId !== endpointId)
+      );
     } catch (err) {
       const message = getErrorMessage(err);
       setError(message);
@@ -325,12 +378,14 @@ export function useNearbyChat(displayName = "Utilisateur BAARO") {
     debug,
     isScanning,
     devices,
+    pendingConnections,
     messages,
     error,
     refreshStatus,
     start,
     stop,
     sendMessage,
+    requestConnection,
     acceptConnection,
     rejectConnection,
   };
