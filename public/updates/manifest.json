@@ -1,7 +1,7 @@
 {
-  "version": "0.2.5",
-  "url": "https://baaro-xi.vercel.app/updates/0.2.5.zip",
-  "sha256": "203814771a27116376c5695a4d401f82470c5c840f2716ef138d406505d45027",
+  "version": "0.2.6",
+  "url": "https://baaro-xi.vercel.app/updates/0.2.6.zip",
+  "sha256": "b7652581c3ccf84b7650503c7f34aa37551bbb8da7110031a012006fd6a8ed7a",
   "mandatory": false,
-  "notes": "Baaro 0.2.5 - updater maison"
+  "notes": "Baaro 0.2.6 - updater maison"
 }
