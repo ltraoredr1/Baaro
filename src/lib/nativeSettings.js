@@ -11,20 +11,22 @@ let lastAuthEnd = 0;
 
 const REASON = "Déverrouiller BAARO";
 
-/** true = déverrouillé (ou biométrie indisponible), false = refusé/annulé. */
+/** true = déverrouillé (ou aucun verrou disponible), false = refusé/annulé. */
 async function authenticate() {
   if (authenticating) return true;
   authenticating = true;
   try {
     const { BiometricAuth } = await import("@aparajita/capacitor-biometric-auth");
     const info = await BiometricAuth.checkBiometry();
-    if (!info.isAvailable) return true;
+    // Aucun verrou possible : ni biométrie, ni code/schéma du téléphone.
+    if (!info.isAvailable && !info.deviceIsSecure) return true;
     await BiometricAuth.authenticate({
       reason: REASON,
       allowDeviceCredential: true, // code/schéma du téléphone en secours : évite le blocage définitif
     });
     return true;
-  } catch (_) {
+  } catch (e) {
+    if (e?.code !== "userCancel") console.warn("[native] biometric", e);
     return false;
   } finally {
     authenticating = false;
@@ -42,8 +44,9 @@ export async function confirmBiometricEnable() {
   try {
     const { BiometricAuth } = await import("@aparajita/capacitor-biometric-auth");
     const info = await BiometricAuth.checkBiometry();
-    if (!info.isAvailable) return false;
-  } catch (_) {
+    if (!info.isAvailable && !info.deviceIsSecure) return false;
+  } catch (e) {
+    console.warn("[native] biometric", e);
     return false;
   }
   return authenticate();
@@ -98,9 +101,10 @@ export async function applyNativeSettings(s) {
 
   // Verrouillage au démarrage à froid (appStateChange ne se déclenche
   // qu'au retour d'arrière-plan, pas au lancement).
-  if (!coldChecked) {
+  // On ne marque le contrôle comme fait que si le réglage est actif.
+  if (!coldChecked && biometricEnabled) {
     coldChecked = true;
-    if (biometricEnabled && !(await authenticate())) {
+    if (!(await authenticate())) {
       const { App } = await import("@capacitor/app");
       App.exitApp();
     }
