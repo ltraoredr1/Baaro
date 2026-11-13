@@ -51,11 +51,11 @@
     "test:stories": "node --test tests/stories/*.test.mjs && node scripts/test-story-policy-rust.mjs && node scripts/test-stories-wasm.mjs"
   },
   "dependencies": {
-    "@aparajita/capacitor-biometric-auth": "^7.0.1",
+    "@aparajita/capacitor-biometric-auth": "^10.0.0",
     "@aws-sdk/client-s3": "^3.637.0",
     "@aws-sdk/s3-request-presigner": "^3.637.0",
-    "@capacitor-community/contacts": "^7.0.1",
-    "@capacitor-community/privacy-screen": "^6.1.0",
+    "@capacitor-community/contacts": "^8.0.0",
+    "@capacitor-community/privacy-screen": "^8.0.0",
     "@capacitor-community/speech-recognition": "^7.0.0",
     "@capacitor-community/text-to-speech": "^8.0.2",
     "@capacitor-trancee/nearby-connections": "^0.2.6",
