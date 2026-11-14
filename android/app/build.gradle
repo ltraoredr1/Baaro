@@ -43,24 +43,22 @@ android {
         }
     }
 
-    signingConfigs {
-        release {
-            if (!keystorePath || !keystorePassword || !keyAliasValue || !keyPasswordValue) {
-                throw new GradleException("Signature APK impossible : secrets Android manquants.")
-            }
-            if (!file(keystorePath).isFile()) {
-                throw new GradleException("Keystore Android introuvable.")
-            }
+def releaseSigningReady = keystorePath && keystorePassword && keyAliasValue && keyPasswordValue && file(keystorePath).isFile()
+
+signingConfigs {
+    release {
+        if (releaseSigningReady) {
             storeFile file(keystorePath)
             storePassword keystorePassword
             keyAlias keyAliasValue
             keyPassword keyPasswordValue
         }
     }
+}
 
     buildTypes {
         release {
-            signingConfig signingConfigs.release
+            if (releaseSigningReady) signingConfig signingConfigs.release
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
@@ -100,4 +98,11 @@ try {
     }
 } catch(Exception e) {
     logger.info("google-services.json not found")
+}
+
+gradle.taskGraph.whenReady { graph ->
+    def releaseRequested = graph.allTasks.any { it.name in ["assembleRelease", "bundleRelease"] }
+    if (releaseRequested && !releaseSigningReady) {
+        throw new GradleException("Publication impossible : clé de signature Android absente ou invalide.")
+    }
 }
