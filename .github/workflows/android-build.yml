@@ -1,163 +1,206 @@
-name: Build Android APK
+name: BAARO Android Release
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version à publier (patch, minor, major)'
+        description: "Type de mise à jour"
         required: true
-        default: 'patch'
         type: choice
+        default: patch
         options:
           - patch
           - minor
           - major
 
-concurrency:
-  group: android-build-${{ github.ref }}
-  cancel-in-progress: true
-
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: baaro-android-release
+  cancel-in-progress: false
 
 jobs:
   build:
+    name: Build APK Release signé
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     env:
       CLANG: clang-18
+
     steps:
-      - name: Checkout repository
+      - name: Récupérer le dépôt
         uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install Rust 1.99.1
-        uses: dtolnay/rust-toolchain@1.99.1
+      - name: Installer Node.js
+        uses: actions/setup-node@v4
         with:
-          targets: wasm32-unknown-unknown
+          node-version: "24.22.2"
+          cache: npm
 
-      - name: Install Clang 18 and LLD 18
+      - name: Installer Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Installer Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Installer les composants Android
         run: |
-          set -euo pipefail
+          sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Installer Clang 18 et LLD 18
+        run: |
           sudo apt-get update
           sudo apt-get install -y clang-18 lld-18
 
-      - name: Setup Node.js 24.22.2
-        uses: actions/setup-node@v4
+      - name: Installer Rust
+        uses: dtolnay/rust-toolchain@stable
         with:
-          node-version: 24.22.2
-          cache: npm
+          targets: wasm32-unknown-unknown, aarch64-linux-android, armv7-linux-androideabi, x86_64-linux-android
 
-      - name: Setup Java
-        uses: actions/setup-java@v5
-        with:
-          java-version: 21
-          distribution: temurin
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          packages: platform-tools platforms;android-36 build-tools;36.0.0
-
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
-
-      - name: Verify required secrets
-        shell: bash
-        env:
-          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
-          VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
-        run: |
-          set -euo pipefail
-          check_url() {
-            local name="$1" value="$2"
-            if [[ -z "$value" ]]; then
-              echo "::error::Le secret $name est manquant."
-              exit 1
-            fi
-            if [[ "$value" =~ [[:space:]] ]]; then
-              echo "::error::Le secret $name contient un espace ou un retour à la ligne."
-              exit 1
-            fi
-            if [[ ! "$value" =~ ^https:// ]]; then
-              echo "::error::Le secret $name doit commencer par https://"
-              exit 1
-            fi
-          }
-          check_url VITE_SUPABASE_URL "${VITE_SUPABASE_URL:-}"
-          check_url VITE_API_BASE_URL "${VITE_API_BASE_URL:-}"
-          if [[ -z "${VITE_SUPABASE_ANON_KEY:-}" ]]; then
-            echo "::error::Le secret VITE_SUPABASE_ANON_KEY est manquant."
-            exit 1
-          fi
-          echo "Secrets valides."
-          echo "Commit : ${GITHUB_SHA}"
-          echo "Date UTC : $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-
-      - name: Install dependencies
-        run: npm ci --prefer-offline --no-audit
-
-      - name: Bump version
-        run: npm version ${{ inputs.version }} --no-git-tag-version
-
-      - name: Build web application
-        run: npm run build
+      - name: Vérifier les secrets de configuration
         env:
           VITE_APP_ENV: production
-          VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          for name in \
+            VITE_SUPABASE_URL \
+            VITE_SUPABASE_ANON_KEY \
+            VITE_API_BASE_URL \
+            ANDROID_KEYSTORE_BASE64 \
+            ANDROID_KEY_ALIAS \
+            ANDROID_KEYSTORE_PASSWORD \
+            ANDROID_KEY_PASSWORD
+          do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::Secret manquant : $name"
+              exit 1
+            fi
+          done
+
+          echo "Configuration et secrets présents."
+
+      - name: Restaurer la clé de signature
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          KEYSTORE_PATH="$RUNNER_TEMP/baaro.jks"
+
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
+          chmod 600 "$KEYSTORE_PATH"
+
+          if [ ! -s "$KEYSTORE_PATH" ]; then
+            echo "::error::Keystore vide ou invalide."
+            exit 1
+          fi
+
+          echo "ANDROID_KEYSTORE_PATH=$KEYSTORE_PATH" >> "$GITHUB_ENV"
+
+          echo "Clé de signature restaurée."
+
+      - name: Installer les dépendances
+        run: npm ci
+
+      - name: Mettre à jour la version
+        env:
+          VERSION_BUMP: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          npm version "$VERSION_BUMP" --no-git-tag-version
+          echo "Version de l'application : $(node -p "require('./package.json').version")"
+
+      - name: Construire l'application Web
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
           VITE_TURNSTILE_SITE_KEY: ${{ secrets.VITE_TURNSTILE_SITE_KEY }}
           VITE_DAILY_DOMAIN: ${{ secrets.VITE_DAILY_DOMAIN }}
           VITE_VAPID_PUBLIC_KEY: ${{ secrets.VITE_VAPID_PUBLIC_KEY }}
           VITE_BAARO_MEDIA_WORKER_URL: ${{ secrets.VITE_BAARO_MEDIA_WORKER_URL }}
+        run: |
+          set -euo pipefail
+          npm run build
 
-      - name: Verify Whisper runtime assets
-        shell: bash
+          if [ ! -f dist/index.html ]; then
+            echo "::error::Build Web incomplet : dist/index.html absent."
+            exit 1
+          fi
+
+      - name: Vérifier les assets Whisper
         run: |
           set -euo pipefail
           test -s dist/ort/ort-wasm-simd-threaded.asyncify.mjs
           test -s dist/ort/ort-wasm-simd-threaded.asyncify.wasm
 
-      - name: Create Updater Maison bundle
-        run: node scripts/build-update.mjs
-
-      - name: Sync Capacitor
-        run: npx cap sync android
-
-      - name: Build debug APK
-        working-directory: android
-        shell: bash
+      - name: Générer le paquet de mise à jour Web
         run: |
           set -euo pipefail
+          node scripts/build-update.mjs
+
+      - name: Synchroniser Capacitor
+        run: |
+          set -euo pipefail
+          npx cap sync android
+
+      - name: Vérifier la configuration Android
+        run: |
+          set -euo pipefail
+          node scripts/check-android.mjs
+
+      - name: Construire l'APK Release signé
+        env:
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          cd android
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon
+          ./gradlew assembleRelease --no-daemon
 
-      - name: Verify APK exists
-        shell: bash
+      - name: Vérifier la signature APK
         run: |
           set -euo pipefail
-          APK="android/app/build/outputs/apk/debug/app-debug.apk"
-          if [[ ! -s "$APK" ]]; then
-            echo "::error::APK absent ou vide : $APK"
+
+          APK="android/app/build/outputs/apk/release/app-release.apk"
+
+          if [ ! -s "$APK" ]; then
+            echo "::error::APK Release introuvable."
             exit 1
           fi
-          ls -lh "$APK"
 
-      - name: Upload debug APK
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -n 1)"
+
+          if [ -z "$APKSIGNER" ]; then
+            echo "::error::apksigner introuvable."
+            exit 1
+          fi
+
+          "$APKSIGNER" verify --verbose --print-certs "$APK"
+
+          echo "Signature APK vérifiée."
+
+      - name: Publier l'APK comme artefact
         uses: actions/upload-artifact@v4
         with:
-          name: app-debug-${{ github.sha }}
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          name: baaro-android-release-${{ github.run_number }}
+          path: android/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
-          retention-days: 14
-
-      - name: Publish update manifest for all users
-        run: |
-          git config user.name "baaro-release-bot"
-          git config user.email "release@baaro.app"
-          git add package.json package-lock.json public/updates/
-          git commit -m "release: publie la version $(node -p "require('./package.json').version") pour tous les utilisateurs" || echo "Rien à publier"
-          git push
+          retention-days: 30

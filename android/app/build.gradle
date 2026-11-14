@@ -1,34 +1,79 @@
 apply plugin: 'com.android.application'
+
+def packageJson = new groovy.json.JsonSlurper().parse(
+    rootProject.file("../package.json")
+)
+
+def appVersion = packageJson.version
+def versionParts = appVersion.tokenize('.')
+
+if (versionParts.size() != 3 || !(appVersion ==~ /\d+\.\d+\.\d+/)) {
+    throw new GradleException("Version package.json invalide : ${appVersion}")
+}
+
+def major = versionParts[0].toInteger()
+def minor = versionParts[1].toInteger()
+def patch = versionParts[2].toInteger()
+
+if (major > 2099 || minor > 999 || patch > 999) {
+    throw new GradleException("Composants de version hors limites")
+}
+
+def calculatedVersionCode = major * 1000000 + minor * 1000 + patch
+
+def keystorePath = System.getenv("ANDROID_KEYSTORE_PATH")
+def keystorePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+def keyAliasValue = System.getenv("ANDROID_KEY_ALIAS")
+def keyPasswordValue = System.getenv("ANDROID_KEY_PASSWORD")
+
 android {
     namespace = "com.baaro.app"
     compileSdk = 36
+
     defaultConfig {
         applicationId "com.baaro.app"
         minSdkVersion 24
         targetSdkVersion 36
-        versionCode 1
-        versionName "1.0"
+        versionCode calculatedVersionCode
+        versionName appVersion
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+
         aaptOptions {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+
+    signingConfigs {
+        release {
+            if (keystorePath && keystorePassword && keyAliasValue && keyPasswordValue) {
+                storeFile file(keystorePath)
+                storePassword keystorePassword
+                keyAlias keyAliasValue
+                keyPassword keyPasswordValue
+            }
+        }
+    }
+
     buildTypes {
         release {
+            signingConfig signingConfigs.release
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
     }
+
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_21
         targetCompatibility JavaVersion.VERSION_21
     }
 }
+
 repositories {
-    flatDir{
+    flatDir {
         dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
     }
 }
+
 dependencies {
     implementation fileTree(include: ['*.jar'], dir: 'libs')
     implementation "androidx.appcompat:appcompat:1.7.1"
@@ -41,7 +86,9 @@ dependencies {
     androidTestImplementation "androidx.test.ext:junit:1.2.1"
     androidTestImplementation "androidx.test.espresso:espresso-core:3.6.1"
 }
+
 apply from: 'capacitor.build.gradle'
+
 try {
     def servicesJSON = file('google-services.json')
     if (servicesJSON.text) {
