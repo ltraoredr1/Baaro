@@ -56,7 +56,7 @@ export type NearbyEvent =
   | (NearbyEventBase & {
       type: 'TRANSFER_UPDATE';
       payloadId: number;
-      status: 'IN_PROGRESS' | 'SUCCESS';
+      status: 'IN_PROGRESS' | 'SUCCESS' | 'FAILURE' | 'CANCELED' | 'UNKNOWN';
       bytesTransferred: number;
       totalBytes?: number;
     })

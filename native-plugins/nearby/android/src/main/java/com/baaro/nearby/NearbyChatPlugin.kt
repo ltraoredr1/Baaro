@@ -20,6 +20,8 @@ import com.google.android.gms.nearby.connection.Payload
 import com.google.android.gms.nearby.connection.PayloadCallback
 import com.google.android.gms.nearby.connection.PayloadTransferUpdate
 import com.google.android.gms.nearby.connection.Strategy
+import com.google.android.gms.tasks.Task
+import com.google.android.gms.tasks.Tasks
 import android.Manifest
 import android.os.Build
 import android.os.Handler
@@ -238,6 +240,18 @@ class NearbyChatPlugin : Plugin() {
                     put("bytesTransferred", update.bytesTransferred)
                     put("totalBytes", update.totalBytes)
                 }
+            } else {
+                val status = when (update.status) {
+                    PayloadTransferUpdate.Status.FAILURE -> "FAILURE"
+                    PayloadTransferUpdate.Status.CANCELED -> "CANCELED"
+                    else -> "UNKNOWN"
+                }
+                emit("TRANSFER_UPDATE", endpointId) {
+                    put("payloadId", update.payloadId)
+                    put("status", status)
+                    put("bytesTransferred", update.bytesTransferred)
+                    put("totalBytes", update.totalBytes)
+                }
             }
         }
     }
@@ -448,14 +462,43 @@ class NearbyChatPlugin : Plugin() {
             call.resolve(JSObject().apply { put("success", true) }); return
         }
 
-        try { client().stopAdvertising() } catch (_: Exception) {}
-        try { client().stopDiscovery() } catch (_: Exception) {}
-        try { client().stopAllEndpoints() } catch (_: Exception) {}
+        val stopTasks = mutableListOf<Task<Void>>()
+        val synchronousErrors = mutableListOf<String>()
 
-        clearConnectionState()
-        isStarted = false; isStarting = false; isStopping = false
-        emit("STOPPED")
-        call.resolve(JSObject().apply { put("success", true) })
+        fun collectStopTask(name: String, action: () -> Task<Void>) {
+            try {
+                stopTasks += action()
+            } catch (error: Exception) {
+                synchronousErrors += "$name: ${error.message ?: "échec inconnu"}"
+            }
+        }
+
+        collectStopTask("diffusion") { client().stopAdvertising() }
+        collectStopTask("découverte") { client().stopDiscovery() }
+        collectStopTask("endpoints") { client().stopAllEndpoints() }
+
+        fun finishStop(errorMessage: String? = null) {
+            clearConnectionState()
+            isStarted = false; isStarting = false; isStopping = false
+            if (errorMessage != null) {
+                emit("ERROR") { put("message", "Échec de l'arrêt Nearby : $errorMessage") }
+                call.reject("Échec de l'arrêt Nearby : $errorMessage")
+            } else {
+                emit("STOPPED")
+                call.resolve(JSObject().apply { put("success", true) })
+            }
+        }
+
+        if (synchronousErrors.isNotEmpty()) {
+            finishStop(synchronousErrors.joinToString("; "))
+            return
+        }
+
+        Tasks.whenAll(stopTasks)
+            .addOnSuccessListener { finishStop() }
+            .addOnFailureListener { error ->
+                finishStop(error.message ?: "une tâche d'arrêt a échoué")
+            }
     }
 
     private fun clearConnectionState() {

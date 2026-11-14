@@ -43,6 +43,7 @@ export function useNearbyChat(displayName = "Utilisateur BAARO") {
   const [devices, setDevices] = useState([]);
   const [pendingConnections, setPendingConnections] = useState([]);
   const [messages, setMessages] = useState([]);
+  const [transfers, setTransfers] = useState([]);
   const [error, setError] = useState(null);
   const [isOperating, setIsOperating] = useState(false);
 
@@ -107,6 +108,7 @@ export function useNearbyChat(displayName = "Utilisateur BAARO") {
             setIsScanning(false);
             setDevices([]);
             setPendingConnections([]);
+            setTransfers([]);
             pendingTimersRef.current.forEach((timer) => clearTimeout(timer));
             pendingTimersRef.current.clear();
             receivedMessageIdsRef.current.clear();
@@ -221,6 +223,32 @@ export function useNearbyChat(displayName = "Utilisateur BAARO") {
                 isMe: false,
               },
             ].slice(-MAX_MESSAGE_HISTORY));
+            break;
+          }
+
+          case "TRANSFER_UPDATE": {
+            if (!Number.isFinite(Number(event.payloadId))) return;
+            const update = {
+              endpointId,
+              payloadId: Number(event.payloadId),
+              status: event.status || "UNKNOWN",
+              bytesTransferred: Number(event.bytesTransferred) || 0,
+              totalBytes: Number(event.totalBytes) || 0,
+              updatedAt: Date.now(),
+            };
+            setTransfers((previous) => [
+              ...previous.filter(
+                (transfer) =>
+                  transfer.endpointId !== update.endpointId ||
+                  transfer.payloadId !== update.payloadId
+              ),
+              update,
+            ].slice(-100));
+            if (update.status === "FAILURE") {
+              setError("Le transfert Nearby a échoué.");
+            } else if (update.status === "CANCELED") {
+              setError("Le transfert Nearby a été annulé.");
+            }
             break;
           }
 
@@ -475,6 +503,7 @@ export function useNearbyChat(displayName = "Utilisateur BAARO") {
     devices,
     pendingConnections,
     messages,
+    transfers,
     error,
     refreshStatus,
     start,

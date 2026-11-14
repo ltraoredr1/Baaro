@@ -35,7 +35,7 @@
     "cap:sync": "npx cap sync",
     "cap:open": "npx cap open android",
     "test:android-nearby": "cd android && bash ./gradlew :nearby-chat:testDebugUnitTest --no-daemon",
-    "ci": "npm run check:lock && npm run check:production && npm run audit:security && npm run check:secrets && npm run check:upstash && npm run check:e2e && npm run check:e2e:smoke && npm run test:messaging-crypto && npm run check:notifications && npm run test:push-preferences && npm run test:push-queue && npm run test:notification-idempotency && npm run test:notification-sounds && npm run check:messaging-rust && npm run test:stories && npm run check:payout && npm run check:performance && npm run check:android && npm run test:offline && npm run build",
+    "ci": "npm run check:lock && npm run check:production && npm run audit:security && npm run check:secrets && npm run check:upstash && npm run check:e2e && npm run check:e2e:smoke && npm run test:messaging-crypto && npm run check:notifications && npm run test:push-preferences && npm run test:push-queue && npm run test:notification-idempotency && npm run test:notification-sounds && npm run check:messaging-rust && npm run test:stories && npm run check:payout && npm run check:performance && npm run check:android && npm run test:android-nearby && npm run test:offline && npm run build",
     "test:chat-translate": "node scripts/test-chat-autotranslate.mjs",
     "test:messaging-crypto": "node --test tests/messaging/*.test.mjs",
     "test:push-preferences": "node --test tests/api/push-preferences.test.mjs",
