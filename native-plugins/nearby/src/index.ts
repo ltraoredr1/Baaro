@@ -44,6 +44,8 @@ export type NearbyEvent =
       type: 'MESSAGE_RECEIVED';
       senderName?: string;
       text: string;
+      messageId?: string | null;
+      protocolVersion?: number;
       timestamp?: number;
     })
   | (NearbyEventBase & {
@@ -66,7 +68,7 @@ export type NearbyEvent =
 export interface NearbyChatPlugin {
   start(options: { displayName: string }): Promise<{ success: boolean; alreadyStarted?: boolean }>;
   stop(): Promise<{ success: boolean }>;
-  send(options: { text: string; endpointId?: string }): Promise<{ success: boolean; sentTo: number }>;
+  send(options: { text: string; endpointId?: string; messageId?: string; protocolVersion?: number }): Promise<{ success: boolean; sentTo: number; messageId?: string }>;
   requestConnection(options: { endpointId: string }): Promise<{ success: boolean; alreadyConnected?: boolean }>;
   accept(options: { endpointId: string; authenticationConfirmed: true }): Promise<{ success: boolean }>;
   reject(options: { endpointId: string }): Promise<{ success: boolean }>;

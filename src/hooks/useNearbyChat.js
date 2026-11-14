@@ -24,6 +24,11 @@ function normalizeEndpointId(event) {
   return event?.endpointId ?? event?.endpoint?.id ?? null;
 }
 
+const REQUEST_TIMEOUT_MS = 60_000;
+const MAX_MESSAGE_IDS = 512;
+const MAX_MESSAGE_HISTORY = 200;
+const MAX_SCAN_WINDOW_MS = 5 * 60_000;
+
 export function useNearbyChat(displayName = "Utilisateur BAARO") {
   const [isNative, setIsNative] = useState(() =>
     Capacitor.isNativePlatform()
@@ -43,6 +48,9 @@ export function useNearbyChat(displayName = "Utilisateur BAARO") {
 
   const operationRef = useRef(null);
   const scanningRef = useRef(false);
+  const scanTimerRef = useRef(null);
+  const pendingTimersRef = useRef(new Map());
+  const receivedMessageIdsRef = useRef(new Set());
 
   const refreshStatus = useCallback(() => {
     try {
@@ -57,6 +65,22 @@ export function useNearbyChat(displayName = "Utilisateur BAARO") {
   useEffect(() => {
     refreshStatus();
   }, [refreshStatus]);
+
+  // Un changement d’onglet démonte OfflineTab. Sans ce nettoyage, le plugin
+  // continuait à diffuser/découvrir en arrière-plan et l’écran suivant pouvait
+  // hériter d’une session native que son état React ne connaissait plus.
+  useEffect(() => {
+    return () => {
+      if (scanTimerRef.current) clearTimeout(scanTimerRef.current);
+      pendingTimersRef.current.forEach((timer) => clearTimeout(timer));
+      pendingTimersRef.current.clear();
+      if (!scanningRef.current) return;
+      scanningRef.current = false;
+      void stopNearby().catch((err) => {
+        console.warn("Impossible d'arrêter Nearby au démontage :", err);
+      });
+    };
+  }, []);
 
   // Écoute les événements natifs lorsque le plugin est disponible.
   useEffect(() => {
@@ -77,10 +101,15 @@ export function useNearbyChat(displayName = "Utilisateur BAARO") {
             break;
 
           case "STOPPED":
+            if (scanTimerRef.current) clearTimeout(scanTimerRef.current);
+            scanTimerRef.current = null;
             scanningRef.current = false;
             setIsScanning(false);
             setDevices([]);
             setPendingConnections([]);
+            pendingTimersRef.current.forEach((timer) => clearTimeout(timer));
+            pendingTimersRef.current.clear();
+            receivedMessageIdsRef.current.clear();
             refreshStatus();
             break;
 
@@ -93,6 +122,9 @@ export function useNearbyChat(displayName = "Utilisateur BAARO") {
               );
 
               if (existing) {
+                if (!event.deviceName || existing.name === event.deviceName) {
+                  return previous;
+                }
                 return previous.map((device) =>
                   device.endpointId === endpointId
                     ? {
@@ -152,6 +184,9 @@ export function useNearbyChat(displayName = "Utilisateur BAARO") {
 
           case "DEVICE_LOST": {
             if (!endpointId) return;
+            const timer = pendingTimersRef.current.get(endpointId);
+            if (timer) clearTimeout(timer);
+            pendingTimersRef.current.delete(endpointId);
             setPendingConnections((previous) =>
               previous.filter((request) => request.endpointId !== endpointId)
             );
@@ -167,25 +202,47 @@ export function useNearbyChat(displayName = "Utilisateur BAARO") {
           case "MESSAGE_RECEIVED": {
             if (typeof event.text !== "string") return;
 
+            if (event.messageId) {
+              const ids = receivedMessageIdsRef.current;
+              if (ids.has(event.messageId)) return;
+              ids.add(event.messageId);
+              if (ids.size > MAX_MESSAGE_IDS) {
+                ids.delete(ids.values().next().value);
+              }
+            }
+
             setMessages((previous) => [
               ...previous,
               {
                 from: event.senderName || "Utilisateur inconnu",
                 text: event.text,
-                timestamp: Date.now(),
+                timestamp: event.timestamp || Date.now(),
+                messageId: event.messageId || null,
                 isMe: false,
               },
-            ]);
+            ].slice(-MAX_MESSAGE_HISTORY));
             break;
           }
 
           case "CONNECTION_REQUESTED": {
             if (!endpointId) return;
+            const requestId = `${endpointId}-${Date.now()}-${Math.random()}`;
+            const oldTimer = pendingTimersRef.current.get(endpointId);
+            if (oldTimer) clearTimeout(oldTimer);
+            pendingTimersRef.current.set(
+              endpointId,
+              setTimeout(() => {
+                pendingTimersRef.current.delete(endpointId);
+                setPendingConnections((previous) =>
+                  previous.filter((request) => request.endpointId !== endpointId)
+                );
+              }, REQUEST_TIMEOUT_MS)
+            );
             setPendingConnections((previous) => [
               ...previous.filter((request) => request.endpointId !== endpointId),
               {
                 endpointId,
-                requestId: `${endpointId}-${Date.now()}-${Math.random()}`,
+                requestId,
                 deviceName: event.deviceName || "Appareil inconnu",
                 authToken: event.authToken || null,
               },
@@ -256,6 +313,16 @@ export function useNearbyChat(displayName = "Utilisateur BAARO") {
 
       scanningRef.current = true;
       setIsScanning(true);
+      if (scanTimerRef.current) clearTimeout(scanTimerRef.current);
+      scanTimerRef.current = setTimeout(() => {
+        scanTimerRef.current = null;
+        if (!scanningRef.current || operationRef.current) return;
+        scanningRef.current = false;
+        setIsScanning(false);
+        void stopNearby().catch((err) => {
+          setError(getErrorMessage(err));
+        });
+      }, MAX_SCAN_WINDOW_MS);
       refreshStatus();
     } catch (err) {
       scanningRef.current = false;
@@ -285,6 +352,8 @@ export function useNearbyChat(displayName = "Utilisateur BAARO") {
       setError(null);
       await stopNearby();
 
+      if (scanTimerRef.current) clearTimeout(scanTimerRef.current);
+      scanTimerRef.current = null;
       scanningRef.current = false;
       setIsScanning(false);
       setDevices([]);
@@ -363,6 +432,9 @@ export function useNearbyChat(displayName = "Utilisateur BAARO") {
     try {
       setError(null);
       await acceptNearbyConnection(endpointId, authenticationConfirmed);
+      const timer = pendingTimersRef.current.get(endpointId);
+      if (timer) clearTimeout(timer);
+      pendingTimersRef.current.delete(endpointId);
       setPendingConnections((previous) =>
         previous.filter((request) => request.endpointId !== endpointId)
       );
@@ -381,6 +453,9 @@ export function useNearbyChat(displayName = "Utilisateur BAARO") {
     try {
       setError(null);
       await rejectNearbyConnection(endpointId);
+      const timer = pendingTimersRef.current.get(endpointId);
+      if (timer) clearTimeout(timer);
+      pendingTimersRef.current.delete(endpointId);
       setPendingConnections((previous) =>
         previous.filter((request) => request.endpointId !== endpointId)
       );

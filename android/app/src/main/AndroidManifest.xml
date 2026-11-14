@@ -44,7 +44,8 @@
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" android:minSdkVersion="31" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" android:minSdkVersion="31" />
 
-    <!-- Android 12+ exige coarse et fine dans la même demande runtime. -->
+    <!-- Localisation requise par Nearby jusqu'à Android 11. Android 12+
+         utilise les permissions Bluetooth dédiées et NEARBY_WIFI_DEVICES. -->
     <uses-permission
         android:name="android.permission.ACCESS_FINE_LOCATION"
         android:minSdkVersion="29"
@@ -53,7 +54,7 @@
 
     <uses-permission
         android:name="android.permission.ACCESS_COARSE_LOCATION"
-        android:maxSdkVersion="32"
+        android:maxSdkVersion="30"
         tools:replace="android:maxSdkVersion" />
 
     <!-- Wi-Fi Nearby -->

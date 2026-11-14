@@ -21,14 +21,8 @@ class NearbyPluginRulesTest {
         assertEquals(listOf("locationCoarse"), NearbyPluginRules.requiredPermissionAliases(28))
         assertEquals(listOf("locationFine"), NearbyPluginRules.requiredPermissionAliases(29))
         assertEquals(listOf("locationFine"), NearbyPluginRules.requiredPermissionAliases(30))
-        assertEquals(
-            listOf("bluetooth", "locationCoarse", "locationFine"),
-            NearbyPluginRules.requiredPermissionAliases(31)
-        )
-        assertEquals(
-            listOf("bluetooth", "locationCoarse", "locationFine"),
-            NearbyPluginRules.requiredPermissionAliases(32)
-        )
+        assertEquals(listOf("bluetooth"), NearbyPluginRules.requiredPermissionAliases(31))
+        assertEquals(listOf("bluetooth"), NearbyPluginRules.requiredPermissionAliases(32))
         assertEquals(listOf("bluetooth", "nearbyWifi"), NearbyPluginRules.requiredPermissionAliases(33))
     }
 

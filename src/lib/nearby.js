@@ -3,12 +3,14 @@ import { Capacitor } from "@capacitor/core";
 import { NearbyChat } from "../../native-plugins/nearby/src/index.ts";
 
 const SERVICE_NAME = "com.baaro.app.nearby";
+const MESSAGE_PROTOCOL_VERSION = 1;
 
 let isInitialized = false;
 let isStarting = false;
 let isStopping = false;
 
 const connectedEndpoints = new Set();
+const sendQueues = new Map();
 
 function getPlugin() {
   return NearbyChat;
@@ -81,8 +83,6 @@ function requiredPermissionAliasesForSdk(sdkVersion) {
   if (sdkVersion >= 31) aliases.push("bluetooth");
   if (sdkVersion >= 33) {
     aliases.push("nearbyWifi");
-  } else if (sdkVersion >= 31) {
-    aliases.push("locationCoarse", "locationFine");
   } else if (sdkVersion >= 29) {
     aliases.push("locationFine");
   } else {
@@ -173,6 +173,20 @@ function requireEndpointId(endpointId) {
   }
 
   return endpointId.trim();
+}
+
+function createMessageId() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+function enqueueSend(queueKey, operation) {
+  const previous = sendQueues.get(queueKey) || Promise.resolve();
+  const current = previous.catch(() => {}).then(operation);
+  sendQueues.set(queueKey, current);
+  return current.finally(() => {
+    if (sendQueues.get(queueKey) === current) sendQueues.delete(queueKey);
+  });
 }
 
 function assertAndroid() {
@@ -363,11 +377,11 @@ export async function startNearby(displayName = "BAARO User") {
       sdkVersion,
     };
 
-    if (
-      (sdkVersion >= 31 && permissions.bluetooth !== "granted") ||
-      (sdkVersion >= 33 && permissions.nearbyWifi !== "granted") ||
-      (sdkVersion < 33 && permissions.location !== "granted")
-    ) {
+    const missingRequiredPermission = (permissions.requiredAliases || []).some(
+      (alias) => permissions[alias] !== "granted"
+    );
+
+    if (missingRequiredPermission) {
       permissions = {
         ...(await requestNearbyPermissions()),
         sdkVersion,
@@ -480,6 +494,7 @@ export async function stopNearby() {
     throw new Error(getErrorMessage(error));
   } finally {
     connectedEndpoints.clear();
+    sendQueues.clear();
     isInitialized = false;
     isStopping = false;
   }
@@ -497,60 +512,65 @@ export async function requestNearbyConnection(endpointId) {
 }
 
 export async function sendNearbyMessage(text, endpointId = null) {
-  const plugin = requirePlugin();
-
   if (typeof text !== "string" || !text.trim()) {
     throw new Error("Le message Nearby ne peut pas être vide.");
   }
-
-  const payload = text;
 
   if (endpointId !== null && endpointId !== undefined) {
     endpointId = requireEndpointId(endpointId);
   }
 
-  if (typeof plugin.send === "function") {
-    await plugin.send({
-      text: payload,
-      ...(endpointId ? { endpointId } : {}),
-    });
+  const queueKey = endpointId || "broadcast";
+  const messageId = createMessageId();
 
-    return;
-  }
+  return enqueueSend(queueKey, async () => {
+    const plugin = requirePlugin();
+    const payload = text.trim();
 
-  if (typeof plugin.sendMessage === "function") {
-    if (endpointId) {
-      if (!connectedEndpoints.has(endpointId)) {
-        throw new Error("Cet appareil n'est pas connecté.");
+    if (typeof plugin.send === "function") {
+      await plugin.send({
+        text: payload,
+        messageId,
+        protocolVersion: MESSAGE_PROTOCOL_VERSION,
+        ...(endpointId ? { endpointId } : {}),
+      });
+
+      return { messageId };
+    }
+
+    if (typeof plugin.sendMessage === "function") {
+      const data = JSON.stringify({
+        v: MESSAGE_PROTOCOL_VERSION,
+        id: messageId,
+        type: "message",
+        text: payload,
+        ts: Date.now(),
+      });
+
+      if (endpointId) {
+        if (!connectedEndpoints.has(endpointId)) {
+          throw new Error("Cet appareil n'est pas connecté.");
+        }
+
+        await plugin.sendMessage({ endpointId, data });
+        return { messageId };
       }
 
-      await plugin.sendMessage({
-        endpointId,
-        data: payload,
-      });
+      const endpoints = [...connectedEndpoints];
+      if (endpoints.length === 0) {
+        throw new Error("Aucun appareil Nearby n'est connecté.");
+      }
 
-      return;
+      for (const id of endpoints) {
+        await plugin.sendMessage({ endpointId: id, data });
+      }
+      return { messageId };
     }
 
-    const endpoints = [...connectedEndpoints];
-
-    if (endpoints.length === 0) {
-      throw new Error("Aucun appareil Nearby n'est connecté.");
-    }
-
-    for (const id of endpoints) {
-      await plugin.sendMessage({
-        endpointId: id,
-        data: payload,
-      });
-    }
-
-    return;
-  }
-
-  throw new Error(
-    "Le plugin Nearby ne fournit aucune méthode d'envoi reconnue."
-  );
+    throw new Error(
+      "Le plugin Nearby ne fournit aucune méthode d'envoi reconnue."
+    );
+  });
 }
 
 export async function acceptNearbyConnection(endpointId, authenticationConfirmed = false) {
@@ -618,6 +638,11 @@ function normalizeEvent(event) {
         endpointId,
         text: event.text ?? event.data,
         senderName: event.senderName ?? event.endpointName ?? "Proche",
+        messageId: event.messageId ?? event.id ?? null,
+        protocolVersion: event.protocolVersion ?? event.v ?? 1,
+        timestamp: Number.isFinite(Number(event.timestamp))
+          ? Number(event.timestamp)
+          : Date.now(),
       };
 
     case "CONNECTION_REQUESTED":

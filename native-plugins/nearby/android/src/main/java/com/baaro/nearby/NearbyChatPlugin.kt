@@ -22,6 +22,9 @@ import com.google.android.gms.nearby.connection.PayloadTransferUpdate
 import com.google.android.gms.nearby.connection.Strategy
 import android.Manifest
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import org.json.JSONObject
 
 @CapacitorPlugin(
     name = "NearbyChat",
@@ -56,6 +59,9 @@ class NearbyChatPlugin : Plugin() {
         private const val MAX_MESSAGE_BYTES = 32 * 1024
         private const val MAX_FILE_BYTES = 20L * 1024L * 1024L
         private const val MAX_PENDING_CONNECTIONS = 3
+        private const val MAX_RECENT_MESSAGE_IDS = 512
+        private const val MESSAGE_PROTOCOL_VERSION = 1
+        private const val PENDING_CONNECTION_TIMEOUT_MS = 60_000L
     }
 
     private lateinit var connectionsClient: ConnectionsClient
@@ -68,6 +74,9 @@ class NearbyChatPlugin : Plugin() {
     private val rejectedByUser = mutableSetOf<String>()
     private val connectedEndpoints = mutableMapOf<String, String>()
     private val cancelingPayloads = mutableSetOf<Long>()
+    private val receivedMessageIds = mutableMapOf<String, LinkedHashSet<String>>()
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val pendingTimeouts = mutableMapOf<String, Runnable>()
     private var isStarting = false
     private var isStarted = false
     private var isStopping = false
@@ -111,6 +120,31 @@ class NearbyChatPlugin : Plugin() {
             isStopping
         )
 
+    private fun isDuplicateMessage(endpointId: String, messageId: String): Boolean {
+        val ids = receivedMessageIds.getOrPut(endpointId) { LinkedHashSet() }
+        if (!ids.add(messageId)) return true
+        if (ids.size > MAX_RECENT_MESSAGE_IDS) {
+            ids.iterator().apply { if (hasNext()) { next(); remove() } }
+        }
+        return false
+    }
+
+    private fun expirePendingConnection(endpointId: String, generation: Long) {
+        pendingTimeouts.remove(endpointId)?.let(mainHandler::removeCallbacks)
+        val timeout = Runnable {
+            if (generation != sessionGeneration || !pendingEndpoints.remove(endpointId)) return@Runnable
+            pendingConnectionActions.remove(endpointId)
+            requestingEndpoints.remove(endpointId)
+            rejectedByUser.add(endpointId)
+            try { client().rejectConnection(endpointId) } catch (_: Exception) {}
+            emit("ERROR", endpointId) {
+                put("message", "La demande Nearby a expiré après une minute.")
+            }
+        }
+        pendingTimeouts[endpointId] = timeout
+        mainHandler.postDelayed(timeout, PENDING_CONNECTION_TIMEOUT_MS)
+    }
+
     private fun payloadCallback(generation: Long) = object : PayloadCallback() {
         override fun onPayloadReceived(endpointId: String, payload: Payload) {
             if (!isCurrentSession(generation)) {
@@ -130,10 +164,34 @@ class NearbyChatPlugin : Plugin() {
                         }
                         return
                     }
+                    val rawText = String(bytes, Charsets.UTF_8)
+                    var text = rawText
+                    var messageId: String? = null
+                    var timestamp = System.currentTimeMillis()
+                    try {
+                        val envelope = JSONObject(rawText)
+                        if (envelope.optInt("v", -1) == MESSAGE_PROTOCOL_VERSION &&
+                            envelope.optString("type") == "message" && envelope.has("text")) {
+                            text = envelope.optString("text")
+                            messageId = envelope.optString("id").takeIf { it.isNotBlank() }
+                            timestamp = envelope.optLong("ts", timestamp)
+                        }
+                    } catch (_: Exception) {
+                        // Compatibilité avec les anciennes versions qui envoyaient du texte brut.
+                    }
+                    if (text.toByteArray(Charsets.UTF_8).size > MAX_MESSAGE_BYTES) {
+                        emit("ERROR", endpointId) {
+                            put("message", "Message Nearby refusé : taille maximale dépassée.")
+                        }
+                        return
+                    }
+                    if (messageId != null && isDuplicateMessage(endpointId, messageId)) return
                     emit("MESSAGE_RECEIVED", endpointId) {
                         put("senderName", connectedEndpoints[endpointId] ?: "Inconnu")
-                        put("text", String(bytes, Charsets.UTF_8))
-                        put("timestamp", System.currentTimeMillis())
+                        put("text", text)
+                        put("timestamp", timestamp)
+                        if (messageId != null) put("messageId", messageId)
+                        put("protocolVersion", MESSAGE_PROTOCOL_VERSION)
                     }
                 }
                 Payload.Type.FILE -> {
@@ -201,6 +259,7 @@ class NearbyChatPlugin : Plugin() {
             }
             endpointNames[endpointId] = connectionInfo.endpointName
             pendingEndpoints.add(endpointId)
+            expirePendingConnection(endpointId, generation)
             emit("CONNECTION_REQUESTED", endpointId) {
                 put("deviceName", connectionInfo.endpointName)
                 put("authToken", connectionInfo.authenticationDigits)
@@ -210,6 +269,7 @@ class NearbyChatPlugin : Plugin() {
         override fun onConnectionResult(endpointId: String, result: ConnectionResolution) {
             if (!isCurrentSession(generation)) return
             pendingEndpoints.remove(endpointId)
+            pendingTimeouts.remove(endpointId)?.let(mainHandler::removeCallbacks)
             requestingEndpoints.remove(endpointId)
             pendingConnectionActions.remove(endpointId)
             val wasLostDuringDiscovery = lostDuringDiscovery.remove(endpointId)
@@ -235,6 +295,7 @@ class NearbyChatPlugin : Plugin() {
             val name = endpointNames[endpointId]
             connectedEndpoints.remove(endpointId)
             pendingEndpoints.remove(endpointId)
+            pendingTimeouts.remove(endpointId)?.let(mainHandler::removeCallbacks)
             requestingEndpoints.remove(endpointId)
             pendingConnectionActions.remove(endpointId)
             lostDuringDiscovery.remove(endpointId)
@@ -312,6 +373,7 @@ class NearbyChatPlugin : Plugin() {
                 }
                 .addOnFailureListener { error ->
                     if (generation == sessionGeneration) {
+                        pendingTimeouts.remove(endpointId)?.let(mainHandler::removeCallbacks)
                         requestingEndpoints.remove(endpointId)
                         if (lostDuringDiscovery.remove(endpointId)) {
                             endpointNames.remove(endpointId)
@@ -322,6 +384,7 @@ class NearbyChatPlugin : Plugin() {
                 }
         } catch (error: Exception) {
             if (generation == sessionGeneration) {
+                pendingTimeouts.remove(endpointId)?.let(mainHandler::removeCallbacks)
                 requestingEndpoints.remove(endpointId)
                 if (lostDuringDiscovery.remove(endpointId)) {
                     endpointNames.remove(endpointId)
@@ -404,6 +467,9 @@ class NearbyChatPlugin : Plugin() {
         rejectedByUser.clear()
         endpointNames.clear()
         cancelingPayloads.clear()
+        pendingTimeouts.values.forEach(mainHandler::removeCallbacks)
+        pendingTimeouts.clear()
+        receivedMessageIds.clear()
     }
 
     @PluginMethod
@@ -422,7 +488,16 @@ class NearbyChatPlugin : Plugin() {
 
         if (targets.isEmpty()) { call.reject("Aucun appareil Nearby n'est connecté."); return }
 
-        val bytes = text.toByteArray(Charsets.UTF_8)
+        val messageId = call.getString("messageId")?.trim()?.takeIf { it.isNotEmpty() }
+        val protocolVersion = call.getInt("protocolVersion") ?: MESSAGE_PROTOCOL_VERSION
+        val payloadText = JSONObject()
+            .put("v", protocolVersion)
+            .put("id", messageId ?: "")
+            .put("type", "message")
+            .put("text", text)
+            .put("ts", System.currentTimeMillis())
+            .toString()
+        val bytes = payloadText.toByteArray(Charsets.UTF_8)
         if (bytes.size > MAX_MESSAGE_BYTES) {
             call.reject("Le message Nearby dépasse la taille maximale de 32 Ko.")
             return
@@ -434,6 +509,7 @@ class NearbyChatPlugin : Plugin() {
                     call.resolve(JSObject().apply {
                         put("success", true)
                         put("sentTo", targets.size)
+                        if (messageId != null) put("messageId", messageId)
                     })
                 }
                 .addOnFailureListener { error ->
@@ -500,6 +576,7 @@ class NearbyChatPlugin : Plugin() {
             client().rejectConnection(endpointId)
                 .addOnSuccessListener {
                     if (generation == sessionGeneration) {
+                        pendingTimeouts.remove(endpointId)?.let(mainHandler::removeCallbacks)
                         pendingEndpoints.remove(endpointId)
                         connectedEndpoints.remove(endpointId)
                         pendingConnectionActions.remove(endpointId)
@@ -509,6 +586,7 @@ class NearbyChatPlugin : Plugin() {
                 }
                 .addOnFailureListener { error ->
                     if (generation == sessionGeneration) {
+                        pendingTimeouts.remove(endpointId)?.let(mainHandler::removeCallbacks)
                         pendingConnectionActions.remove(endpointId)
                         rejectedByUser.remove(endpointId)
                     }
@@ -516,6 +594,7 @@ class NearbyChatPlugin : Plugin() {
                 }
         } catch (error: Exception) {
             if (generation == sessionGeneration) {
+                pendingTimeouts.remove(endpointId)?.let(mainHandler::removeCallbacks)
                 pendingConnectionActions.remove(endpointId)
                 rejectedByUser.remove(endpointId)
             }
