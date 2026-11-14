@@ -42,6 +42,9 @@ internal object NearbyPluginRules {
             if (sdkVersion >= 31) add("bluetooth")
             if (sdkVersion >= 33) {
                 add("nearbyWifi")
+            } else if (sdkVersion >= 31) {
+                add("locationCoarse")
+                add("locationFine")
             } else if (sdkVersion >= 29) {
                 add("locationFine")
             } else {

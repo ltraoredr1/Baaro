@@ -81,6 +81,8 @@ function requiredPermissionAliasesForSdk(sdkVersion) {
   if (sdkVersion >= 31) aliases.push("bluetooth");
   if (sdkVersion >= 33) {
     aliases.push("nearbyWifi");
+  } else if (sdkVersion >= 31) {
+    aliases.push("locationCoarse", "locationFine");
   } else if (sdkVersion >= 29) {
     aliases.push("locationFine");
   } else {

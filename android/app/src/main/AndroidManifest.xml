@@ -44,15 +44,16 @@
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" android:minSdkVersion="31" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" android:minSdkVersion="31" />
 
-    <!-- Localisation : fine jusqu'à Android 12L; coarse seulement jusqu'à Android 9 -->
+    <!-- Android 12+ exige coarse et fine dans la même demande runtime. -->
     <uses-permission
         android:name="android.permission.ACCESS_FINE_LOCATION"
+        android:minSdkVersion="29"
         android:maxSdkVersion="32"
         tools:replace="android:maxSdkVersion" />
 
     <uses-permission
         android:name="android.permission.ACCESS_COARSE_LOCATION"
-        android:maxSdkVersion="28"
+        android:maxSdkVersion="32"
         tools:replace="android:maxSdkVersion" />
 
     <!-- Wi-Fi Nearby -->
