@@ -740,8 +740,16 @@ export default function SettingsTab({
       const result = await checkUpdateNative();
       if (result?.updated) {
         setMessage(t("update_later"));
+      } else if (result?.permissionRequired) {
+        setMessage(t("update_permission"));
+      } else if (result?.installerLaunched) {
+        setMessage(t("update_installer"));
+      } else if (result?.available) {
+        setMessage(tf("update_available", { version: String(result.version) }));
       } else if (result?.error) {
         setMessage(t("update_error"));
+      } else if (result?.platform && result.platform !== "android") {
+        setMessage(t("update_store"));
       } else {
         setMessage(t("update_none"));
       }

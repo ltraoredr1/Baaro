@@ -84,8 +84,9 @@ async function getLatestManifest() {
   const manifest = await manifestResponse.json();
 
   if (
-    !manifest.version ||
-    !manifest.apkUrl ||
+    typeof manifest.version !== "string" ||
+    !/^\d+\.\d+\.\d+$/.test(manifest.version) ||
+    typeof manifest.apkUrl !== "string" ||
     !/^[a-f0-9]{64}$/i.test(manifest.sha256 || "") ||
     manifest.appId !== "com.baaro.app" ||
     release.tag_name !== "v" + manifest.version
@@ -128,6 +129,16 @@ export async function checkUpdateNative() {
       return { updated: false, reason: "already-current" };
     }
 
+    const accepted = window.confirm(
+      "Une nouvelle version de BAARO est disponible : " +
+      manifest.version +
+      ". Voulez-vous la télécharger et lancer l'installation Android ?"
+    );
+
+    if (!accepted) {
+      return { updated: false, available: true, version: manifest.version };
+    }
+
     const permission = await BaaroUpdater.canInstallPackages();
 
     if (!permission?.allowed) {
@@ -139,19 +150,15 @@ export async function checkUpdateNative() {
       };
     }
 
-    const accepted = window.confirm(
-      "Une nouvelle version de BAARO est disponible : " +
-      manifest.version +
-      ". Voulez-vous la télécharger et lancer l'installation Android ?"
-    );
-
-    if (!accepted) {
-      return { updated: false, available: true, version: manifest.version };
-    }
-
     const response = await fetch(manifest.apkUrl, { cache: "no-store" });
 
     if (!response.ok) throw new Error("Téléchargement de l'APK impossible.");
+
+    const contentLength = Number(response.headers.get("content-length") || 0);
+
+    if (contentLength > MAX_APK_BYTES) {
+      throw new Error("APK trop volumineux pour être téléchargé en sécurité.");
+    }
 
     const bytes = new Uint8Array(await response.arrayBuffer());
 
