@@ -75,4 +75,18 @@ internal object NearbyPluginRules {
         endpointId in requestingEndpoints -> DiscoveryLossAction.DEFER
         else -> DiscoveryLossAction.EMIT
     }
+
+    fun combineStopErrors(
+        synchronousErrors: List<String>,
+        asynchronousErrors: List<String>,
+        fallback: String? = null
+    ): String? {
+        val errors = (synchronousErrors + asynchronousErrors).filter { it.isNotBlank() }
+        return errors.takeIf { it.isNotEmpty() }?.joinToString("; ") ?: fallback.takeIf { it.isNotBlank() }
+    }
+
+    fun normalizeTransferStatus(status: String): String = when (status) {
+        "IN_PROGRESS", "SUCCESS", "FAILURE", "CANCELED" -> status
+        else -> "UNKNOWN"
+    }
 }

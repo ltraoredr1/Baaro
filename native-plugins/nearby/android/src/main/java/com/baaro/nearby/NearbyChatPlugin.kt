@@ -27,6 +27,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import org.json.JSONObject
+import java.util.concurrent.atomic.AtomicBoolean
 
 @CapacitorPlugin(
     name = "NearbyChat",
@@ -241,11 +242,11 @@ class NearbyChatPlugin : Plugin() {
                     put("totalBytes", update.totalBytes)
                 }
             } else {
-                val status = when (update.status) {
+                val status = NearbyPluginRules.normalizeTransferStatus(when (update.status) {
                     PayloadTransferUpdate.Status.FAILURE -> "FAILURE"
                     PayloadTransferUpdate.Status.CANCELED -> "CANCELED"
                     else -> "UNKNOWN"
-                }
+                })
                 emit("TRANSFER_UPDATE", endpointId) {
                     put("payloadId", update.payloadId)
                     put("status", status)
@@ -489,15 +490,33 @@ class NearbyChatPlugin : Plugin() {
             }
         }
 
-        if (synchronousErrors.isNotEmpty()) {
-            finishStop(synchronousErrors.joinToString("; "))
-            return
+        val finished = AtomicBoolean(false)
+        fun finishOnce(errorMessage: String? = null) {
+            if (finished.compareAndSet(false, true)) finishStop(errorMessage)
         }
 
-        Tasks.whenAll(stopTasks)
-            .addOnSuccessListener { finishStop() }
+        Tasks.whenAllComplete(stopTasks)
+            .addOnSuccessListener { completedTasks ->
+                val asynchronousErrors = completedTasks.mapIndexedNotNull { index, task ->
+                    task.exception?.let { error ->
+                        "tâche-${index + 1}: ${error.message ?: "échec inconnu"}"
+                    }
+                }
+                finishOnce(
+                    NearbyPluginRules.combineStopErrors(
+                        synchronousErrors,
+                        asynchronousErrors
+                    )
+                )
+            }
             .addOnFailureListener { error ->
-                finishStop(error.message ?: "une tâche d'arrêt a échoué")
+                finishOnce(
+                    NearbyPluginRules.combineStopErrors(
+                        synchronousErrors,
+                        emptyList(),
+                        error.message ?: "une tâche d'arrêt a échoué"
+                    )
+                )
             }
     }
 

@@ -106,4 +106,32 @@ class NearbyPluginRulesTest {
             NearbyPluginRules.discoveryLossAction("discovered", connected, pending, requesting)
         )
     }
+
+    @Test
+    fun stopErrorsAreAggregatedAfterAllStopTasksFinish() {
+        assertEquals(
+            "diffusion: échec; endpoints: timeout",
+            NearbyPluginRules.combineStopErrors(
+                listOf("diffusion: échec"),
+                listOf("endpoints: timeout")
+            )
+        )
+        assertEquals(
+            "fallback",
+            NearbyPluginRules.combineStopErrors(emptyList(), emptyList(), "fallback")
+        )
+        assertEquals(
+            null,
+            NearbyPluginRules.combineStopErrors(emptyList(), emptyList())
+        )
+    }
+
+    @Test
+    fun transferStatusesKeepFailureAndCancellationVisible() {
+        assertEquals("IN_PROGRESS", NearbyPluginRules.normalizeTransferStatus("IN_PROGRESS"))
+        assertEquals("SUCCESS", NearbyPluginRules.normalizeTransferStatus("SUCCESS"))
+        assertEquals("FAILURE", NearbyPluginRules.normalizeTransferStatus("FAILURE"))
+        assertEquals("CANCELED", NearbyPluginRules.normalizeTransferStatus("CANCELED"))
+        assertEquals("UNKNOWN", NearbyPluginRules.normalizeTransferStatus("unexpected"))
+    }
 }
