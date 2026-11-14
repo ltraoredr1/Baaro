@@ -95,6 +95,9 @@ jobs:
           echo "ANDROID_KEYSTORE_PATH=$KEYSTORE_PATH" >> "$GITHUB_ENV"
 
       - name: Installer les dépendances
+        env:
+          # Évite le téléchargement des binaires natifs onnxruntime-node (inutiles pour le build web/Android).
+          ONNXRUNTIME_NODE_INSTALL: skip
         run: npm ci
 
       - name: Incrémenter la version dans l’espace de travail
