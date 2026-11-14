@@ -212,8 +212,6 @@ export default function App() {
     void getPushState().catch(() => {});
   }, []);
 
-  // Capgo : notifyAppReady() est déjà appelé dans main.jsx (une seule fois).
-
   return (
     <ErrorBoundary>
       <Suspense fallback={<LoadingScreen />}>

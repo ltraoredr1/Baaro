@@ -140,9 +140,27 @@ if (
   process.exit(1);
 }
 
+const legacyUpdaterFiles = [
+  "scripts/build-update.mjs",
+  "public/updates/manifest.json",
+  "backups/updater-before-fix/build-update.mjs",
+  "backups/updater-before-fix/main.jsx",
+  "backups/updater-before-fix/nativeUpdater.js",
+];
+const legacyUpdaterPresent = legacyUpdaterFiles.filter((file) =>
+  fs.existsSync(path.join(root, file))
+);
+
+if (legacyUpdaterPresent.length > 0) {
+  console.error("Ancien updater ZIP détecté :");
+  for (const file of legacyUpdaterPresent) console.error(`- ${file}`);
+  process.exit(1);
+}
+
 console.log("Contrôles de fondation Android : OK");
 console.log("Updater APK natif en flux et contrôle SHA-256 : OK");
 console.log("Séparation build APK / publication GitHub Release : OK");
+console.log("Ancien updater ZIP supprimé : OK");
 console.log("Identifiant Android : com.baaro.app");
 console.log("Module push : pushNotifications.js");
 console.log("Fichiers Android requis : présents");

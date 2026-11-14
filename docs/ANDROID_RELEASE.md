@@ -23,4 +23,4 @@ Après ces contrôles, le workflow crée le tag `vX.Y.Z` et une GitHub Release a
 - **Build BAARO Android APK** : produit un APK signé vérifiable et un artefact; ne le diffuse pas.
 - **Publier mise à jour BAARO** : étape manuelle de diffusion après validation; publie les assets de Release lus par l’updater Android.
 
-Les anciens bundles ZIP sous `public/updates/` ne font pas partie de la chaîne native GitHub Releases.
+L’ancien mécanisme web ZIP a été retiré : son script de génération, son manifeste Vercel et ses copies archivées ne sont plus dans le dépôt. `public/manifest.json` à la racine est conservé : c’est le manifeste PWA, pas un manifeste de mise à jour Android.
