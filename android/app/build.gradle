@@ -20,8 +20,6 @@ if (major > 2099 || minor > 999 || patch > 999) {
 }
 
 def calculatedVersionCode = major * 1000000 + minor * 1000 + patch
-def githubRunNumber = (System.getenv("GITHUB_RUN_NUMBER") ?: "0").toInteger()
-def finalVersionCode = calculatedVersionCode + githubRunNumber
 
 def keystorePath = System.getenv("ANDROID_KEYSTORE_PATH")
 def keystorePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
@@ -36,7 +34,7 @@ android {
         applicationId "com.baaro.app"
         minSdkVersion 24
         targetSdkVersion 36
-        versionCode finalVersionCode
+        versionCode calculatedVersionCode
         versionName appVersion
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
 

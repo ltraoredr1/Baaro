@@ -49,37 +49,33 @@ if (Capacitor.isNativePlatform() && !window.__baaroFetchPatched) {
 captureRefFromUrl();
 initPerf();
 
-// ===================================================================
-// - Maintenant : on utilise src/lib/nativeUpdater.js
-//   qui vérifie sur TON serveur : https://baaro-xi.vercel.app/updates/manifest.json
-// ===================================================================
+// Mises à jour natives : exclusivement par BAARO Updater Maison.
 const setupNative = async () => {
   if (!Capacitor.isNativePlatform()) return;
 
   try {
     const result = await checkUpdateNative();
-    if (result?.updated) {
-      console.log(`[Baaro] Mise à jour native installée : ${result.version}`);
-      // checkUpdateNative a déjà rechargé la page, on ne continue pas
-      return;
+
+    if (result?.installerLaunched) {
+      console.info("[BAARO] Installateur Android lancé :", result.version);
+    } else if (result?.permissionRequired) {
+      console.info("[BAARO] Autorisation Android d'installation requise.");
+    } else if (result?.available) {
+      console.info("[BAARO] Mise à jour disponible :", result.version);
+    } else if (result?.error) {
+      console.warn("[BAARO] Updater Maison :", result.error);
     }
-    if (result?.disabled) {
-      console.info("[BAARO] Ancien updater ZIP désactivé : utiliser un APK signé.");
-    } else {
-      console.log("[Baaro] Vérification updater terminée.");
-    }
-  } catch (e) {
-    console.log("[Baaro] Updater maison indisponible", e);
+  } catch (error) {
+    console.warn("[BAARO] Updater Maison indisponible :", error);
   }
 
-  // StatusBar
   try {
     const { StatusBar, Style } = await import("@capacitor/status-bar");
     await StatusBar.setOverlaysWebView({ overlay: false });
     await StatusBar.setStyle({ style: Style.Dark });
     await StatusBar.setBackgroundColor({ color: "#0b1220" });
-  } catch (e) {
-    console.log("StatusBar not available", e);
+  } catch (error) {
+    console.log("StatusBar not available", error);
   }
 };
 
@@ -111,7 +107,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(
 // ===================================================================
 // FIX NATIF 3 : Service Worker - Jamais en APK
 // - Sur le Web : on utilise VitePWA autoUpdate (dans vite.config.js)
-// - En APK : on désactive le Service Worker, c'est l'updater maison qui gère
+// - En APK : les mises à jour passent exclusivement par un APK signé BAARO.
 // ===================================================================
 if ("serviceWorker" in navigator) {
   if (Capacitor.isNativePlatform()) {

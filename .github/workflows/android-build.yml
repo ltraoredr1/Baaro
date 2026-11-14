@@ -1,10 +1,10 @@
-name: BAARO Android Release
+name: Publier BAARO - Updater Maison
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Type de mise à jour"
+        description: "Version à publier"
         required: true
         type: choice
         default: patch
@@ -14,23 +14,32 @@ on:
           - major
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
-  group: baaro-android-release
+  group: baaro-updater-maison
   cancel-in-progress: false
 
 jobs:
-  build:
-    name: Build APK Release signé
+  publish:
+    name: Publier une mise à jour BAARO officielle
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
-    env:
-      CLANG: clang-18
+    timeout-minutes: 45
 
     steps:
       - name: Récupérer le dépôt
         uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Vérifier la branche de publication
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main" || {
+            echo "::error::La publication est autorisée uniquement depuis main."
+            exit 1
+          }
 
       - name: Installer Node.js
         uses: actions/setup-node@v4
@@ -48,20 +57,9 @@ jobs:
         uses: android-actions/setup-android@v3
 
       - name: Installer les composants Android
-        run: |
-          sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+        run: sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
 
-      - name: Installer Clang 18 et LLD 18
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y clang-18 lld-18
-
-      - name: Installer Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown, aarch64-linux-android, armv7-linux-androideabi, x86_64-linux-android
-
-      - name: Vérifier les secrets de configuration
+      - name: Vérifier les secrets
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
@@ -72,63 +70,43 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-
-          for name in \
-            VITE_SUPABASE_URL \
-            VITE_SUPABASE_ANON_KEY \
-            VITE_API_BASE_URL \
-            ANDROID_KEYSTORE_BASE64 \
-            ANDROID_KEY_ALIAS \
-            ANDROID_KEYSTORE_PASSWORD \
-            ANDROID_KEY_PASSWORD
-          do
+          for name in VITE_SUPABASE_URL VITE_SUPABASE_ANON_KEY VITE_API_BASE_URL ANDROID_KEYSTORE_BASE64 ANDROID_KEY_ALIAS ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_PASSWORD; do
             if [ -z "${!name:-}" ]; then
               echo "::error::Secret manquant : $name"
               exit 1
             fi
           done
 
-          echo "Configuration et secrets présents."
-
-      - name: Restaurer la clé de signature
+      - name: Restaurer et vérifier la clé officielle BAARO
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-
           KEYSTORE_PATH="$RUNNER_TEMP/baaro.jks"
-
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
           chmod 600 "$KEYSTORE_PATH"
-
-          if [ ! -s "$KEYSTORE_PATH" ]; then
-            echo "::error::Keystore vide ou invalide."
-            exit 1
-          fi
-
-          keytool -list -keystore "$KEYSTORE_PATH" \
-            -alias "$ANDROID_KEY_ALIAS" \
-            -storepass "$ANDROID_KEYSTORE_PASSWORD" >/dev/null
-
-          echo "Keystore et alias vérifiés."
-
+          test -s "$KEYSTORE_PATH"
+          keytool -list -keystore "$KEYSTORE_PATH" -alias "$ANDROID_KEY_ALIAS" -storepass "$ANDROID_KEYSTORE_PASSWORD" >/dev/null
           echo "ANDROID_KEYSTORE_PATH=$KEYSTORE_PATH" >> "$GITHUB_ENV"
-
-          echo "Clé de signature restaurée."
 
       - name: Installer les dépendances
         run: npm ci
 
-      - name: Mettre à jour la version
+      - name: Incrémenter et enregistrer durablement la version
         env:
           VERSION_BUMP: ${{ inputs.version }}
         run: |
           set -euo pipefail
           npm version "$VERSION_BUMP" --no-git-tag-version
-          echo "Version de l'application : $(node -p "require('./package.json').version")"
+          VERSION="$(node -p "require('./package.json').version")"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json package-lock.json
+          git commit -m "chore(release): BAARO v$VERSION"
+          git push origin HEAD:main
 
       - name: Construire l'application Web
         env:
@@ -143,29 +121,17 @@ jobs:
         run: |
           set -euo pipefail
           npm run build
-
-          if [ ! -f dist/index.html ]; then
-            echo "::error::Build Web incomplet : dist/index.html absent."
-            exit 1
-          fi
-
-      - name: Vérifier les assets Whisper
-        run: |
-          set -euo pipefail
+          test -s dist/index.html
           test -s dist/ort/ort-wasm-simd-threaded.asyncify.mjs
           test -s dist/ort/ort-wasm-simd-threaded.asyncify.wasm
 
       - name: Synchroniser Capacitor
-        run: |
-          set -euo pipefail
-          npx cap sync android
+        run: npx cap sync android
 
-      - name: Vérifier la configuration Android
-        run: |
-          set -euo pipefail
-          node scripts/check-android.mjs
+      - name: Vérifier Android
+        run: node scripts/check-android.mjs
 
-      - name: Construire l'APK Release signé
+      - name: Construire l'APK signé
         env:
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -176,32 +142,60 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleRelease --no-daemon
 
-      - name: Vérifier la signature APK
+      - name: Vérifier la signature officielle
         run: |
           set -euo pipefail
-
           APK="android/app/build/outputs/apk/release/app-release.apk"
-
-          if [ ! -s "$APK" ]; then
-            echo "::error::APK Release introuvable."
-            exit 1
-          fi
-
+          test -s "$APK"
           APKSIGNER="$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -n 1)"
-
-          if [ -z "$APKSIGNER" ]; then
-            echo "::error::apksigner introuvable."
-            exit 1
-          fi
-
+          test -n "$APKSIGNER"
           "$APKSIGNER" verify --verbose --print-certs "$APK"
 
-          echo "Signature APK vérifiée."
+      - name: Préparer APK et manifeste de mise à jour
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          cp android/app/build/outputs/apk/release/app-release.apk "release/baaro-v$VERSION.apk"
+          node --input-type=module - "$VERSION" "$GITHUB_REPOSITORY" <<'NODE'
+          import fs from "node:fs";
+          import crypto from "node:crypto";
 
-      - name: Publier l'APK comme artefact
-        uses: actions/upload-artifact@v4
+          const [version, repository] = process.argv.slice(2);
+          const apkPath = `release/baaro-v${version}.apk`;
+          const apk = fs.readFileSync(apkPath);
+          const parts = version.split(".").map(Number);
+          const versionCode = parts[0] * 1000000 + parts[1] * 1000 + parts[2];
+
+          const manifest = {
+            appId: "com.baaro.app",
+            version,
+            versionCode,
+            apkUrl: `https://github.com/${repository}/releases/download/v${version}/baaro-v${version}.apk`,
+            sha256: crypto.createHash("sha256").update(apk).digest("hex"),
+            mandatory: false,
+            notes: `Mise à jour officielle BAARO ${version}`
+          };
+
+          fs.writeFileSync("release/manifest.json", JSON.stringify(manifest, null, 2) + "\n");
+          console.log(`Manifeste prêt : BAARO ${version}`);
+          NODE
+
+      - name: Créer le tag de version
+        run: |
+          set -euo pipefail
+          TAG="v$VERSION"
+          git tag "$TAG"
+          git push origin "$TAG"
+
+      - name: Publier la Release officielle BAARO
+        uses: softprops/action-gh-release@v2
         with:
-          name: baaro-android-release-${{ github.run_number }}
-          path: android/app/build/outputs/apk/release/app-release.apk
-          if-no-files-found: error
-          retention-days: 30
+          tag_name: v${{ env.VERSION }}
+          name: BAARO v${{ env.VERSION }}
+          target_commitish: main
+          files: |
+            release/manifest.json
+            release/baaro-v${{ env.VERSION }}.apk
+          generate_release_notes: true
+          make_latest: true
+          fail_on_unmatched_files: true

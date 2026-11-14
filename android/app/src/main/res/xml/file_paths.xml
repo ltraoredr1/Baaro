@@ -11,4 +11,5 @@
         name="shared_files"
         path="share/" />
 
+    <cache-path name="updater_apks" path="updates/" />
 </paths>
