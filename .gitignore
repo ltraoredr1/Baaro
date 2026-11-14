@@ -40,15 +40,6 @@ supabase/.temp/
 target/
 src/features/messaging/native/pkg/
 !public/wasm/
-keystore.txt
-
-/baaro.jks
-/keystore-base64.txt
-/keystore.txt
-
-/baaro.jks
-/keystore-base64.txt
-/keystore.txt
 
 # Android signing secrets
 /baaro.jks

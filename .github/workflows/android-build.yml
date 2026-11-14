@@ -63,7 +63,6 @@ jobs:
 
       - name: Vérifier les secrets de configuration
         env:
-          VITE_APP_ENV: production
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
           VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
@@ -110,6 +109,12 @@ jobs:
             exit 1
           fi
 
+          keytool -list -keystore "$KEYSTORE_PATH" \
+            -alias "$ANDROID_KEY_ALIAS" \
+            -storepass "$ANDROID_KEYSTORE_PASSWORD" >/dev/null
+
+          echo "Keystore et alias vérifiés."
+
           echo "ANDROID_KEYSTORE_PATH=$KEYSTORE_PATH" >> "$GITHUB_ENV"
 
           echo "Clé de signature restaurée."
@@ -127,6 +132,7 @@ jobs:
 
       - name: Construire l'application Web
         env:
+          VITE_APP_ENV: production
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
           VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
@@ -148,11 +154,6 @@ jobs:
           set -euo pipefail
           test -s dist/ort/ort-wasm-simd-threaded.asyncify.mjs
           test -s dist/ort/ort-wasm-simd-threaded.asyncify.wasm
-
-      - name: Générer le paquet de mise à jour Web
-        run: |
-          set -euo pipefail
-          node scripts/build-update.mjs
 
       - name: Synchroniser Capacitor
         run: |

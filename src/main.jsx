@@ -63,7 +63,11 @@ const setupNative = async () => {
       // checkUpdateNative a déjà rechargé la page, on ne continue pas
       return;
     }
-    console.log("[Baaro] Updater maison OK, déjà à jour");
+    if (result?.disabled) {
+      console.info("[BAARO] Ancien updater ZIP désactivé : utiliser un APK signé.");
+    } else {
+      console.log("[Baaro] Vérification updater terminée.");
+    }
   } catch (e) {
     console.log("[Baaro] Updater maison indisponible", e);
   }
