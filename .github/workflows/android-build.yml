@@ -1,10 +1,10 @@
-name: Publier BAARO - Updater Maison
+name: Build BAARO Android APK
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version à publier"
+        description: "Incrément de version de l’APK"
         required: true
         type: choice
         default: patch
@@ -17,27 +17,27 @@ permissions:
   contents: write
 
 concurrency:
-  group: baaro-updater-maison
+  group: baaro-android-build
   cancel-in-progress: false
 
 jobs:
-  publish:
-    name: Publier une mise à jour BAARO officielle
+  build:
+    name: Construire et archiver l’APK signé
     runs-on: ubuntu-24.04
     timeout-minutes: 45
 
     steps:
-      - name: Récupérer le dépôt
+      - name: Récupérer main
         uses: actions/checkout@v4
         with:
           ref: main
           fetch-depth: 0
 
-      - name: Vérifier la branche de publication
+      - name: Vérifier la branche
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = "refs/heads/main" || {
-            echo "::error::La publication est autorisée uniquement depuis main."
+            echo "::error::Le build officiel doit être lancé depuis main."
             exit 1
           }
 
@@ -94,7 +94,7 @@ jobs:
       - name: Installer les dépendances
         run: npm ci
 
-      - name: Incrémenter et enregistrer durablement la version
+      - name: Incrémenter la version dans l’espace de travail
         env:
           VERSION_BUMP: ${{ inputs.version }}
         run: |
@@ -102,13 +102,9 @@ jobs:
           npm version "$VERSION_BUMP" --no-git-tag-version
           VERSION="$(node -p "require('./package.json').version")"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add package.json package-lock.json
-          git commit -m "chore(release): BAARO v$VERSION"
-          git push origin HEAD:main
+          echo "Version à construire : $VERSION"
 
-      - name: Construire l'application Web
+      - name: Construire l’application Web
         env:
           VITE_APP_ENV: production
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
@@ -128,10 +124,10 @@ jobs:
       - name: Synchroniser Capacitor
         run: npx cap sync android
 
-      - name: Vérifier Android
+      - name: Vérifier Android et l’updater en flux
         run: node scripts/check-android.mjs
 
-      - name: Construire l'APK signé
+      - name: Construire l’APK signé
         env:
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -151,51 +147,77 @@ jobs:
           test -n "$APKSIGNER"
           "$APKSIGNER" verify --verbose --print-certs "$APK"
 
-      - name: Préparer APK et manifeste de mise à jour
+      - name: Préparer APK et manifeste comme artefact
+        id: package
         run: |
           set -euo pipefail
           mkdir -p release
-          cp android/app/build/outputs/apk/release/app-release.apk "release/baaro-v$VERSION.apk"
-          node --input-type=module - "$VERSION" "$GITHUB_REPOSITORY" <<'NODE'
+          APK_NAME="baaro-v$VERSION.apk"
+          cp android/app/build/outputs/apk/release/app-release.apk "release/$APK_NAME"
+          APK_SHA256="$(sha256sum "release/$APK_NAME" | cut -d' ' -f1)"
+          echo "APK_NAME=$APK_NAME" >> "$GITHUB_ENV"
+          echo "APK_SHA256=$APK_SHA256" >> "$GITHUB_ENV"
+          node --input-type=module - "$VERSION" "$GITHUB_REPOSITORY" "$APK_SHA256" "$APK_NAME" <<'NODE'
           import fs from "node:fs";
-          import crypto from "node:crypto";
-
-          const [version, repository] = process.argv.slice(2);
-          const apkPath = `release/baaro-v${version}.apk`;
-          const apk = fs.readFileSync(apkPath);
+          const [version, repository, sha256, apkName] = process.argv.slice(2);
           const parts = version.split(".").map(Number);
           const versionCode = parts[0] * 1000000 + parts[1] * 1000 + parts[2];
-
           const manifest = {
             appId: "com.baaro.app",
             version,
             versionCode,
-            apkUrl: `https://github.com/${repository}/releases/download/v${version}/baaro-v${version}.apk`,
-            sha256: crypto.createHash("sha256").update(apk).digest("hex"),
+            apkUrl: `https://github.com/${repository}/releases/download/v${version}/${apkName}`,
+            sha256,
             mandatory: false,
             notes: `Mise à jour officielle BAARO ${version}`
           };
-
           fs.writeFileSync("release/manifest.json", JSON.stringify(manifest, null, 2) + "\n");
-          console.log(`Manifeste prêt : BAARO ${version}`);
           NODE
 
-      - name: Créer le tag de version
+      - name: Enregistrer la version seulement après le build réussi
+        id: version_commit
         run: |
           set -euo pipefail
-          TAG="v$VERSION"
-          git tag "$TAG"
-          git push origin "$TAG"
+          git fetch origin main
+          if [ "$(git rev-parse origin/main)" != "$GITHUB_SHA" ]; then
+            echo "::error::main a changé pendant le build; aucun bump automatique ne sera poussé. Relancez le workflow sur le nouveau main."
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json package-lock.json
+          git commit -m "chore(release): prépare BAARO v$VERSION"
+          git push origin HEAD:main
+          SOURCE_SHA="$(git rev-parse HEAD)"
+          echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+          node --input-type=module - "$VERSION" "$SOURCE_SHA" "$GITHUB_RUN_ID" "$APK_NAME" "$APK_SHA256" <<'NODE'
+          import fs from "node:fs";
+          const [version, sourceSha, buildRunId, apkName, sha256] = process.argv.slice(2);
+          fs.writeFileSync("release/build-info.json", JSON.stringify({
+            version,
+            sourceSha,
+            buildRunId,
+            apkName,
+            sha256
+          }, null, 2) + "\n");
+          NODE
 
-      - name: Publier la Release officielle BAARO
-        uses: softprops/action-gh-release@v2
+      - name: Archiver l’APK signé pour la publication manuelle
+        uses: actions/upload-artifact@v4
         with:
-          tag_name: v${{ env.VERSION }}
-          name: BAARO v${{ env.VERSION }}
-          target_commitish: main
-          files: |
-            release/manifest.json
-            release/baaro-v${{ env.VERSION }}.apk
-          generate_release_notes: true
-          make_latest: true
-          fail_on_unmatched_files: true
+          name: baaro-apk
+          path: release/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Résumé et identifiant de run à publier
+        run: |
+          {
+            echo "## APK BAARO prêt à valider"
+            echo "- Version : $VERSION"
+            echo "- Artefact : baaro-apk"
+            echo "- Run ID à transmettre au workflow de publication : $GITHUB_RUN_ID"
+            echo "- Aucune GitHub Release n’a été publiée par ce workflow."
+            echo ""
+            echo "Après validation, lancer manuellement **Publier mise à jour BAARO** avec ce Run ID."
+          } >> "$GITHUB_STEP_SUMMARY"

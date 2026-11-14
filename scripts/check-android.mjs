@@ -112,8 +112,37 @@ for (const marker of [
   }
 }
 
+const buildWorkflow = fs.readFileSync(
+  path.join(root, ".github/workflows/android-build.yml"),
+  "utf8"
+);
+const publishWorkflow = fs.readFileSync(
+  path.join(root, ".github/workflows/publish.yml"),
+  "utf8"
+);
+
+if (
+  !buildWorkflow.includes("actions/upload-artifact@v4") ||
+  !buildWorkflow.includes("name: baaro-apk") ||
+  buildWorkflow.includes("softprops/action-gh-release")
+) {
+  console.error("Le workflow build doit archiver l’APK sans publier de Release.");
+  process.exit(1);
+}
+
+if (
+  !publishWorkflow.includes("workflow_dispatch") ||
+  !publishWorkflow.includes("build_run_id") ||
+  !publishWorkflow.includes("actions/download-artifact@v4") ||
+  !publishWorkflow.includes("softprops/action-gh-release@v2")
+) {
+  console.error("Le workflow de publication doit publier manuellement l’artefact de build choisi.");
+  process.exit(1);
+}
+
 console.log("Contrôles de fondation Android : OK");
 console.log("Updater APK natif en flux et contrôle SHA-256 : OK");
+console.log("Séparation build APK / publication GitHub Release : OK");
 console.log("Identifiant Android : com.baaro.app");
 console.log("Module push : pushNotifications.js");
 console.log("Fichiers Android requis : présents");
