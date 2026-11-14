@@ -330,16 +330,10 @@ export async function requestNearbyPermissions() {
 async function ensureInitialized() {
   if (isInitialized) return;
 
-  const plugin = requirePlugin();
+  // Vérifie seulement que le plugin natif est bien enregistré.
+  requirePlugin();
 
-  // Le plugin Kotlin fourni ne nécessite pas de méthode initialize().
-  if (typeof plugin.initialize === "function") {
-    await plugin.initialize({
-      serviceName: SERVICE_NAME,
-      strategy: 1,
-    });
-  }
-
+  // Le plugin Kotlin n'a pas de méthode initialize() : rien à appeler.
   isInitialized = true;
 }
 
