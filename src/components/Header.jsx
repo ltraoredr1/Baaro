@@ -306,7 +306,7 @@ export function Header({
 
             {langMenuOpen && (
               <div
-                className="absolute right-0 mt-1.5 w-40 rounded-xl p-1 shadow-2xl border z-50 max-h-56 overflow-y-auto"
+                className="absolute end-0 mt-1.5 w-40 rounded-xl p-1 shadow-2xl border z-50 max-h-56 overflow-y-auto"
                 style={{
                   borderColor: C.borderGold,
                   background: C.surface,
@@ -320,7 +320,7 @@ export function Header({
                     onClick={() =>
                       handleLanguageChange(language.code)
                     }
-                    className="w-full text-left px-2.5 py-2 text-xs rounded-lg transition disabled:opacity-50"
+                    className="w-full text-start px-2.5 py-2 text-xs rounded-lg transition disabled:opacity-50"
                     style={{
                       background:
                         currentLang === language.code
@@ -353,7 +353,7 @@ export function Header({
             <Bell size={14} />
             {notificationCount > 0 && (
               <span
-                className="absolute -top-1 -right-1 min-w-4 h-4 px-1 rounded-full text-[9px] font-bold flex items-center justify-center"
+                className="absolute -top-1 -end-1 min-w-4 h-4 px-1 rounded-full text-[9px] font-bold flex items-center justify-center"
                 style={{ background: C.gold, color: C.bg }}
               >
                 {notificationCount > 99 ? "99+" : notificationCount}
@@ -393,7 +393,7 @@ export function Header({
             </div>
 
             <span
-              className="hidden md:inline text-xs font-semibold truncate max-w-[80px] pr-1"
+              className="hidden md:inline text-xs font-semibold truncate max-w-[80px] pe-1"
               style={{ color: C.ivory }}
             >
               {userProfile?.display_name || "Membre"}

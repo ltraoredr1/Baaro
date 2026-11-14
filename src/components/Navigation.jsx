@@ -114,7 +114,7 @@ export function Navigation({ activeTab, setActiveTab, unreadMessages = 0 }) {
 
               {(item.badge || (item.id === "messages" && unreadMessages > 0)) && (
                 <span
-                  className="ml-auto text-[9px] px-2 py-0.5 rounded-full font-mono font-bold shadow-sm"
+                  className="ms-auto text-[9px] px-2 py-0.5 rounded-full font-mono font-bold shadow-sm"
                   style={{
                     background: C.gold,
                     color: C.bg,
@@ -148,7 +148,7 @@ export function Navigation({ activeTab, setActiveTab, unreadMessages = 0 }) {
           TABLETTES & MOBILE (Affiché en dessous de lg)
          ========================================================= */}
       <nav
-        className="lg:hidden fixed bottom-0 left-0 right-0 border-t z-50 backdrop-blur-2xl shadow-2xl"
+        className="lg:hidden fixed bottom-0 left-0 end-0 border-t z-50 backdrop-blur-2xl shadow-2xl"
         style={{
           background: "rgba(11, 18, 32, 0.95)",
           borderColor: "rgba(255,255,255,0.08)",
@@ -179,7 +179,7 @@ export function Navigation({ activeTab, setActiveTab, unreadMessages = 0 }) {
                     <Icon size={19} />
                   </span>
                   {item.id === "messages" && unreadMessages > 0 && (
-                    <span className="absolute -top-1 -right-1 min-w-4 h-4 px-1 rounded-full text-[8px] font-bold flex items-center justify-center" style={{ background: C.gold, color: C.bg }}>
+                    <span className="absolute -top-1 -end-1 min-w-4 h-4 px-1 rounded-full text-[8px] font-bold flex items-center justify-center" style={{ background: C.gold, color: C.bg }}>
                       {unreadMessages > 99 ? "99+" : unreadMessages}
                     </span>
                   )}
@@ -282,7 +282,7 @@ export function Navigation({ activeTab, setActiveTab, unreadMessages = 0 }) {
 
                     {item.badge && (
                       <span
-                        className="absolute top-2 right-2 text-[8px] px-1.5 py-0.5 rounded-full font-mono font-bold shadow-md"
+                        className="absolute top-2 end-2 text-[8px] px-1.5 py-0.5 rounded-full font-mono font-bold shadow-md"
                         style={{
                           background: C.gold,
                           color: C.bg,
