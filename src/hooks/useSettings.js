@@ -10,38 +10,70 @@ import {
   syncPrivateProfile,
   sanitizeSettings,
   DEFAULT_SETTINGS,
+  LOCAL_ONLY_KEYS,
   SETTINGS_EVENT,
 } from "../lib/appSettings.js";
 
 /** Délai de regroupement des écritures cloud (sélecteur de couleur, toggles rapides). */
 const CLOUD_SYNC_DELAY_MS = 600;
+/** Nouvelle tentative automatique : 2 s, 4 s, 8 s ... plafonné à 60 s. */
+const RETRY_BASE_MS = 2000;
+const RETRY_MAX_MS = 60000;
+/** Clés modifiées localement mais pas encore confirmées par le cloud (persisté). */
+export const DIRTY_KEY = "baaro_settings_dirty";
+
+function readDirty() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(DIRTY_KEY) || "[]");
+    return Array.isArray(raw) ? raw.filter((k) => typeof k === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeDirty(set) {
+  try {
+    if (set.size === 0) localStorage.removeItem(DIRTY_KEY);
+    else localStorage.setItem(DIRTY_KEY, JSON.stringify([...set]));
+  } catch {
+    /* stockage plein ou indisponible */
+  }
+}
 
 /**
  * Hook unique pour les réglages : état React + stockage local + DOM + cloud.
- * Plusieurs composants peuvent l'utiliser : ils restent synchronisés
- * grâce à l'événement "baaro:settings".
  *
- * Local + DOM = immédiat. Cloud = regroupé (une seule écriture par rafale).
+ * syncStatus :
+ *  - "synced"  : tout est enregistré dans le cloud
+ *  - "saving"  : envoi en cours
+ *  - "pending" : enregistré localement, synchronisation en attente (retry auto)
+ *  - "local"   : non connecté, réglages uniquement sur cet appareil
+ *
+ * Les clés de LOCAL_ONLY_KEYS (biometric, notif_push) ne sont jamais synchronisées.
  */
 export function useSettings() {
   const [settings, setSettings] = useState(() => loadLocalSettings());
   const [loading, setLoading] = useState(true);
+  const [syncStatus, setSyncStatus] = useState(() =>
+    readDirty().length > 0 ? "pending" : "synced",
+  );
+  const [syncError, setSyncError] = useState(null);
 
   const settingsRef = useRef(settings);
-  const dirtyKeysRef = useRef(new Set()); // modifiés localement, pas encore confirmés par le cloud
+  const dirtyKeysRef = useRef(new Set(readDirty()));
   const saveQueueRef = useRef(Promise.resolve());
   const privateDirtyRef = useRef(false);
   const timerRef = useRef(null);
+  const retryTimerRef = useRef(null);
+  const attemptRef = useRef(0);
   const waitersRef = useRef([]);
   const flushRef = useRef(() => {});
 
-  // Applique à l'interface à chaque changement.
   useEffect(() => {
     settingsRef.current = settings;
     applySettingsToDom(settings);
   }, [settings]);
 
-  // Garde les autres instances du hook synchronisées.
   useEffect(() => {
     const onChange = (event) => {
       const incoming = event?.detail;
@@ -50,7 +82,6 @@ export function useSettings() {
       settingsRef.current = incoming;
       setSettings(incoming);
     };
-
     window.addEventListener(SETTINGS_EVENT, onChange);
     return () => window.removeEventListener(SETTINGS_EVENT, onChange);
   }, []);
@@ -66,6 +97,7 @@ export function useSettings() {
         return { ok: false, localOnly: true, error: authError.message };
       }
 
+      // Pas connecté : réglages locaux uniquement (ce n'est pas une erreur).
       if (!session?.user) return { ok: true, localOnly: true };
 
       const userId = session.user.id;
@@ -76,13 +108,12 @@ export function useSettings() {
         try {
           await syncPrivateProfile(userId, !!current.private_profile);
         } catch (e) {
-          privateDirtyRef.current = true; // à réessayer
+          privateDirtyRef.current = true;
           throw e;
         }
       }
 
       const result = await saveCloudSettings(userId, current);
-
       if (!result?.ok) {
         return {
           ok: false,
@@ -90,7 +121,6 @@ export function useSettings() {
           error: result?.error || "Échec de synchronisation.",
         };
       }
-
       return { ok: true };
     } catch (error) {
       console.warn("[useSettings] Synchronisation :", error);
@@ -105,45 +135,82 @@ export function useSettings() {
     }
   }, []);
 
-  // Envoie immédiatement au cloud et résout toutes les promesses en attente.
+  const scheduleRetry = useCallback(() => {
+    if (retryTimerRef.current) return;
+    const delay = Math.min(RETRY_BASE_MS * 2 ** attemptRef.current, RETRY_MAX_MS);
+    attemptRef.current += 1;
+    retryTimerRef.current = window.setTimeout(() => {
+      retryTimerRef.current = null;
+      void flushRef.current();
+    }, delay);
+  }, []);
+
   const flushCloud = useCallback(() => {
     window.clearTimeout(timerRef.current);
     timerRef.current = null;
+    window.clearTimeout(retryTimerRef.current);
+    retryTimerRef.current = null;
 
     const waiters = waitersRef.current;
     waitersRef.current = [];
     const keysSnapshot = [...dirtyKeysRef.current];
 
-    const task = saveQueueRef.current
-      .then(syncToCloud)
-      .then((res) => {
-        // Les clés ne sont « propres » que si le cloud a vraiment confirmé :
-        // sinon elles gardent la priorité sur un futur rechargement cloud.
-        if (res?.ok && !res.localOnly) {
-          for (const key of keysSnapshot) dirtyKeysRef.current.delete(key);
-        }
-        return res;
-      });
+    setSyncStatus("saving");
+
+    const task = saveQueueRef.current.then(syncToCloud).then((res) => {
+      if (res?.ok && !res.localOnly) {
+        // Confirmé par le cloud : ces clés ne sont plus « en attente ».
+        for (const key of keysSnapshot) dirtyKeysRef.current.delete(key);
+        writeDirty(dirtyKeysRef.current);
+        attemptRef.current = 0;
+        setSyncError(null);
+        // De nouveaux changements sont arrivés pendant l'envoi : un autre envoi est prévu.
+        setSyncStatus(
+          timerRef.current || dirtyKeysRef.current.size > 0 ? "pending" : "synced",
+        );
+      } else if (res?.ok && res.localOnly) {
+        setSyncError(null);
+        setSyncStatus(dirtyKeysRef.current.size > 0 ? "local" : "synced");
+      } else {
+        setSyncError(res?.error || "Échec de synchronisation.");
+        setSyncStatus("pending");
+        scheduleRetry();
+      }
+      return res;
+    });
 
     saveQueueRef.current = task.catch(() => {});
     task.then((res) => waiters.forEach((resolve) => resolve(res)));
     return task;
-  }, [syncToCloud]);
+  }, [syncToCloud, scheduleRetry]);
 
   flushRef.current = flushCloud;
 
-  // Ne perd pas une sauvegarde en attente quand l'app passe en arrière-plan.
+  // Arrière-plan : envoyer ce qui attend. Retour au premier plan / réseau : réessayer.
   useEffect(() => {
-    const onHide = () => {
-      if (document.visibilityState === "hidden" && timerRef.current) {
-        void flushRef.current();
+    const retryIfNeeded = () => {
+      if (dirtyKeysRef.current.size === 0 || timerRef.current) return;
+      attemptRef.current = 0;
+      void flushRef.current();
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") {
+        if (timerRef.current) void flushRef.current();
+      } else {
+        retryIfNeeded();
       }
     };
-    document.addEventListener("visibilitychange", onHide);
+    const onHide = () => {
+      if (timerRef.current) void flushRef.current();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
     window.addEventListener("pagehide", onHide);
+    window.addEventListener("online", retryIfNeeded);
     return () => {
-      document.removeEventListener("visibilitychange", onHide);
+      document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("pagehide", onHide);
+      window.removeEventListener("online", retryIfNeeded);
+      window.clearTimeout(retryTimerRef.current);
     };
   }, []);
 
@@ -153,14 +220,13 @@ export function useSettings() {
 
     async function loadCloud(userId) {
       const result = await loadCloudSettings(userId);
-
       if (!active || !result.ok || !result.data) return;
 
       const cloud = { ...result.data };
+      // Les choix locaux non synchronisés gardent la priorité (même après rechargement).
       for (const key of dirtyKeysRef.current) delete cloud[key];
 
       const merged = { ...settingsRef.current, ...cloud };
-
       settingsRef.current = merged;
       setSettings(merged);
       saveLocalSettings(merged);
@@ -179,12 +245,14 @@ export function useSettings() {
           return;
         }
 
-        if (session?.user && active) await loadCloud(session.user.id);
+        if (session?.user && active) {
+          await loadCloud(session.user.id);
+          // Rejoue ce qui était resté en attente avant la fermeture de l'app.
+          if (active && dirtyKeysRef.current.size > 0) void flushRef.current();
+        }
       } catch (error) {
         console.warn("[useSettings] Chargement des réglages :", error);
       } finally {
-        // NB : on ne vide plus dirtyKeysRef ici. Les clés ne sont retirées
-        // qu'une fois réellement enregistrées dans le cloud (voir flushCloud).
         if (active) setLoading(false);
       }
     }
@@ -194,12 +262,10 @@ export function useSettings() {
     const { data: authListener } = supabase.auth.onAuthStateChange(
       (event, session) => {
         if (event !== "SIGNED_IN" || !session?.user) return;
-
         setTimeout(() => {
           if (!active) return;
           loadCloud(session.user.id)
             .then(() => {
-              // Les choix faits hors connexion gardent la priorité : on les envoie.
               if (dirtyKeysRef.current.size > 0) void flushRef.current();
             })
             .catch((error) =>
@@ -228,17 +294,28 @@ export function useSettings() {
     }
 
     const next = { ...settingsRef.current, ...clean };
-
     settingsRef.current = next;
-    for (const key of keys) dirtyKeysRef.current.add(key);
+
+    // Les réglages propres à l'appareil ne sont jamais « en attente » de synchro.
+    const cloudKeys = keys.filter((k) => !LOCAL_ONLY_KEYS.has(k));
+    for (const key of cloudKeys) dirtyKeysRef.current.add(key);
+    writeDirty(dirtyKeysRef.current);
     if (keys.includes("private_profile")) privateDirtyRef.current = true;
 
-    // Local + interface : immédiat (applySettingsToDom est déjà fait par l'effet).
     setSettings(next);
     saveLocalSettings(next);
     broadcastSettings(next);
 
-    // Cloud : regroupé.
+    if (cloudKeys.length === 0) {
+      return Promise.resolve({ ok: true, localOnly: true });
+    }
+
+    // Nouvelle modification : on repart sur un délai de retry court.
+    attemptRef.current = 0;
+    window.clearTimeout(retryTimerRef.current);
+    retryTimerRef.current = null;
+    setSyncStatus("pending");
+
     return new Promise((resolve) => {
       waitersRef.current.push(resolve);
       window.clearTimeout(timerRef.current);
@@ -249,9 +326,6 @@ export function useSettings() {
     });
   }, []);
 
-  // Réinitialise (garde la langue courante).
-  // Vérifie que sanitizeSettings accepte customTheme: null, sinon le thème
-  // personnalisé survit à la réinitialisation.
   const reset = useCallback(
     () =>
       update({
@@ -262,5 +336,11 @@ export function useSettings() {
     [update],
   );
 
-  return { settings, loading, update, reset };
+  /** Nouvelle tentative manuelle (bouton « Réessayer »). */
+  const retrySync = useCallback(() => {
+    attemptRef.current = 0;
+    return flushRef.current();
+  }, []);
+
+  return { settings, loading, update, reset, syncStatus, syncError, retrySync };
 }

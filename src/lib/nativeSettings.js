@@ -11,6 +11,20 @@ let lastAuthEnd = 0;
 
 const REASON = "Déverrouiller BAARO";
 
+// La biométrie dépend de l'appareil : elle n'est active que si elle a été
+// vérifiée ICI (jamais déduite d'un réglage venu d'un autre appareil).
+const DEVICE_KEY = "baaro_biometric_device_v1";
+
+export function isBiometricVerifiedOnDevice() {
+  try { return localStorage.getItem(DEVICE_KEY) === "1"; } catch { return false; }
+}
+export function markBiometricDevice(ok) {
+  try {
+    if (ok) localStorage.setItem(DEVICE_KEY, "1");
+    else localStorage.removeItem(DEVICE_KEY);
+  } catch { /* ignore */ }
+}
+
 /** true = déverrouillé (ou aucun verrou disponible), false = refusé/annulé. */
 async function authenticate() {
   if (authenticating) return true;
@@ -49,7 +63,9 @@ export async function confirmBiometricEnable() {
     console.warn("[native] biometric", e);
     return false;
   }
-  return authenticate();
+  const ok = await authenticate();
+  if (ok) coldChecked = true; // évite une 2e demande juste après l'activation
+  return ok;
 }
 
 async function ensureBiometricListener() {
@@ -70,7 +86,7 @@ async function ensureBiometricListener() {
 }
 
 export async function applyNativeSettings(s) {
-  biometricEnabled = !!s?.biometric;
+  biometricEnabled = !!s?.biometric && isBiometricVerifiedOnDevice();
   const block = !!s?.block_screenshots;
 
   // Le blocage des captures est une fonction native. Le Web/PWA ne doit pas

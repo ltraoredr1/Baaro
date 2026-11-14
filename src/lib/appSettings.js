@@ -48,7 +48,10 @@ export const DEFAULT_SETTINGS = {
   privacy_ai: true,
 };
 
-export const CLOUD_KEYS = Object.keys(DEFAULT_SETTINGS);
+export const ALL_KEYS = Object.keys(DEFAULT_SETTINGS);
+/** Réglages propres à l'appareil : jamais envoyés ni lus depuis le cloud. */
+export const LOCAL_ONLY_KEYS = new Set(["biometric", "notif_push"]);
+export const CLOUD_KEYS = ALL_KEYS.filter((k) => !LOCAL_ONLY_KEYS.has(k));
 
 /** Langues écrites de droite à gauche (source unique pour toute l'app). */
 export const RTL_LANGS = new Set(["ar", "he", "fa", "ur", "ps", "sd", "ug", "nqo"]);
@@ -80,7 +83,7 @@ export function sanitizeSettings(input) {
   const out = {};
   if (!isPlainObject(input)) return out;
 
-  for (const key of CLOUD_KEYS) {
+  for (const key of ALL_KEYS) {
     if (!Object.prototype.hasOwnProperty.call(input, key)) continue;
     const value = input[key];
     if (typeof value === typeof DEFAULT_SETTINGS[key]) out[key] = value;
@@ -244,7 +247,9 @@ export async function loadCloudSettings(userId) {
   const raw = { ...res.data };
   if (raw.custom_theme !== undefined) raw.customTheme = raw.custom_theme;
 
-  return { ok: true, data: sanitizeSettings(raw) };
+  const data = sanitizeSettings(raw);
+  for (const k of LOCAL_ONLY_KEYS) delete data[k]; // propre à l'appareil : valeur cloud ignorée
+  return { ok: true, data };
 }
 
 export async function saveCloudSettings(userId, settings) {

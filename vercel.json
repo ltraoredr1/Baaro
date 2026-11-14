@@ -94,7 +94,7 @@
         },
         {
           "key": "Permissions-Policy",
-          "value": "camera=(self \"https://*.daily.co\"), microphone=(self \"https://*.daily.co\"), display-capture=(self \"https://*.daily.co\"), geolocation=(), payment=(self), usb=()"
+          "value": "camera=(self \"https://*.daily.co\"), microphone=(self \"https://*.daily.co\"), display-capture=(self \"https://*.daily.co\"), geolocation=(self), payment=(self), usb=()"
         },
         {
           "key": "Strict-Transport-Security",

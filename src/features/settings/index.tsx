@@ -59,7 +59,13 @@ import { supabase } from "../../supabaseClient.js";
 import { uploadExternalMedia } from "../../lib/externalMedia.js";
 import { useSettings } from "../../hooks/useSettings.js";
 import { STORAGE_KEY as LOCAL_KEY } from "../../lib/appSettings.js";
-import { confirmBiometricEnable } from "../../lib/nativeSettings.js";
+import {
+  confirmBiometricEnable,
+  applyNativeSettings,
+  markBiometricDevice,
+  isBiometricVerifiedOnDevice,
+} from "../../lib/nativeSettings.js";
+import { resetAllPreferences } from "../../lib/resetPreferences.js";
 import { enableBiometric, disableBiometric } from "../../lib/biometric.js";
 import { wipeSecureStorage } from "../../lib/messageOutbox.js";
 import { clearSmsNumbers } from "../../lib/smsFallback.js";
@@ -67,7 +73,7 @@ import { NotificationPrefsPanel } from "./NotificationPrefsPanel.jsx";
 import NotificationSoundSettings from "./NotificationSoundSettings.jsx";
 import BlockedUsersPanel from "./BlockedUsersPanel.jsx";
 import { PushSettings } from "../../components/PushSettings.jsx";
-import { saveNotificationPreferences } from "../../lib/notificationPreferences.js";
+
 import ProfilePhotosEditor from "../../components/ProfilePhotosEditor.jsx";
 import ProfileContactsLinks from "../../components/ProfileContactsLinks.jsx";
 import {
@@ -140,6 +146,9 @@ export default function SettingsTab({
     settings: rawSettings,
     update: updateSettings,
     reset: resetSettings,
+    syncStatus,
+    syncError,
+    retrySync,
   } = useSettings();
   const settings = rawSettings as SettingsState;
 
@@ -147,6 +156,7 @@ export default function SettingsTab({
   const [query, setQuery] = useState("");
   const [message, setMessage] = useState("");
   const [showPrivacy, setShowPrivacy] = useState(false);
+  const [resetKey, setResetKey] = useState(0);
 
   // Profile edit
   const [isEditing, setIsEditing] = useState(false);
@@ -376,9 +386,8 @@ export default function SettingsTab({
 
     if (res && !res.ok && !res.localOnly) {
       setMessage("❌ " + (res.error || t("profile_error")));
-    } else if (res?.localOnly && res.error) {
-      console.warn("[settings] cloud save:", res.error);
     }
+    // La synchro cloud est affichée par le bandeau d'état (syncStatus).
   }
 
   // ---- Thème personnalisé (couleurs + image de fond) ----
@@ -641,12 +650,13 @@ export default function SettingsTab({
   // Remet les valeurs par défaut (langue conservée), synchronisé avec le cloud.
   const handleResetPrefs = async () => {
     if (!window.confirm(t("reset_confirm"))) return;
-    const res = await resetSettings();
+    const res = await resetAllPreferences(resetSettings);
     if (res && !res.ok && !res.localOnly) {
       setMessage("❌ " + (res.error || t("action_error")));
       return;
     }
-    setMessage(t("reset_done"));
+    setResetKey((k) => k + 1); // remonte les panneaux de notifications
+    setMessage(res?.partial ? "⚠️ " + t("reset_done") : t("reset_done"));
   };
 
   // Active / désactive la biométrie (un seul interrupteur pour l'APK et le web).
@@ -664,9 +674,12 @@ export default function SettingsTab({
         setMessage("❌ " + t("action_error"));
         return;
       }
-    } else if (user?.id) {
-      disableBiometric(user.id);
+      markBiometricDevice(true); // cet appareil est vérifié
+    } else {
+      markBiometricDevice(false);
+      if (user?.id) disableBiometric(user.id);
     }
+    void applyNativeSettings({ ...settings, biometric: value }).catch(console.warn);
     void save({ biometric: value });
   };
 
@@ -798,6 +811,7 @@ export default function SettingsTab({
       localStorage.removeItem("baaro_settings_v22");
       localStorage.removeItem("baaro_settings_v21");
       localStorage.removeItem("baaro_settings_v20");
+      localStorage.removeItem("baaro_settings_dirty");
     } catch {
       /* ignore */
     }
@@ -1064,6 +1078,32 @@ export default function SettingsTab({
           style={{ background: messageTone.bg, color: messageTone.fg }}
         >
           {message}
+        </div>
+      )}
+
+      {syncStatus !== "synced" && (
+        <div
+          role="status"
+          className="p-3 rounded-xl text-xs flex items-center justify-between gap-2"
+          style={{ background: "rgba(217,174,82,0.15)", color: COLORS.gold }}
+        >
+          <span>
+            {syncStatus === "saving" && "Synchronisation…"}
+            {syncStatus === "pending" &&
+              "Enregistré localement, synchronisation en attente" +
+                (syncError ? ` (${syncError})` : "")}
+            {syncStatus === "local" &&
+              "Enregistré sur cet appareil uniquement (non connecté)"}
+          </span>
+          {syncStatus === "pending" && (
+            <button
+              type="button"
+              onClick={() => void retrySync()}
+              className="font-bold underline"
+            >
+              Réessayer
+            </button>
+          )}
         </div>
       )}
 
@@ -1447,20 +1487,13 @@ export default function SettingsTab({
           onToggle={() => toggleSection("notifications")}
         >
           <CollapsibleSection id="notif_push" icon={Smartphone} title={t("push_title")} accent={COLORS.teal} open={openSections.notif_push} onToggle={() => toggleSection("notif_push")}>
-            <PushSettings
-              onChange={(v: boolean) => {
-                void Promise.all([
-                  save({ notif_push: v }),
-                  saveNotificationPreferences({ push_enabled: v }),
-                ]);
-              }}
-            />
+            <PushSettings key={resetKey} />
           </CollapsibleSection>
           <CollapsibleSection id="notif_sound" icon={Volume2} title={t("sound_settings")} desc={t("sound_settings_desc")} accent={COLORS.gold} open={openSections.notif_sound} onToggle={() => toggleSection("notif_sound")}>
-            <NotificationSoundSettings C={COLORS} />
+            <NotificationSoundSettings key={resetKey} C={COLORS} />
           </CollapsibleSection>
           <CollapsibleSection id="notif_prefs" icon={Bot} title={t("prefs_title")} accent={COLORS.teal} open={openSections.notif_prefs} onToggle={() => toggleSection("notif_prefs")}>
-            <NotificationPrefsPanel />
+            <NotificationPrefsPanel key={resetKey} />
           </CollapsibleSection>
         </CollapsibleSection>
       )}
@@ -1927,7 +1960,7 @@ export default function SettingsTab({
           <ToggleRow
             title={t("biometric")}
             desc={t("biometric_desc")}
-            enabled={settings.biometric}
+            enabled={settings.biometric && isBiometricVerifiedOnDevice()}
             onChange={(v) => void handleBiometricChange(v)}
           />
         </CollapsibleSection>

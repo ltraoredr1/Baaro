@@ -8,6 +8,7 @@ import { useSettings } from "../hooks/useSettings.js";
 import { usePushNotifications } from "../hooks/usePushNotifications.js";
 import { applyNativeSettings } from "../lib/nativeSettings.js";
 import { unlockAudio } from "../lib/callRingtone.js";
+import { getPushState } from "../lib/pushState.js";
 
 // ---------------------------------------------------------------
 // Chargement à la demande : le bundle de démarrage ne contient plus
@@ -205,6 +206,11 @@ export default function App() {
       console.warn("[app] native settings:", e)
     );
   }, [settings.block_screenshots, settings.biometric]);
+
+  // État réel des notifications (reflet notif_push) dès le démarrage.
+  useEffect(() => {
+    void getPushState().catch(() => {});
+  }, []);
 
   // Capgo : notifyAppReady() est déjà appelé dans main.jsx (une seule fois).
 

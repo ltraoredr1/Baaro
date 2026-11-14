@@ -6,6 +6,7 @@ import {
   DEFAULT_NOTIFICATION_PREFERENCES,
 } from "../../lib/notificationPreferences.js";
 import { KEYS, currentTexts } from "./notificationPrefsTexts.js";
+import { PUSH_STATE_EVENT, notifyPushStateChanged } from "../../lib/pushState.js";
 
 /**
  * Corrections :
@@ -66,6 +67,21 @@ export function NotificationPrefsPanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Suit les changements faits ailleurs (ex. « Activer sur cet appareil »).
+  useEffect(() => {
+    const onExternal = async () => {
+      if (pendingCountRef.current > 0) return; // une sauvegarde en cours reste prioritaire
+      const res = await getNotificationPreferences();
+      if (!mountedRef.current || !res?.data || pendingCountRef.current > 0) return;
+      if (res.data.push_enabled === prefsRef.current.push_enabled) return;
+      const next = { ...prefsRef.current, push_enabled: res.data.push_enabled };
+      prefsRef.current = next;
+      setPrefs(next);
+    };
+    window.addEventListener(PUSH_STATE_EVENT, onExternal);
+    return () => window.removeEventListener(PUSH_STATE_EVENT, onExternal);
+  }, []);
+
   const toggle = (key) => {
     const previous = prefsRef.current;
     const next = { ...previous, [key]: !previous[key] };
@@ -81,6 +97,7 @@ export function NotificationPrefsPanel() {
     queueRef.current = queueRef.current
       .then(() => saveNotificationPreferences(next))
       .then((res) => {
+        if (key === "push_enabled" && res?.ok) notifyPushStateChanged();
         if (!mountedRef.current) return;
 
         if (res.ok) {
@@ -127,11 +144,13 @@ export function NotificationPrefsPanel() {
         <label
           key={key}
           className="flex items-center justify-between gap-3 text-sm cursor-pointer"
+          style={{ opacity: key !== "push_enabled" && !prefs.push_enabled ? 0.5 : 1 }}
         >
           <span style={{ color: COLORS.ivory }}>{tx.labels[key]}</span>
           <input
             type="checkbox"
             checked={!!prefs[key]}
+            disabled={key !== "push_enabled" && !prefs.push_enabled}
             onChange={() => toggle(key)}
             className="h-4 w-4 accent-amber-500"
           />
