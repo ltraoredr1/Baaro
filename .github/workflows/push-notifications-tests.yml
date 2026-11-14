@@ -8,7 +8,7 @@ on:
       - "api/_lib/push-queue.js"
       - "api/_lib/push-preferences.js"
       - "tests/api/push-queue.test.mjs"
-      - "tests/api/push-preferences.mjs"
+      - "tests/api/push-preferences.test.mjs"
       - ".github/workflows/push-notifications-tests.yml"
   pull_request:
     branches: [main, develop]
@@ -16,7 +16,7 @@ on:
       - "api/_lib/push-queue.js"
       - "api/_lib/push-preferences.js"
       - "tests/api/push-queue.test.mjs"
-      - "tests/api/push-preferences.mjs"
+      - "tests/api/push-preferences.test.mjs"
       - ".github/workflows/push-notifications-tests.yml"
   workflow_dispatch:
 
@@ -46,4 +46,4 @@ jobs:
         run: node --version
 
       - name: Test push preferences and queue
-        run: node --test tests/api/push-preferences.mjs tests/api/push-queue.test.mjs
+        run: npm run test:push-preferences && npm run test:push-queue
