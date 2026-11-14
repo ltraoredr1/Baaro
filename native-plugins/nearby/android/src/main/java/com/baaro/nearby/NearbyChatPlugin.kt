@@ -46,7 +46,10 @@ import org.json.JSONObject
             alias = "locationCoarse"
         ),
         Permission(
-            strings = [Manifest.permission.ACCESS_FINE_LOCATION],
+            strings = [
+                Manifest.permission.ACCESS_FINE_LOCATION,
+                Manifest.permission.ACCESS_COARSE_LOCATION
+            ],
             alias = "locationFine"
         )
     ]
