@@ -103,12 +103,12 @@ export function useVideoFeed() {
               .maybeSingle();
 
           if (sharedVideoError && isMissingColumn(sharedVideoError)) {
-            ({ data: sharedVideo, error: sharedVideoError }) =
+            ({ data: sharedVideo, error: sharedVideoError } =
               await supabase
                 .from("videos")
                 .select(buildVideoSelect(false))
                 .eq("id", sharedVideoId)
-                .maybeSingle();
+                .maybeSingle());
           }
 
           if (!sharedVideoError && sharedVideo) {
