@@ -20,14 +20,11 @@ import com.google.android.gms.nearby.connection.Payload
 import com.google.android.gms.nearby.connection.PayloadCallback
 import com.google.android.gms.nearby.connection.PayloadTransferUpdate
 import com.google.android.gms.nearby.connection.Strategy
-import com.google.android.gms.tasks.Task
-import com.google.android.gms.tasks.Tasks
 import android.Manifest
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import org.json.JSONObject
-import java.util.concurrent.atomic.AtomicBoolean
 
 @CapacitorPlugin(
     name = "NearbyChat",
@@ -109,7 +106,7 @@ class NearbyChatPlugin : Plugin() {
     private fun emit(type: String, endpointId: String? = null, extras: JSObject.() -> Unit = {}) {
         val event = JSObject()
         event.put("type", type)
-        if (endpointId!= null) event.put("endpointId", endpointId)
+        if (endpointId != null) event.put("endpointId", endpointId)
         event.extras()
         notifyListeners("nearbyEvent", event)
     }
@@ -415,7 +412,7 @@ class NearbyChatPlugin : Plugin() {
         if (isStarting || isStopping) { call.reject("Une opération Nearby est déjà en cours."); return }
         if (isStarted) { call.resolve(JSObject().apply { put("success", true); put("alreadyStarted", true) }); return }
 
-        displayName = call.getString("displayName")?.trim()?.takeIf { it.isNotEmpty() }?: DEFAULT_DISPLAY_NAME
+        displayName = call.getString("displayName")?.trim()?.takeIf { it.isNotEmpty() } ?: DEFAULT_DISPLAY_NAME
         sessionGeneration += 1
         val generation = sessionGeneration
         val lifecycleCallback = connectionLifecycleCallback(generation)
@@ -463,61 +460,32 @@ class NearbyChatPlugin : Plugin() {
             call.resolve(JSObject().apply { put("success", true) }); return
         }
 
-        val stopTasks = mutableListOf<Task<Void>>()
-        val synchronousErrors = mutableListOf<String>()
+        // stopAdvertising(), stopDiscovery() et stopAllEndpoints() sont synchrones (void).
+        val errors = mutableListOf<String>()
 
-        fun collectStopTask(name: String, action: () -> Task<Void>) {
+        fun stopStep(name: String, action: () -> Unit) {
             try {
-                stopTasks += action()
+                action()
             } catch (error: Exception) {
-                synchronousErrors += "$name: ${error.message ?: "échec inconnu"}"
+                errors += "$name: ${error.message ?: "échec inconnu"}"
             }
         }
 
-        collectStopTask("diffusion") { client().stopAdvertising() }
-        collectStopTask("découverte") { client().stopDiscovery() }
-        collectStopTask("endpoints") { client().stopAllEndpoints() }
+        stopStep("diffusion") { client().stopAdvertising() }
+        stopStep("découverte") { client().stopDiscovery() }
+        stopStep("endpoints") { client().stopAllEndpoints() }
 
-        fun finishStop(errorMessage: String? = null) {
-            clearConnectionState()
-            isStarted = false; isStarting = false; isStopping = false
-            if (errorMessage != null) {
-                emit("ERROR") { put("message", "Échec de l'arrêt Nearby : $errorMessage") }
-                call.reject("Échec de l'arrêt Nearby : $errorMessage")
-            } else {
-                emit("STOPPED")
-                call.resolve(JSObject().apply { put("success", true) })
-            }
+        clearConnectionState()
+        isStarted = false; isStarting = false; isStopping = false
+
+        val errorMessage = NearbyPluginRules.combineStopErrors(errors, emptyList<String>())
+        if (errorMessage != null) {
+            emit("ERROR") { put("message", "Échec de l'arrêt Nearby : $errorMessage") }
+            call.reject("Échec de l'arrêt Nearby : $errorMessage")
+        } else {
+            emit("STOPPED")
+            call.resolve(JSObject().apply { put("success", true) })
         }
-
-        val finished = AtomicBoolean(false)
-        fun finishOnce(errorMessage: String? = null) {
-            if (finished.compareAndSet(false, true)) finishStop(errorMessage)
-        }
-
-        Tasks.whenAllComplete(stopTasks)
-            .addOnSuccessListener { completedTasks ->
-                val asynchronousErrors = completedTasks.mapIndexedNotNull { index, task ->
-                    task.exception?.let { error ->
-                        "tâche-${index + 1}: ${error.message ?: "échec inconnu"}"
-                    }
-                }
-                finishOnce(
-                    NearbyPluginRules.combineStopErrors(
-                        synchronousErrors,
-                        asynchronousErrors
-                    )
-                )
-            }
-            .addOnFailureListener { error ->
-                finishOnce(
-                    NearbyPluginRules.combineStopErrors(
-                        synchronousErrors,
-                        emptyList(),
-                        error.message ?: "une tâche d'arrêt a échoué"
-                    )
-                )
-            }
     }
 
     private fun clearConnectionState() {
@@ -538,7 +506,7 @@ class NearbyChatPlugin : Plugin() {
     fun send(call: PluginCall) {
         val text = call.getString("text")
         if (text.isNullOrBlank()) { call.reject("Le message ne peut pas être vide."); return }
-        if (!::connectionsClient.isInitialized ||!isStarted || isStopping) { call.reject("Nearby n'est pas démarré."); return }
+        if (!::connectionsClient.isInitialized || !isStarted || isStopping) { call.reject("Nearby n'est pas démarré."); return }
 
         val requestedEndpoint = call.getString("endpointId")
         val targets = try {
