@@ -38,6 +38,7 @@ export function useVideoFeed() {
   const requestSequence = useRef(0);
   const currentUserId = useRef(null);
   const realtimeTimers = useRef(new Map());
+  const likeRealtimeTimers = useRef(new Map());
 
   // Synchronisation des connexions et déconnexions.
   useEffect(() => {
@@ -248,6 +249,72 @@ export function useVideoFeed() {
       active = false;
       realtimeTimers.current.forEach((timer) => clearTimeout(timer));
       realtimeTimers.current.clear();
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
+  // Synchronisation ciblée des likes entre utilisateurs.
+  useEffect(() => {
+    let active = true;
+
+    const channel = supabase
+      .channel("baaro-video-likes-v1")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "video_likes" },
+        (payload) => {
+          if (!active) return;
+
+          const record =
+            payload.eventType === "DELETE" ? payload.old : payload.new;
+
+          const videoId = record?.video_id;
+          const actorId = record?.user_id;
+
+          if (!videoId) return;
+
+          const previous = likeRealtimeTimers.current.get(videoId);
+          if (previous) clearTimeout(previous);
+
+          const timer = setTimeout(async () => {
+            likeRealtimeTimers.current.delete(videoId);
+
+            try {
+              const { count, error } = await supabase
+                .from("video_likes")
+                .select("*", { count: "exact", head: true })
+                .eq("video_id", videoId);
+
+              if (!active || error || count === null) return;
+
+              setVideos((current) =>
+                current.map((video) =>
+                  String(video.id) === String(videoId)
+                    ? { ...video, likes: count }
+                    : video,
+                ),
+              );
+
+              if (actorId && actorId === currentUserId.current) {
+                setLikedMap((current) => ({
+                  ...current,
+                  [videoId]: payload.eventType !== "DELETE",
+                }));
+              }
+            } catch (error) {
+              console.warn("[video-likes-realtime]", error);
+            }
+          }, 180);
+
+          likeRealtimeTimers.current.set(videoId, timer);
+        },
+      )
+      .subscribe();
+
+    return () => {
+      active = false;
+      likeRealtimeTimers.current.forEach(clearTimeout);
+      likeRealtimeTimers.current.clear();
       supabase.removeChannel(channel);
     };
   }, []);
