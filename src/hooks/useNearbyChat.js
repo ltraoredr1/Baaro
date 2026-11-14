@@ -39,6 +39,7 @@ export function useNearbyChat(displayName = "Utilisateur BAARO") {
   const [pendingConnections, setPendingConnections] = useState([]);
   const [messages, setMessages] = useState([]);
   const [error, setError] = useState(null);
+  const [isOperating, setIsOperating] = useState(false);
 
   const operationRef = useRef(null);
   const scanningRef = useRef(false);
@@ -70,6 +71,19 @@ export function useNearbyChat(displayName = "Utilisateur BAARO") {
         const endpointId = normalizeEndpointId(event);
 
         switch (event.type) {
+          case "STARTED":
+            scanningRef.current = true;
+            setIsScanning(true);
+            break;
+
+          case "STOPPED":
+            scanningRef.current = false;
+            setIsScanning(false);
+            setDevices([]);
+            setPendingConnections([]);
+            refreshStatus();
+            break;
+
           case "DEVICE_FOUND": {
             if (!endpointId) return;
 
@@ -211,7 +225,7 @@ export function useNearbyChat(displayName = "Utilisateur BAARO") {
         console.warn("Impossible de retirer le listener Nearby :", err);
       }
     };
-  }, [isAvailable]);
+  }, [isAvailable, refreshStatus]);
 
   const start = useCallback(async () => {
     if (operationRef.current) {
@@ -219,6 +233,7 @@ export function useNearbyChat(displayName = "Utilisateur BAARO") {
     }
 
     operationRef.current = "starting";
+    setIsOperating(true);
 
     try {
       setError(null);
@@ -252,6 +267,7 @@ export function useNearbyChat(displayName = "Utilisateur BAARO") {
       throw err instanceof Error ? err : new Error(message);
     } finally {
       operationRef.current = null;
+      setIsOperating(false);
     }
   }, [displayName, refreshStatus]);
 
@@ -263,6 +279,7 @@ export function useNearbyChat(displayName = "Utilisateur BAARO") {
     }
 
     operationRef.current = "stopping";
+    setIsOperating(true);
 
     try {
       setError(null);
@@ -279,6 +296,7 @@ export function useNearbyChat(displayName = "Utilisateur BAARO") {
       throw err instanceof Error ? err : new Error(message);
     } finally {
       operationRef.current = null;
+      setIsOperating(false);
     }
   }, [refreshStatus]);
 
@@ -287,14 +305,15 @@ export function useNearbyChat(displayName = "Utilisateur BAARO") {
       throw new Error("Le message ne peut pas être vide.");
     }
 
-    if (!scanningRef.current) {
-      throw new Error(
-        "Démarre Nearby avant d'envoyer un message."
-      );
-    }
-
     try {
       setError(null);
+
+      if (operationRef.current === "stopping") {
+        throw new Error("Attends la fin de l'arrêt de Nearby avant d'envoyer un message.");
+      }
+      if (!scanningRef.current) {
+        throw new Error("Démarre Nearby avant d'envoyer un message.");
+      }
 
       const messageText = text.trim();
 
@@ -376,6 +395,7 @@ export function useNearbyChat(displayName = "Utilisateur BAARO") {
     isAvailable,
     isNative,
     debug,
+    isOperating,
     isScanning,
     devices,
     pendingConnections,

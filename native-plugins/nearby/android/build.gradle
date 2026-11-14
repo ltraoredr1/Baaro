@@ -32,4 +32,5 @@ dependencies {
     implementation 'androidx.appcompat:appcompat:1.7.1'
     implementation "org.jetbrains.kotlin:kotlin-stdlib:2.0.21"
     implementation 'com.google.android.gms:play-services-nearby:19.3.0'
+    testImplementation 'junit:junit:4.13.2'
 }

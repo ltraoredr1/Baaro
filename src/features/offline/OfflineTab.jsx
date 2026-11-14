@@ -39,6 +39,7 @@ export function OfflineTab() {
     isAvailable,
     isNative,
     debug,
+    isOperating,
     isScanning,
     devices,
     pendingConnections,
@@ -178,16 +179,18 @@ export function OfflineTab() {
   if (!isAvailable) return offlineFallback;
 
   const handleToggleScan = async () => {
-    if (isScanning) {
-      stop();
-      showToast("Détection P2P arrêtée.", "info");
-    } else {
-      try {
+    if (isOperating) return;
+
+    try {
+      if (isScanning) {
+        await stop();
+        showToast("Détection P2P arrêtée.", "info");
+      } else {
         await start();
         showToast("Recherche d'appareils BAARO à proximité…", "info");
-      } catch {
-        // L’erreur est déjà affichée par le toast lié à l’état du hook.
       }
+    } catch {
+      // L’erreur est déjà affichée par le toast lié à l’état du hook.
     }
   };
 
@@ -196,9 +199,9 @@ export function OfflineTab() {
     if (!p2pInput.trim()) return;
     sendMessage(p2pInput.trim())
       .then(() => setP2pInput(""))
-      .catch((err) =>
-        showToast("Échec de l'envoi : " + err.message, "error")
-      );
+      .catch(() => {
+        // Le hook publie l’erreur via l’état et le toast partagé.
+      });
   };
 
   return (
@@ -256,7 +259,9 @@ export function OfflineTab() {
             <button
               type="button"
               onClick={handleToggleScan}
-              className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold shadow-lg"
+              disabled={isOperating}
+              aria-busy={isOperating}
+              className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold shadow-lg disabled:opacity-60"
               style={{
                 background: isScanning ? COLORS.gold : COLORS.teal,
                 color: COLORS.bg,
@@ -267,7 +272,13 @@ export function OfflineTab() {
                 className={isScanning ? "animate-pulse" : ""}
               />
               <span>
-                {isScanning ? "Arrêter la détection" : "Activer détection P2P"}
+                {isOperating
+                  ? isScanning
+                    ? "Arrêt en cours…"
+                    : "Démarrage…"
+                  : isScanning
+                    ? "Arrêter la détection"
+                    : "Activer détection P2P"}
               </span>
             </button>
           </div>
@@ -371,6 +382,7 @@ export function OfflineTab() {
             <input
               value={p2pInput}
               onChange={(e) => setP2pInput(e.target.value)}
+              disabled={isOperating}
               placeholder="Message de proximité…"
               maxLength={500}
               className="flex-1 bg-transparent border rounded-xl px-3 py-2 text-xs outline-none"
@@ -378,6 +390,7 @@ export function OfflineTab() {
             />
             <button
               type="submit"
+              disabled={isOperating}
               className="px-3 py-2 rounded-xl"
               style={{ background: COLORS.teal, color: COLORS.bg }}
               aria-label="Envoyer"

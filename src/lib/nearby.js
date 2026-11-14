@@ -18,6 +18,14 @@ function getPluginName() {
   return "NearbyChat";
 }
 
+function isNativePluginRegistered() {
+  try {
+    return Capacitor.isPluginAvailable(getPluginName());
+  } catch {
+    return false;
+  }
+}
+
 function getErrorMessage(error) {
   if (error instanceof Error) return error.message;
   if (typeof error === "string") return error;
@@ -66,34 +74,70 @@ function combinePermissions(...values) {
   return "denied";
 }
 
-function normalizePermissions(status, sdkVersion) {
-  if (!status || typeof status !== "object") {
-    return {
-      nearby: "unknown",
-      bluetooth: "unknown",
-      nearbyWifi: "unknown",
-      location: "unknown",
-      sdkVersion,
-    };
+function requiredPermissionAliasesForSdk(sdkVersion) {
+  if (!Number.isInteger(sdkVersion) || sdkVersion < 24) return [];
+
+  const aliases = [];
+  if (sdkVersion >= 31) aliases.push("bluetooth");
+  if (sdkVersion >= 33) {
+    aliases.push("nearbyWifi");
+  } else if (sdkVersion >= 29) {
+    aliases.push("locationFine");
+  } else {
+    aliases.push("locationCoarse");
+  }
+  return aliases;
+}
+
+async function getRequiredPermissionAliases(plugin, sdkVersion) {
+  if (typeof plugin?.getRequiredPermissionAliases === "function") {
+    try {
+      const result = await plugin.getRequiredPermissionAliases();
+      const permissions = result?.permissions;
+      const allowed = new Set([
+        "bluetooth",
+        "nearbyWifi",
+        "locationCoarse",
+        "locationFine",
+      ]);
+      if (
+        Array.isArray(permissions) &&
+        permissions.length > 0 &&
+        permissions.every((permission) => allowed.has(permission))
+      ) {
+        return [...new Set(permissions)];
+      }
+    } catch (error) {
+      console.warn("Alias de permissions Nearby indisponibles :", error);
+    }
   }
 
-  const bluetooth = normalizePermission(status.bluetooth);
-  const nearbyWifi = normalizePermission(status.nearbyWifi);
-  const locationCoarse = normalizePermission(status.locationCoarse);
-  const locationFine = normalizePermission(status.locationFine);
+  return requiredPermissionAliasesForSdk(sdkVersion);
+}
+
+function normalizePermissions(status, sdkVersion, requiredAliases = []) {
+  const permissionStatus = status && typeof status === "object" ? status : {};
+  const bluetooth = normalizePermission(permissionStatus.bluetooth);
+  const nearbyWifi = normalizePermission(permissionStatus.nearbyWifi);
+  const locationCoarse = normalizePermission(permissionStatus.locationCoarse);
+  const locationFine = normalizePermission(permissionStatus.locationFine);
+  const byAlias = {
+    bluetooth,
+    nearbyWifi,
+    locationCoarse,
+    locationFine,
+  };
   const nearby =
-    sdkVersion == null || sdkVersion < 31
-      ? "granted"
-      : sdkVersion >= 33
-        ? combinePermissions(bluetooth, nearbyWifi)
-        : bluetooth;
+    sdkVersion == null
+      ? "unknown"
+      : combinePermissions(...requiredAliases.map((alias) => byAlias[alias]));
   const location =
     sdkVersion == null
       ? "unknown"
       : sdkVersion >= 33
         ? "granted"
         : sdkVersion >= 29
-          ? combinePermissions(locationCoarse, locationFine)
+          ? locationFine
           : locationCoarse;
 
   return {
@@ -103,6 +147,7 @@ function normalizePermissions(status, sdkVersion) {
     location,
     locationCoarse,
     locationFine,
+    requiredAliases,
     sdkVersion,
     raw: status,
   };
@@ -111,7 +156,7 @@ function normalizePermissions(status, sdkVersion) {
 function requirePlugin() {
   const plugin = getPlugin();
 
-  if (!plugin) {
+  if (!plugin || !isNativePluginRegistered()) {
     throw new Error(
       "Plugin Nearby indisponible. Vérifie son enregistrement Android, puis exécute npx cap sync android et reconstruis l’application."
     );
@@ -145,16 +190,17 @@ function assertPermissionsGranted(permissions) {
     throw new Error("Impossible de déterminer la version Android pour Nearby.");
   }
 
-  const missing = [];
-  if (sdkVersion >= 31 && permissions.bluetooth !== "granted") {
-    missing.push("Bluetooth : appareils à proximité");
-  }
-  if (sdkVersion >= 33 && permissions.nearbyWifi !== "granted") {
-    missing.push("Wi-Fi : appareils à proximité");
-  }
-  if (sdkVersion < 33 && permissions.location !== "granted") {
-    missing.push("localisation");
-  }
+  const labels = {
+    bluetooth: "Bluetooth : appareils à proximité",
+    nearbyWifi: "Wi-Fi : appareils à proximité",
+    locationCoarse: "localisation approximative",
+    locationFine: "localisation précise",
+  };
+  const missing = (
+    permissions.requiredAliases || requiredPermissionAliasesForSdk(sdkVersion)
+  )
+    .filter((alias) => permissions[alias] !== "granted")
+    .map((alias) => labels[alias] || alias);
 
   if (missing.length > 0) {
     throw new Error(
@@ -168,7 +214,7 @@ export function isNearbyAvailable() {
     return (
       Capacitor.isNativePlatform() &&
       Capacitor.getPlatform() === "android" &&
-      !!getPlugin()
+      isNativePluginRegistered()
     );
   } catch {
     return false;
@@ -188,9 +234,9 @@ export function getNearbyDebug() {
 
   return {
     isNative,
-    isPluginAvailable: !!getPlugin(),
+    isPluginAvailable: isNativePluginRegistered(),
     platform,
-    hasPlugin: !!getPlugin(),
+    hasPlugin: isNativePluginRegistered(),
     isInitialized,
     isStarting,
     isStopping,
@@ -203,30 +249,21 @@ export async function checkNearbyPermissions() {
   const plugin = getPlugin();
 
   if (!plugin || typeof plugin.checkPermissions !== "function") {
-    return {
-      nearby: "unknown",
-      bluetooth: "unknown",
-      nearbyWifi: "unknown",
-      location: "unknown",
-    };
+    return normalizePermissions(null, null);
   }
 
   try {
     const sdkVersion = await getAndroidSdkVersion(plugin);
+    const requiredAliases = await getRequiredPermissionAliases(plugin, sdkVersion);
     const status = await plugin.checkPermissions();
-    return normalizePermissions(status, sdkVersion);
+    return normalizePermissions(status, sdkVersion, requiredAliases);
   } catch (error) {
     console.warn(
       "Vérification des permissions Nearby impossible:",
       error
     );
 
-    return {
-      nearby: "unknown",
-      bluetooth: "unknown",
-      nearbyWifi: "unknown",
-      location: "unknown",
-    };
+    return normalizePermissions(null, null);
   }
 }
 
@@ -247,12 +284,7 @@ export async function requestNearbyPermissions() {
   const plugin = getPlugin();
 
   if (!plugin) {
-    return {
-      nearby: "unknown",
-      bluetooth: "unknown",
-      nearbyWifi: "unknown",
-      location: "unknown",
-    };
+    return normalizePermissions(null, null);
   }
 
   if (typeof plugin.requestPermissions !== "function") {
@@ -265,14 +297,7 @@ export async function requestNearbyPermissions() {
       throw new Error("Impossible de déterminer la version Android.");
     }
 
-    const permissions = [];
-    if (sdkVersion >= 31) permissions.push("bluetooth");
-    if (sdkVersion >= 33) {
-      permissions.push("nearbyWifi");
-    } else {
-      permissions.push("locationCoarse");
-      if (sdkVersion >= 29) permissions.push("locationFine");
-    }
+    const permissions = await getRequiredPermissionAliases(plugin, sdkVersion);
 
     await plugin.requestPermissions({ permissions });
   } catch (error) {
@@ -449,12 +474,11 @@ export async function stopNearby() {
         );
       }
     }
-
-    connectedEndpoints.clear();
-    isInitialized = false;
   } catch (error) {
     throw new Error(getErrorMessage(error));
   } finally {
+    connectedEndpoints.clear();
+    isInitialized = false;
     isStopping = false;
   }
 }
@@ -575,6 +599,10 @@ function normalizeEvent(event) {
     event.deviceName ?? event.endpointName ?? event.name ?? null;
 
   switch (type) {
+    case "STARTED":
+    case "STOPPED":
+      return { type };
+
     case "DEVICE_FOUND":
     case "DEVICE_CONNECTED":
       return { type, endpointId, deviceName };
@@ -603,6 +631,16 @@ function normalizeEvent(event) {
         type,
         endpointId,
         message: event.message || "Erreur du service Nearby.",
+      };
+
+    case "TRANSFER_UPDATE":
+      return {
+        type,
+        endpointId,
+        payloadId: event.payloadId,
+        status: event.status,
+        bytesTransferred: event.bytesTransferred,
+        totalBytes: event.totalBytes,
       };
 
     default:
@@ -657,6 +695,8 @@ export function onNearbyEvent(_eventName, callback) {
       connectedEndpoints.add(event.endpointId);
     } else if (event.type === "DEVICE_LOST" && event.endpointId) {
       connectedEndpoints.delete(event.endpointId);
+    } else if (event.type === "STOPPED") {
+      connectedEndpoints.clear();
     }
 
     try {
