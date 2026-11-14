@@ -26,6 +26,10 @@ def keystorePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
 def keyAliasValue = System.getenv("ANDROID_KEY_ALIAS")
 def keyPasswordValue = System.getenv("ANDROID_KEY_PASSWORD")
 
+// Défini au niveau du script (et non dans android { }) pour rester visible
+// dans gradle.taskGraph.whenReady plus bas.
+def releaseSigningReady = keystorePath && keystorePassword && keyAliasValue && keyPasswordValue && file(keystorePath).isFile()
+
 android {
     namespace = "com.baaro.app"
     compileSdk = 36
@@ -43,18 +47,16 @@ android {
         }
     }
 
-def releaseSigningReady = keystorePath && keystorePassword && keyAliasValue && keyPasswordValue && file(keystorePath).isFile()
-
-signingConfigs {
-    release {
-        if (releaseSigningReady) {
-            storeFile file(keystorePath)
-            storePassword keystorePassword
-            keyAlias keyAliasValue
-            keyPassword keyPasswordValue
+    signingConfigs {
+        release {
+            if (releaseSigningReady) {
+                storeFile file(keystorePath)
+                storePassword keystorePassword
+                keyAlias keyAliasValue
+                keyPassword keyPasswordValue
+            }
         }
     }
-}
 
     buildTypes {
         release {
