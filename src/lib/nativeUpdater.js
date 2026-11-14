@@ -1,13 +1,11 @@
 import { Capacitor, registerPlugin } from "@capacitor/core";
 import { App } from "@capacitor/app";
-import { Filesystem, Directory } from "@capacitor/filesystem";
 
 const REPOSITORY = "ltraoredr1/Baaro";
 const RELEASE_API =
   "https://api.github.com/repos/" + REPOSITORY + "/releases/latest";
 
 const BaaroUpdater = registerPlugin("BaaroUpdater");
-const MAX_APK_BYTES = 300 * 1024 * 1024;
 
 function compareVersions(a, b) {
   const parse = (v) => {
@@ -25,31 +23,6 @@ function compareVersions(a, b) {
     if (left[i] < right[i]) return -1;
   }
   return 0;
-}
-
-function toBase64(bytes) {
-  let binary = "";
-  const chunkSize = 0x8000;
-
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    binary += String.fromCharCode(
-      ...bytes.subarray(i, Math.min(i + chunkSize, bytes.length))
-    );
-  }
-
-  return btoa(binary);
-}
-
-async function sha256(bytes) {
-  if (!globalThis.crypto?.subtle) {
-    throw new Error("Vérification cryptographique indisponible.");
-  }
-
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
-
-  return Array.from(new Uint8Array(digest))
-    .map((value) => value.toString(16).padStart(2, "0"))
-    .join("");
 }
 
 async function getLatestManifest() {
@@ -150,39 +123,16 @@ export async function checkUpdateNative() {
       };
     }
 
-    const response = await fetch(manifest.apkUrl, { cache: "no-store" });
-
-    if (!response.ok) throw new Error("Téléchargement de l'APK impossible.");
-
-    const contentLength = Number(response.headers.get("content-length") || 0);
-
-    if (contentLength > MAX_APK_BYTES) {
-      throw new Error("APK trop volumineux pour être téléchargé en sécurité.");
-    }
-
-    const bytes = new Uint8Array(await response.arrayBuffer());
-
-    if (!bytes.length || bytes.length > MAX_APK_BYTES) {
-      throw new Error("Taille APK invalide.");
-    }
-
-    const actualHash = await sha256(bytes);
-
-    if (actualHash.toLowerCase() !== manifest.sha256.toLowerCase()) {
-      throw new Error("SHA-256 incorrect : APK rejeté.");
-    }
-
-    const relativePath =
-      "updates/baaro-v" + manifest.version + ".apk";
-
-    await Filesystem.writeFile({
-      path: relativePath,
-      data: toBase64(bytes),
-      directory: Directory.Cache,
-      recursive: true
+    const download = await BaaroUpdater.downloadApk({
+      version: manifest.version,
+      sha256: manifest.sha256
     });
 
-    await BaaroUpdater.installApk({ path: relativePath });
+    if (!download?.path) {
+      throw new Error("Le téléchargement natif n’a pas fourni de fichier APK.");
+    }
+
+    await BaaroUpdater.installApk({ path: download.path });
 
     return {
       updated: false,

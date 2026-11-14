@@ -13,6 +13,7 @@ const required = [
   "android/app/build.gradle",
   "android/app/src/main/AndroidManifest.xml",
   "android/app/src/main/java/com/baaro/app/MainActivity.java",
+  "android/app/src/main/java/com/baaro/app/BaaroUpdaterPlugin.java",
 ];
 
 const missing = required.filter(
@@ -79,7 +80,40 @@ if (bootstrap.includes("./nativePush.js")) {
   process.exit(1);
 }
 
+const updaterJs = fs.readFileSync(
+  path.join(root, "src/lib/nativeUpdater.js"),
+  "utf8"
+);
+const updaterJava = fs.readFileSync(
+  path.join(root, "android/app/src/main/java/com/baaro/app/BaaroUpdaterPlugin.java"),
+  "utf8"
+);
+
+if (
+  updaterJs.includes("arrayBuffer()") ||
+  updaterJs.includes("toBase64") ||
+  !updaterJs.includes("BaaroUpdater.downloadApk")
+) {
+  console.error("L'updater APK ne doit pas charger l'APK en mémoire JavaScript.");
+  process.exit(1);
+}
+
+for (const marker of [
+  "BufferedInputStream",
+  "FileOutputStream",
+  "digest.update(buffer, 0, count)",
+  "MessageDigest.isEqual",
+  "MAX_APK_BYTES",
+  ".apk.part",
+]) {
+  if (!updaterJava.includes(marker)) {
+    console.error(`Téléchargement natif en flux incomplet : ${marker} absent.`);
+    process.exit(1);
+  }
+}
+
 console.log("Contrôles de fondation Android : OK");
+console.log("Updater APK natif en flux et contrôle SHA-256 : OK");
 console.log("Identifiant Android : com.baaro.app");
 console.log("Module push : pushNotifications.js");
 console.log("Fichiers Android requis : présents");
