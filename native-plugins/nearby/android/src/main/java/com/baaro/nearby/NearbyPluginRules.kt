@@ -82,7 +82,7 @@ internal object NearbyPluginRules {
         fallback: String? = null
     ): String? {
         val errors = (synchronousErrors + asynchronousErrors).filter { it.isNotBlank() }
-        return errors.takeIf { it.isNotEmpty() }?.joinToString("; ") ?: fallback.takeIf { it.isNotBlank() }
+        return errors.takeIf { it.isNotEmpty() }?.joinToString("; ") ?: fallback?.takeIf { it.isNotBlank() }
     }
 
     fun normalizeTransferStatus(status: String): String = when (status) {
