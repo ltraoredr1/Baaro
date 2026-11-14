@@ -123,6 +123,9 @@ export const renderToFile = async ({
       "L'enregistrement vidéo n'est pas supporté par ce navigateur.",
     );
   }
+  if (!Number.isFinite(totalMs) || totalMs < 0) {
+    throw new Error("Durée de rendu vidéo invalide.");
+  }
   const canvas = document.createElement("canvas");
   canvas.width = CANVAS_W;
   canvas.height = CANVAS_H;
@@ -134,68 +137,97 @@ export const renderToFile = async ({
   const ctx = canvas.getContext("2d");
   drawFrame(ctx, 0);
   const stream = canvas.captureStream(30);
-
-  if (audioUrl && audioCtx) {
-    let buffer;
-    try {
-      const response = await fetch(audioUrl);
-      buffer = await audioCtx.decodeAudioData(await response.arrayBuffer());
-    } catch {
-      throw new Error("Impossible de charger le son choisi.");
+  let recorder = null;
+  let stopped = null;
+  let source = null;
+  let raf = 0;
+  try {
+    if (audioUrl && audioCtx) {
+      let buffer;
+      try {
+        const response = await fetch(audioUrl);
+        if (!response.ok) throw new Error("HTTP audio invalide");
+        buffer = await audioCtx.decodeAudioData(await response.arrayBuffer());
+      } catch {
+        throw new Error("Impossible de charger le son choisi.");
+      }
+      const dest = audioCtx.createMediaStreamDestination();
+      const gain = audioCtx.createGain();
+      source = audioCtx.createBufferSource();
+      source.buffer = buffer;
+      source.loop = true;
+      source.connect(gain);
+      gain.connect(dest);
+      const endAt = audioCtx.currentTime + totalMs / 1000;
+      gain.gain.setValueAtTime(1, Math.max(audioCtx.currentTime, endAt - 0.6));
+      gain.gain.linearRampToValueAtTime(0, endAt);
+      source.start();
+      dest.stream.getAudioTracks().forEach((track) => stream.addTrack(track));
     }
-    const dest = audioCtx.createMediaStreamDestination();
-    const gain = audioCtx.createGain();
-    const source = audioCtx.createBufferSource();
-    source.buffer = buffer;
-    source.loop = true;
-    source.connect(gain);
-    gain.connect(dest);
-    const endAt = audioCtx.currentTime + totalMs / 1000;
-    gain.gain.setValueAtTime(1, Math.max(audioCtx.currentTime, endAt - 0.6));
-    gain.gain.linearRampToValueAtTime(0, endAt);
-    source.start();
-    dest.stream.getAudioTracks().forEach((track) => stream.addTrack(track));
-  }
 
-  const mimeType = pickRecorderMime();
-  const recorder = new MediaRecorder(
-    stream,
-    mimeType ? { mimeType, videoBitsPerSecond: 2500000 } : undefined,
-  );
-  const chunks = [];
-  recorder.ondataavailable = (event) => {
-    if (event.data?.size) chunks.push(event.data);
-  };
-  const stopped = new Promise((resolve, reject) => {
-    recorder.onstop = () => resolve();
-    recorder.onerror = (event) =>
-      reject(event.error || new Error("Erreur d'enregistrement."));
-  });
-
-  recorder.start(500);
-  const startedAt = performance.now();
-  await new Promise((resolve) => {
-    const tick = () => {
-      const elapsed = performance.now() - startedAt;
-      drawFrame(ctx, Math.min(elapsed, totalMs));
-      onProgress?.(Math.min(1, elapsed / totalMs));
-      if (elapsed >= totalMs) resolve();
-      else requestAnimationFrame(tick);
+    const mimeType = pickRecorderMime();
+    recorder = new MediaRecorder(
+      stream,
+      mimeType ? { mimeType, videoBitsPerSecond: 2500000 } : undefined,
+    );
+    const chunks = [];
+    recorder.ondataavailable = (event) => {
+      if (event.data?.size) chunks.push(event.data);
     };
-    tick();
-  });
-  recorder.stop();
-  await stopped;
-  stream.getTracks().forEach((track) => track.stop());
+    stopped = new Promise((resolve, reject) => {
+      recorder.onstop = () => resolve();
+      recorder.onerror = (event) =>
+        reject(event.error || new Error("Erreur d'enregistrement."));
+    });
+    stopped.catch(() => {});
 
-  const type = (recorder.mimeType || mimeType || "video/webm").split(";")[0];
-  const blob = new Blob(chunks, { type });
-  if (!blob.size) throw new Error("Aucune vidéo n'a été créée.");
-  const ext = type.includes("mp4") ? "mp4" : "webm";
-  return new File([blob], `baaro-${Date.now()}.${ext}`, {
-    type,
-    lastModified: Date.now(),
-  });
+    recorder.start(500);
+    const startedAt = performance.now();
+    await new Promise((resolve, reject) => {
+      const tick = () => {
+        try {
+          const elapsed = performance.now() - startedAt;
+          drawFrame(ctx, Math.min(elapsed, totalMs));
+          onProgress?.(totalMs > 0 ? Math.min(1, elapsed / totalMs) : 1);
+          if (elapsed >= totalMs) {
+            raf = 0;
+            resolve();
+          } else raf = requestAnimationFrame(tick);
+        } catch (error) {
+          raf = 0;
+          reject(error);
+        }
+      };
+      tick();
+    });
+    recorder.stop();
+    await stopped;
+
+    const type = (recorder.mimeType || mimeType || "video/webm").split(";")[0];
+    const blob = new Blob(chunks, { type });
+    if (!blob.size) throw new Error("Aucune vidéo n'a été créée.");
+    const ext = type.includes("mp4") ? "mp4" : "webm";
+    return new File([blob], `baaro-${Date.now()}.${ext}`, {
+      type,
+      lastModified: Date.now(),
+    });
+  } finally {
+    if (raf) cancelAnimationFrame(raf);
+    if (recorder && recorder.state !== "inactive") {
+      try {
+        recorder.stop();
+      } catch {
+        // L'enregistreur a pu devenir inactif avant l'arrêt.
+      }
+      await stopped?.catch(() => {});
+    }
+    try {
+      source?.stop();
+    } catch {
+      // La source peut déjà être arrêtée.
+    }
+    stream.getTracks().forEach((track) => track.stop());
+  }
 };
 
 export const readDuration = (file) =>

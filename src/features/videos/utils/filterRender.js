@@ -101,6 +101,9 @@ export async function renderVideoWithFilter({
 
   let audioCtx = null;
   let stream = null;
+  let recorder = null;
+  let finished = null;
+  let raf = 0;
   const fxProcessor = new FaceFxProcessor();
   try {
     await new Promise((resolve, reject) => {
@@ -125,7 +128,11 @@ export async function renderVideoWithFilter({
       }
     }
 
-    const { recorder, finished, toFile } = makeRecorder(stream);
+    const recording = makeRecorder(stream);
+    recorder = recording.recorder;
+    finished = recording.finished;
+    // Évite un rejet non géré si la lecture échoue avant l'attente de onstop.
+    finished.catch(() => {});
     ctx.fillStyle = "#000";
     ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
     recorder.start(500);
@@ -133,15 +140,23 @@ export async function renderVideoWithFilter({
     await video.play();
     const t0 = performance.now();
     await new Promise((resolve, reject) => {
-      let raf = 0;
+      let abortHandler = null;
       const finish = (error) => {
         cancelAnimationFrame(raf);
+        raf = 0;
+        if (abortHandler) signal?.removeEventListener("abort", abortHandler);
         error ? reject(error) : resolve();
       };
+      abortHandler = () => {
+        video.pause();
+        if (recorder?.state !== "inactive") recorder?.stop();
+        finish(new Error("Filtre annulé."));
+      };
+      signal?.addEventListener("abort", abortHandler, { once: true });
       video.onended = () => finish();
       video.onerror = () => finish(new Error("Lecture de la vidéo interrompue."));
       const tick = (now) => {
-        if (signal?.aborted) return finish(new Error("Filtre annulé."));
+        if (signal?.aborted) return abort();
         if (video.videoWidth) {
           const f = fxProcessor.process(video, video.videoWidth, video.videoHeight, fx);
           drawFiltered(ctx, f.source, f.w, f.h, spec, now - t0);
@@ -154,10 +169,21 @@ export async function renderVideoWithFilter({
 
     if (recorder.state !== "inactive") recorder.stop();
     await finished;
-    return toFile("baaro-filtre");
+    return recording.toFile("baaro-filtre");
   } finally {
+    if (raf) cancelAnimationFrame(raf);
+    if (recorder && recorder.state !== "inactive") {
+      try {
+        recorder.stop();
+      } catch {
+        // L'enregistreur a pu devenir inactif entre le test et stop().
+      }
+      await finished?.catch(() => {});
+    }
     fxProcessor.dispose();
     video.pause();
+    video.removeAttribute("src");
+    video.load();
     stream?.getTracks().forEach((track) => track.stop());
     audioCtx?.close?.().catch(() => {});
     URL.revokeObjectURL(url);

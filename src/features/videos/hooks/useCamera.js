@@ -18,6 +18,8 @@ export function useCamera({ onOpen, onRecorded, filter = null } = {}) {
   const cameraChunksRef = useRef([]);
   const cameraTimerRef = useRef(null);
   const filteredRef = useRef(null);
+  const cameraRequestRef = useRef(0);
+  const suppressRecordingRef = useRef(false);
 
   // Filtre courant, relu à chaque image du rendu pendant l'enregistrement.
   const specRef = useRef(null);
@@ -32,6 +34,8 @@ export function useCamera({ onOpen, onRecorded, filter = null } = {}) {
   }, [onRecorded]);
 
   const stopCameraStream = useCallback(() => {
+    cameraRequestRef.current += 1;
+    suppressRecordingRef.current = true;
     if (cameraTimerRef.current) {
       clearInterval(cameraTimerRef.current);
       cameraTimerRef.current = null;
@@ -63,6 +67,7 @@ export function useCamera({ onOpen, onRecorded, filter = null } = {}) {
     }
 
     stopCameraStream();
+    const requestId = cameraRequestRef.current;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
@@ -72,6 +77,11 @@ export function useCamera({ onOpen, onRecorded, filter = null } = {}) {
         },
         audio: true,
       });
+      // La permission peut être accordée après fermeture/changement de caméra.
+      if (requestId !== cameraRequestRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
       cameraStreamRef.current = stream;
       if (cameraVideoRef.current) {
         cameraVideoRef.current.srcObject = stream;
@@ -95,8 +105,8 @@ export function useCamera({ onOpen, onRecorded, filter = null } = {}) {
   };
 
   const closeCamera = () => {
-    stopCameraStream();
     setCameraOpen(false);
+    stopCameraStream();
     setCameraError("");
     setCameraSeconds(0);
   };
@@ -131,6 +141,7 @@ export function useCamera({ onOpen, onRecorded, filter = null } = {}) {
     }
 
     cameraChunksRef.current = [];
+    suppressRecordingRef.current = false;
     let recorder;
     let recordStream = stream;
     let baked = false;
@@ -166,10 +177,15 @@ export function useCamera({ onOpen, onRecorded, filter = null } = {}) {
     };
     recorder.onerror = (event) => {
       console.error("BAARO recorder:", event.error);
+      if (cameraTimerRef.current) {
+        clearInterval(cameraTimerRef.current);
+        cameraTimerRef.current = null;
+      }
       setCameraError("Une erreur est survenue pendant l'enregistrement.");
       setCameraRecording(false);
     };
     recorder.onstop = () => {
+      if (suppressRecordingRef.current) return;
       const type = (recorder.mimeType || mimeType || "video/webm").split(
         ";",
       )[0];
@@ -201,6 +217,7 @@ export function useCamera({ onOpen, onRecorded, filter = null } = {}) {
 
   const stopCameraRecording = () => {
     if (mediaRecorderRef.current?.state === "recording") {
+      suppressRecordingRef.current = false;
       mediaRecorderRef.current.stop();
     }
     if (cameraTimerRef.current) {

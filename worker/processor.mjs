@@ -23,7 +23,12 @@ const TRANSLATION_BATCH_SIZE = 20;
 
 const MIME = {
   mp4: "video/mp4",
+  m4v: "video/mp4",
+  mov: "video/quicktime",
   webm: "video/webm",
+  mkv: "video/x-matroska",
+  avi: "video/x-msvideo",
+  "3gp": "video/3gpp",
   jpg: "image/jpeg",
   jpeg: "image/jpeg",
   png: "image/png",
@@ -107,14 +112,18 @@ async function transcode(job, input, dir) {
   const profiles = {
     mobile: ["720:-2", "2500k"],
     hd: ["1080:-2", "5000k"],
-    source: ["copy", "copy"],
   };
 
+  // Le profil source copie les flux sans ré-encodage : conserver le conteneur
+  // source pour éviter un faux MP4 (qui échoue notamment avec WebM/VP9).
+  const sourceExt = extname(input).slice(1).toLowerCase();
+  const copySource = profile === "source" && !!MIME[sourceExt];
   const [size, bitrate] = profiles[profile] || profiles.mobile;
-  const output = join(dir, `video-${profile}.mp4`);
+  const extension = copySource ? sourceExt : "mp4";
+  const output = join(dir, `video-${profile}.${extension}`);
   const args = ["-y", "-i", input];
 
-  if (size === "copy") {
+  if (copySource) {
     args.push("-c", "copy");
   } else {
     args.push(
@@ -133,10 +142,10 @@ async function transcode(job, input, dir) {
   args.push(output);
   await run(config.ffmpeg, args);
 
-  const key = outputKey(job, profile, "mp4");
+  const key = outputKey(job, profile, extension);
 
   return {
-    url: await putFile(key, output, MIME.mp4),
+    url: await putFile(key, output, MIME[extension] || MIME.mp4),
     key,
     profile,
   };
