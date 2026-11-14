@@ -53,7 +53,7 @@ html[data-baaro-theme="custom"] {
 
 .skip-link {
   position: absolute;
-  left: -9999px;
+  inset-inline-start: 0;
   top: 0;
   z-index: 9999;
   padding: 0.75rem 1.25rem;
@@ -61,10 +61,11 @@ html[data-baaro-theme="custom"] {
   color: #0b1220;
   font-weight: 700;
   border-radius: 0 0 0.75rem 0;
+  transform: translateY(-150%);
 }
 
 .skip-link:focus {
-  left: 0;
+  transform: translateY(0);
 }
 
 ::-webkit-scrollbar {
