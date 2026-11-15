@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../../../supabaseClient.js";
 import { isMissingColumn } from "../utils/videosApi.js";
-import { rankForYou, recordBookmarks } from "../lib/feedScore.js";
+import { rankForYou, recordBookmarks, syncWatchHistory } from "../lib/feedScore.js";
 
 const PAGE_SIZE = 24;
 
@@ -17,6 +17,8 @@ const buildVideoSelect = (withSound) => `
   comments_count,
   saves_count,
   shares_count,
+  watch_ratio_sum,
+  watch_ratio_count,
   is_repost,
   created_at,
   author_id,
@@ -222,6 +224,15 @@ export function useVideoFeed() {
                 .order("created_at", { ascending: false })
                 .limit(100);
               recordBookmarks(saved);
+
+              // Historique de visionnage côté serveur (suit l'utilisateur d'un appareil à l'autre)
+              const { data: watched } = await supabase
+                .from("video_watch_events")
+                .select("video_id, ratio, videos:video_id(author_id, title, description)")
+                .eq("user_id", userId)
+                .order("updated_at", { ascending: false })
+                .limit(200);
+              syncWatchHistory(watched);
             } catch {
               /* signal facultatif */
             }

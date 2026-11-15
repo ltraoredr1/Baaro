@@ -1,4 +1,6 @@
-// Classement « Pour toi » (v1 client). Profil stocké localement.
+import { supabase } from "../../../supabaseClient.js";
+
+// Classement « Pour toi ». Profil local, synchronisé avec Supabase (video_watch_events).
 const KEY = "baaro:feed-profile:v1";
 const W = { interest: 0.3, engagement: 0.2, watch: 0.25, discovery: 0.1, fresh: 0.15 };
 const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
@@ -41,6 +43,12 @@ export function recordWatch(video, ratio) {
   const a = p.authors[video.author_id] || [0, 0];
   p.authors[video.author_id] = [a[0] + 1, a[1] + r];
   saveProfile(p);
+  // Synchronisation serveur, silencieuse (ignorée si non connecté).
+  try {
+    supabase.rpc("record_video_watch", { p_video_id: video.id, p_ratio: r }).then(null, () => {});
+  } catch {
+    /* hors ligne */
+  }
 }
 
 function authorStats(v, p) {
@@ -60,7 +68,13 @@ export function scoreVideo(v, p) {
     : 0.5;
   const views = Math.max(Number(v.views || 0), 20);
   const engagement = Math.min(1, ((Number(v.likes || 0) + 2 * Number(v.comments_count || 0) + 3 * Number(v.shares_count || 0) + 3 * Number(v.saves_count || 0)) / views) * 5);
-  const watch = authorStats(v, p).avg;
+  const st = authorStats(v, p);
+  const gCount = Number(v.watch_ratio_count || 0);
+  const watch = st.n
+    ? st.avg
+    : gCount >= 5
+      ? clamp(Number(v.watch_ratio_sum || 0) / gCount, 0, 1)
+      : 0.5;
   const ageH = (Date.now() - new Date(v.created_at).getTime()) / 36e5;
   const fresh = Math.max(0.2, Math.pow(0.5, (Number.isFinite(ageH) ? ageH : 0) / 48));
   const score =
@@ -99,6 +113,24 @@ export function recordBookmarks(rows) {
     if (!v) continue;
     for (const t of extractTags(v)) p.tags[t] = clamp((p.tags[t] || 0) + 1.5, -2, 5);
     if (v.author_id) p.fav[v.author_id] = 1;
+  }
+  saveProfile(p);
+}
+
+// Historique de visionnage venant du serveur (autre appareil, cache vidé).
+// Les vidéos déjà connues localement sont ignorées : pas de double comptage.
+export function syncWatchHistory(rows) {
+  const p = loadProfile();
+  for (const row of rows || []) {
+    const v = row?.videos;
+    if (!v || p.seen[row.video_id] != null) continue;
+    const r = clamp(Number(row.ratio) || 0, 0, 1);
+    p.seen[row.video_id] = r;
+    for (const t of extractTags(v)) p.tags[t] = clamp((p.tags[t] || 0) + (r - 0.3), -2, 5);
+    if (v.author_id) {
+      const a = p.authors[v.author_id] || [0, 0];
+      p.authors[v.author_id] = [a[0] + 1, a[1] + r];
+    }
   }
   saveProfile(p);
 }
