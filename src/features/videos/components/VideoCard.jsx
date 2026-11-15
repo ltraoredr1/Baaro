@@ -441,7 +441,7 @@ export default function VideoCard({
 
       {/* Colonne d'actions (droite) */}
       <div
-        className="absolute right-2 bottom-28 z-30 flex flex-col items-center gap-2.5"
+        className="absolute right-3 bottom-28 z-30 flex w-11 flex-col items-center gap-3"
         onClick={(e) => e.stopPropagation()}
       >
         <button
@@ -504,9 +504,7 @@ export default function VideoCard({
 
         {/* POURBOIRE : visible pour tout le monde sauf l'auteur */}
         {canTip && (
-          <div className="flex items-center justify-center">
-            <TipButton recipientId={authorId} videoId={video.id} compact />
-          </div>
+          <TipButton recipientId={authorId} videoId={video.id} iconOnly />
         )}
 
         {!isImage && (
@@ -523,8 +521,10 @@ export default function VideoCard({
         {isOwner && (
           <button
             type="button"
-            onClick={() => handleDelete(video.id)}
-            className="h-11 w-11 rounded-full bg-red-500/20 backdrop-blur-md flex items-center justify-center"
+            onClick={() => {
+              if (window.confirm("Supprimer cette vidéo ?")) handleDelete(video.id);
+            }}
+            className="mt-3 h-11 w-11 rounded-full bg-red-500/20 backdrop-blur-md flex items-center justify-center"
             aria-label="Supprimer"
           >
             <Trash2 size={19} className="text-red-300" />

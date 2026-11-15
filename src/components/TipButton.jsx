@@ -15,7 +15,7 @@ const PROVIDERS = [
   { id: 'paypal', label: 'PayPal' },
 ];
 
-export function TipButton({ recipientId, postId = null, liveId = null, compact = false }) {
+export function TipButton({ recipientId, postId = null, liveId = null, compact = false, iconOnly = false }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -48,10 +48,14 @@ export function TipButton({ recipientId, postId = null, liveId = null, compact =
   }
 
   return <div className="relative">
-    <button type="button" onClick={toggle} disabled={busy || !recipientId} className={`flex items-center gap-1.5 rounded-xl border border-white/10 bg-white/[.04] text-xs font-bold text-white/75 hover:bg-white/[.08] disabled:opacity-50 ${compact ? 'px-2 py-1.5' : 'px-3 py-2'}`}>
-      <Gift size={15} /> {busy ? '…' : t('economy.tip')}
+    <button type="button" onClick={toggle} disabled={busy || !recipientId} aria-label={t('economy.tip', 'Pourboire')} className={iconOnly
+      ? 'h-11 w-11 rounded-full bg-white/10 backdrop-blur-md flex items-center justify-center text-white disabled:opacity-50'
+      : `flex items-center gap-1.5 rounded-xl border border-white/10 bg-white/[.04] text-xs font-bold text-white/75 hover:bg-white/[.08] disabled:opacity-50 ${compact ? 'px-2 py-1.5' : 'px-3 py-2'}`}>
+      {iconOnly
+        ? (busy ? <span className="text-xs">…</span> : <Gift size={21} />)
+        : <><Gift size={15} /> {busy ? '…' : t('economy.tip')}</>}
     </button>
-    {open && <div className="absolute bottom-full left-0 z-50 mb-2 w-52 rounded-2xl border border-white/10 bg-black/95 p-2 shadow-2xl">
+    {open && <div className={`absolute bottom-full z-50 mb-2 w-52 ${iconOnly ? "right-0" : "left-0"} rounded-2xl border border-white/10 bg-black/95 p-2 shadow-2xl">
       <div className="px-2 py-1 text-[10px] font-black uppercase tracking-wider text-white/40">
         {amount ? 'Moyen de paiement' : t("economy.support_creator")}
       </div>
