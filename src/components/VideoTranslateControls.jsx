@@ -31,6 +31,7 @@ export function VideoTranslateControls({
   const [active, setActive] = useState(null); // { targetLang, vttUrl, dubAudioUrl, ... }
   const menuRef = useRef(null);
   const dubAudioRef = useRef(null);
+  const hiddenTracksRef = useRef([]);
 
   const userMutedRef = useRef(userMuted);
   userMutedRef.current = userMuted;
@@ -222,15 +223,16 @@ export function VideoTranslateControls({
     const video = videoRef?.current;
     if (video) {
       // Le son est restauré par l'effet de synchronisation du doublage.
-      // Nettoyage complet des pistes de sous-titres
-      const tracks = video.querySelectorAll("track[data-baaro-translate]");
-      tracks.forEach((t) => t.remove());
-
-      if (video.textTracks) {
-        Array.from(video.textTracks).forEach((track) => {
-          track.mode = "disabled";
-        });
-      }
+      // Seules les pistes BAARO sont retirées
+      video.querySelectorAll("track[data-baaro-translate]").forEach((t) => {
+        if (t.track) t.track.mode = "disabled";
+        t.remove();
+      });
+      // Restaure les sous-titres d'origine qui étaient affichés
+      hiddenTracksRef.current.forEach((t) => {
+        t.mode = "showing";
+      });
+      hiddenTracksRef.current = [];
     }
     if (dubAudioRef.current) {
       dubAudioRef.current.pause();
@@ -250,6 +252,14 @@ export function VideoTranslateControls({
 
     // Supprimer les anciennes pistes
     video.querySelectorAll("track[data-baaro-translate]").forEach((t) => t.remove());
+    if (hiddenTracksRef.current.length === 0) {
+      hiddenTracksRef.current = Array.from(video.textTracks).filter(
+        (t) => t.mode === "showing"
+      );
+    }
+    hiddenTracksRef.current.forEach((t) => {
+      t.mode = "disabled";
+    });
 
     let src = vttUrl;
 
@@ -273,15 +283,7 @@ export function VideoTranslateControls({
 
     // Forcer l'activation d'affichage des sous-titres sur le lecteur vidéo
     setTimeout(() => {
-      if (video.textTracks && video.textTracks.length > 0) {
-        Array.from(video.textTracks).forEach((t) => {
-          if (t.label.includes("BAARO")) {
-            t.mode = "showing";
-          } else {
-            t.mode = "disabled";
-          }
-        });
-      }
+      if (track.track) track.track.mode = "showing";
     }, 100);
   };
 
