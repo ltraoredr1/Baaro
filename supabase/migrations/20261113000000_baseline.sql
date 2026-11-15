@@ -309,6 +309,64 @@ end $$;
 ALTER FUNCTION "public"."ban_community_member"("p_group" "uuid", "p_user" "uuid", "p_reason" "text") OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."bump_video_counter"() RETURNS "trigger"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public'
+    AS $$
+DECLARE delta integer;
+BEGIN
+  delta := CASE TG_OP WHEN 'INSERT' THEN 1 ELSE -1 END;
+  IF TG_TABLE_NAME = 'video_bookmarks' THEN
+    UPDATE public.videos
+       SET saves_count = GREATEST(0, saves_count + delta)
+     WHERE id = COALESCE(NEW.video_id, OLD.video_id);
+  ELSE
+    UPDATE public.videos
+       SET shares_count = GREATEST(0, shares_count + delta)
+     WHERE id = COALESCE(NEW.video_id, OLD.video_id);
+  END IF;
+  RETURN NULL;
+END $$;
+
+
+ALTER FUNCTION "public"."bump_video_counter"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."calls_guard_update"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO 'public'
+    AS $$
+BEGIN
+  -- service_role / jobs serveur : aucune restriction.
+  IF auth.uid() IS NULL THEN
+    RETURN NEW;
+  END IF;
+
+  IF NEW.id IS DISTINCT FROM OLD.id
+     OR NEW.conversation_id IS DISTINCT FROM OLD.conversation_id
+     OR NEW.caller_id IS DISTINCT FROM OLD.caller_id
+     OR NEW.callee_id IS DISTINCT FROM OLD.callee_id
+     OR NEW.type IS DISTINCT FROM OLD.type
+     OR NEW.daily_room_name IS DISTINCT FROM OLD.daily_room_name
+     OR NEW.daily_room_url IS DISTINCT FROM OLD.daily_room_url
+     OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN
+    RAISE EXCEPTION 'calls: colonnes non modifiables' USING ERRCODE = '42501';
+  END IF;
+
+  -- Un appel terminé, refusé ou manqué ne repart pas.
+  IF OLD.status IN ('ended', 'rejected', 'missed')
+     AND NEW.status IS DISTINCT FROM OLD.status THEN
+    RAISE EXCEPTION 'calls: appel déjà terminé' USING ERRCODE = '42501';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."calls_guard_update"() OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."can_post_in_channel"("p_channel" "uuid") RETURNS boolean
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO 'public'
@@ -1739,6 +1797,19 @@ end $$;
 ALTER FUNCTION "public"."get_monetization_dashboard"() OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."get_my_private_profile"() RETURNS TABLE("phone" "text", "first_name" "text", "last_name" "text", "birth_date" "date")
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO 'public', 'auth'
+    AS $$
+  SELECT p.phone, p.first_name, p.last_name, p.birth_date
+  FROM public.profile_private p
+  WHERE p.user_id = auth.uid();
+$$;
+
+
+ALTER FUNCTION "public"."get_my_private_profile"() OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."get_playlist_videos"("p_playlist_id" "uuid") RETURNS TABLE("video_id" "uuid", "position" integer, "title" "text", "video_url" "text", "thumbnail_url" "text", "duration" "text", "author_id" "uuid")
     LANGUAGE "sql" STABLE
     AS $$ 
@@ -2549,6 +2620,64 @@ END $$;
 ALTER FUNCTION "public"."mark_order_paid"("p_order_id" "uuid", "p_payment_ref" "text", "p_provider" "text") OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."messages_guard_update"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO 'public'
+    AS $$
+DECLARE
+  uid uuid := auth.uid();
+  sender_cols text[] := ARRAY[
+    'text', 'edited_at', 'deleted_at', 'expires_at', 'metadata', 'media_url',
+    'media_mime', 'media_size', 'media_duration', 'file_name', 'scheduled_for'
+  ];
+  recipient_cols text[] := ARRAY['read_at', 'delivered_at'];
+  old_j jsonb := to_jsonb(OLD);
+  new_j jsonb := to_jsonb(NEW);
+  allowed text[];
+BEGIN
+  -- service_role / jobs serveur : aucune restriction.
+  IF uid IS NULL THEN
+    RETURN NEW;
+  END IF;
+
+  -- Les colonnes immuables ne changent jamais.
+  IF NEW.id IS DISTINCT FROM OLD.id
+     OR NEW.conversation_id IS DISTINCT FROM OLD.conversation_id
+     OR NEW.sender_id IS DISTINCT FROM OLD.sender_id
+     OR NEW.recipient_id IS DISTINCT FROM OLD.recipient_id
+     OR NEW.created_at IS DISTINCT FROM OLD.created_at
+     OR NEW.client_message_id IS DISTINCT FROM OLD.client_message_id THEN
+    RAISE EXCEPTION 'messages: colonnes immuables non modifiables'
+      USING ERRCODE = '42501';
+  END IF;
+
+  IF uid = OLD.sender_id THEN
+    allowed := sender_cols || recipient_cols;
+  ELSIF uid = OLD.recipient_id THEN
+    allowed := recipient_cols;
+  ELSE
+    RAISE EXCEPTION 'messages: modification non autorisée' USING ERRCODE = '42501';
+  END IF;
+
+  -- Toute autre colonne modifiée est refusée.
+  IF (old_j - allowed) IS DISTINCT FROM (new_j - allowed) THEN
+    RAISE EXCEPTION 'messages: colonne non modifiable pour ce rôle'
+      USING ERRCODE = '42501';
+  END IF;
+
+  -- Un message supprimé ne revient pas.
+  IF OLD.deleted_at IS NOT NULL AND NEW.deleted_at IS DISTINCT FROM OLD.deleted_at THEN
+    RAISE EXCEPTION 'messages: message déjà supprimé' USING ERRCODE = '42501';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."messages_guard_update"() OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."messages_rate_limit"() RETURNS "trigger"
     LANGUAGE "plpgsql"
     AS $$
@@ -3058,6 +3187,54 @@ END; $$;
 
 
 ALTER FUNCTION "public"."record_video_gift"("p_video_id" "uuid", "p_sender_id" "uuid", "p_gift_code" "text", "p_checkout_intent_id" "uuid") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."record_video_watch"("p_video_id" "uuid", "p_ratio" real) RETURNS "void"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public'
+    AS $$
+    DECLARE
+      uid uuid := auth.uid();
+      r real := LEAST(1, GREATEST(0, COALESCE(p_ratio, 0)));
+      old real;
+    BEGIN
+      IF uid IS NULL OR r < 0.03 THEN
+        RETURN;
+      END IF;
+
+      SELECT ratio
+      INTO old
+      FROM public.video_watch_events
+      WHERE user_id = uid
+        AND video_id = p_video_id;
+
+      IF NOT FOUND THEN
+        INSERT INTO public.video_watch_events (
+          user_id, video_id, ratio
+        )
+        VALUES (uid, p_video_id, r);
+
+        UPDATE public.videos
+        SET watch_ratio_sum = watch_ratio_sum + r,
+            watch_ratio_count = watch_ratio_count + 1
+        WHERE id = p_video_id;
+
+      ELSIF r > old THEN
+        UPDATE public.video_watch_events
+        SET ratio = r,
+            updated_at = now()
+        WHERE user_id = uid
+          AND video_id = p_video_id;
+
+        UPDATE public.videos
+        SET watch_ratio_sum = watch_ratio_sum + (r - old)
+        WHERE id = p_video_id;
+      END IF;
+    END;
+    $$;
+
+
+ALTER FUNCTION "public"."record_video_watch"("p_video_id" "uuid", "p_ratio" real) OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."record_video_watch"("p_video_id" "uuid", "p_watch_ms" integer, "p_duration_ms" integer, "p_completed" boolean DEFAULT false, "p_rewatched" boolean DEFAULT false, "p_liked" boolean DEFAULT false, "p_shared" boolean DEFAULT false, "p_negative_signal" "text" DEFAULT NULL::"text") RETURNS "void"
@@ -4009,6 +4186,25 @@ end $$;
 ALTER FUNCTION "public"."unban_community_member"("p_group" "uuid", "p_user" "uuid") OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."update_my_private_profile"("p_phone" "text" DEFAULT NULL::"text", "p_first_name" "text" DEFAULT NULL::"text", "p_last_name" "text" DEFAULT NULL::"text", "p_birth_date" "date" DEFAULT NULL::"date") RETURNS "void"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public', 'auth'
+    AS $$
+BEGIN
+  IF auth.uid() IS NULL THEN RAISE EXCEPTION 'AUTH_REQUIRED'; END IF;
+  INSERT INTO public.profile_private(user_id, phone, first_name, last_name, birth_date, updated_at)
+  VALUES (auth.uid(), NULLIF(trim(p_phone), ''), NULLIF(trim(p_first_name), ''), NULLIF(trim(p_last_name), ''), p_birth_date, now())
+  ON CONFLICT (user_id) DO UPDATE SET
+    phone = EXCLUDED.phone, first_name = EXCLUDED.first_name,
+    last_name = EXCLUDED.last_name, birth_date = EXCLUDED.birth_date,
+    updated_at = now();
+END;
+$$;
+
+
+ALTER FUNCTION "public"."update_my_private_profile"("p_phone" "text", "p_first_name" "text", "p_last_name" "text", "p_birth_date" "date") OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."update_notifications_updated_at"() RETURNS "trigger"
     LANGUAGE "plpgsql"
     AS $$
@@ -4173,6 +4369,10 @@ CREATE TABLE IF NOT EXISTS "public"."videos" (
     "stitch_start_ms" integer,
     "stitch_end_ms" integer,
     "playlist_id" "uuid",
+    "saves_count" integer DEFAULT 0 NOT NULL,
+    "shares_count" integer DEFAULT 0 NOT NULL,
+    "watch_ratio_sum" real DEFAULT 0 NOT NULL,
+    "watch_ratio_count" integer DEFAULT 0 NOT NULL,
     CONSTRAINT "videos_collab_mode_check" CHECK ((("collab_mode" IS NULL) OR ("collab_mode" = ANY (ARRAY['stitch'::"text", 'duo'::"text", 'reply'::"text"])))),
     CONSTRAINT "videos_content_mode_check" CHECK (("content_mode" = ANY (ARRAY['original'::"text", 'remix'::"text", 'duet'::"text", 'react'::"text", 'reply'::"text", 'collab'::"text", 'challenge'::"text", 'tutorial'::"text", 'music'::"text", 'comedy'::"text", 'education'::"text"]))),
     CONSTRAINT "videos_visibility_check" CHECK (("visibility" = ANY (ARRAY['public'::"text", 'followers'::"text", 'private'::"text", 'unlisted'::"text"])))
@@ -4390,7 +4590,7 @@ CREATE TABLE IF NOT EXISTS "public"."calls" (
     "ended_at" timestamp with time zone,
     "created_at" timestamp with time zone DEFAULT "now"(),
     "duration_seconds" integer,
-    CONSTRAINT "calls_status_check" CHECK (("status" = ANY (ARRAY['ringing'::"text", 'ongoing'::"text", 'ended'::"text", 'rejected'::"text", 'missed'::"text"]))),
+    CONSTRAINT "calls_status_check" CHECK (("status" = ANY (ARRAY['ringing'::"text", 'ongoing'::"text", 'ended'::"text", 'rejected'::"text", 'missed'::"text", 'cancelled'::"text"]))),
     CONSTRAINT "calls_type_check" CHECK (("type" = ANY (ARRAY['voice'::"text", 'video'::"text"])))
 );
 
@@ -5529,7 +5729,7 @@ CREATE TABLE IF NOT EXISTS "public"."payment_webhook_events" (
     CONSTRAINT "payment_webhook_events_completed_at_check" CHECK ((("status" <> 'completed'::"text") OR ("completed_at" IS NOT NULL))),
     CONSTRAINT "payment_webhook_events_event_id_check" CHECK ((("length"(TRIM(BOTH FROM "event_id")) >= 1) AND ("length"(TRIM(BOTH FROM "event_id")) <= 255))),
     CONSTRAINT "payment_webhook_events_payload_hash_check" CHECK (("length"(TRIM(BOTH FROM "payload_hash")) = 64)),
-    CONSTRAINT "payment_webhook_events_provider_check" CHECK (("provider" = ANY (ARRAY['stripe'::"text", 'paypal'::"text", 'cinetpay'::"text"]))),
+    CONSTRAINT "payment_webhook_events_provider_check" CHECK (("provider" = ANY (ARRAY['stripe'::"text", 'paypal'::"text", 'cinetpay'::"text", 'flutterwave'::"text"]))),
     CONSTRAINT "payment_webhook_events_status_check" CHECK (("status" = ANY (ARRAY['processing'::"text", 'completed'::"text", 'failed'::"text"])))
 );
 
@@ -5745,6 +5945,19 @@ CREATE TABLE IF NOT EXISTS "public"."profile_links" (
 
 
 ALTER TABLE "public"."profile_links" OWNER TO "postgres";
+
+
+CREATE TABLE IF NOT EXISTS "public"."profile_private" (
+    "user_id" "uuid" NOT NULL,
+    "phone" "text",
+    "first_name" "text",
+    "last_name" "text",
+    "birth_date" "date",
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL
+);
+
+
+ALTER TABLE "public"."profile_private" OWNER TO "postgres";
 
 
 CREATE TABLE IF NOT EXISTS "public"."profile_social_links" (
@@ -6336,6 +6549,7 @@ CREATE TABLE IF NOT EXISTS "public"."user_settings" (
     "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "custom_theme" "jsonb",
     "enabled_modules" "jsonb" DEFAULT '{}'::"jsonb",
+    "sms_fallback" boolean DEFAULT false NOT NULL,
     CONSTRAINT "user_settings_lang_check" CHECK (("lang" = ANY (ARRAY['fr'::"text", 'en'::"text", 'ar'::"text", 'bm'::"text", 'wo'::"text", 'ha'::"text", 'ff'::"text", 'sw'::"text", 'pt'::"text", 'es'::"text", 'nqo'::"text", 'boz'::"text", 'dog'::"text", 'snk'::"text"])))
 );
 
@@ -6678,6 +6892,16 @@ CREATE TABLE IF NOT EXISTS "public"."video_remixes" (
 ALTER TABLE "public"."video_remixes" OWNER TO "postgres";
 
 
+CREATE TABLE IF NOT EXISTS "public"."video_shares" (
+    "user_id" "uuid" NOT NULL,
+    "video_id" "uuid" NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL
+);
+
+
+ALTER TABLE "public"."video_shares" OWNER TO "postgres";
+
+
 CREATE TABLE IF NOT EXISTS "public"."video_views" (
     "video_id" "uuid" NOT NULL,
     "viewer_id" "uuid" NOT NULL,
@@ -6703,8 +6927,11 @@ CREATE TABLE IF NOT EXISTS "public"."video_watch_events" (
     "shared" boolean DEFAULT false NOT NULL,
     "negative_signal" "text",
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "ratio" real,
     CONSTRAINT "video_watch_events_duration_ms_check" CHECK (("duration_ms" >= 0)),
     CONSTRAINT "video_watch_events_negative_signal_check" CHECK ((("negative_signal" IS NULL) OR ("negative_signal" = ANY (ARRAY['not_interested'::"text", 'hide_creator'::"text", 'report'::"text"])))),
+    CONSTRAINT "video_watch_events_ratio_check" CHECK ((("ratio" >= (0)::double precision) AND ("ratio" <= (1)::double precision))),
     CONSTRAINT "video_watch_events_watch_ms_check" CHECK (("watch_ms" >= 0))
 );
 
@@ -7193,6 +7420,11 @@ ALTER TABLE ONLY "public"."message_stars"
 
 
 
+ALTER TABLE "public"."messages"
+    ADD CONSTRAINT "messages_media_url_https" CHECK ((("media_url" IS NULL) OR ("media_url" ~* '^https://'::"text"))) NOT VALID;
+
+
+
 ALTER TABLE ONLY "public"."messages"
     ADD CONSTRAINT "messages_pkey" PRIMARY KEY ("id");
 
@@ -7370,6 +7602,11 @@ ALTER TABLE ONLY "public"."profile_contacts"
 
 ALTER TABLE ONLY "public"."profile_links"
     ADD CONSTRAINT "profile_links_pkey" PRIMARY KEY ("id");
+
+
+
+ALTER TABLE ONLY "public"."profile_private"
+    ADD CONSTRAINT "profile_private_pkey" PRIMARY KEY ("user_id");
 
 
 
@@ -7750,6 +7987,11 @@ ALTER TABLE ONLY "public"."video_remixes"
 
 ALTER TABLE ONLY "public"."video_remixes"
     ADD CONSTRAINT "video_remixes_video_id_key" UNIQUE ("video_id");
+
+
+
+ALTER TABLE ONLY "public"."video_shares"
+    ADD CONSTRAINT "video_shares_pkey" PRIMARY KEY ("user_id", "video_id");
 
 
 
@@ -8297,6 +8539,10 @@ CREATE INDEX "idx_video_remixes_source_mode" ON "public"."video_remixes" USING "
 
 
 
+CREATE INDEX "idx_video_shares_video" ON "public"."video_shares" USING "btree" ("video_id");
+
+
+
 CREATE INDEX "idx_video_views_video_date" ON "public"."video_views" USING "btree" ("video_id", "view_date" DESC);
 
 
@@ -8310,6 +8556,14 @@ CREATE INDEX "idx_video_watch_events_video_created" ON "public"."video_watch_eve
 
 
 CREATE INDEX "idx_video_watch_user_created" ON "public"."video_watch_events" USING "btree" ("user_id", "created_at" DESC);
+
+
+
+CREATE INDEX "idx_video_watch_user_updated" ON "public"."video_watch_events" USING "btree" ("user_id", "updated_at" DESC);
+
+
+
+CREATE UNIQUE INDEX "idx_video_watch_user_video_unique" ON "public"."video_watch_events" USING "btree" ("user_id", "video_id");
 
 
 
@@ -8374,6 +8628,10 @@ CREATE UNIQUE INDEX "notifications_idempotency_key_uidx" ON "public"."notificati
 
 
 CREATE INDEX "post_likes_user_idx" ON "public"."post_likes" USING "btree" ("user_id");
+
+
+
+CREATE UNIQUE INDEX "post_reposts_post_user_unique" ON "public"."post_reposts" USING "btree" ("post_id", "user_id");
 
 
 
@@ -8453,7 +8711,15 @@ CREATE INDEX "user_blocks_blocked_idx" ON "public"."user_blocks" USING "btree" (
 
 
 
+CREATE OR REPLACE TRIGGER "calls_guard_update" BEFORE UPDATE ON "public"."calls" FOR EACH ROW EXECUTE FUNCTION "public"."calls_guard_update"();
+
+
+
 CREATE OR REPLACE TRIGGER "debate_participants_role_guard" BEFORE UPDATE ON "public"."debate_participants" FOR EACH ROW EXECUTE FUNCTION "public"."prevent_client_role_change"();
+
+
+
+CREATE OR REPLACE TRIGGER "messages_guard_update" BEFORE UPDATE ON "public"."messages" FOR EACH ROW EXECUTE FUNCTION "public"."messages_guard_update"();
 
 
 
@@ -8533,7 +8799,15 @@ CREATE OR REPLACE TRIGGER "trg_story_reply_notify" AFTER INSERT ON "public"."sto
 
 
 
+CREATE OR REPLACE TRIGGER "trg_video_bookmarks_count" AFTER INSERT OR DELETE ON "public"."video_bookmarks" FOR EACH ROW EXECUTE FUNCTION "public"."bump_video_counter"();
+
+
+
 CREATE OR REPLACE TRIGGER "trg_video_likes_count" AFTER INSERT OR DELETE ON "public"."video_likes" FOR EACH ROW EXECUTE FUNCTION "public"."update_video_likes_count"();
+
+
+
+CREATE OR REPLACE TRIGGER "trg_video_shares_count" AFTER INSERT OR DELETE ON "public"."video_shares" FOR EACH ROW EXECUTE FUNCTION "public"."bump_video_counter"();
 
 
 
@@ -9280,6 +9554,11 @@ ALTER TABLE ONLY "public"."profile_links"
 
 
 
+ALTER TABLE ONLY "public"."profile_private"
+    ADD CONSTRAINT "profile_private_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id") ON DELETE CASCADE;
+
+
+
 ALTER TABLE ONLY "public"."profile_social_links"
     ADD CONSTRAINT "profile_social_links_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id") ON DELETE CASCADE;
 
@@ -9700,6 +9979,16 @@ ALTER TABLE ONLY "public"."video_remixes"
 
 
 
+ALTER TABLE ONLY "public"."video_shares"
+    ADD CONSTRAINT "video_shares_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "public"."profiles"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."video_shares"
+    ADD CONSTRAINT "video_shares_video_id_fkey" FOREIGN KEY ("video_id") REFERENCES "public"."videos"("id") ON DELETE CASCADE;
+
+
+
 ALTER TABLE ONLY "public"."video_views"
     ADD CONSTRAINT "video_views_video_id_fkey" FOREIGN KEY ("video_id") REFERENCES "public"."videos"("id") ON DELETE CASCADE;
 
@@ -9974,7 +10263,11 @@ CREATE POLICY "bookmarks_select_own" ON "public"."post_bookmarks" FOR SELECT USI
 ALTER TABLE "public"."calls" ENABLE ROW LEVEL SECURITY;
 
 
-CREATE POLICY "calls_participants" ON "public"."calls" USING ((("auth"."uid"() = "caller_id") OR ("auth"."uid"() = "callee_id")));
+CREATE POLICY "calls_participants_select" ON "public"."calls" FOR SELECT TO "authenticated" USING (((( SELECT "auth"."uid"() AS "uid") = "caller_id") OR (( SELECT "auth"."uid"() AS "uid") = "callee_id")));
+
+
+
+CREATE POLICY "calls_participants_update" ON "public"."calls" FOR UPDATE TO "authenticated" USING (((( SELECT "auth"."uid"() AS "uid") = "caller_id") OR (( SELECT "auth"."uid"() AS "uid") = "callee_id"))) WITH CHECK (((( SELECT "auth"."uid"() AS "uid") = "caller_id") OR (( SELECT "auth"."uid"() AS "uid") = "callee_id")));
 
 
 
@@ -10610,15 +10903,27 @@ CREATE POLICY "messages_insert" ON "public"."channel_messages" FOR INSERT TO "au
 
 
 
-CREATE POLICY "messages_participants" ON "public"."messages" USING ((("auth"."uid"() = "sender_id") OR ("auth"."uid"() = "recipient_id") OR ("auth"."uid"() IN ( SELECT "conversations"."user1_id"
-   FROM "public"."conversations"
-  WHERE ("conversations"."id" = "messages"."conversation_id"))) OR ("auth"."uid"() IN ( SELECT "conversations"."user2_id"
-   FROM "public"."conversations"
-  WHERE ("conversations"."id" = "messages"."conversation_id")))));
+CREATE POLICY "messages_participants_insert" ON "public"."messages" FOR INSERT TO "authenticated" WITH CHECK ((("sender_id" = ( SELECT "auth"."uid"() AS "uid")) AND "public"."is_real_user"() AND (EXISTS ( SELECT 1
+   FROM "public"."conversations" "c"
+  WHERE (("c"."id" = "messages"."conversation_id") AND ((("c"."user1_id" = ( SELECT "auth"."uid"() AS "uid")) AND ("c"."user2_id" = "messages"."recipient_id")) OR (("c"."user2_id" = ( SELECT "auth"."uid"() AS "uid")) AND ("c"."user1_id" = "messages"."recipient_id"))))))));
+
+
+
+CREATE POLICY "messages_participants_select" ON "public"."messages" FOR SELECT TO "authenticated" USING (((( SELECT "auth"."uid"() AS "uid") = "sender_id") OR (( SELECT "auth"."uid"() AS "uid") = "recipient_id") OR (EXISTS ( SELECT 1
+   FROM "public"."conversations" "c"
+  WHERE (("c"."id" = "messages"."conversation_id") AND ((( SELECT "auth"."uid"() AS "uid") = "c"."user1_id") OR (( SELECT "auth"."uid"() AS "uid") = "c"."user2_id")))))));
+
+
+
+CREATE POLICY "messages_participants_update" ON "public"."messages" FOR UPDATE TO "authenticated" USING (((( SELECT "auth"."uid"() AS "uid") = "sender_id") OR (( SELECT "auth"."uid"() AS "uid") = "recipient_id"))) WITH CHECK (((( SELECT "auth"."uid"() AS "uid") = "sender_id") OR (( SELECT "auth"."uid"() AS "uid") = "recipient_id")));
 
 
 
 CREATE POLICY "messages_select" ON "public"."channel_messages" FOR SELECT TO "authenticated" USING ("public"."can_see_group"("public"."channel_group"("channel_id")));
+
+
+
+CREATE POLICY "messages_sender_delete" ON "public"."messages" FOR DELETE TO "authenticated" USING (("sender_id" = ( SELECT "auth"."uid"() AS "uid")));
 
 
 
@@ -10869,6 +11174,13 @@ ALTER TABLE "public"."profile_contacts" ENABLE ROW LEVEL SECURITY;
 
 
 ALTER TABLE "public"."profile_links" ENABLE ROW LEVEL SECURITY;
+
+
+ALTER TABLE "public"."profile_private" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "profile_private_owner" ON "public"."profile_private" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
+
 
 
 ALTER TABLE "public"."profile_social_links" ENABLE ROW LEVEL SECURITY;
@@ -11446,6 +11758,17 @@ CREATE POLICY "video_remixes_read" ON "public"."video_remixes" FOR SELECT USING 
 
 
 
+ALTER TABLE "public"."video_shares" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "video_shares_insert_own" ON "public"."video_shares" FOR INSERT TO "authenticated" WITH CHECK (("auth"."uid"() = "user_id"));
+
+
+
+CREATE POLICY "video_shares_select_own" ON "public"."video_shares" FOR SELECT TO "authenticated" USING (("auth"."uid"() = "user_id"));
+
+
+
 ALTER TABLE "public"."video_views" ENABLE ROW LEVEL SECURITY;
 
 
@@ -11456,6 +11779,10 @@ CREATE POLICY "video_views_owner_or_self" ON "public"."video_views" FOR SELECT T
 
 
 ALTER TABLE "public"."video_watch_events" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "video_watch_select_own" ON "public"."video_watch_events" FOR SELECT TO "authenticated" USING (("auth"."uid"() = "user_id"));
+
 
 
 ALTER TABLE "public"."videos" ENABLE ROW LEVEL SECURITY;
@@ -11745,6 +12072,19 @@ GRANT ALL ON FUNCTION "public"."ban_community_member"("p_group" "uuid", "p_user"
 
 
 
+REVOKE ALL ON FUNCTION "public"."bump_video_counter"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."bump_video_counter"() TO "anon";
+GRANT ALL ON FUNCTION "public"."bump_video_counter"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."bump_video_counter"() TO "service_role";
+
+
+
+GRANT ALL ON FUNCTION "public"."calls_guard_update"() TO "anon";
+GRANT ALL ON FUNCTION "public"."calls_guard_update"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."calls_guard_update"() TO "service_role";
+
+
+
 REVOKE ALL ON FUNCTION "public"."can_post_in_channel"("p_channel" "uuid") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."can_post_in_channel"("p_channel" "uuid") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."can_post_in_channel"("p_channel" "uuid") TO "service_role";
@@ -11944,6 +12284,13 @@ GRANT ALL ON FUNCTION "public"."get_monetization_catalog"() TO "service_role";
 REVOKE ALL ON FUNCTION "public"."get_monetization_dashboard"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."get_monetization_dashboard"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."get_monetization_dashboard"() TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."get_my_private_profile"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."get_my_private_profile"() TO "anon";
+GRANT ALL ON FUNCTION "public"."get_my_private_profile"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."get_my_private_profile"() TO "service_role";
 
 
 
@@ -12204,6 +12551,12 @@ GRANT ALL ON FUNCTION "public"."mark_order_paid"("p_order_id" "uuid", "p_payment
 
 
 
+GRANT ALL ON FUNCTION "public"."messages_guard_update"() TO "anon";
+GRANT ALL ON FUNCTION "public"."messages_guard_update"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."messages_guard_update"() TO "service_role";
+
+
+
 GRANT ALL ON FUNCTION "public"."messages_rate_limit"() TO "anon";
 GRANT ALL ON FUNCTION "public"."messages_rate_limit"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."messages_rate_limit"() TO "service_role";
@@ -12325,6 +12678,12 @@ GRANT ALL ON FUNCTION "public"."record_story_view"("p_story_id" "uuid") TO "serv
 
 REVOKE ALL ON FUNCTION "public"."record_video_gift"("p_video_id" "uuid", "p_sender_id" "uuid", "p_gift_code" "text", "p_checkout_intent_id" "uuid") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."record_video_gift"("p_video_id" "uuid", "p_sender_id" "uuid", "p_gift_code" "text", "p_checkout_intent_id" "uuid") TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."record_video_watch"("p_video_id" "uuid", "p_ratio" real) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."record_video_watch"("p_video_id" "uuid", "p_ratio" real) TO "authenticated";
+GRANT ALL ON FUNCTION "public"."record_video_watch"("p_video_id" "uuid", "p_ratio" real) TO "service_role";
 
 
 
@@ -12648,6 +13007,13 @@ GRANT ALL ON FUNCTION "public"."trg_notify_story_reply"() TO "service_role";
 REVOKE ALL ON FUNCTION "public"."unban_community_member"("p_group" "uuid", "p_user" "uuid") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."unban_community_member"("p_group" "uuid", "p_user" "uuid") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."unban_community_member"("p_group" "uuid", "p_user" "uuid") TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."update_my_private_profile"("p_phone" "text", "p_first_name" "text", "p_last_name" "text", "p_birth_date" "date") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."update_my_private_profile"("p_phone" "text", "p_first_name" "text", "p_last_name" "text", "p_birth_date" "date") TO "anon";
+GRANT ALL ON FUNCTION "public"."update_my_private_profile"("p_phone" "text", "p_first_name" "text", "p_last_name" "text", "p_birth_date" "date") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."update_my_private_profile"("p_phone" "text", "p_first_name" "text", "p_last_name" "text", "p_birth_date" "date") TO "service_role";
 
 
 
@@ -13203,8 +13569,6 @@ GRANT UPDATE("read_at") ON TABLE "public"."notifications" TO "authenticated";
 
 
 
-GRANT ALL ON TABLE "public"."notification_unread_counts" TO "anon";
-GRANT ALL ON TABLE "public"."notification_unread_counts" TO "authenticated";
 GRANT ALL ON TABLE "public"."notification_unread_counts" TO "service_role";
 
 
@@ -13322,6 +13686,11 @@ GRANT ALL ON TABLE "public"."profile_contacts" TO "service_role";
 GRANT ALL ON TABLE "public"."profile_links" TO "anon";
 GRANT ALL ON TABLE "public"."profile_links" TO "authenticated";
 GRANT ALL ON TABLE "public"."profile_links" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."profile_private" TO "authenticated";
+GRANT ALL ON TABLE "public"."profile_private" TO "service_role";
 
 
 
@@ -13768,14 +14137,18 @@ GRANT ALL ON TABLE "public"."video_remixes" TO "service_role";
 
 
 
+GRANT ALL ON TABLE "public"."video_shares" TO "authenticated";
+GRANT ALL ON TABLE "public"."video_shares" TO "service_role";
+
+
+
 GRANT SELECT,REFERENCES,TRIGGER,TRUNCATE,MAINTAIN ON TABLE "public"."video_views" TO "anon";
 GRANT SELECT,REFERENCES,TRIGGER,TRUNCATE,MAINTAIN ON TABLE "public"."video_views" TO "authenticated";
 GRANT ALL ON TABLE "public"."video_views" TO "service_role";
 
 
 
-GRANT ALL ON TABLE "public"."video_watch_events" TO "anon";
-GRANT ALL ON TABLE "public"."video_watch_events" TO "authenticated";
+GRANT SELECT,REFERENCES,TRIGGER,TRUNCATE,MAINTAIN ON TABLE "public"."video_watch_events" TO "authenticated";
 GRANT ALL ON TABLE "public"."video_watch_events" TO "service_role";
 
 
