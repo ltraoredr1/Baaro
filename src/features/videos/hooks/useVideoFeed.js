@@ -56,6 +56,7 @@ export function useVideoFeed() {
   const [loadError, setLoadError] = useState(null);
   const [likedMap, setLikedMap] = useState({});
   const [mode, setMode] = useState("forYou");
+  const [profileRevision, setProfileRevision] = useState(0);
 
   const requestSequence = useRef(0);
   const currentUserId = useRef(null);
@@ -235,6 +236,8 @@ export function useVideoFeed() {
               syncWatchHistory(watched);
             } catch {
               /* signal facultatif */
+            } finally {
+              setProfileRevision((current) => current + 1);
             }
           }
         }
@@ -463,7 +466,7 @@ export function useVideoFeed() {
     }
     forYouOrderRef.current = ids;
     return ids.map((id) => byId.get(id));
-  }, [videos, mode]);
+  }, [videos, mode, profileRevision]);
 
   return {
     videos,
