@@ -656,7 +656,7 @@ export function MainShell() {
           BOUTON FLOTTANT TRANSPARENT (MODE VIDÉO)
           ===================================================== */}
       {isImmersive && (
-        <div className="fixed top-4 left-4 z-[70] flex items-center">
+        <div className="fixed left-4 z-[70] flex items-center" style={{ top: "calc(env(safe-area-inset-top, 0px) + 1rem)" }}>
           <button
             onClick={() => setShowUi((prev) => !prev)}
             className="px-3.5 py-1.5 rounded-full bg-black/40 backdrop-blur-xl border border-white/20 text-white text-xs font-semibold shadow-lg hover:bg-black/60 transition-all flex items-center gap-1.5"
