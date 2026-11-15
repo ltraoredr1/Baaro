@@ -331,7 +331,7 @@ export function ChatCallModal({
             startedAtRef.current = Date.now();
             if (callRecord?.id) {
               updateCallStatus(callRecord.id, {
-                status: "accepted",
+                status: "ongoing",
                 started_at: new Date().toISOString(),
               }).catch(() => {});
             }
@@ -419,7 +419,7 @@ export function ChatCallModal({
 
     if (callRecord?.id) {
       updateCallStatus(callRecord.id, {
-        status: "accepted",
+        status: "ongoing",
         started_at: new Date().toISOString(),
       }).catch((e) => console.warn("updateCallStatus :", e));
     }

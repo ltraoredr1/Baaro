@@ -950,6 +950,18 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
         .single();
 
       if (error) {
+        // Création simultanée (index unique sur la paire) : on rouvre la conversation existante.
+        if (error.code === "23505") {
+          const { data: again } = await supabase
+            .from("conversations")
+            .select("id")
+            .or(`and(user1_id.eq.${id},user2_id.eq.${otherId}),and(user1_id.eq.${otherId},user2_id.eq.${id})`)
+            .limit(1);
+          if (again?.[0]) {
+            openChatWith(again[0].id, otherId, name, avatar, flag);
+            return;
+          }
+        }
         notify(error.message || "Impossible de créer la conversation");
         return;
       }
@@ -1151,7 +1163,7 @@ export function MessagesTab({ id: propId, onOpenProfile }) {
     setSearchLoading(true);
     const t = setTimeout(async () => {
       // On retire % _ et la virgule pour ne pas casser le filtre ni créer de jokers
-      const safe = q.replace(/[%_,]/g, " ");
+      const safe = q.replace(/[%_,()*\\"]/g, " ");
       const { data, error } = await supabase
         .from("profiles")
         .select("id, display_name, avatar_url, flag, handle, public_key")
