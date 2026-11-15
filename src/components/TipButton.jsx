@@ -55,7 +55,7 @@ export function TipButton({ recipientId, postId = null, liveId = null, compact =
         ? (busy ? <span className="text-xs">…</span> : <Gift size={21} />)
         : <><Gift size={15} /> {busy ? '…' : t('economy.tip')}</>}
     </button>
-    {open && <div className={`absolute bottom-full z-50 mb-2 w-52 ${iconOnly ? "right-0" : "left-0"} rounded-2xl border border-white/10 bg-black/95 p-2 shadow-2xl">
+    {open && <div className={`absolute bottom-full z-50 mb-2 w-52 ${iconOnly ? "right-0" : "left-0"} rounded-2xl border border-white/10 bg-black/95 p-2 shadow-2xl`}>
       <div className="px-2 py-1 text-[10px] font-black uppercase tracking-wider text-white/40">
         {amount ? 'Moyen de paiement' : t("economy.support_creator")}
       </div>
