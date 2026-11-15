@@ -69,8 +69,11 @@ export function VideosTab({ onRewardPoints, onExit }) {
     setVideos,
     user,
     loading,
+    loadingMore,
+    hasMore,
     loadError,
     loadVideos,
+    loadMore,
     likedMap,
     setLikedMap,
     visibleVideos,
@@ -393,6 +396,13 @@ export function VideosTab({ onRewardPoints, onExit }) {
 
     if (!target) return false;
 
+    // Plein écran natif = lié à UN élément <video>.
+    // On doit en sortir avant de changer de slide, sinon l'ancien
+    // élément (souvent démonté / sans frames) reste affiché → écran noir.
+    if (typeof document !== "undefined" && document.fullscreenElement) {
+      document.exitFullscreen?.().catch(() => {});
+    }
+
     slideRefs.current[String(target.id)]?.scrollIntoView({
       behavior: reducedMotion ? "auto" : "smooth",
       block: "start",
@@ -613,6 +623,19 @@ export function VideosTab({ onRewardPoints, onExit }) {
           return;
         }
 
+        // Si le src vient d'être posé (passage preload/none → active),
+        // s'assurer que le navigateur charge bien les frames.
+        if (!element.getAttribute("src") && element.dataset?.id) {
+          // src géré par React via loadMode ; on force un load si vide
+        }
+        if (element.readyState === 0 && element.src) {
+          try {
+            element.load();
+          } catch {
+            /* ignore */
+          }
+        }
+
         if (element.ended) {
           element.currentTime = 0;
         } else {
@@ -629,7 +652,21 @@ export function VideosTab({ onRewardPoints, onExit }) {
             });
         }
 
-        safePlay(element);
+        // Attendre d'avoir des données décodables avant play (évite écran noir)
+        const tryPlay = () => safePlay(element);
+        if (element.readyState >= 2) {
+          tryPlay();
+        } else {
+          const onReady = () => {
+            element.removeEventListener("loadeddata", onReady);
+            element.removeEventListener("canplay", onReady);
+            tryPlay();
+          };
+          element.addEventListener("loadeddata", onReady, { once: true });
+          element.addEventListener("canplay", onReady, { once: true });
+          // Filet de sécurité si les events ne partent pas
+          setTimeout(tryPlay, 400);
+        }
       } else {
         element.pause();
       }
@@ -839,6 +876,24 @@ export function VideosTab({ onRewardPoints, onExit }) {
       (video) => String(video.id) === String(activeId)
     )
   );
+  // Pagination : charger la page suivante quand on approche de la fin
+  useEffect(() => {
+    if (
+      !hasMore ||
+      loadingMore ||
+      loading ||
+      visibleVideos.length === 0 ||
+      activeIndex < 0
+    ) {
+      return;
+    }
+
+    // On déclenche quand il reste 4 vidéos ou moins avant la fin
+    if (activeIndex >= visibleVideos.length - 4) {
+      loadMore();
+    }
+  }, [activeIndex, visibleVideos.length, hasMore, loadingMore, loading, loadMore]);
+
 
   const getLoadMode = (index) => {
     if (index === activeIndex) return "active";

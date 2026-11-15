@@ -1,33 +1,73 @@
 import { useCallback, useRef, useState } from "react";
 
-// Compression dans le navigateur avant l'envoi : la vidéo est relue, redessinée
-// à une résolution raisonnable puis ré-encodée en MP4 (MediaRecorder).
-// La compression se fait en temps réel : une vidéo de 60 s prend ~60 s.
-// Si le navigateur ne sait pas produire du MP4, on n'y touche pas
-// (un WebM risquerait de ne pas se lire sur iPhone).
+// Compression hybride BAARO
+// --------------------------
+// 1. Tentative locale légère (MediaRecorder → MP4 H.264) quand le navigateur
+//    le supporte vraiment et que le fichier n'est pas trop long / trop lourd.
+// 2. Si échec, interruption, ou gain insuffisant → on renvoie l'original
+//    avec le flag _needsServerTranscode = true pour que le worker fasse
+//    le vrai travail (FFmpeg).
+// 3. Sur mobile / faible mémoire on est plus agressif (720p, bitrate plus bas)
+//    et on abandonne plus vite pour ne pas bloquer Termux / WebView Android.
 
-const MIN_SIZE_BYTES = 10 * 1024 * 1024; // en dessous : inutile
-const MAX_DURATION_S = 180; // au-delà : trop long à ré-encoder
-const MAX_SIDE = 1280; // plus grand côté, en pixels
-const VIDEO_BPS = 2_500_000;
+const MIN_SIZE_BYTES = 8 * 1024 * 1024; // en dessous : inutile de compresser
+const MAX_DURATION_S_DESKTOP = 120;
+const MAX_DURATION_S_MOBILE = 75;
+const MAX_SIDE_DESKTOP = 1280;
+const MAX_SIDE_MOBILE = 720;
+const VIDEO_BPS_DESKTOP = 2_200_000;
+const VIDEO_BPS_MOBILE = 1_400_000;
 const AUDIO_BPS = 96_000;
-const KEEP_IF_SMALLER_THAN = 0.9; // on garde le résultat s'il gagne au moins 10 %
+const KEEP_IF_SMALLER_THAN = 0.92; // on garde le résultat s'il gagne au moins \~8 %
 
 const MIME_CANDIDATES = [
   "video/mp4;codecs=avc1.42E01E,mp4a.40.2",
+  "video/mp4;codecs=avc1.4D401E,mp4a.40.2",
   "video/mp4;codecs=avc1,mp4a",
   "video/mp4",
 ];
 
 const even = (value) => Math.max(2, Math.round(value / 2) * 2);
 
+function isLikelyMobile() {
+  if (typeof navigator === "undefined") return false;
+  // Heuristique légère, sans dépendance
+  const ua = navigator.userAgent || "";
+  const mobileUA = /Android|iPhone|iPad|iPod|Mobile|Termux/i.test(ua);
+  const smallScreen =
+    typeof window !== "undefined" &&
+    Math.min(window.screen?.width || 9999, window.screen?.height || 9999) < 700;
+  const lowMem =
+    typeof navigator.deviceMemory === "number" && navigator.deviceMemory <= 4;
+  return mobileUA || smallScreen || lowMem;
+}
+
 function pickMimeType() {
   if (typeof MediaRecorder === "undefined") return null;
-
   return (
-    MIME_CANDIDATES.find((type) => MediaRecorder.isTypeSupported(type)) ||
-    null
+    MIME_CANDIDATES.find((type) => {
+      try {
+        return MediaRecorder.isTypeSupported(type);
+      } catch {
+        return false;
+      }
+    }) || null
   );
+}
+
+function markNeedsServer(file) {
+  if (!file) return file;
+  try {
+    // Propriété non-énumérable pour ne pas polluer les sérialisations
+    Object.defineProperty(file, "_needsServerTranscode", {
+      value: true,
+      writable: false,
+      configurable: true,
+    });
+  } catch {
+    file._needsServerTranscode = true;
+  }
+  return file;
 }
 
 export function useVideoCompression() {
@@ -44,18 +84,29 @@ export function useVideoCompression() {
   /**
    * Retourne { file, status } avec status parmi :
    * done | skipped | cancelled | interrupted | failed | aborted (file = null).
+   *
+   * Quand status !== "done", le fichier original est renvoyé et peut porter
+   * _needsServerTranscode = true pour le worker.
    */
   const compress = useCallback(async (file) => {
     const mimeType = pickMimeType();
+    const mobile = isLikelyMobile();
+    const maxDuration = mobile ? MAX_DURATION_S_MOBILE : MAX_DURATION_S_DESKTOP;
+    const maxSide = mobile ? MAX_SIDE_MOBILE : MAX_SIDE_DESKTOP;
+    const videoBps = mobile ? VIDEO_BPS_MOBILE : VIDEO_BPS_DESKTOP;
 
+    // Conditions trop mauvaises → skip immédiat + flag serveur
     if (
       !file ||
-      !mimeType ||
       !file.type?.startsWith("video/") ||
       file.size < MIN_SIZE_BYTES ||
-      !HTMLCanvasElement.prototype.captureStream
+      !HTMLCanvasElement.prototype.captureStream ||
+      !mimeType
     ) {
-      return { file, status: "skipped" };
+      return {
+        file: markNeedsServer(file),
+        status: "skipped",
+      };
     }
 
     const url = URL.createObjectURL(file);
@@ -68,21 +119,17 @@ export function useVideoCompression() {
 
     const stopDrawing = () => {
       if (!frameHandle) return;
-
       if (usesVideoFrameCallback) video.cancelVideoFrameCallback?.(frameHandle);
       else cancelAnimationFrame(frameHandle);
-
       frameHandle = 0;
     };
 
     const cleanup = () => {
       stopDrawing();
       stopRef.current = null;
-
       if (onVisibility) {
         document.removeEventListener("visibilitychange", onVisibility);
       }
-
       video.pause();
       video.removeAttribute("src");
       video.load();
@@ -98,6 +145,7 @@ export function useVideoCompression() {
         let finished = false;
         let stopReason = null;
         let recorder = null;
+        const chunks = [];
 
         const finish = (value) => {
           if (finished) return;
@@ -108,65 +156,92 @@ export function useVideoCompression() {
         const requestStop = (reason) => {
           stopReason = stopReason || reason;
           video.pause();
-
-          if (recorder && recorder.state !== "inactive") recorder.stop();
-          else finish({ status: reason === "abort" ? "aborted" : "cancelled" });
+          if (recorder && recorder.state !== "inactive") {
+            try {
+              recorder.stop();
+            } catch {
+              finish({
+                status: reason === "abort" ? "aborted" : "cancelled",
+              });
+            }
+          } else {
+            finish({
+              status: reason === "abort" ? "aborted" : "cancelled",
+            });
+          }
         };
 
         stopRef.current = requestStop;
 
         video.muted = false;
         video.playsInline = true;
+        video.setAttribute("playsinline", "");
+        video.setAttribute("webkit-playsinline", "");
         video.preload = "auto";
         video.onerror = () => finish({ status: "failed" });
 
         video.onloadedmetadata = () => {
           const { duration, videoWidth, videoHeight } = video;
 
-          if (!Number.isFinite(duration) || duration > MAX_DURATION_S || !videoWidth) {
+          if (
+            !Number.isFinite(duration) ||
+            duration <= 0 ||
+            duration > maxDuration ||
+            !videoWidth ||
+            !videoHeight
+          ) {
             finish({ status: "skipped" });
             return;
           }
 
-          const scale = Math.min(1, MAX_SIDE / Math.max(videoWidth, videoHeight));
+          const scale = Math.min(1, maxSide / Math.max(videoWidth, videoHeight));
           const width = even(videoWidth * scale);
           const height = even(videoHeight * scale);
+
+          // Si on ne réduit presque rien et que le fichier n'est pas énorme,
+          // autant laisser le worker gérer.
+          if (scale > 0.92 && file.size < 25 * 1024 * 1024) {
+            finish({ status: "skipped" });
+            return;
+          }
 
           const canvas = document.createElement("canvas");
           canvas.width = width;
           canvas.height = height;
 
-          const context = canvas.getContext("2d", { alpha: false });
-          const stream = canvas.captureStream(30);
+          const context = canvas.getContext("2d", {
+            alpha: false,
+            desynchronized: true,
+          });
+          if (!context) {
+            finish({ status: "failed" });
+            return;
+          }
 
-          // Le son passe par Web Audio vers un flux d'enregistrement,
-          // sans jamais sortir par les haut-parleurs.
+          const stream = canvas.captureStream(mobile ? 24 : 30);
+
+          // Audio via Web Audio (jamais par les haut-parleurs)
           try {
             const AudioContextClass =
               window.AudioContext || window.webkitAudioContext;
-
             if (AudioContextClass) {
               audioCtx = new AudioContextClass();
-
               const source = audioCtx.createMediaElementSource(video);
               const destination = audioCtx.createMediaStreamDestination();
-
               source.connect(destination);
               destination.stream
                 .getAudioTracks()
                 .forEach((track) => stream.addTrack(track));
-              audioCtx.resume?.();
+              audioCtx.resume?.().catch(() => {});
             }
           } catch {
-            // vidéo sans son exploitable : on continue en image seule
+            // Pas d'audio dans le résultat local → le worker pourra ré-encoder
           }
-
-          const chunks = [];
 
           try {
             recorder = new MediaRecorder(stream, {
               mimeType,
-              videoBitsPerSecond: VIDEO_BPS,
+              videoBitsPerSecond: videoBps,
               audioBitsPerSecond: AUDIO_BPS,
             });
           } catch {
@@ -175,16 +250,20 @@ export function useVideoCompression() {
           }
 
           recorder.ondataavailable = (event) => {
-            if (event.data?.size) chunks.push(event.data);
+            if (event.data && event.data.size > 0) chunks.push(event.data);
           };
 
-          recorder.onerror = () => finish({ status: "failed" });
+          recorder.onerror = () => requestStop("failed");
 
           recorder.onstop = () => {
-            if (stopReason === "abort") finish({ status: "aborted" });
-            else if (stopReason === "skip") finish({ status: "cancelled" });
-            else if (stopReason === "interrupted") {
+            if (stopReason === "abort") {
+              finish({ status: "aborted" });
+            } else if (stopReason === "skip" || stopReason === "cancelled") {
+              finish({ status: "cancelled" });
+            } else if (stopReason === "interrupted") {
               finish({ status: "interrupted" });
+            } else if (stopReason === "failed") {
+              finish({ status: "failed" });
             } else {
               finish({
                 status: "recorded",
@@ -195,7 +274,7 @@ export function useVideoCompression() {
 
           video.onended = () => requestStop("done");
 
-          // En arrière-plan le navigateur gèle le dessin : on abandonne proprement.
+          // En arrière-plan le navigateur gèle le dessin → on abandonne proprement
           onVisibility = () => {
             if (document.hidden) requestStop("interrupted");
           };
@@ -205,7 +284,6 @@ export function useVideoCompression() {
 
           const schedule = () => {
             if (finished) return;
-
             if (video.requestVideoFrameCallback) {
               usesVideoFrameCallback = true;
               frameHandle = video.requestVideoFrameCallback(draw);
@@ -216,23 +294,28 @@ export function useVideoCompression() {
 
           function draw() {
             if (finished) return;
-
-            context.drawImage(video, 0, 0, width, height);
-
+            try {
+              context.drawImage(video, 0, 0, width, height);
+            } catch {
+              // frame droppé, on continue
+            }
             const percent = Math.min(
               99,
-              Math.round((video.currentTime / duration) * 100)
+              Math.round((video.currentTime / duration) * 100),
             );
-
             if (percent !== lastPercent) {
               lastPercent = percent;
               setProgress(percent);
             }
-
             schedule();
           }
 
-          recorder.start(1000);
+          try {
+            recorder.start(1000);
+          } catch {
+            finish({ status: "failed" });
+            return;
+          }
 
           video
             .play()
@@ -248,26 +331,45 @@ export function useVideoCompression() {
       if (outcome.status === "recorded") {
         const blob = outcome.blob;
 
-        if (blob.size === 0 || blob.size > file.size * KEEP_IF_SMALLER_THAN) {
-          return { file, status: "skipped" };
+        if (
+          !blob ||
+          blob.size === 0 ||
+          blob.size > file.size * KEEP_IF_SMALLER_THAN
+        ) {
+          // Pas assez de gain → worker
+          return {
+            file: markNeedsServer(file),
+            status: "skipped",
+          };
         }
 
-        const name = `${file.name.replace(/\.[^.]+$/, "") || "video"}.mp4`;
+        const baseName = (file.name || "video").replace(/\.[^.]+$/, "") || "video";
+        const compressed = new File([blob], `${baseName}.mp4`, {
+          type: "video/mp4",
+          lastModified: Date.now(),
+        });
 
+        // Succès local : pas besoin du worker pour la compression
         return {
-          file: new File([blob], name, {
-            type: "video/mp4",
-            lastModified: Date.now(),
-          }),
+          file: compressed,
           status: "done",
         };
       }
 
-      if (outcome.status === "aborted") return { file: null, status: "aborted" };
+      if (outcome.status === "aborted") {
+        return { file: null, status: "aborted" };
+      }
 
-      return { file, status: outcome.status };
+      // skipped / cancelled / interrupted / failed → original + flag serveur
+      return {
+        file: markNeedsServer(file),
+        status: outcome.status || "failed",
+      };
     } catch {
-      return { file, status: "failed" };
+      return {
+        file: markNeedsServer(file),
+        status: "failed",
+      };
     } finally {
       cleanup();
       setCompressing(false);

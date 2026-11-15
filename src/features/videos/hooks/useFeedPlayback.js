@@ -109,8 +109,26 @@ export function useFeedPlayback({ visibleVideos } = {}) { // eslint-disable-line
     const video = videoRefs.current[String(id)];
     if (!video) return;
     try {
-      if (document.fullscreenElement) await document.exitFullscreen();
-      else if (video.requestFullscreen) await video.requestFullscreen();
+      // Déjà en plein écran (sur cet élément ou un autre) → on sort
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+        return;
+      }
+      // Attendre un minimum de données pour éviter un plein écran noir
+      if (video.readyState < 2 && video.src) {
+        await new Promise((resolve) => {
+          const done = () => {
+            video.removeEventListener("loadeddata", done);
+            video.removeEventListener("canplay", done);
+            resolve();
+          };
+          video.addEventListener("loadeddata", done, { once: true });
+          video.addEventListener("canplay", done, { once: true });
+          setTimeout(done, 600);
+        });
+      }
+      if (video.requestFullscreen) await video.requestFullscreen();
+      else if (video.webkitEnterFullscreen) video.webkitEnterFullscreen();
     } catch { /* Plein écran bloqué par le navigateur */ }
   };
 

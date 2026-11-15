@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../../../supabaseClient.js";
 import { isMissingColumn } from "../utils/videosApi.js";
 
+const PAGE_SIZE = 24;
+
 const buildVideoSelect = (withSound) => `
   id,
   title,
@@ -27,10 +29,25 @@ const buildVideoSelect = (withSound) => `
   )
 `;
 
+/**
+ * Construit le filtre cursor (created_at, id) pour une pagination stable.
+ * On ordonne toujours par created_at DESC, id DESC.
+ */
+function applyCursor(query, cursor) {
+  if (!cursor?.created_at || !cursor?.id) return query;
+
+  // (created_at < cursor) OR (created_at = cursor AND id < cursor.id)
+  return query.or(
+    `created_at.lt.\( {cursor.created_at},and(created_at.eq. \){cursor.created_at},id.lt.${cursor.id})`
+  );
+}
+
 export function useVideoFeed() {
   const [videos, setVideos] = useState([]);
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
   const [loadError, setLoadError] = useState(null);
   const [likedMap, setLikedMap] = useState({});
   const [mode, setMode] = useState("forYou");
@@ -39,6 +56,8 @@ export function useVideoFeed() {
   const currentUserId = useRef(null);
   const realtimeTimers = useRef(new Map());
   const likeRealtimeTimers = useRef(new Map());
+  const cursorRef = useRef(null); // { created_at, id }
+  const loadingMoreRef = useRef(false);
 
   // Synchronisation des connexions et déconnexions.
   useEffect(() => {
@@ -60,107 +79,167 @@ export function useVideoFeed() {
     return () => subscription.unsubscribe();
   }, []);
 
-  const loadVideos = useCallback(async () => {
-    const requestId = ++requestSequence.current;
-    const userId = user?.id || null;
+  const fetchPage = useCallback(async (withSound, cursor) => {
+    let query = supabase
+      .from("videos")
+      .select(buildVideoSelect(withSound))
+      .order("created_at", { ascending: false })
+      .order("id", { ascending: false })
+      .limit(PAGE_SIZE);
 
-    setLoading(true);
-    setLoadError(null);
+    query = applyCursor(query, cursor);
 
-    try {
-      const fetchFeed = (withSound) =>
-        supabase
-          .from("videos")
-          .select(buildVideoSelect(withSound))
-          .order("created_at", { ascending: false })
-          .limit(100);
+    return query;
+  }, []);
 
-      let { data, error } = await fetchFeed(true);
+  /**
+   * Charge la première page (reset) ou une page suivante.
+   * @param {{ reset?: boolean }} options
+   */
+  const loadVideos = useCallback(
+    async (options = {}) => {
+      const reset = options.reset !== false; // défaut = reset
+      const requestId = ++requestSequence.current;
+      const userId = user?.id || null;
 
-      if (error && isMissingColumn(error)) {
-        ({ data, error } = await fetchFeed(false));
-      }
-
-      if (error) throw error;
-
-      const sharedVideoId =
-        typeof window !== "undefined"
-          ? new URLSearchParams(window.location.search).get("video")
-          : null;
-
-      if (
-        sharedVideoId &&
-        !(data || []).some(
-          (video) => String(video.id) === String(sharedVideoId),
-        )
-      ) {
-        try {
-          let { data: sharedVideo, error: sharedVideoError } =
-            await supabase
-              .from("videos")
-              .select(buildVideoSelect(true))
-              .eq("id", sharedVideoId)
-              .maybeSingle();
-
-          if (sharedVideoError && isMissingColumn(sharedVideoError)) {
-            ({ data: sharedVideo, error: sharedVideoError } =
-              await supabase
-                .from("videos")
-                .select(buildVideoSelect(false))
-                .eq("id", sharedVideoId)
-                .maybeSingle());
-          }
-
-          if (!sharedVideoError && sharedVideo) {
-            data = [sharedVideo, ...(data || [])];
-          }
-        } catch (sharedVideoError) {
-          console.warn(
-            "[video-share] Chargement impossible :",
-            sharedVideoError,
-          );
-        }
-      }
-
-      if (requestId !== requestSequence.current) return;
-      setVideos(data || []);
-
-      if (!userId) {
-        setLikedMap({});
+      if (reset) {
+        setLoading(true);
+        setLoadError(null);
+        setHasMore(true);
+        cursorRef.current = null;
       } else {
-        const { data: likes, error: likesError } = await supabase
-          .from("video_likes")
-          .select("video_id")
-          .eq("user_id", userId);
+        if (!hasMore || loadingMoreRef.current) return;
+        loadingMoreRef.current = true;
+        setLoadingMore(true);
+      }
 
-        if (likesError) throw likesError;
+      try {
+        const cursor = reset ? null : cursorRef.current;
+
+        let { data, error } = await fetchPage(true, cursor);
+
+        if (error && isMissingColumn(error)) {
+          ({ data, error } = await fetchPage(false, cursor));
+        }
+
+        if (error) throw error;
+
+        let page = data || [];
+
+        // Lien partagé : injecter la vidéo en tête si absente (uniquement sur reset)
+        if (reset) {
+          const sharedVideoId =
+            typeof window !== "undefined"
+              ? new URLSearchParams(window.location.search).get("video")
+              : null;
+
+          if (
+            sharedVideoId &&
+            !page.some((video) => String(video.id) === String(sharedVideoId))
+          ) {
+            try {
+              let { data: sharedVideo, error: sharedVideoError } =
+                await supabase
+                  .from("videos")
+                  .select(buildVideoSelect(true))
+                  .eq("id", sharedVideoId)
+                  .maybeSingle();
+
+              if (sharedVideoError && isMissingColumn(sharedVideoError)) {
+                ({ data: sharedVideo, error: sharedVideoError } =
+                  await supabase
+                    .from("videos")
+                    .select(buildVideoSelect(false))
+                    .eq("id", sharedVideoId)
+                    .maybeSingle());
+              }
+
+              if (!sharedVideoError && sharedVideo) {
+                page = [sharedVideo, ...page];
+              }
+            } catch (sharedVideoError) {
+              console.warn(
+                "[video-share] Chargement impossible :",
+                sharedVideoError,
+              );
+            }
+          }
+        }
+
         if (requestId !== requestSequence.current) return;
 
-        const map = {};
-        (likes || []).forEach((item) => {
-          map[item.video_id] = true;
-        });
-        setLikedMap(map);
-      }
-    } catch (error) {
-      if (requestId !== requestSequence.current) return;
-      console.error("[videos] Erreur de chargement :", error);
-      setLoadError(error.message || "Impossible de charger les vidéos.");
-    } finally {
-      if (requestId === requestSequence.current) setLoading(false);
-    }
-  }, [user?.id]);
+        // Mettre à jour le cursor pour la page suivante
+        if (page.length > 0) {
+          const last = page[page.length - 1];
+          cursorRef.current = {
+            created_at: last.created_at,
+            id: last.id,
+          };
+        }
 
-  useEffect(() => {
-    loadVideos();
+        setHasMore(page.length >= PAGE_SIZE);
+
+        if (reset) {
+          setVideos(page);
+        } else {
+          setVideos((current) => {
+            const existingIds = new Set(current.map((v) => String(v.id)));
+            const unique = page.filter((v) => !existingIds.has(String(v.id)));
+            return [...current, ...unique];
+          });
+        }
+
+        // Likes de l'utilisateur (seulement sur reset pour rester simple)
+        if (reset) {
+          if (!userId) {
+            setLikedMap({});
+          } else {
+            const { data: likes, error: likesError } = await supabase
+              .from("video_likes")
+              .select("video_id")
+              .eq("user_id", userId);
+
+            if (likesError) throw likesError;
+            if (requestId !== requestSequence.current) return;
+
+            const map = {};
+            (likes || []).forEach((item) => {
+              map[item.video_id] = true;
+            });
+            setLikedMap(map);
+          }
+        }
+      } catch (error) {
+        if (requestId !== requestSequence.current) return;
+        console.error("[useVideoFeed] loadVideos:", error);
+        setLoadError(error?.message || "Impossible de charger les vidéos");
+      } finally {
+        if (requestId === requestSequence.current) {
+          setLoading(false);
+          setLoadingMore(false);
+          loadingMoreRef.current = false;
+        }
+      }
+    },
+    [user?.id, hasMore, fetchPage],
+  );
+
+  /** Charge la page suivante (utilisé par le feed quand on approche de la fin). */
+  const loadMore = useCallback(() => {
+    return loadVideos({ reset: false });
   }, [loadVideos]);
 
-  // Mise à jour ciblée sans recharger tout le flux.
+  // Chargement initial
+  useEffect(() => {
+    loadVideos({ reset: true });
+  }, [user?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Realtime vidéos
   useEffect(() => {
     let active = true;
 
     const channel = supabase
-      .channel("baaro-videos-v3")
+      .channel("baaro-videos-v1")
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "videos" },
@@ -227,7 +306,8 @@ export function useVideoFeed() {
                 }
 
                 if (eventType === "INSERT") {
-                  return [data, ...current].slice(0, 100);
+                  // Nouvelles vidéos en tête, on ne touche pas au cursor
+                  return [data, ...current];
                 }
 
                 return current;
@@ -253,7 +333,7 @@ export function useVideoFeed() {
     };
   }, []);
 
-  // Synchronisation ciblée des likes entre utilisateurs.
+  // Realtime likes
   useEffect(() => {
     let active = true;
 
@@ -346,8 +426,11 @@ export function useVideoFeed() {
     setVideos,
     user,
     loading,
+    loadingMore,
+    hasMore,
     loadError,
     loadVideos,
+    loadMore,
     likedMap,
     setLikedMap,
     mode,

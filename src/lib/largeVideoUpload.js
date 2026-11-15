@@ -5,8 +5,13 @@ const DEFAULT_WORKER = import.meta.env.VITE_BAARO_MEDIA_WORKER_URL || "";
 const DIRECT_MAX_BYTES = 500 * 1024 * 1024;
 const SIGN_BATCH = 50;
 const PART_RETRIES = 3;
-// Nombre de parties envoyées en même temps (gros fichiers > 500 Mo).
 const PART_CONCURRENCY = 4;
+
+// File d'attente / reprise
+const IDB_NAME = "baaro-upload-v1";
+const IDB_STORE = "multipart";
+const IDB_QUEUE = "queue";
+const SESSION_TTL_MS = 48 * 60 * 60 * 1000; // 48 h
 
 const MIME_BY_EXT = {
   mp4: "video/mp4",
@@ -41,7 +46,6 @@ function workerUrl(path) {
 }
 
 async function authHeaders() {
-  // getSession() rafraichit le jeton si besoin : utile pour les envois longs
   const {
     data: { session },
   } = await supabase.auth.getSession();
@@ -69,7 +73,87 @@ async function post(path, body) {
   return data;
 }
 
-/** <= 500 Mo : R2 direct via /api/media, avec progression réelle et nouvelles tentatives. */
+// ---------------------------------------------------------------------------
+// IndexedDB minimal (sessions multipart + file d'attente)
+// ---------------------------------------------------------------------------
+
+function openDb() {
+  return new Promise((resolve, reject) => {
+    if (typeof indexedDB === "undefined") {
+      reject(new Error("IndexedDB indisponible"));
+      return;
+    }
+    const req = indexedDB.open(IDB_NAME, 1);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(IDB_STORE)) {
+        db.createObjectStore(IDB_STORE, { keyPath: "id" });
+      }
+      if (!db.objectStoreNames.contains(IDB_QUEUE)) {
+        db.createObjectStore(IDB_QUEUE, { keyPath: "id" });
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error || new Error("IndexedDB open failed"));
+  });
+}
+
+async function idbPut(storeName, value) {
+  try {
+    const db = await openDb();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(storeName, "readwrite");
+      tx.objectStore(storeName).put(value);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch {
+    // Pas bloquant si IDB indisponible
+  }
+}
+
+async function idbGet(storeName, id) {
+  try {
+    const db = await openDb();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(storeName, "readonly");
+      const req = tx.objectStore(storeName).get(id);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => reject(req.error);
+    });
+  } catch {
+    return null;
+  }
+}
+
+async function idbDelete(storeName, id) {
+  try {
+    const db = await openDb();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(storeName, "readwrite");
+      tx.objectStore(storeName).delete(id);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch {
+    // ignore
+  }
+}
+
+/** Identifiant stable d'un fichier pour la reprise (taille + nom + lastModified). */
+function fileFingerprint(file) {
+  return [
+    file.name || "video",
+    file.size || 0,
+    file.lastModified || 0,
+    file.type || "",
+  ].join("|");
+}
+
+// ---------------------------------------------------------------------------
+// Upload direct (<= 500 Mo)
+// ---------------------------------------------------------------------------
+
 async function uploadDirect(file, onProgress, user_id) {
   const {
     data: { session },
@@ -78,24 +162,39 @@ async function uploadDirect(file, onProgress, user_id) {
   if (!uid) throw new Error("Session expiree");
   onProgress?.(2);
 
-  // Certains mobiles envoient un fichier sans type MIME : on lui en donne un
-  const typed = file.type && file.type.startsWith("video/")
-    ? file
-    : new File([file], file.name || "video.mp4", { type: resolveType(file) });
+  const typed =
+    file.type && file.type.startsWith("video/")
+      ? file
+      : new File([file], file.name || "video.mp4", { type: resolveType(file) });
 
-  const result = await uploadExternalMedia(typed, {
-    folder: "videos",
-    onProgress: (pct) => onProgress?.(Math.min(99, Math.max(2, pct))),
-  });
-  onProgress?.(100);
-  return {
-    ...result,
-    url: result.url || result.publicUrl,
-    publicUrl: result.publicUrl || result.url,
-  };
+  // Quelques retries sur réseau intermittent
+  let lastError;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      const result = await uploadExternalMedia(typed, {
+        folder: "videos",
+        onProgress: (pct) => onProgress?.(Math.min(99, Math.max(2, pct))),
+      });
+      onProgress?.(100);
+      return {
+        ...result,
+        url: result.url || result.publicUrl,
+        publicUrl: result.publicUrl || result.url,
+      };
+    } catch (error) {
+      lastError = error;
+      if (attempt < 3) {
+        await new Promise((r) => setTimeout(r, 700 * attempt));
+      }
+    }
+  }
+  throw lastError || new Error("Echec upload direct");
 }
 
-/** Envoie une partie vers R2 (XHR pour suivre la progression octet par octet). */
+// ---------------------------------------------------------------------------
+// Multipart (> 500 Mo) avec reprise
+// ---------------------------------------------------------------------------
+
 function putPart(url, blob, onLoaded, signal) {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
@@ -168,32 +267,96 @@ async function putPartWithRetry(url, blob, onLoaded, partNumber, signal) {
   );
 }
 
-/** > 500 Mo : multipart via le worker, plusieurs parties envoyées en parallèle. */
 async function uploadViaWorker(file, onProgress) {
   const contentType = resolveType(file);
   const fileName = file.name || "video.mp4";
+  const fingerprint = fileFingerprint(file);
 
-  const prepared = await post("/upload/prepare", {
-    size: file.size,
-    contentType,
-    fileName,
-  });
+  // Reprise éventuelle
+  let session = await idbGet(IDB_STORE, fingerprint);
+  if (session && Date.now() - (session.updatedAt || 0) > SESSION_TTL_MS) {
+    await idbDelete(IDB_STORE, fingerprint);
+    session = null;
+  }
+
+  let prepared;
+  let uploadedParts = [];
+
+  if (session?.uploadId && session?.key && Array.isArray(session.parts)) {
+    prepared = {
+      uploadId: session.uploadId,
+      key: session.key,
+      partSize: session.partSize,
+    };
+    uploadedParts = session.parts.slice();
+    onProgress?.(Math.min(95, Math.round((uploadedParts.length / Math.max(1, session.totalParts || 1)) * 100)));
+  } else {
+    prepared = await post("/upload/prepare", {
+      size: file.size,
+      contentType,
+      fileName,
+    });
+    uploadedParts = [];
+    await idbPut(IDB_STORE, {
+      id: fingerprint,
+      uploadId: prepared.uploadId,
+      key: prepared.key,
+      partSize: prepared.partSize,
+      totalParts: Math.ceil(file.size / prepared.partSize),
+      parts: [],
+      updatedAt: Date.now(),
+      fileName,
+      size: file.size,
+    });
+  }
 
   const controller = new AbortController();
-  const uploadedParts = [];
   const loadedByPart = new Map();
+  const donePartNumbers = new Set(uploadedParts.map((p) => p.PartNumber));
 
   const report = () => {
     let sum = 0;
     loadedByPart.forEach((value) => {
       sum += value;
     });
-    onProgress?.(Math.min(99, Math.floor((sum / file.size) * 100)));
+    donePartNumbers.forEach((n) => {
+      if (!loadedByPart.has(n)) {
+        const start = (n - 1) * prepared.partSize;
+        const end = Math.min(file.size, start + prepared.partSize);
+        sum += end - start;
+      }
+    });
+    onProgress?.(Math.min(99, Math.round((sum / file.size) * 100)));
+  };
+
+  const persistParts = async () => {
+    await idbPut(IDB_STORE, {
+      id: fingerprint,
+      uploadId: prepared.uploadId,
+      key: prepared.key,
+      partSize: prepared.partSize,
+      totalParts: Math.ceil(file.size / prepared.partSize),
+      parts: uploadedParts.slice(),
+      updatedAt: Date.now(),
+      fileName,
+      size: file.size,
+    });
   };
 
   try {
-    for (let first = 1; first <= prepared.partCount; first += SIGN_BATCH) {
-      const count = Math.min(SIGN_BATCH, prepared.partCount - first + 1);
+    const totalParts = Math.ceil(file.size / prepared.partSize);
+    const missing = [];
+    for (let n = 1; n <= totalParts; n += 1) {
+      if (!donePartNumbers.has(n)) missing.push(n);
+    }
+
+    for (let offset = 0; offset < missing.length; offset += SIGN_BATCH) {
+      const batch = missing.slice(offset, offset + SIGN_BATCH);
+      if (batch.length === 0) break;
+
+      const first = batch[0];
+      const count = batch.length;
+
       const { urls } = await post("/upload/sign-parts", {
         uploadId: prepared.uploadId,
         key: prepared.key,
@@ -201,35 +364,48 @@ async function uploadViaWorker(file, onProgress) {
         count,
       });
 
+      const urlByPart = new Map(
+        (urls || []).map((u) => [u.partNumber, u.url])
+      );
+
       let cursor = 0;
       const runNext = async () => {
-        while (cursor < urls.length) {
+        while (cursor < batch.length) {
           if (controller.signal.aborted) return;
-          const item = urls[cursor];
+          const partNumber = batch[cursor];
           cursor += 1;
 
-          const start = (item.partNumber - 1) * prepared.partSize;
+          if (donePartNumbers.has(partNumber)) continue;
+
+          const url = urlByPart.get(partNumber);
+          if (!url) {
+            throw new Error("URL manquante pour la partie " + partNumber);
+          }
+
+          const start = (partNumber - 1) * prepared.partSize;
           const end = Math.min(file.size, start + prepared.partSize);
 
           const etag = await putPartWithRetry(
-            item.url,
+            url,
             file.slice(start, end),
             (loaded) => {
-              loadedByPart.set(item.partNumber, loaded);
+              loadedByPart.set(partNumber, loaded);
               report();
             },
-            item.partNumber,
+            partNumber,
             controller.signal
           );
 
-          loadedByPart.set(item.partNumber, end - start);
+          loadedByPart.set(partNumber, end - start);
           report();
-          uploadedParts.push({ PartNumber: item.partNumber, ETag: etag });
+          uploadedParts.push({ PartNumber: partNumber, ETag: etag });
+          donePartNumbers.add(partNumber);
+          await persistParts();
         }
       };
 
       const workers = Array.from(
-        { length: Math.min(PART_CONCURRENCY, urls.length) },
+        { length: Math.min(PART_CONCURRENCY, batch.length) },
         () =>
           runNext().catch((error) => {
             controller.abort();
@@ -239,7 +415,6 @@ async function uploadViaWorker(file, onProgress) {
       await Promise.all(workers);
     }
 
-    // R2/S3 exige les parties dans l'ordre.
     uploadedParts.sort((a, b) => a.PartNumber - b.PartNumber);
 
     const completed = await post("/upload/complete", {
@@ -247,7 +422,10 @@ async function uploadViaWorker(file, onProgress) {
       key: prepared.key,
       parts: uploadedParts,
     });
+
+    await idbDelete(IDB_STORE, fingerprint);
     onProgress?.(100);
+
     return {
       url: completed.url,
       publicUrl: completed.url,
@@ -260,24 +438,119 @@ async function uploadViaWorker(file, onProgress) {
     };
   } catch (error) {
     controller.abort();
-    await post("/upload/abort", {
-      uploadId: prepared.uploadId,
-      key: prepared.key,
-    }).catch(() => {});
+    if (error?.fatal || error?.message === "Envoi annule") {
+      await post("/upload/abort", {
+        uploadId: prepared.uploadId,
+        key: prepared.key,
+      }).catch(() => {});
+      await idbDelete(IDB_STORE, fingerprint);
+    } else {
+      await persistParts();
+    }
     throw error;
   }
 }
 
-/** Onglet Vidéos : <=500Mo R2 direct (/api/media), >500Mo worker Render (multipart) */
-export async function uploadLargeVideo(file, { onProgress, user_id } = {}) {
+// ---------------------------------------------------------------------------
+// File d'attente hors ligne
+// ---------------------------------------------------------------------------
+
+export async function enqueueOfflineUpload(meta) {
+  const id = meta.id || `q-\( {Date.now()}- \){Math.random().toString(36).slice(2, 8)}`;
+  await idbPut(IDB_QUEUE, {
+    id,
+    ...meta,
+    createdAt: Date.now(),
+    status: "pending",
+  });
+  return id;
+}
+
+export async function listOfflineQueue() {
+  try {
+    const db = await openDb();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(IDB_QUEUE, "readonly");
+      const req = tx.objectStore(IDB_QUEUE).getAll();
+      req.onsuccess = () => resolve(req.result || []);
+      req.onerror = () => reject(req.error);
+    });
+  } catch {
+    return [];
+  }
+}
+
+export async function removeFromOfflineQueue(id) {
+  await idbDelete(IDB_QUEUE, id);
+}
+
+function isOffline() {
+  return typeof navigator !== "undefined" && navigator.onLine === false;
+}
+
+// ---------------------------------------------------------------------------
+// API publique
+// ---------------------------------------------------------------------------
+
+export async function uploadLargeVideo(file, { onProgress, user_id, signal } = {}) {
   if (!file?.size) throw new Error("Video invalide");
   if (!looksLikeVideo(file)) throw new Error("Video invalide");
 
-  if (file.size <= DIRECT_MAX_BYTES) {
-    return uploadDirect(file, onProgress, user_id);
+  if (isOffline()) {
+    const err = new Error("Hors ligne : impossible d'envoyer la video maintenant");
+    err.code = "OFFLINE";
+    throw err;
   }
-  if (!DEFAULT_WORKER) {
-    throw new Error("Fichier > 500 Mo : configure VITE_BAARO_MEDIA_WORKER_URL");
+
+  if (signal?.aborted) {
+    const err = new Error("Envoi annule");
+    err.fatal = true;
+    throw err;
   }
-  return uploadViaWorker(file, onProgress);
+
+  const onAbort = () => {};
+  signal?.addEventListener("abort", onAbort, { once: true });
+
+  try {
+    if (file.size <= DIRECT_MAX_BYTES) {
+      return await uploadDirect(file, onProgress, user_id);
+    }
+    if (!DEFAULT_WORKER) {
+      throw new Error("Fichier > 500 Mo : configure VITE_BAARO_MEDIA_WORKER_URL");
+    }
+    return await uploadViaWorker(file, onProgress);
+  } finally {
+    signal?.removeEventListener("abort", onAbort);
+  }
+}
+
+export async function listResumableUploads() {
+  try {
+    const db = await openDb();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(IDB_STORE, "readonly");
+      const req = tx.objectStore(IDB_STORE).getAll();
+      req.onsuccess = () => {
+        const now = Date.now();
+        const list = (req.result || []).filter(
+          (s) => now - (s.updatedAt || 0) < SESSION_TTL_MS
+        );
+        resolve(list);
+      };
+      req.onerror = () => reject(req.error);
+    });
+  } catch {
+    return [];
+  }
+}
+
+export async function abortResumableUpload(fingerprint) {
+  const session = await idbGet(IDB_STORE, fingerprint);
+  if (session?.uploadId && session?.key && DEFAULT_WORKER) {
+    await post("/upload/abort", {
+      uploadId: session.uploadId,
+      key: session.key,
+    }).catch(() => {});
+  }
+  await idbDelete(IDB_STORE, fingerprint);
 }
