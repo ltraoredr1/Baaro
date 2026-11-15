@@ -12,11 +12,26 @@ import { VoiceTranscript } from "./VoiceTranscript.jsx";
 import { ChatTranslate } from "./ChatTranslate.jsx";
 import { useAutoTranslate } from "../lib/autoTranslate.js";
 
+/**
+ * Anti-injection : une URL de média envoyée par un autre utilisateur n'est jamais
+ * utilisée telle quelle (« javascript: », « data: »… permettraient d'exécuter du code
+ * en cliquant sur un fichier). Seules les URL https sont acceptées.
+ */
+export function safeMediaUrl(url) {
+  if (typeof url !== "string" || !url || url.length > 2048) return "";
+  try {
+    const parsed = new URL(url.trim());
+    return parsed.protocol === "https:" ? parsed.href : "";
+  } catch {
+    return "";
+  }
+}
+
 /** Texte court décrivant un message (aperçu dans les citations et la barre de réponse) */
 export function messagePreviewText(m) {
   if (!m) return "";
   if (m.deleted_at) return "Message supprimé";
-  if (m.type && m.type !== "text" && m.media_url) {
+  if (m.type && m.type !== "text" && safeMediaUrl(m.media_url)) {
     if (m.type === "voice") return "🎤 Message vocal";
     if (m.type === "image") return "📷 Photo";
     if (m.type === "video") return "🎬 Vidéo";
@@ -181,7 +196,8 @@ export function MessageBubble({
 
   const isExpired = message.expired;
   const isDeleted = !!message.deleted_at;
-  const isMedia = !isDeleted && message.type && message.type !== "text" && message.media_url;
+  const mediaUrl = safeMediaUrl(message.media_url);
+  const isMedia = !isDeleted && message.type && message.type !== "text" && mediaUrl;
   const time = message.created_at
     ? new Date(message.created_at).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })
     : "";
@@ -203,7 +219,7 @@ export function MessageBubble({
     !pending &&
     !message.failed &&
     !isTmpId &&
-    ((message.type === "voice" && message.media_url) ||
+    ((message.type === "voice" && mediaUrl) ||
       (!isMe && !isMedia && body && String(body).trim().length > 1));
 
   const copyText = async () => {
@@ -250,7 +266,7 @@ export function MessageBubble({
             message.type === "image" ? (
               <>
                 <img
-                  src={message.media_url}
+                  src={mediaUrl}
                   alt={message.file_name || "Photo"}
                   loading="lazy"
                   onClick={() => setLightbox(true)}
@@ -270,17 +286,17 @@ export function MessageBubble({
                     >
                       <X size={22} />
                     </button>
-                    <img src={message.media_url} alt="" className="max-w-full max-h-full object-contain" />
+                    <img src={mediaUrl} alt="" className="max-w-full max-h-full object-contain" />
                   </div>
                 )}
               </>
             ) : message.type === "video" ? (
-              <video src={message.media_url} controls preload="metadata" className="rounded-lg max-w-full max-h-72" />
+              <video src={mediaUrl} controls preload="metadata" className="rounded-lg max-w-full max-h-72" />
             ) : message.type === "voice" ? (
               <>
-                <VoicePlayer src={message.media_url} duration={message.media_duration} isMe={isMe} />
+                <VoicePlayer src={mediaUrl} duration={message.media_duration} isMe={isMe} />
                 {toolsOpen && !pending && !message.failed && !isTmpId && (
-                  <VoiceTranscript src={message.media_url} isMe={isMe} />
+                  <VoiceTranscript src={mediaUrl} isMe={isMe} />
                 )}
                 {hasTools && (
                   <button
@@ -295,7 +311,7 @@ export function MessageBubble({
               </>
             ) : (
               <a
-                href={message.media_url}
+                href={mediaUrl}
                 target="_blank"
                 rel="noreferrer"
                 className="flex items-center gap-2.5 underline-offset-2 hover:underline"
