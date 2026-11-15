@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../../../supabaseClient.js";
 import { isMissingColumn } from "../utils/videosApi.js";
+import { rankForYou } from "../lib/feedScore.js";
 
 const PAGE_SIZE = 24;
 
@@ -58,6 +59,7 @@ export function useVideoFeed() {
   const likeRealtimeTimers = useRef(new Map());
   const cursorRef = useRef(null); // { created_at, id }
   const loadingMoreRef = useRef(false);
+  const forYouOrderRef = useRef([]); // ordre figé : le fil ne bouge pas sous les doigts
 
   // Synchronisation des connexions et déconnexions.
   useEffect(() => {
@@ -107,6 +109,7 @@ export function useVideoFeed() {
         setLoadError(null);
         setHasMore(true);
         cursorRef.current = null;
+        forYouOrderRef.current = [];
       } else {
         if (!hasMore || loadingMoreRef.current) return;
         loadingMoreRef.current = true;
@@ -418,7 +421,22 @@ export function useVideoFeed() {
       });
     }
 
-    return list;
+    // « Pour toi » : les vidéos déjà placées gardent leur rang, les nouvelles
+    // sont classées par lot puis ajoutées à la suite.
+    const byId = new Map(list.map((v) => [String(v.id), v]));
+    const known = forYouOrderRef.current.filter((id) => byId.has(id));
+    const knownSet = new Set(known);
+    const fresh = list.filter((v) => !knownSet.has(String(v.id)));
+    let ids = known;
+    if (fresh.length) {
+      const shared =
+        known.length === 0 && typeof window !== "undefined"
+          ? new URLSearchParams(window.location.search).get("video")
+          : null;
+      ids = [...known, ...rankForYou(fresh, { pinnedId: shared }).map((v) => String(v.id))];
+    }
+    forYouOrderRef.current = ids;
+    return ids.map((id) => byId.get(id));
   }, [videos, mode]);
 
   return {
