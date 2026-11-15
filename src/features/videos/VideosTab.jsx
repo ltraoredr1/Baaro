@@ -911,7 +911,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
     <div
       ref={rootRef}
       className="relative flex h-screen w-full flex-col overflow-hidden bg-black"
-      style={{ height: "100dvh" }}
+      style={{ height: "100dvh", paddingTop: "3.5rem" }}
     >
       {/* Barre de progression de la publication active */}
       <div className="pointer-events-none absolute inset-x-0 top-0 z-[75] h-[3px] bg-white/10">
