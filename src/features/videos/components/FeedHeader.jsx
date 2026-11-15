@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Plus, Sparkles, Volume2, VolumeX, X } from "lucide-react";
+import { Plus, Sparkles, Volume2, VolumeX } from "lucide-react";
 import { COLORS } from "../../../theme.js";
 import { baaroLogo } from "../constants.js";
 
@@ -23,18 +23,11 @@ export default function FeedHeader({
       <div className="flex items-center justify-between pointer-events-auto">
         
         {/* GAUCHE : Bouton retour + Logo & Version v0.1.0 */}
-        <div className="flex items-center gap-2.5">
-          {onExit && (
-            <button
-              onClick={onExit}
-              className="h-9 w-9 rounded-2xl bg-white/10 backdrop-blur-xl border border-white/15 flex items-center justify-center transition-transform active:scale-95 shadow-lg text-white hover:bg-white/20"
-              aria-label="Retour"
-            >
-              <X size={17} />
-            </button>
-          )}
+        <div className="flex items-center gap-2.5 min-w-0">
+          {/* Emplacement du bouton Menus (☰) posé par MainShell */}
+          <div className="w-11 shrink-0" aria-hidden="true" />
 
-          <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-2xl bg-black/40 border border-amber-500/30 backdrop-blur-xl shadow-lg">
+          <div className="hidden min-[400px]:flex items-center gap-2 px-2.5 py-1.5 rounded-2xl bg-black/40 border border-amber-500/30 backdrop-blur-xl shadow-lg">
             {!logoFailed && (
               <img
                 src={baaroLogo}
@@ -50,7 +43,7 @@ export default function FeedHeader({
         </div>
 
         {/* DROITE : Studio, Son et Upload stylés */}
-        <div className="flex items-center gap-2 pointer-events-auto">
+        <div className="flex items-center gap-1.5 shrink-0 pointer-events-auto">
           {onOpenStudio && (
             <button
               onClick={onOpenStudio}

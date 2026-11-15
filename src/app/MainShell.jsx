@@ -656,13 +656,14 @@ export function MainShell() {
           BOUTON FLOTTANT TRANSPARENT (MODE VIDÉO)
           ===================================================== */}
       {isImmersive && (
-        <div className="fixed left-4 z-[70] flex items-center" style={{ top: "calc(env(safe-area-inset-top, 0px) + 1rem)" }}>
+        <div className="fixed z-[70] flex items-center" style={{ left: "0.875rem", top: "max(0.75rem, env(safe-area-inset-top, 0px))" }}>
           <button
             onClick={() => setShowUi((prev) => !prev)}
-            className="px-3.5 py-1.5 rounded-full bg-black/40 backdrop-blur-xl border border-white/20 text-white text-xs font-semibold shadow-lg hover:bg-black/60 transition-all flex items-center gap-1.5"
+            aria-label={showUi ? "Masquer les menus" : "Afficher les menus"}
+            className="h-9 w-9 justify-center rounded-2xl bg-black/40 backdrop-blur-xl border border-white/20 text-white font-semibold shadow-lg hover:bg-black/60 transition-all flex items-center"
             title={showUi ? "Masquer les menus" : "Afficher les menus"}
           >
-            <span>{showUi ? "✕ Fermer" : "☰ Menus"}</span>
+            <span className="text-base leading-none">{showUi ? "✕" : "☰"}</span>
           </button>
         </div>
       )}
