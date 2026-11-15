@@ -196,6 +196,49 @@ function validateMediaUrl(value) {
   }
 }
 
+const MEDIA_DUB_TIMEOUT_MS = 120_000;
+
+async function runWorkerJob({ workerUrl, workerSecret, job, timeoutMs }) {
+  const response = await fetch(workerUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-baaro-worker-secret": workerSecret,
+    },
+    body: JSON.stringify({ job }),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+
+  const payload = await response.json().catch(() => ({}));
+
+  if (!response.ok || !payload?.ok) {
+    throw Object.assign(
+      new Error(payload?.error || `worker HTTP ${response.status}`),
+      { status: 502 }
+    );
+  }
+
+  return payload.result || {};
+}
+
+// Extrait le texte parlé d'un VTT (sans en-tête, numéros ni horodatages).
+function vttToPlainText(vtt) {
+  return String(vtt || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(
+      (line) =>
+        line &&
+        !/^WEBVTT/.test(line) &&
+        !/^NOTE(\s|$)/.test(line) &&
+        !line.includes("-->") &&
+        !/^\d+$/.test(line)
+    )
+    .map((line) => line.replace(/<[^>]+>/g, "").trim())
+    .filter(Boolean)
+    .join(" ");
+}
+
 export default async function handler(req, res) {
   if (applyCors(req, res)) return;
 
@@ -259,16 +302,6 @@ export default async function handler(req, res) {
     }
 
     const mode = body.mode === "dub" ? "dub" : "subtitles";
-
-    // Le doublage (synthèse vocale + synchronisation) n'est pas encore
-    // implémenté : on le dit clairement au lieu de renvoyer de faux contenus.
-    if (mode === "dub") {
-      return jsonError(
-        res,
-        501,
-        "Le doublage n'est pas encore disponible. Utilise les sous-titres."
-      );
-    }
 
     const sourceKey = r2KeyFromMediaUrl(mediaUrl);
 
@@ -373,6 +406,52 @@ export default async function handler(req, res) {
         vttText = "";
       }
 
+      // Doublage : texte du VTT traduit -> job "dub" (TTS) du worker.
+      let dubAudioUrl = null;
+
+      if (mode === "dub") {
+        const speech = vttToPlainText(vttText);
+
+        if (!speech) {
+          return jsonError(
+            res,
+            502,
+            "Aucun texte à synthétiser pour le doublage."
+          );
+        }
+
+        const dubResult = await runWorkerJob({
+          workerUrl,
+          workerSecret,
+          timeoutMs: MEDIA_DUB_TIMEOUT_MS,
+          job: {
+            id: crypto.randomUUID(),
+            job_type: "dub",
+            owner_id: user.id,
+            video_id:
+              typeof body.videoId === "string" ||
+              typeof body.videoId === "number"
+                ? String(body.videoId).slice(0, 80)
+                : null,
+            payload: {
+              sourceKey,
+              text: speech,
+              targetLanguage: targetLang,
+            },
+          },
+        });
+
+        dubAudioUrl = dubResult.url || null;
+
+        if (!dubAudioUrl) {
+          return jsonError(
+            res,
+            503,
+            "La synthèse vocale n'est pas configurée sur le worker."
+          );
+        }
+      }
+
       return res.status(200).json({
         ok: true,
         targetLang,
@@ -385,6 +464,7 @@ export default async function handler(req, res) {
         vttUrl,
         vttText,
         translatedText: vttText,
+        dubAudioUrl,
         provider: result.provider || "worker",
       });
     } catch (error) {
