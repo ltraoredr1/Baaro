@@ -198,6 +198,19 @@ export function useVideoActions({
       // Une notification est demandée uniquement après
       // le succès du partage ou de la copie du lien.
       if (user) {
+        // Compteur de partages (score du fil). Silencieux : ne bloque jamais le partage.
+        // ignoreDuplicates : un 2e partage de la même vidéo ne fait rien (clé user_id + video_id).
+        try {
+          await supabase
+            .from("video_shares")
+            .upsert(
+              { user_id: user.id, video_id: video.id },
+              { onConflict: "user_id,video_id", ignoreDuplicates: true },
+            );
+        } catch (shareError) {
+          console.debug("[video-share-count]", shareError);
+        }
+
         await notifyVideoInteraction({
           contentId: video.id,
           interactionType: "share",
