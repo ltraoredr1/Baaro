@@ -86,6 +86,9 @@ const locked = {
 const missing = Object.keys(declared).filter(
   (name) => !locked[name]
 );
+const versionMismatches = Object.keys(declared).filter((name) =>
+  locked[name] && String(locked[name]) !== String(declared[name])
+);
 
 const stale = Object.keys(locked).filter(
   (name) => !declared[name]
@@ -95,7 +98,7 @@ const stale = Object.keys(locked).filter(
 // Result
 // ------------------------------------------------------------
 
-if (missing.length || stale.length) {
+if (missing.length || stale.length || versionMismatches.length) {
   console.error(
     "package.json / package-lock.json mismatch"
   );
@@ -112,6 +115,9 @@ if (missing.length || stale.length) {
       "Stale root entries:",
       stale.join(", ")
     );
+  }
+  if (versionMismatches.length) {
+    console.error("Version/range mismatches:", versionMismatches.map((name) => `${name}: package=${declared[name]} lock=${locked[name]}`).join(", "));
   }
 
   console.error(

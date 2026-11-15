@@ -15,7 +15,7 @@ const pillOff = `${pill} bg-white/15 text-white border-white/25 hover:bg-white/2
 const pillOn = `${pill} bg-amber-400/90 text-black border-amber-300`;
 
 export function ViewerContent({ story, userId, viewer, cart, videoRef, readOnly, actions, onOpenProfile, onOpenProduct }) {
-  const { mediaLoading, setMediaLoading, setProgress, translatedCaption, setTranslatedCaption, next, setIsPaused } = viewer;
+  const { mediaLoading, setMediaLoading, setProgress, translatedCaption, setTranslatedCaption, next, setIsPaused, isPaused } = viewer;
   const stop = (e) => e.stopPropagation();
 
   const { product, status: productStatus } = useLiveProduct(story.product);
@@ -29,6 +29,11 @@ export function ViewerContent({ story, userId, viewer, cart, videoRef, readOnly,
     }
   }, [trackingStoryId, story.product?.id]);
 
+  useEffect(() => {
+    if (!videoRef.current || story.media_type !== 'video') return;
+    if (isPaused) videoRef.current.pause();
+    else videoRef.current.play().catch(() => {});
+  }, [isPaused, story.id, story.media_type]);
   const hasMedia = story.media_url && story.media_type !== 'text';
   const hasBackground = !hasMedia && !!story.background;
   const hasStack = story.stickers?.length > 0 || story.poll?.question;

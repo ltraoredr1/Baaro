@@ -171,7 +171,7 @@ export const getUserById = async (user_id) => {
     currentId = await getSessionUserId();
   } catch {}
   const isOwner = Boolean(currentId && currentId === user_id);
-  const cols = isOwner ? `${publicCols},phone` : publicCols;
+  const cols = publicCols;
 
   return await supabase.from("profiles").select(cols).eq("id", user_id).maybeSingle();
 };

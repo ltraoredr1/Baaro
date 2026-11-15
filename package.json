@@ -30,7 +30,7 @@
     "check:real-money-flow": "node scripts/check-real-money-flow.mjs",
     "check:secrets": "node scripts/check-secrets.mjs",
     "check:upstash": "node scripts/check-upstash-production.mjs",
-    "cleanup:identity": "node scripts/cleanup-identity-dead-code.mjs",
+    "cleanup:identity": "bash scripts/cleanup-identity-dead-code.sh",
     "validate:upgrade": "node scripts/validate_upgrade.mjs",
     "cap:sync": "npx cap sync",
     "cap:open": "npx cap open android",

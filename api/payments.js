@@ -514,7 +514,7 @@ async function createFlutterwavePayment({ user, payment, body }) {
     customer: {
       email: user.email,
       name: user.user_metadata?.full_name || "BAARO User",
-      phonenumber: body.phone || undefined,
+      phonenumber: body.phone || user.phone || undefined,
     },
     customizations: {
       title: "BAARO",

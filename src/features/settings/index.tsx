@@ -302,7 +302,7 @@ export default function SettingsTab({
         const { data: profile } = await supabase
           .from("profiles")
           .select(
-            "id, display_name, handle, flag, bio, avatar_url, cover_url, country, registered_country, country_changed_at, country_change_available_at, first_name, last_name, location, is_verified, created_at"
+            "id, display_name, handle, flag, bio, avatar_url, cover_url, country, registered_country, country_changed_at, country_change_available_at, location, is_verified, created_at"
           )
           .eq("id", data.user.id)
           .maybeSingle();
@@ -312,6 +312,10 @@ export default function SettingsTab({
           const { data: priv } = await supabase.rpc("get_my_private_profile");
           const privateRow = Array.isArray(priv) ? priv[0] : priv;
           birthDate = privateRow?.birth_date ?? null;
+          if (privateRow) {
+            profile.first_name = privateRow.first_name || "";
+            profile.last_name = privateRow.last_name || "";
+          }
         } catch {
           /* fonction non installée : la date reste vide */
         }
@@ -492,8 +496,6 @@ export default function SettingsTab({
       const profilePayload = {
         id: user.id,
         display_name: name,
-        first_name: editFirstName.trim(),
-        last_name: editLastName.trim(),
         // La date n'est envoyée que si le champ est rempli : une date déjà
         // enregistrée n'est jamais effacée par accident.
         ...(editBirthDate ? { birth_date: editBirthDate } : {}),
@@ -532,11 +534,14 @@ export default function SettingsTab({
         }
       }
 
+      const { error: privateError } = await supabase.rpc("update_my_private_profile", {
+        p_phone: null, p_first_name: editFirstName.trim(), p_last_name: editLastName.trim(),
+        p_birth_date: editBirthDate || userProfile?.birth_date || null,
+      });
+      if (privateError) throw privateError;
       const updated = {
         ...userProfile,
         display_name: name,
-        first_name: editFirstName.trim(),
-        last_name: editLastName.trim(),
         birth_date: editBirthDate || userProfile?.birth_date || null,
         location: editLocation.trim(),
         country: editCountry || null,

@@ -466,16 +466,22 @@ test("un commentaire de vidéo utilise video_comments", async () => {
   ]);
 });
 
-test("partage et repost sont acceptés si le destinataire est bien l'auteur", async () => {
+test("partage et repost exigent une ligne persistée", async () => {
   for (const interactionType of ["share", "repost"]) {
-    const ok = contentAdmin();
+    const table = interactionType === "share" ? "post_shares" : "post_reposts";
+    const absent = contentAdmin();
     assert.equal(
-      await interactionHappened(ok, baseInteraction({ interactionType })),
+      await interactionHappened(absent, baseInteraction({ interactionType, eventId: EVENT })),
+      false
+    );
+    const ok = contentAdmin({ extra: { [table]: found({ id: EVENT }) } });
+    assert.equal(
+      await interactionHappened(ok, baseInteraction({ interactionType, eventId: EVENT })),
       true
     );
-    const wrongAuthor = contentAdmin({ authorId: OTHER });
+    const wrongAuthor = contentAdmin({ authorId: OTHER, extra: { [table]: found({ id: EVENT }) } });
     assert.equal(
-      await interactionHappened(wrongAuthor, baseInteraction({ interactionType })),
+      await interactionHappened(wrongAuthor, baseInteraction({ interactionType, eventId: EVENT })),
       false
     );
   }

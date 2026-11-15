@@ -26,8 +26,9 @@ function guessDefaultCountry() {
 
 function normalizePhone(value) {
   if (!value) return '';
-  const normalized = value.replace(/[^\d+]/g, '');
-  return normalized.startsWith('+') ? normalized : '+' + normalized;
+  const normalized = String(value).replace(/[^\d+]/g, '');
+  const digits = normalized.replace(/(?!^)\+/g, '');
+  return digits.startsWith('+') ? digits : '+' + digits;
 }
 
 // Transforme un numéro de téléphone en e-mail technique pour Supabase
@@ -70,14 +71,8 @@ async function phoneAccountExists(normalizedPhone) {
   });
   if (!error) return !!data;
 
-  // Secours si la fonction SQL n'est pas encore créée
   console.warn('[BAARO] RPC phone_account_exists indisponible :', error);
-  const { data: existingProfile } = await supabase
-    .from('profiles')
-    .select('id')
-    .eq('phone', normalizedPhone)
-    .maybeSingle();
-  return !!existingProfile;
+  return false;
 }
 
 export default function PhoneAuth({ onAuthSuccess }) {
@@ -161,13 +156,13 @@ export default function PhoneAuth({ onAuthSuccess }) {
     try {
       const { data: existingProfile } = await supabase
         .from('profiles')
-        .select('id, display_name, handle, flag, phone')
+        .select('id, display_name, handle, flag')
         .eq('id', user_id)
         .maybeSingle();
 
       if (existingProfile) {
         const updates = {};
-        if (!existingProfile.phone && normalizedPhone) updates.phone = normalizedPhone;
+
         if (!existingProfile.display_name) updates.display_name = normalizedPhone || 'Membre BAARO';
         if (!existingProfile.handle) updates.handle = buildFallbackHandle(user_id);
         if (!existingProfile.flag) updates.flag = '🌍';
@@ -183,7 +178,6 @@ export default function PhoneAuth({ onAuthSuccess }) {
         display_name: normalizedPhone || 'Membre BAARO',
         handle: buildFallbackHandle(user_id),
         flag: '🌍',
-        phone: normalizedPhone || null,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       });

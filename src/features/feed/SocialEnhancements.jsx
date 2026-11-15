@@ -519,7 +519,7 @@ export const SocialPostEnhancements = memo(
     const following = isFollowing === true;
 
     // Fonction d'envoi de notification vers /api/social
-    const sendNotification = async (interactionType) => {
+    const sendNotification = async (interactionType, eventId = null) => {
       if (!post?.id || !isValidAuthUserId(user_id)) return;
       try {
         const { data: { session } } = await supabase.auth.getSession();
@@ -537,6 +537,7 @@ export const SocialPostEnhancements = memo(
             interaction_type: interactionType,
             target_id: post.id,
             recipient_id: post.author_id,
+            ...(eventId ? { event_id: eventId } : {}),
           }),
         });
       } catch (err) {

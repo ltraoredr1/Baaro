@@ -143,7 +143,7 @@ export function MainShell() {
         const params = new URLSearchParams(search);
         if (params.get("post")) setActiveTab("feed");
         else if (params.get("video")) setActiveTab("videos");
-        else if (params.get("invite")) setActiveTab("community");
+        else if (params.get("invite") || params.get("group")) setActiveTab("community");
       } catch {}
     };
     const onSharedLink = (event) => openSharedLink(event.detail?.search);

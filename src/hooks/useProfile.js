@@ -4,7 +4,7 @@ import { handleDbError } from "../lib/dbErrors.js";
 
 // Colonnes PUBLIQUES + PRIVÉES maintenant dans UNE SEULE TABLE: profiles
 const PROFILE_SELECT =
-  "id, display_name, handle, flag, bio, avatar_url, cover_url, location, country, first_name, last_name, birth_date, phone, updated_at, created_at";
+  "id, display_name, handle, flag, bio, avatar_url, cover_url, location, country, updated_at, created_at";
 
 // Champs privés (visibles seulement par owner via RLS)
 const PRIVATE_FIELDS = ["first_name", "last_name", "birth_date", "phone"];
@@ -119,11 +119,19 @@ export function useProfile(user_id, showToast) {
         if (has("location")) payload.location = updates.location?.trim() || null;
         if (has("country")) payload.country = updates.country || null;
 
-        // Champs privés maintenant DANS profiles (plus dans profile_private)
-        if (has("first_name")) payload.first_name = updates.first_name?.trim() || null;
-        if (has("last_name")) payload.last_name = updates.last_name?.trim() || null;
-        if (has("birth_date")) payload.birth_date = updates.birth_date || null;
-        if (has("phone")) payload.phone = updates.phone?.trim() || null;
+        const privatePayload = {
+          phone: has("phone") ? updates.phone?.trim() || null : undefined,
+          first_name: has("first_name") ? updates.first_name?.trim() || null : undefined,
+          last_name: has("last_name") ? updates.last_name?.trim() || null : undefined,
+          birth_date: has("birth_date") ? updates.birth_date || null : undefined,
+        };
+        if (Object.values(privatePayload).some((value) => value !== undefined)) {
+          const { error: privateError } = await supabase.rpc("update_my_private_profile", {
+            p_phone: privatePayload.phone ?? null, p_first_name: privatePayload.first_name ?? null,
+            p_last_name: privatePayload.last_name ?? null, p_birth_date: privatePayload.birth_date ?? null,
+          });
+          if (privateError) throw privateError;
+        }
 
         const { data, error } = await supabase
           .from("profiles")

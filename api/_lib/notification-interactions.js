@@ -158,13 +158,17 @@ export async function interactionHappened(
       );
     }
 
-    // Le schéma actuel ne fournit pas de journal dédié
-    // aux événements de partage et de repost.
-    if (
-      interactionType === "share" ||
-      interactionType === "repost"
-    ) {
-      return true;
+    if (interactionType === "share" || interactionType === "repost") {
+      if (!isUuid(eventId)) return false;
+      const table = interactionType === "share"
+        ? (contentType === "post" ? "post_shares" : "video_shares")
+        : (contentType === "post" ? "post_reposts" : "video_reposts");
+      const foreignKey = contentType === "post" ? "post_id" : "video_id";
+      return rowExists(
+        admin.from(table).select("id")
+          .eq("id", eventId).eq(foreignKey, targetId).eq("user_id", actorId),
+        `${contentType}_${interactionType}`
+      );
     }
 
     return false;

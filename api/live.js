@@ -1050,6 +1050,24 @@ async function handleCreateRoom(req, res, user, admin) {
   );
 
   if (inviteCode.startsWith("call-")) {
+    const calleeId = body.callee_id || null;
+    const conversationId = body.conversation_id || null;
+    if (!calleeId || !UUID_RE.test(String(calleeId)) || calleeId === user.id) {
+      return res.status(400).json({ error: "Destinataire d'appel invalide." });
+    }
+    if (!conversationId || !UUID_RE.test(String(conversationId))) {
+      return res.status(400).json({ error: "Conversation d'appel invalide." });
+    }
+    const { data: conversation, error: conversationError } = await admin.from("conversations")
+      .select("user1_id,user2_id").eq("id", conversationId).maybeSingle();
+    if (conversationError) return res.status(503).json({ error: "Vérification de la conversation impossible." });
+    const participants = [conversation?.user1_id, conversation?.user2_id];
+    if (!conversation || !participants.includes(user.id) || !participants.includes(calleeId)) {
+      return res.status(403).json({ error: "Le destinataire n'appartient pas à cette conversation." });
+    }
+    const { data: blocked } = await admin.from("user_blocks").select("blocker_id")
+      .or(`and(blocker_id.eq.${user.id},blocked_id.eq.${calleeId}),and(blocker_id.eq.${calleeId},blocked_id.eq.${user.id})`).limit(1);
+    if (blocked?.length) return res.status(403).json({ error: "Appel interdit entre ces utilisateurs." });
     let dailyRoom;
 
     try {
@@ -1073,8 +1091,8 @@ async function handleCreateRoom(req, res, user, admin) {
     try {
       const insertPayload = {
         caller_id: user.id,
-        callee_id: body.callee_id || null,
-        conversation_id: body.conversation_id || null,
+        callee_id: calleeId,
+        conversation_id: conversationId,
         daily_room_name: dailyRoom.name,
         type: mode === "audio" ? "voice" : "video",
         status: "ringing",
@@ -1329,12 +1347,6 @@ async function handleToken(req, res, user, admin) {
 
         isOwner = callRecord.caller_id === user.id;
 
-        if (callRecord.status === "ringing") {
-          await admin
-            .from("calls")
-            .update({ status: "ongoing" })
-            .eq("id", callRecord.id);
-        }
       }
 
       const token = await createMeetingToken(liveId, {
@@ -1464,25 +1476,6 @@ async function handleToken(req, res, user, admin) {
     userName: body.userName || (isOwner ? "Hôte" : "Participant"),
     isOwner,
   });
-
-  if (callData && callData.status === "ringing") {
-    try {
-      const { error } = await admin
-        .from("calls")
-        .update({ status: "ongoing" })
-        .eq("id", callData.id);
-
-      if (error) {
-        logWarn("live", "call status update failed", {
-          message: error.message,
-        });
-      }
-    } catch (err) {
-      logWarn("live", "call status update exception", {
-        message: err.message,
-      });
-    }
-  }
 
   return res.status(200).json({
     ok: true,

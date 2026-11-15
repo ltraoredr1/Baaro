@@ -18,6 +18,8 @@ const CINETPAY_API_KEY = process.env.CINETPAY_API_KEY;
 const CINETPAY_SITE_ID = process.env.CINETPAY_SITE_ID;
 const SEND_SMS_HOOK_SECRET = process.env.SEND_SMS_HOOK_SECRET;
 const CRON_SECRET = process.env.CRON_SECRET || '';
+const FLW_SECRET_HASH = process.env.FLW_SECRET_HASH || '';
+const FLW_SECRET_KEY = process.env.FLW_SECRET_KEY || process.env.FLUTTERWAVE_SECRET_KEY || '';
 
 const PAYPAL_CLIENT_ID = process.env.PAYPAL_CLIENT_ID || '';
 const PAYPAL_CLIENT_SECRET = process.env.PAYPAL_CLIENT_SECRET || '';
@@ -198,13 +200,17 @@ export default async function handler(req, res) {
     if (paypalTransmissionId) {
       return await handlePayPalWebhook(req, res);
     }
+    // 3. Flutterwave : hash secret + vérification transaction côté serveur
+    if (req.headers['verif-hash']) {
+      return await handleFlutterwaveWebhook(req, res);
+    }
 
-    // 3. Gestion du webhook InfiniReach (Vérification du secret pour le 0401)
+    // 4. Gestion du webhook InfiniReach (Vérification du secret pour le 0401)
     if (authHeader) {
       return await handleInfiniReachWebhook(req, res, authHeader);
     }
 
-    // 4. Gestion du webhook CinetPay (par défaut)
+    // 5. Gestion du webhook CinetPay (par défaut)
     return await handleCinetPayWebhook(req, res);
   } catch (error) {
     if (error?.status) return res.status(error.status).json({ error: error.message });
@@ -598,6 +604,47 @@ async function handlePayPalWebhook(req, res) {
     default:
       await completeWebhookEvent(supabase, 'paypal', eventId);
       return res.status(200).json({ received: true, ignored: event.event_type });
+  }
+}
+
+
+async function handleFlutterwaveWebhook(req, res) {
+  if (!FLW_SECRET_HASH || !FLW_SECRET_KEY) {
+    return res.status(503).json({ error: 'Flutterwave non configuré.', code: 'flutterwave_not_configured' });
+  }
+  const raw = await readRawBody(req);
+  let event;
+  try { event = JSON.parse(raw.toString()); }
+  catch { return res.status(400).json({ error: 'Payload Flutterwave invalide.' }); }
+  if (!safeEqual(req.headers['verif-hash'], FLW_SECRET_HASH)) {
+    return res.status(401).json({ error: 'Signature Flutterwave invalide.' });
+  }
+  const txId = String(event?.data?.id || event?.id || '').trim();
+  if (!txId) return res.status(400).json({ error: 'Transaction Flutterwave manquante.' });
+  const verify = await fetch(`https://api.flutterwave.com/v3/transactions/${encodeURIComponent(txId)}/verify`, {
+    headers: { Authorization: `Bearer ${FLW_SECRET_KEY}` },
+  });
+  const verified = await verify.json().catch(() => ({}));
+  const tx = verified?.data;
+  if (!verify.ok || verified?.status !== 'success' || tx?.status !== 'successful') {
+    return res.status(400).json({ error: 'Transaction Flutterwave non confirmée.' });
+  }
+  const paymentRef = String(tx.tx_ref || '').trim();
+  if (!paymentRef) return res.status(400).json({ error: 'Référence BAARO absente.' });
+  const supabase = admin();
+  const claim = await claimWebhookEvent(supabase, { provider: 'flutterwave', eventId: txId, rawBody: raw });
+  if (claim.duplicate) return res.status(claim.processing ? 409 : 200).json({ received: true, duplicate: true });
+  try {
+    await fulfillPayment(supabase, {
+      paymentRef, kind: inferKind(paymentRef), provider: 'flutterwave',
+      amount: majorToMinor(tx.amount, tx.currency),
+      currency: String(tx.currency || '').toUpperCase(), cpmTransId: String(tx.id),
+    });
+    await completeWebhookEvent(supabase, 'flutterwave', txId);
+    return res.status(200).json({ received: true, paymentRef });
+  } catch (error) {
+    await failWebhookEvent(supabase, 'flutterwave', txId, error);
+    throw error;
   }
 }
 

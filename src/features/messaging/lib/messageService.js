@@ -48,41 +48,20 @@ export const messageService = {
     const list = convs || [];
     if (!list.length) return [];
 
-    // 2) derniers messages, résolus séparément
+    // 2) Chaque conversation obtient son propre dernier message : une limite
+    // globale pouvait supprimer le badge des conversations moins actives.
     const lastMessageByConversation = new Map();
-    const { data: recentMessages, error: recentErr } = await supabase
-      .from("messages")
-      .select("*")
-      .in("conversation_id", list.map((c) => c.id))
-      .order("created_at", { ascending: false })
-      .limit(CONVERSATION_LIMIT * 3);
-    if (recentErr) console.warn("[messageService] derniers messages:", recentErr.message);
-    for (const msg of recentMessages || []) {
-      if (!lastMessageByConversation.has(msg.conversation_id)) {
-        lastMessageByConversation.set(msg.conversation_id, msg);
-      }
+    for (let offset = 0; offset < list.length; offset += 20) {
+      const batch = list.slice(offset, offset + 20);
+      const latest = await Promise.all(batch.map(async (c) => {
+        const { data, error: msgErr } = await supabase.from("messages")
+          .select("*").eq("conversation_id", c.id)
+          .order("created_at", { ascending: false }).limit(1);
+        if (msgErr) console.warn("[messageService] dernier message:", msgErr.message);
+        return data?.[0] ? [c.id, data[0]] : null;
+      }));
+      latest.forEach((entry) => { if (entry) lastMessageByConversation.set(entry[0], entry[1]); });
     }
-
-    // Les conversations peu actives peuvent être absentes des derniers messages globaux :
-    // on récupère individuellement leur dernier message (borné pour limiter les requêtes).
-    const missing = list.filter((c) => !lastMessageByConversation.has(c.id)).slice(0, 30);
-    if (missing.length) {
-      const extras = await Promise.all(
-        missing.map((c) =>
-          supabase
-            .from("messages")
-            .select("*")
-            .eq("conversation_id", c.id)
-            .order("created_at", { ascending: false })
-            .limit(1)
-            .then(({ data }) => (data && data[0]) || null, () => null)
-        )
-      );
-      extras.forEach((msg) => {
-        if (msg) lastMessageByConversation.set(msg.conversation_id, msg);
-      });
-    }
-
     const otherIdOf = (c) =>
       [c.user1_id, c.user2_id].filter(Boolean).find((u) => u !== userId) || null;
 

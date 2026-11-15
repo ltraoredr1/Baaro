@@ -186,6 +186,21 @@ async function performFlush() {
     }
     try {
       await HANDLERS[item.type](item.payload);
+      if (item.type === "like_post") {
+        try {
+          const { callSocial } = await import("./notifyInteraction.js");
+          await callSocial("notify_interaction", {
+            content_type: "post", interaction_type: "like",
+            target_id: item.payload.post_id,
+            idempotency_key: `offline-like:${item.payload.post_id}:${userId}`,
+          });
+          await supabase.from("feed_events").insert({
+            post_id: item.payload.post_id, user_id: userId, event_type: "like",
+          });
+        } catch (sideEffectError) {
+          console.warn("[offline] effets secondaires du like différés:", sideEffectError?.message || sideEffectError);
+        }
+      }
       flushed += 1;
     } catch (error) {
       const ownerAfterError = await currentUserId().catch(() => null);
