@@ -864,10 +864,6 @@ export function VideosTab({ onRewardPoints, onExit }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeId, feedKey, settings.autoNext, overlayOpen, loading]);
 
-  if (loading) {
-    return <FeedLoading />;
-  }
-
   // Économie de données : seule la vidéo active est chargée en entier.
   // La suivante n'est préchargée (métadonnées) que si le réseau le permet.
   const activeIndex = Math.max(
@@ -876,7 +872,9 @@ export function VideosTab({ onRewardPoints, onExit }) {
       (video) => String(video.id) === String(activeId)
     )
   );
-  // Pagination : charger la page suivante quand on approche de la fin
+
+  // Pagination : charger la page suivante quand on approche de la fin.
+  // Doit rester AVANT le return anticipé (règle des Hooks, React #310).
   useEffect(() => {
     if (
       !hasMore ||
@@ -893,6 +891,10 @@ export function VideosTab({ onRewardPoints, onExit }) {
       loadMore();
     }
   }, [activeIndex, visibleVideos.length, hasMore, loadingMore, loading, loadMore]);
+
+  if (loading) {
+    return <FeedLoading />;
+  }
 
 
   const getLoadMode = (index) => {
