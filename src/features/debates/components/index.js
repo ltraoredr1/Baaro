@@ -1,3 +1,3 @@
-export { default as DebatesTab } from "./components/DebatesTab.jsx";
-export { default as DebateRoom } from "./components/DebateRoom.jsx";
-export { default as CreateDebateModal } from "./components/CreateDebateModal.jsx";
+export { default as DebatesTab } from "./DebatesTab.jsx";
+export { default as DebateRoom } from "./DebateRoom.jsx";
+export { default as CreateDebateModal } from "./CreateDebateModal.jsx";
