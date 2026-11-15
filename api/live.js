@@ -1342,35 +1342,17 @@ async function handleToken(req, res, user, admin) {
   // les privilèges propriétaire par une valeur envoyée dans le body.
   if (liveId.startsWith("call-")) {
     try {
-      // La salle doit être confirmée par Daily avant de délivrer un token.
-      const callDailyRoom = await createDailyRoom(liveId, {
-        maxParticipants: 2,
-        expHours: 2,
-      });
+      const { data: callRecord, error: callError } = await admin
+        .from("calls")
+        .select("id, caller_id, callee_id, daily_room_name, status")
+        .eq("daily_room_name", liveId)
+        .maybeSingle();
 
-      let callRecord = null;
-
-      try {
-        const { data, error } = await admin
-          .from("calls")
-          .select(
-            "id, caller_id, callee_id, daily_room_name, status"
-          )
-          .eq("daily_room_name", liveId)
-          .maybeSingle();
-
-        if (error) throw error;
-        callRecord = data;
-      } catch (err) {
-        logError("live", err, {
-          action: "lookup call",
-          liveId,
+      if (callError) {
+        logError("live", callError, { action: "lookup call", liveId });
+        return res.status(503).json({
+          error: "Impossible de vérifier cet appel. Réessaie.",
         });
-
-        throw Object.assign(
-          new Error("Impossible de vérifier cet appel. Réessaie."),
-          { status: 503 }
-        );
       }
 
       if (!callRecord) {
@@ -1379,31 +1361,26 @@ async function handleToken(req, res, user, admin) {
         });
       }
 
-      let isOwner = false;
-
-      if (callRecord) {
-        const isParticipant =
-          callRecord.caller_id === user.id ||
-          callRecord.callee_id === user.id;
-
-        if (!isParticipant) {
-          return res.status(403).json({
-            error: "Tu n'es pas participant de cet appel",
-          });
-        }
-
-        if (
-          callRecord.status === "ended" ||
-          callRecord.status === "rejected"
-        ) {
-          return res.status(404).json({
-            error: "Appel introuvable ou terminé",
-          });
-        }
-
-        isOwner = callRecord.caller_id === user.id;
-
+      if (
+        callRecord.caller_id !== user.id &&
+        callRecord.callee_id !== user.id
+      ) {
+        return res.status(403).json({
+          error: "Tu n'es pas participant de cet appel",
+        });
       }
+
+      if (["ended", "rejected", "missed", "cancelled"].includes(callRecord.status)) {
+        return res.status(410).json({ error: "Appel terminé" });
+      }
+
+      const isOwner = callRecord.caller_id === user.id;
+
+      // Salle créée ou récupérée seulement après les vérifications
+      const callDailyRoom = await createDailyRoom(liveId, {
+        maxParticipants: 2,
+        expHours: 2,
+      });
 
       const token = await createMeetingToken(liveId, {
         userId: user.id,
@@ -1420,7 +1397,6 @@ async function handleToken(req, res, user, admin) {
       });
     } catch (err) {
       logError("live", err, { liveId });
-
       return res.status(err.status || 500).json({
         error: "Daily token fail: " + err.message,
       });
@@ -1447,7 +1423,9 @@ async function handleToken(req, res, user, admin) {
 
       if (
         call.status === "ended" ||
-        call.status === "rejected"
+        call.status === "rejected" ||
+        call.status === "missed" ||
+        call.status === "cancelled"
       ) {
         return res.status(410).json({
           error: "Ce live est terminé",
