@@ -558,23 +558,23 @@ export default function HandsFreeControls({
       />
 
       {!expanded && (
-        <div className="fixed right-4 top-16 z-[60] flex flex-col items-end gap-1.5">
+        <div className="fixed right-3 z-[60] flex w-11 flex-col items-center gap-1.5" style={{ top: "calc(max(0.75rem, env(safe-area-inset-top, 0px)) + 4.25rem)" }}>
           <button
             type="button"
             onClick={() => setExpanded(true)}
             aria-label="Ouvrir les commandes mains libres"
-            className={`relative flex h-9 w-9 items-center justify-center rounded-full border border-white/20 shadow-lg backdrop-blur-xl transition-all active:scale-95 ${
+            className={`relative flex h-11 w-11 items-center justify-center rounded-full border border-white/20 shadow-lg backdrop-blur-xl transition-all active:scale-95 ${
               active ? "bg-yellow-400 text-black" : "bg-black/40 text-white"
             }`}
           >
-            <Sparkles size={16} />
+            <Sparkles size={20} />
             {active && (
               <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 animate-pulse rounded-full bg-green-400 ring-2 ring-black/60" />
             )}
           </button>
 
           {flash && (
-            <span className="max-w-[200px] truncate rounded-full bg-black/60 px-2.5 py-1 text-[10px] font-bold text-white backdrop-blur-md">
+            <span className="absolute right-full mr-2 top-2 max-w-[200px] truncate whitespace-nowrap rounded-full bg-black/60 px-2.5 py-1 text-[10px] font-bold text-white backdrop-blur-md">
               {flash}
             </span>
           )}
@@ -583,7 +583,7 @@ export default function HandsFreeControls({
             <button
               type="button"
               onClick={() => setExpanded(true)}
-              className="max-w-[220px] rounded-xl bg-red-500/85 px-2.5 py-1.5 text-left text-[10px] font-bold text-white"
+              className="absolute right-full mr-2 top-2 w-max max-w-[220px] rounded-xl bg-red-500/85 px-2.5 py-1.5 text-left text-[10px] font-bold text-white"
             >
               {error}
             </button>
@@ -592,7 +592,7 @@ export default function HandsFreeControls({
       )}
 
       {expanded && (
-        <section className="fixed right-3 top-28 z-[60] w-[min(250px,calc(100vw-24px))] rounded-2xl border border-white/15 bg-zinc-950/90 p-3 text-white shadow-2xl backdrop-blur-xl">
+        <section style={{ top: "calc(max(0.75rem, env(safe-area-inset-top, 0px)) + 4.25rem)" }} className="fixed right-3 z-[60] w-[min(250px,calc(100vw-24px))] rounded-2xl border border-white/15 bg-zinc-950/90 p-3 text-white shadow-2xl backdrop-blur-xl">
           <div className="mb-3 flex items-center gap-2">
             <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-yellow-400 text-black">
               <Sparkles size={16} />
