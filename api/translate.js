@@ -376,7 +376,11 @@ export default async function handler(req, res) {
       return res.status(200).json({
         ok: true,
         targetLang,
-        sourceLang: result.sourceLanguage || "auto",
+        sourceLang: ALLOWED_LANGS.has(
+          normalizeLanguage(result.sourceLanguage)
+        )
+          ? normalizeLanguage(result.sourceLanguage)
+          : "auto",
         mode,
         vttUrl,
         vttText,

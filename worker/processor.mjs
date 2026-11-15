@@ -189,23 +189,41 @@ async function transcribeVtt(job, input, dir, prefix = "whisper") {
   await run(config.whisper, [
     input,
     "--model", model,
-    "--output_format", "vtt",
+    "--output_format", "all",
     "--output_dir", outputDir,
     "--task", "transcribe",
   ]);
 
-  const files = (await readdir(outputDir))
-    .filter((file) => file.endsWith(".vtt"));
+  const all = await readdir(outputDir);
+  const vttFile = all.find((file) => file.endsWith(".vtt"));
+  const jsonFile = all.find((file) => file.endsWith(".json"));
 
-  if (!files.length) {
+  if (!vttFile) {
     throw new Error("Whisper n'a produit aucun fichier WebVTT");
   }
 
-  return readFile(join(outputDir, files[0]), "utf8");
+  const vtt = await readFile(join(outputDir, vttFile), "utf8");
+
+  // Langue détectée (code ISO) : lue dans le JSON de Whisper.
+  let language = null;
+  if (jsonFile) {
+    try {
+      const meta = JSON.parse(
+        await readFile(join(outputDir, jsonFile), "utf8")
+      );
+      if (typeof meta.language === "string" && meta.language.trim()) {
+        language = meta.language.trim().toLowerCase().slice(0, 8);
+      }
+    } catch {
+      // langue inconnue : on retombe sur "auto"
+    }
+  }
+
+  return { vtt, language };
 }
 
 async function captions(job, input, dir) {
-  const vtt = await transcribeVtt(job, input, dir);
+  const { vtt, language } = await transcribeVtt(job, input, dir);
 
   const local = join(dir, "captions.vtt");
   await writeFile(local, vtt, "utf8");
@@ -215,7 +233,7 @@ async function captions(job, input, dir) {
   return {
     url: await putFile(key, local, MIME.vtt),
     key,
-    language: job.payload?.language || "auto",
+    language: language || job.payload?.language || "auto",
     format: "webvtt",
   };
 }
@@ -542,12 +560,8 @@ async function translate(job, input, dir) {
   }
 
   if (input) {
-    const sourceVtt = await transcribeVtt(
-      job,
-      input,
-      dir,
-      "whisper-translate"
-    );
+    const { vtt: sourceVtt, language: detectedLanguage } =
+      await transcribeVtt(job, input, dir, "whisper-translate");
 
     const translated = await translateVtt(
       sourceVtt,
@@ -574,7 +588,8 @@ async function translate(job, input, dir) {
     return {
       status: "completed",
       targetLanguage: target,
-      sourceLanguage: job.payload?.sourceLanguage || "auto",
+      sourceLanguage:
+        detectedLanguage || job.payload?.sourceLanguage || "auto",
       subtitles: { url, key },
       cues: translated.cues,
       provider: translated.provider,
