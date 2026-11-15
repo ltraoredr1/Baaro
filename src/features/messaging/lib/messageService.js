@@ -63,6 +63,26 @@ export const messageService = {
       }
     }
 
+    // Les conversations peu actives peuvent être absentes des derniers messages globaux :
+    // on récupère individuellement leur dernier message (borné pour limiter les requêtes).
+    const missing = list.filter((c) => !lastMessageByConversation.has(c.id)).slice(0, 30);
+    if (missing.length) {
+      const extras = await Promise.all(
+        missing.map((c) =>
+          supabase
+            .from("messages")
+            .select("*")
+            .eq("conversation_id", c.id)
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .then(({ data }) => (data && data[0]) || null, () => null)
+        )
+      );
+      extras.forEach((msg) => {
+        if (msg) lastMessageByConversation.set(msg.conversation_id, msg);
+      });
+    }
+
     const otherIdOf = (c) =>
       [c.user1_id, c.user2_id].filter(Boolean).find((u) => u !== userId) || null;
 

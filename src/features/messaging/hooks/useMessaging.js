@@ -106,6 +106,8 @@ export function useMessaging(conversation_id, current_user_id, recipient_id) {
   const conversationRef = useRef(conversation_id);
   const channelRef = useRef(null);
   const channelReadyRef = useRef(false);
+  const typingChannelRef = useRef(null);
+  const typingReadyRef = useRef(false);
   const typingTimerRef = useRef(null);
   const lastTypingSentRef = useRef(0);
 
@@ -218,23 +220,27 @@ export function useMessaging(conversation_id, current_user_id, recipient_id) {
       setLoading(false);
     };
 
-    // Rattrapage : récupère tout message plus récent que le dernier connu (temps réel manqué)
+    // Rattrapage : récupère tout message plus récent que le dernier connu (temps réel manqué).
+    // Lecture par pages ascendantes pour ne laisser aucun trou après une longue coupure.
     const sync = async () => {
       if (cancelled || (typeof document !== "undefined" && document.hidden)) return;
       const real = messagesRef.current.filter((m) => !isTmp(m.id) && m.created_at);
-      const newest = real[real.length - 1];
-      let q = supabase
-        .from("messages")
-        .select("*")
-        .eq("conversation_id", conversation_id)
-        .order("created_at", { ascending: false })
-        .limit(50);
-      if (newest) q = q.gt("created_at", newest.created_at);
-      const { data, error } = await q;
-      if (error || cancelled || !data?.length) return;
-      const dec = await Promise.all(data.slice().reverse().map(decryptOne));
-      if (cancelled) return;
-      setMessages((prev) => mergeMessages(prev, dec.filter((m) => !m.expired)));
+      let cursor = real[real.length - 1]?.created_at || null;
+
+      for (let page = 0; page < 5; page++) {
+        let q = supabase.from("messages").select("*").eq("conversation_id", conversation_id);
+        q = cursor
+          ? q.gt("created_at", cursor).order("created_at", { ascending: true }).limit(50)
+          : q.order("created_at", { ascending: false }).limit(50);
+        const { data, error } = await q;
+        if (error || cancelled || !data?.length) return;
+        const rows = cursor ? data : data.slice().reverse();
+        const dec = await Promise.all(rows.map(decryptOne));
+        if (cancelled) return;
+        setMessages((prev) => mergeMessages(prev, dec.filter((m) => !m.expired)));
+        if (!cursor || data.length < 50) return;
+        cursor = rows[rows.length - 1].created_at;
+      }
     };
 
     // Nom de canal unique : évite de réutiliser un canal encore en cours de fermeture
@@ -276,12 +282,6 @@ export function useMessaging(conversation_id, current_user_id, recipient_id) {
           }
         }
       )
-      .on("broadcast", { event: "typing" }, ({ payload }) => {
-        if (cancelled || !payload || payload.user_id === current_user_id) return;
-        setOtherTyping(true);
-        clearTimeout(typingTimerRef.current);
-        typingTimerRef.current = setTimeout(() => setOtherTyping(false), TYPING_TTL_MS);
-      })
       .subscribe((status) => {
         if (status === "SUBSCRIBED") {
           channelReadyRef.current = true;
@@ -292,10 +292,36 @@ export function useMessaging(conversation_id, current_user_id, recipient_id) {
       });
 
     channelRef.current = channel;
+
+    // « En train d'écrire » : un canal au nom STABLE, partagé par les deux participants
+    // (avec un nom unique par abonnement, la diffusion n'atteignait jamais l'autre).
+    const typingTopic = `typing:${conversation_id}`;
+    const staleTyping = supabase.getChannels?.().find((c) => c.topic === `realtime:${typingTopic}`);
+    if (staleTyping) supabase.removeChannel(staleTyping);
+    const typingChannel = supabase
+      .channel(typingTopic)
+      .on("broadcast", { event: "typing" }, ({ payload }) => {
+        if (cancelled || !payload || payload.user_id === current_user_id) return;
+        setOtherTyping(true);
+        clearTimeout(typingTimerRef.current);
+        typingTimerRef.current = setTimeout(() => setOtherTyping(false), TYPING_TTL_MS);
+      })
+      .subscribe((status) => {
+        if (status === "SUBSCRIBED") typingReadyRef.current = true;
+        else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+          typingReadyRef.current = false;
+        }
+      });
+    typingChannelRef.current = typingChannel;
     load();
 
     // Filet de sécurité si le temps réel ne livre pas (table hors publication, RLS, coupure réseau…)
-    const poll = setInterval(sync, 4000);
+    let pollTick = 0;
+    const poll = setInterval(() => {
+      pollTick += 1;
+      // Temps réel actif : rattrapage toutes les ~32 s ; sinon toutes les 4 s.
+      if (!channelReadyRef.current || pollTick % 8 === 0) sync();
+    }, 4000);
     const onWake = () => sync();
     document.addEventListener("visibilitychange", onWake);
     window.addEventListener("focus", onWake);
@@ -308,15 +334,18 @@ export function useMessaging(conversation_id, current_user_id, recipient_id) {
       window.removeEventListener("online", onWake);
       cancelled = true;
       channelReadyRef.current = false;
+      typingReadyRef.current = false;
       channelRef.current = null;
+      typingChannelRef.current = null;
       supabase.removeChannel(channel);
+      supabase.removeChannel(typingChannel);
     };
   }, [conversation_id, current_user_id, keysReady, decryptOne]);
 
   // Signale "en train d'écrire" (limité à 1 envoi / 2 s)
   const notifyTyping = useCallback(() => {
-    const ch = channelRef.current;
-    if (!ch || !channelReadyRef.current) return;
+    const ch = typingChannelRef.current;
+    if (!ch || !typingReadyRef.current) return;
     const now = Date.now();
     if (now - lastTypingSentRef.current < TYPING_THROTTLE_MS) return;
     lastTypingSentRef.current = now;

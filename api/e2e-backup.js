@@ -158,32 +158,73 @@ export default async function handler(req, res) {
       return res.json({ ok: true });
     }
 
-    // ── restore : vérifie la preuve, compte les échecs, applique les blocages
+    // ── restore : RÉSERVE un essai de façon atomique AVANT de vérifier la preuve,
+    //    ce qui empêche de contourner la limite avec des requêtes parallèles.
     if (action === "restore") {
       const proof = b64Bytes(body.proof, 32);
       if (!proof) return res.status(400).json({ error: "Preuve invalide" });
 
-      const { data, error } = await admin
-        .from(TABLE)
-        .select("*")
-        .eq("user_id", user.id)
-        .maybeSingle();
-      if (error) throw error;
-      if (!data) return res.status(404).json({ error: "Aucune sauvegarde" });
+      let data = null;
+      let reserved = null;
 
-      if (data.locked_until && new Date(data.locked_until) > new Date()) {
-        return res.status(429).json({
-          error: "Trop d'essais. Réessaie plus tard.",
-          lockedUntil: data.locked_until,
-          attemptsLeft: 0,
-        });
+      for (let attempt = 0; attempt < 6 && !reserved; attempt++) {
+        const { data: row, error } = await admin
+          .from(TABLE)
+          .select("*")
+          .eq("user_id", user.id)
+          .maybeSingle();
+        if (error) throw error;
+        if (!row) return res.status(404).json({ error: "Aucune sauvegarde" });
+
+        if (row.locked_until && new Date(row.locked_until) > new Date()) {
+          return res.status(429).json({
+            error: "Trop d'essais. Réessaie plus tard.",
+            lockedUntil: row.locked_until,
+            attemptsLeft: 0,
+          });
+        }
+
+        const prevFails = row.failed_attempts || 0;
+        const prevLevel = row.lock_level || 0;
+        const fails = prevFails + 1;
+        const update = { failed_attempts: fails };
+        let lockedUntil = null;
+
+        if (fails >= FAILS_PER_LEVEL) {
+          const level = Math.min(prevLevel, LOCK_DURATIONS_MS.length - 1);
+          lockedUntil = new Date(Date.now() + LOCK_DURATIONS_MS[level]).toISOString();
+          update.failed_attempts = 0;
+          update.lock_level = prevLevel + 1;
+          update.locked_until = lockedUntil;
+        }
+
+        // Mise à jour conditionnelle : un seul appel concurrent peut réserver
+        // cet état précis, les autres relisent la ligne et réessaient.
+        const { data: updated, error: updateError } = await admin
+          .from(TABLE)
+          .update(update)
+          .eq("user_id", user.id)
+          .eq("failed_attempts", prevFails)
+          .eq("lock_level", prevLevel)
+          .select("user_id");
+        if (updateError) throw updateError;
+
+        if (updated && updated.length === 1) {
+          data = row;
+          reserved = { fails, lockedUntil };
+        }
+      }
+
+      if (!reserved) {
+        return res.status(429).json({ error: "Serveur occupé, réessaie.", attemptsLeft: 0 });
       }
 
       if (safeEqualHex(hashProof(user.id, proof), data.proof_hash)) {
-        await admin
+        const { error: resetError } = await admin
           .from(TABLE)
           .update({ failed_attempts: 0, lock_level: 0, locked_until: null })
           .eq("user_id", user.id);
+        if (resetError) throw resetError;
 
         return res.json({
           ok: true,
@@ -194,25 +235,11 @@ export default async function handler(req, res) {
         });
       }
 
-      // Mauvais PIN
-      const fails = (data.failed_attempts || 0) + 1;
-      const update = { failed_attempts: fails };
-      let lockedUntil = null;
-
-      if (fails >= FAILS_PER_LEVEL) {
-        const level = Math.min(data.lock_level || 0, LOCK_DURATIONS_MS.length - 1);
-        lockedUntil = new Date(Date.now() + LOCK_DURATIONS_MS[level]).toISOString();
-        update.failed_attempts = 0;
-        update.lock_level = (data.lock_level || 0) + 1;
-        update.locked_until = lockedUntil;
-      }
-
-      await admin.from(TABLE).update(update).eq("user_id", user.id);
-
+      // Mauvais PIN : l'essai a déjà été compté ci-dessus.
       return res.status(401).json({
         error: "PIN incorrect",
-        attemptsLeft: lockedUntil ? 0 : FAILS_PER_LEVEL - fails,
-        lockedUntil,
+        attemptsLeft: reserved.lockedUntil ? 0 : FAILS_PER_LEVEL - reserved.fails,
+        lockedUntil: reserved.lockedUntil,
       });
     }
 
