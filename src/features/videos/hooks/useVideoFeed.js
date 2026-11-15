@@ -15,6 +15,8 @@ const buildVideoSelect = (withSound) => `
   views,
   likes,
   comments_count,
+  saves_count,
+  shares_count,
   is_repost,
   created_at,
   author_id,

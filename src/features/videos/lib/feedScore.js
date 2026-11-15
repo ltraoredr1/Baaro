@@ -59,7 +59,7 @@ export function scoreVideo(v, p) {
     ? clamp(0.5 + tags.reduce((s, t) => s + (p.tags[t] || 0), 0) / tags.length / 4, 0, 1)
     : 0.5;
   const views = Math.max(Number(v.views || 0), 20);
-  const engagement = Math.min(1, ((Number(v.likes || 0) + 2 * Number(v.comments_count || 0)) / views) * 5);
+  const engagement = Math.min(1, ((Number(v.likes || 0) + 2 * Number(v.comments_count || 0) + 3 * Number(v.shares_count || 0) + 3 * Number(v.saves_count || 0)) / views) * 5);
   const watch = authorStats(v, p).avg;
   const ageH = (Date.now() - new Date(v.created_at).getTime()) / 36e5;
   const fresh = Math.max(0.2, Math.pow(0.5, (Number.isFinite(ageH) ? ageH : 0) / 48));
