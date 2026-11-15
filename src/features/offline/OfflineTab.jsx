@@ -1,4 +1,5 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import { Capacitor } from "@capacitor/core";
 import {
   WifiOff,
   Radio,
@@ -7,6 +8,14 @@ import {
   ShieldCheck,
   RefreshCw,
   Inbox,
+  Paperclip,
+  Image as ImageIcon,
+  Video,
+  FileText,
+  X,
+  ExternalLink,
+  Mic,
+  Phone,
 } from "lucide-react";
 import { COLORS } from "../../theme.js";
 import { useToast } from "../../components/ToastContext.jsx";
@@ -22,6 +31,45 @@ import {
 } from "../../lib/offlineActions.js";
 import { clearOfflineEventDeadLetters, flushOfflineEvents, getOfflineEventQueueSize, getOfflineEventDeadLetterCount } from "../../lib/feedEvents.js";
 import { OfflineSyncDashboard } from "./OfflineSyncDashboard.jsx";
+import { NearbyCallLayer } from "./NearbyCallLayer.jsx";
+import {
+  startNearbyCall,
+  startNearbyVoiceRecording,
+  stopNearbyVoiceRecording,
+  cancelNearbyVoiceRecording,
+  NEARBY_MAX_VOICE_MS,
+} from "../../lib/nearby.js";
+
+const MAX_FILE_MB = 20;
+
+const ATTACH_OPTIONS = [
+  { kind: "image", label: "Photo", Icon: ImageIcon },
+  { kind: "video", label: "Vidéo", Icon: Video },
+  { kind: "document", label: "Document", Icon: FileText },
+];
+
+function formatBytes(bytes) {
+  const value = Number(bytes) || 0;
+  if (value < 1024) return `${value} o`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(0)} Ko`;
+  return `${(value / (1024 * 1024)).toFixed(1)} Mo`;
+}
+
+function formatClock(totalSeconds) {
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+function errorText(error) {
+  return error instanceof Error ? error.message : "Action impossible.";
+}
+
+function progressPercent(transfer, fallbackTotal = 0) {
+  const total = Number(transfer?.totalBytes) || Number(fallbackTotal) || 0;
+  if (total <= 0) return 0;
+  return Math.max(0, Math.min(100, Math.floor(((Number(transfer?.bytesTransferred) || 0) / total) * 100)));
+}
 
 export function OfflineTab() {
   const { showToast } = useToast();
@@ -34,6 +82,13 @@ export function OfflineTab() {
   const [deadLetterCount, setDeadLetterCount] = useState(0);
   const [flushing, setFlushing] = useState(false);
   const [verifiedConnectionIds, setVerifiedConnectionIds] = useState(() => new Set());
+  const [attachMenuOpen, setAttachMenuOpen] = useState(false);
+  const [targetEndpointId, setTargetEndpointId] = useState("");
+  const [sendingFile, setSendingFile] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [recordSeconds, setRecordSeconds] = useState(0);
+  const finishVoiceRef = useRef(null);
+  const recordingRef = useRef(false);
 
   const {
     isAvailable,
@@ -44,10 +99,15 @@ export function OfflineTab() {
     devices,
     pendingConnections,
     messages,
+    transfers,
     error,
     start,
     stop,
     sendMessage,
+    pickFile,
+    sendFile,
+    cancelTransfer,
+    openFile,
     requestConnection,
     acceptConnection,
     rejectConnection,
@@ -63,6 +123,30 @@ export function OfflineTab() {
   useEffect(() => {
     if (error) showToast(error, "error");
   }, [error, showToast]);
+
+  useEffect(() => {
+    recordingRef.current = recording;
+  }, [recording]);
+
+  // Compteur du vocal, arrêt automatique à la durée maximale.
+  useEffect(() => {
+    if (!recording) return undefined;
+    const id = setInterval(() => {
+      setRecordSeconds((value) => {
+        const next = value + 1;
+        if (next * 1000 >= NEARBY_MAX_VOICE_MS) finishVoiceRef.current?.(true);
+        return next;
+      });
+    }, 1000);
+    return () => clearInterval(id);
+  }, [recording]);
+
+  // Quitter l'onglet abandonne l'enregistrement en cours.
+  useEffect(() => {
+    return () => {
+      if (recordingRef.current) void cancelNearbyVoiceRecording();
+    };
+  }, []);
 
   useEffect(() => {
     const refresh = () => {
@@ -204,6 +288,109 @@ export function OfflineTab() {
       });
   };
 
+  const connectedDevices = devices.filter((d) => d.status === "connected");
+  const activeTransfers = transfers.filter((t) => t.status === "IN_PROGRESS");
+  const effectiveTarget =
+    connectedDevices.length === 1
+      ? connectedDevices[0].endpointId
+      : connectedDevices.some((d) => d.endpointId === targetEndpointId)
+        ? targetEndpointId
+        : "";
+
+  const handleAttach = async (kind) => {
+    setAttachMenuOpen(false);
+    if (sendingFile) return;
+    if (!isScanning) {
+      showToast("Active la détection P2P avant d'envoyer un fichier.", "info");
+      return;
+    }
+    if (connectedDevices.length === 0) {
+      showToast("Connecte-toi d'abord à un appareil proche.", "info");
+      return;
+    }
+    if (!effectiveTarget) {
+      showToast("Choisis l'appareil destinataire.", "info");
+      return;
+    }
+
+    setSendingFile(true);
+    try {
+      const file = await pickFile(kind);
+      if (!file) return; // sélection annulée
+      await sendFile(file, effectiveTarget);
+      showToast(`Envoi de « ${file.name} » en cours…`, "info");
+    } catch {
+      // Le hook publie l’erreur via l’état et le toast partagé.
+    } finally {
+      setSendingFile(false);
+    }
+  };
+
+  const handleCancelTransfer = (payloadId) => {
+    cancelTransfer(payloadId).catch(() => {});
+  };
+
+  const handleOpenFile = (message) => {
+    openFile(message.path, message.mimeType).catch(() => {});
+  };
+
+  const handleCall = (endpointId, media) => {
+    startNearbyCall(media, endpointId).catch((error) =>
+      showToast(errorText(error), "error")
+    );
+  };
+
+  const handleVoiceStart = async () => {
+    if (recording || sendingFile) return;
+    if (!isScanning) {
+      showToast("Active la détection P2P avant d'enregistrer un vocal.", "info");
+      return;
+    }
+    if (connectedDevices.length === 0) {
+      showToast("Connecte-toi d'abord à un appareil proche.", "info");
+      return;
+    }
+    if (!effectiveTarget) {
+      showToast("Choisis l'appareil destinataire.", "info");
+      return;
+    }
+    try {
+      await startNearbyVoiceRecording();
+      setRecordSeconds(0);
+      setRecording(true);
+    } catch (error) {
+      showToast(errorText(error), "error");
+    }
+  };
+
+  const finishVoice = async (send) => {
+    if (!recordingRef.current) return;
+    recordingRef.current = false;
+    setRecording(false);
+    if (!send) {
+      await cancelNearbyVoiceRecording();
+      return;
+    }
+    setSendingFile(true);
+    let file = null;
+    try {
+      file = await stopNearbyVoiceRecording();
+    } catch (error) {
+      showToast(errorText(error), "error");
+    }
+    try {
+      if (file) {
+        await sendFile(file, effectiveTarget);
+        showToast("Envoi du vocal en cours…", "info");
+      }
+    } catch {
+      // Le hook publie l’erreur via l’état et le toast partagé.
+    } finally {
+      setSendingFile(false);
+    }
+  };
+  finishVoiceRef.current = finishVoice;
+
   return (
     <div className="flex flex-col gap-6 max-w-4xl mx-auto w-full pb-20">
       <OfflineSyncDashboard userId={user?.id} />
@@ -329,7 +516,27 @@ export function OfflineTab() {
                 >
                   <span>{d.name || d.endpointId}</span>
                   {d.status === "connected" ? (
-                    <span className="text-[10px]" style={{ color: COLORS.teal }}>Connecté</span>
+                    <span className="flex items-center gap-1">
+                      <span className="text-[10px]" style={{ color: COLORS.teal }}>Connecté</span>
+                      <button
+                        type="button"
+                        onClick={() => handleCall(d.endpointId, "audio")}
+                        className="rounded-lg p-1.5"
+                        style={{ background: COLORS.teal, color: COLORS.bg }}
+                        aria-label={`Appel vocal avec ${d.name || "cet appareil"}`}
+                      >
+                        <Phone size={12} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleCall(d.endpointId, "video")}
+                        className="rounded-lg p-1.5"
+                        style={{ background: COLORS.teal, color: COLORS.bg }}
+                        aria-label={`Appel vidéo avec ${d.name || "cet appareil"}`}
+                      >
+                        <Video size={12} />
+                      </button>
+                    </span>
                   ) : d.status === "connecting" ? (
                     <span className="text-[10px]" style={{ color: COLORS.muted }}>Demande envoyée…</span>
                   ) : (
@@ -361,24 +568,232 @@ export function OfflineTab() {
                 Aucun message pour l’instant.
               </p>
             ) : (
-              messages.map((m, i) => (
-                <div
-                  key={i}
-                  className="text-xs rounded-lg px-2 py-1.5"
-                  style={{
-                    background: "rgba(255,255,255,0.04)",
-                    color: COLORS.ivory,
-                  }}
-                >
-                  <span className="font-bold" style={{ color: COLORS.teal }}>
-                    {m.from || "?"}
-                  </span>
-                  : {m.text}
-                </div>
-              ))
+              messages.map((m, i) => {
+                if (m.type !== "file") {
+                  return (
+                    <div
+                      key={i}
+                      className="text-xs rounded-lg px-2 py-1.5"
+                      style={{
+                        background: "rgba(255,255,255,0.04)",
+                        color: COLORS.ivory,
+                      }}
+                    >
+                      <span className="font-bold" style={{ color: COLORS.teal }}>
+                        {m.from || "?"}
+                      </span>
+                      : {m.text}
+                    </div>
+                  );
+                }
+
+                const transfer = transfers.find((t) => t.payloadId === m.payloadId);
+                const status = transfer?.status;
+                const percent = progressPercent(transfer, m.size);
+                const isAudio = typeof m.mimeType === "string" && m.mimeType.startsWith("audio/");
+                const canOpen = !m.isMe && Boolean(m.path);
+                let stateLabel = "";
+                if (status === "IN_PROGRESS") stateLabel = `${percent} %`;
+                else if (status === "CANCELED") stateLabel = "Annulé";
+                else if (status === "FAILURE") stateLabel = "Échec";
+                else if (m.isMe && status === "SUCCESS") stateLabel = "Envoyé";
+                else if (m.isMe && !status) stateLabel = "Envoi…";
+
+                return (
+                  <div
+                    key={i}
+                    className="text-xs rounded-lg px-2 py-1.5 flex items-center gap-2"
+                    style={{
+                      background: "rgba(255,255,255,0.04)",
+                      color: COLORS.ivory,
+                    }}
+                  >
+                    {isAudio ? (
+                      <Mic size={16} className="shrink-0" style={{ color: COLORS.teal }} />
+                    ) : (
+                      <FileText size={16} className="shrink-0" style={{ color: COLORS.teal }} />
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate">
+                        <span className="font-bold" style={{ color: COLORS.teal }}>
+                          {m.from || "?"}
+                        </span>
+                        : {m.fileName}
+                      </div>
+                      <div className="text-[10px]" style={{ color: COLORS.muted }}>
+                        {formatBytes(m.size)}
+                        {stateLabel ? ` · ${stateLabel}` : ""}
+                      </div>
+                    </div>
+                    {isAudio && m.path && (
+                      <audio
+                        controls
+                        preload="none"
+                        src={Capacitor.convertFileSrc(`file://${m.path}`)}
+                        className="h-8 w-40 shrink-0"
+                        aria-label={`Écouter ${m.fileName}`}
+                      />
+                    )}
+                    {canOpen && !isAudio && (
+                      <button
+                        type="button"
+                        onClick={() => handleOpenFile(m)}
+                        className="shrink-0 flex items-center gap-1 rounded-lg px-2 py-1 text-[10px] font-bold"
+                        style={{ background: COLORS.teal, color: COLORS.bg }}
+                        aria-label={`Ouvrir ${m.fileName}`}
+                      >
+                        <ExternalLink size={12} />
+                        Ouvrir
+                      </button>
+                    )}
+                  </div>
+                );
+              })
             )}
           </div>
-          <form onSubmit={handleSendP2P} className="flex gap-2">
+          {activeTransfers.length > 0 && (
+            <ul className="space-y-2" aria-label="Transferts en cours">
+              {activeTransfers.map((t) => {
+                const percent = progressPercent(t);
+                return (
+                  <li
+                    key={t.payloadId}
+                    className="rounded-lg border px-2 py-1.5 text-xs"
+                    style={{ borderColor: COLORS.border, color: COLORS.ivory }}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="truncate">
+                        {t.direction === "outgoing" ? "Envoi" : "Réception"} · {t.fileName || "fichier"}
+                      </span>
+                      <span className="shrink-0 font-bold" style={{ color: COLORS.gold }}>
+                        {percent} %
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleCancelTransfer(t.payloadId)}
+                        className="shrink-0 rounded-lg border px-2 py-1 text-[10px] flex items-center gap-1"
+                        style={{ borderColor: COLORS.border, color: COLORS.ivory }}
+                        aria-label="Annuler le transfert"
+                      >
+                        <X size={12} />
+                        Annuler
+                      </button>
+                    </div>
+                    <div
+                      className="mt-1.5 h-1.5 w-full rounded-full overflow-hidden"
+                      style={{ background: "rgba(255,255,255,0.1)" }}
+                      role="progressbar"
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={percent}
+                    >
+                      <div
+                        className="h-full rounded-full transition-all"
+                        style={{ width: `${percent}%`, background: COLORS.teal }}
+                      />
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+          {connectedDevices.length > 1 && (
+            <select
+              value={effectiveTarget}
+              onChange={(e) => setTargetEndpointId(e.target.value)}
+              aria-label="Destinataire du fichier"
+              className="bg-transparent border rounded-xl px-3 py-2 text-xs outline-none"
+              style={{ borderColor: COLORS.border, color: COLORS.ivory }}
+            >
+              <option value="" style={{ color: "#000" }}>
+                Destinataire du fichier…
+              </option>
+              {connectedDevices.map((d) => (
+                <option key={d.endpointId} value={d.endpointId} style={{ color: "#000" }}>
+                  {d.name || d.endpointId}
+                </option>
+              ))}
+            </select>
+          )}
+          {recording && (
+            <div
+              className="flex items-center justify-between gap-2 rounded-xl border px-3 py-2 text-xs"
+              style={{ borderColor: "#ef4444", color: COLORS.ivory }}
+              role="status"
+            >
+              <span className="flex items-center gap-2">
+                <span className="inline-block w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                Enregistrement… {formatClock(recordSeconds)}
+              </span>
+              <span className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => finishVoice(false)}
+                  className="rounded-lg border px-2 py-1 text-[10px]"
+                  style={{ borderColor: COLORS.border, color: COLORS.ivory }}
+                >
+                  Annuler
+                </button>
+                <button
+                  type="button"
+                  onClick={() => finishVoice(true)}
+                  className="rounded-lg px-2 py-1 text-[10px] font-bold"
+                  style={{ background: COLORS.teal, color: COLORS.bg }}
+                >
+                  Envoyer
+                </button>
+              </span>
+            </div>
+          )}
+          <form onSubmit={handleSendP2P} className="flex gap-2 relative">
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setAttachMenuOpen((open) => !open)}
+                disabled={isOperating || sendingFile || !isScanning}
+                aria-haspopup="menu"
+                aria-expanded={attachMenuOpen}
+                aria-label="Joindre un fichier"
+                className="px-3 py-2 rounded-xl border disabled:opacity-50"
+                style={{ borderColor: COLORS.border, color: COLORS.ivory }}
+              >
+                <Paperclip size={16} />
+              </button>
+              {attachMenuOpen && (
+                <div
+                  role="menu"
+                  className="absolute bottom-full left-0 mb-2 z-10 w-44 rounded-xl border p-1 shadow-2xl"
+                  style={{ borderColor: COLORS.borderTeal, background: COLORS.surface }}
+                >
+                  {ATTACH_OPTIONS.map(({ kind, label, Icon }) => (
+                    <button
+                      key={kind}
+                      type="button"
+                      role="menuitem"
+                      onClick={() => handleAttach(kind)}
+                      className="w-full flex items-center gap-2 rounded-lg px-3 py-2 text-xs text-left"
+                      style={{ color: COLORS.ivory }}
+                    >
+                      <Icon size={14} style={{ color: COLORS.teal }} />
+                      {label}
+                    </button>
+                  ))}
+                  <p className="px-3 pt-1 pb-1.5 text-[10px]" style={{ color: COLORS.muted }}>
+                    Maximum {MAX_FILE_MB} Mo par fichier.
+                  </p>
+                </div>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={handleVoiceStart}
+              disabled={isOperating || sendingFile || recording || !isScanning}
+              aria-label="Enregistrer un message vocal"
+              className="px-3 py-2 rounded-xl border disabled:opacity-50"
+              style={{ borderColor: COLORS.border, color: COLORS.ivory }}
+            >
+              <Mic size={16} />
+            </button>
             <input
               value={p2pInput}
               onChange={(e) => setP2pInput(e.target.value)}
@@ -400,6 +815,8 @@ export function OfflineTab() {
           </form>
         </div>
       </div>
+
+      <NearbyCallLayer showToast={showToast} onIncomingCall={playNotification} />
 
       {pendingConnections.length > 0 && (
         <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/70 p-4">

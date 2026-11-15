@@ -12,4 +12,9 @@
         path="share/" />
 
     <cache-path name="updater_apks" path="updates/" />
+
+    <!-- Fichiers reçus via Nearby (ouverture avec une autre application) -->
+    <files-path
+        name="nearby_received"
+        path="nearby_received/" />
 </paths>

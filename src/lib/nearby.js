@@ -567,6 +567,197 @@ export async function sendNearbyMessage(text, endpointId = null) {
   });
 }
 
+export const NEARBY_MAX_FILE_BYTES = 20 * 1024 * 1024;
+const NEARBY_FILE_KINDS = ["image", "video", "document"];
+
+/** Ouvre le sélecteur Android. Retourne null si l'utilisateur annule. */
+export async function pickNearbyFile(kind) {
+  if (!NEARBY_FILE_KINDS.includes(kind)) {
+    throw new Error("Type de fichier non pris en charge.");
+  }
+  const plugin = requirePlugin();
+  if (typeof plugin.pickFile !== "function") {
+    throw new Error("Le plugin Nearby ne permet pas de choisir un fichier. Reconstruis l’application.");
+  }
+
+  const result = await plugin.pickFile({ kind });
+  if (!result || result.cancelled) return null;
+
+  const size = Number(result.size);
+  if (!result.uri || !Number.isFinite(size) || size <= 0) {
+    throw new Error("Fichier illisible.");
+  }
+  if (size > NEARBY_MAX_FILE_BYTES) {
+    throw new Error("Ce fichier dépasse la limite de 20 Mo.");
+  }
+
+  return {
+    uri: result.uri,
+    name: result.name || "fichier",
+    mimeType: result.mimeType || "application/octet-stream",
+    size,
+  };
+}
+
+/** Envoie un fichier choisi avec pickNearbyFile à un appareil connecté. */
+export async function sendNearbyFile(file, endpointId = null) {
+  if (!file || typeof file.uri !== "string" || !file.uri) {
+    throw new Error("Aucun fichier à envoyer.");
+  }
+  if (endpointId !== null && endpointId !== undefined) {
+    endpointId = requireEndpointId(endpointId);
+  }
+
+  return enqueueSend(`file:${endpointId || "default"}`, async () => {
+    const plugin = requirePlugin();
+    if (typeof plugin.sendFile !== "function") {
+      throw new Error("Le plugin Nearby ne permet pas d’envoyer un fichier. Reconstruis l’application.");
+    }
+    const result = await plugin.sendFile({
+      uri: file.uri,
+      ...(endpointId ? { endpointId } : {}),
+    });
+    return {
+      payloadId: String(result.payloadId),
+      endpointId: result.endpointId ?? endpointId,
+      fileName: result.fileName ?? file.name,
+      mimeType: result.mimeType ?? file.mimeType,
+      size: Number(result.size) || file.size,
+    };
+  });
+}
+
+export async function cancelNearbyTransfer(payloadId) {
+  if (typeof payloadId !== "string" || !/^-?\d+$/.test(payloadId)) {
+    throw new Error("Identifiant de transfert invalide.");
+  }
+  const plugin = requirePlugin();
+  if (typeof plugin.cancelTransfer !== "function") {
+    throw new Error("Le plugin Nearby ne permet pas d’annuler un transfert.");
+  }
+  await plugin.cancelTransfer({ payloadId });
+}
+
+export async function openNearbyFile(path, mimeType) {
+  if (typeof path !== "string" || !path) {
+    throw new Error("Chemin du fichier manquant.");
+  }
+  const plugin = requirePlugin();
+  if (typeof plugin.openFile !== "function") {
+    throw new Error("Le plugin Nearby ne permet pas d’ouvrir un fichier.");
+  }
+  await plugin.openFile({ path, ...(mimeType ? { mimeType } : {}) });
+}
+
+// ───────────── Vocal et appels ─────────────
+
+export const NEARBY_MAX_VOICE_MS = 5 * 60 * 1000;
+
+function requireMethod(plugin, name, label) {
+  if (typeof plugin[name] !== "function") {
+    throw new Error(`Le plugin Nearby ne permet pas : ${label}. Reconstruis l’application.`);
+  }
+}
+
+/** Demande l'accès au micro (vocal et appels). Retourne true si accordé. */
+export async function ensureNearbyMicrophone() {
+  const plugin = requirePlugin();
+  requireMethod(plugin, "checkPermissions", "vérifier le micro");
+  let status = await plugin.checkPermissions();
+  if (normalizePermission(status?.microphone) !== "granted") {
+    requireMethod(plugin, "requestPermissions", "demander le micro");
+    status = await plugin.requestPermissions({ permissions: ["microphone"] });
+  }
+  return normalizePermission(status?.microphone) === "granted";
+}
+
+export async function startNearbyVoiceRecording() {
+  const plugin = requirePlugin();
+  requireMethod(plugin, "startVoiceRecording", "enregistrer un vocal");
+  if (!(await ensureNearbyMicrophone())) {
+    throw new Error("Autorise le micro dans les paramètres de BAARO pour enregistrer un vocal.");
+  }
+  await plugin.startVoiceRecording();
+}
+
+/** Termine l'enregistrement et retourne un fichier prêt pour sendNearbyFile. */
+export async function stopNearbyVoiceRecording() {
+  const plugin = requirePlugin();
+  requireMethod(plugin, "stopVoiceRecording", "enregistrer un vocal");
+  const result = await plugin.stopVoiceRecording();
+  return {
+    uri: result.uri,
+    name: result.name,
+    mimeType: result.mimeType,
+    size: Number(result.size),
+    durationMs: Number(result.durationMs) || 0,
+    path: result.path ?? null,
+  };
+}
+
+export async function cancelNearbyVoiceRecording() {
+  const plugin = getPlugin();
+  if (typeof plugin?.cancelVoiceRecording !== "function") return;
+  try {
+    await plugin.cancelVoiceRecording();
+  } catch (error) {
+    console.warn("Annulation du vocal impossible :", error);
+  }
+}
+
+export async function startNearbyCall(media, endpointId = null) {
+  if (media !== "audio" && media !== "video") {
+    throw new Error("Type d’appel invalide.");
+  }
+  if (endpointId !== null && endpointId !== undefined) {
+    endpointId = requireEndpointId(endpointId);
+  }
+  const plugin = requirePlugin();
+  requireMethod(plugin, "startCall", "passer un appel");
+  if (!(await ensureNearbyMicrophone())) {
+    throw new Error("Autorise le micro dans les paramètres de BAARO pour appeler.");
+  }
+  const result = await plugin.startCall({ media, ...(endpointId ? { endpointId } : {}) });
+  return { callId: String(result.callId) };
+}
+
+export async function answerNearbyCall(callId, accept) {
+  if (typeof callId !== "string" || !callId) {
+    throw new Error("Appel invalide.");
+  }
+  const plugin = requirePlugin();
+  requireMethod(plugin, "answerCall", "répondre à un appel");
+  if (accept && !(await ensureNearbyMicrophone())) {
+    throw new Error("Autorise le micro dans les paramètres de BAARO pour répondre.");
+  }
+  await plugin.answerCall({ callId, accept: accept === true });
+}
+
+export async function endNearbyCall() {
+  const plugin = getPlugin();
+  if (typeof plugin?.endCall !== "function") return;
+  await plugin.endCall();
+}
+
+export async function setNearbyCallMuted(muted) {
+  const plugin = requirePlugin();
+  requireMethod(plugin, "setCallMuted", "couper le micro");
+  await plugin.setCallMuted({ muted: muted === true });
+}
+
+export async function setNearbyCallSpeaker(enabled) {
+  const plugin = requirePlugin();
+  requireMethod(plugin, "setCallSpeaker", "activer le haut-parleur");
+  await plugin.setCallSpeaker({ enabled: enabled === true });
+}
+
+/** Envoie une image JPEG (base64 sans préfixe) à l'autre appareil pendant un appel vidéo. */
+export async function sendNearbyVideoFrame(data) {
+  const plugin = requirePlugin();
+  requireMethod(plugin, "sendVideoFrame", "envoyer la vidéo");
+  await plugin.sendVideoFrame({ data });
+}
+
 export async function acceptNearbyConnection(endpointId, authenticationConfirmed = false) {
   endpointId = requireEndpointId(endpointId);
   if (authenticationConfirmed !== true) {
@@ -658,10 +849,55 @@ function normalizeEvent(event) {
       return {
         type,
         endpointId,
-        payloadId: event.payloadId,
+        payloadId: event.payloadId == null ? null : String(event.payloadId),
         status: event.status,
         bytesTransferred: event.bytesTransferred,
         totalBytes: event.totalBytes,
+        direction: event.direction === "outgoing" ? "outgoing" : "incoming",
+        fileName: typeof event.fileName === "string" ? event.fileName : null,
+        mimeType: typeof event.mimeType === "string" ? event.mimeType : null,
+      };
+
+    case "CALL_STATE":
+      return {
+        type,
+        endpointId,
+        callId: String(event.callId ?? ""),
+        media: event.media === "video" ? "video" : "audio",
+        state: event.state,
+        incoming: event.incoming === true,
+        deviceName: event.deviceName ?? "Appareil",
+      };
+
+    case "CALL_ENDED":
+      return {
+        type,
+        endpointId,
+        callId: String(event.callId ?? ""),
+        reason: event.reason || "remote",
+      };
+
+    case "VIDEO_FRAME":
+      return {
+        type,
+        endpointId,
+        callId: String(event.callId ?? ""),
+        data: typeof event.data === "string" ? event.data : "",
+      };
+
+    case "FILE_RECEIVED":
+      return {
+        type,
+        endpointId,
+        payloadId: event.payloadId == null ? null : String(event.payloadId),
+        senderName: event.senderName ?? "Proche",
+        fileName: event.fileName,
+        mimeType: event.mimeType,
+        size: Number(event.size) || 0,
+        path: event.path,
+        timestamp: Number.isFinite(Number(event.timestamp))
+          ? Number(event.timestamp)
+          : Date.now(),
       };
 
     default:

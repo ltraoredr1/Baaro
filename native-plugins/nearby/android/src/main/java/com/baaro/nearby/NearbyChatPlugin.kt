@@ -5,6 +5,7 @@ import com.getcapacitor.JSObject
 import com.getcapacitor.Plugin
 import com.getcapacitor.PluginCall
 import com.getcapacitor.PluginMethod
+import com.getcapacitor.annotation.ActivityCallback
 import com.getcapacitor.annotation.CapacitorPlugin
 import com.getcapacitor.annotation.Permission
 import com.google.android.gms.nearby.Nearby
@@ -21,10 +22,28 @@ import com.google.android.gms.nearby.connection.PayloadCallback
 import com.google.android.gms.nearby.connection.PayloadTransferUpdate
 import com.google.android.gms.nearby.connection.Strategy
 import android.Manifest
+import android.app.Activity
+import android.content.ActivityNotFoundException
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.ParcelFileDescriptor
+import android.provider.OpenableColumns
+import android.webkit.MimeTypeMap
+import androidx.activity.result.ActivityResult
+import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import org.json.JSONObject
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.UUID
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
 @CapacitorPlugin(
     name = "NearbyChat",
@@ -40,6 +59,10 @@ import org.json.JSONObject
         Permission(
             strings = [Manifest.permission.NEARBY_WIFI_DEVICES],
             alias = "nearbyWifi"
+        ),
+        Permission(
+            strings = [Manifest.permission.RECORD_AUDIO],
+            alias = "microphone"
         ),
         Permission(
             strings = [Manifest.permission.ACCESS_COARSE_LOCATION],
@@ -60,7 +83,11 @@ class NearbyChatPlugin : Plugin() {
         private const val SERVICE_ID = "com.baaro.app.nearby"
         private const val DEFAULT_DISPLAY_NAME = "Utilisateur BAARO"
         private const val MAX_MESSAGE_BYTES = 32 * 1024
-        private const val MAX_FILE_BYTES = 20L * 1024L * 1024L
+        private const val MAX_FILE_BYTES = NearbyPluginRules.MAX_FILE_BYTES
+        private const val MAX_INCOMING_FILES = 4
+        private const val MAX_PICKED_FILES = 8
+        private const val RECEIVED_DIR = "nearby_received"
+        private const val CALL_RING_TIMEOUT_MS = 45_000L
         private const val MAX_PENDING_CONNECTIONS = 3
         private const val MAX_RECENT_MESSAGE_IDS = 512
         private const val MESSAGE_PROTOCOL_VERSION = 1
@@ -77,6 +104,33 @@ class NearbyChatPlugin : Plugin() {
     private val rejectedByUser = mutableSetOf<String>()
     private val connectedEndpoints = mutableMapOf<String, String>()
     private val cancelingPayloads = mutableSetOf<Long>()
+
+    private class FileMeta(val name: String, val mime: String, val size: Long)
+    private class PickedFile(val name: String, val mime: String, val size: Long)
+    private class OutgoingFile(val meta: FileMeta, val descriptor: ParcelFileDescriptor)
+
+    // Fichiers choisis par l'utilisateur : seuls ces URI peuvent être envoyés.
+    private val pickedFiles = LinkedHashMap<String, PickedFile>()
+    private val outgoingFiles = mutableMapOf<Long, OutgoingFile>()
+    private val incomingFiles = mutableMapOf<Long, Payload>()
+    private val incomingEndpoints = mutableMapOf<Long, String>()
+    private val incomingMeta = mutableMapOf<Long, FileMeta>()
+    private val incomingCompleted = mutableSetOf<Long>()
+    private val rejectedIncoming = mutableSetOf<Long>()
+    private val ioExecutor: ExecutorService by lazy { Executors.newSingleThreadExecutor() }
+
+    private class CallState(
+        val id: String,
+        val endpointId: String,
+        val media: String,
+        val incoming: Boolean,
+        var active: Boolean = false
+    )
+
+    private var currentCall: CallState? = null
+    private var callTimeout: Runnable? = null
+    private val voiceRecorder by lazy { VoiceRecorder(context) }
+    private val callAudio by lazy { CallAudio(context) }
     private val receivedMessageIds = mutableMapOf<String, LinkedHashSet<String>>()
     private val mainHandler = Handler(Looper.getMainLooper())
     private val pendingTimeouts = mutableMapOf<String, Runnable>()
@@ -148,12 +202,306 @@ class NearbyChatPlugin : Plugin() {
         mainHandler.postDelayed(timeout, PENDING_CONNECTION_TIMEOUT_MS)
     }
 
+    // ───────────── Transfert de fichiers ─────────────
+
+    private fun receivedDir(): File =
+        File(context.filesDir, RECEIVED_DIR).also { if (!it.exists()) it.mkdirs() }
+
+    /** Supprime le fichier temporaire créé par Nearby pour un payload reçu. */
+    private fun deletePayloadFile(payload: Payload) {
+        val file = payload.asFile() ?: return
+        try {
+            val uri = if (Build.VERSION.SDK_INT >= 29) file.asUri() else null
+            if (uri != null) {
+                context.contentResolver.delete(uri, null, null)
+            } else {
+                @Suppress("DEPRECATION")
+                file.asJavaFile()?.delete()
+            }
+        } catch (_: Exception) {
+            // Nettoyage au mieux : un fichier temporaire restant n'est pas bloquant.
+        }
+    }
+
+    private fun closeOutgoing(payloadId: Long) {
+        outgoingFiles.remove(payloadId)?.let {
+            try { it.descriptor.close() } catch (_: Exception) {}
+        }
+    }
+
+    private fun discardIncoming(payloadId: Long) {
+        incomingFiles.remove(payloadId)?.let(::deletePayloadFile)
+        incomingEndpoints.remove(payloadId)
+        incomingMeta.remove(payloadId)
+        incomingCompleted.remove(payloadId)
+        rejectedIncoming.remove(payloadId)
+    }
+
+    private fun clearFileTransfers() {
+        outgoingFiles.keys.toList().forEach(::closeOutgoing)
+        incomingFiles.keys.toList().forEach(::discardIncoming)
+        incomingMeta.clear()
+        incomingCompleted.clear()
+        rejectedIncoming.clear()
+        pickedFiles.clear()
+    }
+
+    /** Métadonnées envoyées par l'expéditeur avant le fichier : nom, type et taille annoncés. */
+    private fun handleFileMetadata(endpointId: String, envelope: JSONObject) {
+        val payloadId = envelope.optString("id").toLongOrNull()
+        val size = envelope.optLong("size", -1L)
+        if (payloadId == null) return
+
+        if (!NearbyPluginRules.isFileSizeAllowed(size)) {
+            rejectedIncoming.add(payloadId)
+            if (incomingFiles.containsKey(payloadId)) {
+                client().cancelPayload(payloadId)
+                discardIncoming(payloadId)
+            }
+            emit("ERROR", endpointId) {
+                put("message", "Fichier Nearby refusé : taille maximale de 20 Mo dépassée.")
+            }
+            return
+        }
+        // Écarte les métadonnées orphelines (fichier annulé avant l'arrivée de ses métadonnées).
+        while (incomingMeta.size >= MAX_INCOMING_FILES) {
+            incomingMeta.remove(incomingMeta.keys.first())
+        }
+
+        incomingMeta[payloadId] = FileMeta(
+            name = NearbyPluginRules.sanitizeFileName(envelope.optString("name")),
+            mime = envelope.optString("mime").ifBlank { "application/octet-stream" }.take(100),
+            size = size
+        )
+        // Le fichier peut déjà être arrivé en entier avant ses métadonnées.
+        if (payloadId in incomingCompleted) tryFinalizeIncoming(payloadId, sessionGeneration)
+    }
+
+    /** Copie le fichier reçu dans le stockage de l'application, puis avertit l'interface. */
+    private fun tryFinalizeIncoming(payloadId: Long, generation: Long) {
+        val payload = incomingFiles[payloadId] ?: return
+        val meta = incomingMeta[payloadId] ?: return
+        if (payloadId !in incomingCompleted) return
+        val endpointId = incomingEndpoints[payloadId] ?: return
+        val senderName = connectedEndpoints[endpointId] ?: "Inconnu"
+
+        incomingFiles.remove(payloadId)
+        incomingCompleted.remove(payloadId)
+        incomingEndpoints.remove(payloadId)
+        incomingMeta.remove(payloadId)
+
+        ioExecutor.execute {
+            var destination: File? = null
+            var errorMessage: String? = null
+            try {
+                val file = payload.asFile()
+                val uri = if (Build.VERSION.SDK_INT >= 29) file?.asUri() else null
+                @Suppress("DEPRECATION")
+                val source = when {
+                    uri != null -> context.contentResolver.openInputStream(uri)
+                    else -> file?.asJavaFile()?.inputStream()
+                } ?: throw IllegalStateException("Fichier reçu illisible.")
+
+                val dir = receivedDir()
+                val name = NearbyPluginRules.uniqueFileName(meta.name) { File(dir, it).exists() }
+                val target = File(dir, name)
+                destination = target
+                var copied = 0L
+                source.use { input ->
+                    target.outputStream().use { output ->
+                        val buffer = ByteArray(64 * 1024)
+                        while (true) {
+                            val read = input.read(buffer)
+                            if (read < 0) break
+                            copied += read
+                            if (copied > MAX_FILE_BYTES) throw IllegalStateException("Fichier trop volumineux.")
+                            output.write(buffer, 0, read)
+                        }
+                    }
+                }
+                if (copied != meta.size) throw IllegalStateException("Fichier incomplet ou altéré.")
+            } catch (error: Exception) {
+                destination?.delete()
+                destination = null
+                errorMessage = "Impossible d'enregistrer le fichier reçu : ${error.message}"
+            } finally {
+                deletePayloadFile(payload)
+            }
+
+            val saved = destination
+            mainHandler.post {
+                if (generation != sessionGeneration) {
+                    saved?.delete()
+                    return@post
+                }
+                if (saved != null) {
+                    emit("FILE_RECEIVED", endpointId) {
+                        put("payloadId", payloadId.toString())
+                        put("senderName", senderName)
+                        put("fileName", saved.name)
+                        put("mimeType", meta.mime)
+                        put("size", saved.length())
+                        put("path", saved.absolutePath)
+                        put("timestamp", System.currentTimeMillis())
+                    }
+                } else {
+                    emit("ERROR", endpointId) { put("message", errorMessage ?: "Fichier reçu invalide.") }
+                }
+            }
+        }
+    }
+
+    // ───────────── Appels (vocal / vidéo) ─────────────
+
+    private fun hasMicrophonePermission(): Boolean =
+        ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+
+    private fun sendControl(endpointId: String, envelope: JSONObject, onFailure: (Exception) -> Unit = {}) {
+        try {
+            client().sendPayload(listOf(endpointId), Payload.fromBytes(envelope.toString().toByteArray(Charsets.UTF_8)))
+                .addOnFailureListener { onFailure(it) }
+        } catch (error: Exception) {
+            onFailure(error)
+        }
+    }
+
+    private fun callEnvelope(action: String, call: CallState, reason: String? = null): JSONObject =
+        JSONObject()
+            .put("v", MESSAGE_PROTOCOL_VERSION)
+            .put("type", "call")
+            .put("action", action)
+            .put("id", call.id)
+            .put("media", call.media)
+            .apply { if (reason != null) put("reason", reason) }
+
+    private fun emitCallState(call: CallState) {
+        val state = when {
+            call.active -> "active"
+            call.incoming -> "ringing_in"
+            else -> "ringing_out"
+        }
+        emit("CALL_STATE", call.endpointId) {
+            put("callId", call.id)
+            put("media", call.media)
+            put("state", state)
+            put("incoming", call.incoming)
+            put("deviceName", connectedEndpoints[call.endpointId] ?: endpointNames[call.endpointId] ?: "Appareil")
+        }
+    }
+
+    private fun scheduleCallTimeout(call: CallState) {
+        callTimeout?.let(mainHandler::removeCallbacks)
+        val timeout = Runnable {
+            val current = currentCall
+            if (current == null || current.id != call.id || current.active) return@Runnable
+            // L'appelant prévient l'autre appareil ; l'appelé abandonne simplement la sonnerie.
+            finishCall("timeout", notifyPeer = !current.incoming)
+        }
+        callTimeout = timeout
+        mainHandler.postDelayed(timeout, CALL_RING_TIMEOUT_MS)
+    }
+
+    /** Démarre l'audio : envoie notre flux micro et joue celui de l'autre appareil à son arrivée. */
+    private fun activateCall(call: CallState) {
+        callTimeout?.let(mainHandler::removeCallbacks)
+        callTimeout = null
+        try {
+            val stream = callAudio.start()
+            call.active = true
+            client().sendPayload(listOf(call.endpointId), Payload.fromStream(stream))
+                .addOnFailureListener { error ->
+                    emit("ERROR", call.endpointId) {
+                        put("message", "Flux audio impossible : ${error.message}")
+                    }
+                    if (currentCall?.id == call.id) finishCall("error", notifyPeer = true)
+                }
+            emitCallState(call)
+        } catch (error: Exception) {
+            emit("ERROR", call.endpointId) {
+                put("message", "Impossible de démarrer l'audio : ${error.message}")
+            }
+            finishCall("error", notifyPeer = true)
+        }
+    }
+
+    private fun finishCall(reason: String, notifyPeer: Boolean) {
+        val call = currentCall ?: return
+        currentCall = null
+        callTimeout?.let(mainHandler::removeCallbacks)
+        callTimeout = null
+        if (notifyPeer) sendControl(call.endpointId, callEnvelope("end", call, reason))
+        callAudio.stop()
+        emit("CALL_ENDED", call.endpointId) {
+            put("callId", call.id)
+            put("reason", reason)
+        }
+    }
+
+    /** Arrêt silencieux (arrêt de Nearby) : pas d'événement, pas de message à l'autre appareil. */
+    private fun teardownCallAndVoice() {
+        callTimeout?.let(mainHandler::removeCallbacks)
+        callTimeout = null
+        currentCall = null
+        callAudio.stop()
+        voiceRecorder.cancel()
+    }
+
+    private fun handleCallControl(endpointId: String, envelope: JSONObject) {
+        val id = envelope.optString("id")
+        if (id.isBlank()) return
+        val media = NearbyPluginRules.parseCallMedia(envelope.optString("media"))
+        val current = currentCall
+
+        when (envelope.optString("action")) {
+            "invite" -> {
+                if (current != null || voiceRecorder.isRecording) {
+                    val busy = CallState(id, endpointId, media, incoming = true)
+                    sendControl(endpointId, callEnvelope("reject", busy, "busy"))
+                    return
+                }
+                val call = CallState(id, endpointId, media, incoming = true)
+                currentCall = call
+                scheduleCallTimeout(call)
+                emitCallState(call)
+            }
+            "accept" -> {
+                if (current == null || current.id != id || current.endpointId != endpointId ||
+                    current.incoming || current.active) return
+                activateCall(current)
+            }
+            "reject" -> {
+                if (current == null || current.id != id || current.endpointId != endpointId) return
+                val reason = if (envelope.optString("reason") == "busy") "busy" else "rejected"
+                finishCall(reason, notifyPeer = false)
+            }
+            "end" -> {
+                if (current == null || current.id != id || current.endpointId != endpointId) return
+                finishCall("remote", notifyPeer = false)
+            }
+        }
+    }
+
+    private fun handleVideoFrame(endpointId: String, envelope: JSONObject) {
+        val call = currentCall ?: return
+        if (!call.active || call.media != "video" || call.endpointId != endpointId) return
+        if (envelope.optString("id") != call.id) return
+        val data = envelope.optString("data")
+        if (!NearbyPluginRules.isVideoFrameAllowed(data)) return
+        emit("VIDEO_FRAME", endpointId) {
+            put("callId", call.id)
+            put("data", data)
+        }
+    }
+
     private fun payloadCallback(generation: Long) = object : PayloadCallback() {
         override fun onPayloadReceived(endpointId: String, payload: Payload) {
             if (!isCurrentSession(generation)) {
                 if (payload.type == Payload.Type.FILE) {
                     client().cancelPayload(payload.id)
-                    payload.asFile()?.asJavaFile()?.delete()
+                    deletePayloadFile(payload)
+                } else if (payload.type == Payload.Type.STREAM) {
+                    client().cancelPayload(payload.id)
                 }
                 return
             }
@@ -168,6 +516,19 @@ class NearbyChatPlugin : Plugin() {
                         return
                     }
                     val rawText = String(bytes, Charsets.UTF_8)
+                    val controlEnvelope = try {
+                        JSONObject(rawText).takeIf { it.optString("type") in setOf("file", "call", "vframe") }
+                    } catch (_: Exception) {
+                        null
+                    }
+                    if (controlEnvelope != null) {
+                        when (controlEnvelope.optString("type")) {
+                            "file" -> handleFileMetadata(endpointId, controlEnvelope)
+                            "call" -> handleCallControl(endpointId, controlEnvelope)
+                            "vframe" -> handleVideoFrame(endpointId, controlEnvelope)
+                        }
+                        return
+                    }
                     var text = rawText
                     var messageId: String? = null
                     var timestamp = System.currentTimeMillis()
@@ -198,15 +559,27 @@ class NearbyChatPlugin : Plugin() {
                     }
                 }
                 Payload.Type.FILE -> {
-                    val file = payload.asFile()?.asJavaFile()
-                    if (file != null) {
-                        // Les transferts de fichiers ne sont pas pris en charge par l'interface.
+                    if (payload.id in rejectedIncoming || incomingFiles.size >= MAX_INCOMING_FILES) {
+                        rejectedIncoming.remove(payload.id)
                         client().cancelPayload(payload.id)
-                        file.delete()
+                        deletePayloadFile(payload)
                         emit("ERROR", endpointId) {
-                            put("message", "Les transferts de fichiers Nearby ne sont pas activés.")
+                            put("message", "Fichier Nearby refusé.")
                         }
+                        return
                     }
+                    incomingFiles[payload.id] = payload
+                    incomingEndpoints[payload.id] = endpointId
+                }
+                Payload.Type.STREAM -> {
+                    val call = currentCall
+                    val input = payload.asStream()?.asInputStream()
+                    if (call == null || !call.active || call.endpointId != endpointId || input == null) {
+                        client().cancelPayload(payload.id)
+                        try { input?.close() } catch (_: Exception) {}
+                        return
+                    }
+                    callAudio.play(input)
                 }
                 else -> Unit
             }
@@ -215,9 +588,17 @@ class NearbyChatPlugin : Plugin() {
         override fun onPayloadTransferUpdate(endpointId: String, update: PayloadTransferUpdate) {
             if (!isCurrentSession(generation)) return
 
+            val id = update.payloadId
+            // Les messages texte (BYTES) ne sont pas des transferts de fichiers.
+            val isFile = id in outgoingFiles || id in incomingFiles || id in incomingMeta
+            if (!isFile) {
+                cancelingPayloads.remove(id)
+                return
+            }
+
             if (update.status == PayloadTransferUpdate.Status.IN_PROGRESS && update.totalBytes > MAX_FILE_BYTES) {
-                if (cancelingPayloads.add(update.payloadId)) {
-                    client().cancelPayload(update.payloadId)
+                if (cancelingPayloads.add(id)) {
+                    client().cancelPayload(id)
                     emit("ERROR", endpointId) {
                         put("message", "Transfert Nearby annulé : taille maximale de fichier dépassée.")
                     }
@@ -225,33 +606,43 @@ class NearbyChatPlugin : Plugin() {
                 return
             }
             if (update.status != PayloadTransferUpdate.Status.IN_PROGRESS) {
-                cancelingPayloads.remove(update.payloadId)
+                cancelingPayloads.remove(id)
             }
 
-            if (update.status == PayloadTransferUpdate.Status.SUCCESS) {
-                emit("TRANSFER_UPDATE", endpointId) {
-                    put("payloadId", update.payloadId)
-                    put("status", "SUCCESS")
-                    put("bytesTransferred", update.bytesTransferred)
+            val status = when (update.status) {
+                PayloadTransferUpdate.Status.SUCCESS -> "SUCCESS"
+                PayloadTransferUpdate.Status.IN_PROGRESS -> "IN_PROGRESS"
+                PayloadTransferUpdate.Status.FAILURE -> "FAILURE"
+                PayloadTransferUpdate.Status.CANCELED -> "CANCELED"
+                else -> "UNKNOWN"
+            }.let(NearbyPluginRules::normalizeTransferStatus)
+
+            val outgoing = outgoingFiles[id]
+            val meta = outgoing?.meta ?: incomingMeta[id]
+            emit("TRANSFER_UPDATE", endpointId) {
+                put("payloadId", id.toString())
+                put("status", status)
+                put("bytesTransferred", update.bytesTransferred)
+                put("totalBytes", update.totalBytes)
+                put("direction", if (outgoing != null) "outgoing" else "incoming")
+                if (meta != null) {
+                    put("fileName", meta.name)
+                    put("mimeType", meta.mime)
                 }
-            } else if (update.status == PayloadTransferUpdate.Status.IN_PROGRESS) {
-                emit("TRANSFER_UPDATE", endpointId) {
-                    put("payloadId", update.payloadId)
-                    put("status", "IN_PROGRESS")
-                    put("bytesTransferred", update.bytesTransferred)
-                    put("totalBytes", update.totalBytes)
+            }
+
+            when (status) {
+                "SUCCESS" -> {
+                    if (outgoing != null) {
+                        closeOutgoing(id)
+                    } else {
+                        incomingCompleted.add(id)
+                        tryFinalizeIncoming(id, generation)
+                    }
                 }
-            } else {
-                val status = NearbyPluginRules.normalizeTransferStatus(when (update.status) {
-                    PayloadTransferUpdate.Status.FAILURE -> "FAILURE"
-                    PayloadTransferUpdate.Status.CANCELED -> "CANCELED"
-                    else -> "UNKNOWN"
-                })
-                emit("TRANSFER_UPDATE", endpointId) {
-                    put("payloadId", update.payloadId)
-                    put("status", status)
-                    put("bytesTransferred", update.bytesTransferred)
-                    put("totalBytes", update.totalBytes)
+                "IN_PROGRESS" -> Unit
+                else -> {
+                    if (outgoing != null) closeOutgoing(id) else discardIncoming(id)
                 }
             }
         }
@@ -308,6 +699,7 @@ class NearbyChatPlugin : Plugin() {
         override fun onDisconnected(endpointId: String) {
             if (!isCurrentSession(generation)) return
             val name = endpointNames[endpointId]
+            if (currentCall?.endpointId == endpointId) finishCall("lost", notifyPeer = false)
             connectedEndpoints.remove(endpointId)
             pendingEndpoints.remove(endpointId)
             pendingTimeouts.remove(endpointId)?.let(mainHandler::removeCallbacks)
@@ -500,6 +892,8 @@ class NearbyChatPlugin : Plugin() {
         rejectedByUser.clear()
         endpointNames.clear()
         cancelingPayloads.clear()
+        clearFileTransfers()
+        teardownCallAndVoice()
         pendingTimeouts.values.forEach(mainHandler::removeCallbacks)
         pendingTimeouts.clear()
         receivedMessageIds.clear()
@@ -633,6 +1027,390 @@ class NearbyChatPlugin : Plugin() {
             }
             call.reject("Impossible de refuser : ${error.message}")
         }
+    }
+
+    // ───────────── Méthodes Capacitor : fichiers ─────────────
+
+    @PluginMethod
+    fun pickFile(call: PluginCall) {
+        val kind = call.getString("kind")
+        val mimeTypes = try {
+            NearbyPluginRules.pickerMimeTypes(kind)
+        } catch (error: IllegalArgumentException) {
+            call.reject(error.message ?: "Type de fichier non pris en charge.")
+            return
+        }
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = if (mimeTypes.size == 1) mimeTypes[0] else "*/*"
+            if (mimeTypes.size > 1) putExtra(Intent.EXTRA_MIME_TYPES, mimeTypes)
+            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, false)
+        }
+        try {
+            startActivityForResult(call, intent, "pickFileResult")
+        } catch (error: ActivityNotFoundException) {
+            call.reject("Aucun sélecteur de fichiers disponible sur cet appareil.")
+        }
+    }
+
+    @ActivityCallback
+    private fun pickFileResult(call: PluginCall?, result: ActivityResult) {
+        if (call == null) return
+        if (result.resultCode != Activity.RESULT_OK) {
+            call.resolve(JSObject().apply { put("cancelled", true) })
+            return
+        }
+        val uri = result.data?.data
+        if (uri == null) { call.reject("Aucun fichier sélectionné."); return }
+
+        var name: String? = null
+        var size = -1L
+        try {
+            context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+                    if (nameIndex >= 0 && !cursor.isNull(nameIndex)) name = cursor.getString(nameIndex)
+                    if (sizeIndex >= 0 && !cursor.isNull(sizeIndex)) size = cursor.getLong(sizeIndex)
+                }
+            }
+            if (size <= 0) {
+                context.contentResolver.openFileDescriptor(uri, "r")?.use { size = it.statSize }
+            }
+        } catch (error: Exception) {
+            call.reject("Impossible de lire ce fichier : ${error.message}")
+            return
+        }
+
+        if (size <= 0) { call.reject("Fichier vide ou illisible."); return }
+        if (!NearbyPluginRules.isFileSizeAllowed(size)) {
+            call.reject("Ce fichier dépasse la limite de 20 Mo.")
+            return
+        }
+
+        val mime = context.contentResolver.getType(uri)?.takeIf { it.isNotBlank() } ?: "application/octet-stream"
+        val kind = call.getString("kind")
+        if ((kind == "image" && !mime.startsWith("image/")) || (kind == "video" && !mime.startsWith("video/"))) {
+            call.reject(if (kind == "image") "Choisis une photo." else "Choisis une vidéo.")
+            return
+        }
+
+        val safeName = NearbyPluginRules.sanitizeFileName(name)
+        pickedFiles[uri.toString()] = PickedFile(safeName, mime, size)
+        while (pickedFiles.size > MAX_PICKED_FILES) {
+            pickedFiles.remove(pickedFiles.keys.first())
+        }
+        call.resolve(JSObject().apply {
+            put("cancelled", false)
+            put("uri", uri.toString())
+            put("name", safeName)
+            put("mimeType", mime)
+            put("size", size)
+        })
+    }
+
+    @PluginMethod
+    fun sendFile(call: PluginCall) {
+        if (!::connectionsClient.isInitialized || !isStarted || isStopping) { call.reject("Nearby n'est pas démarré."); return }
+
+        val uriString = call.getString("uri")
+        val picked = uriString?.let { pickedFiles[it] }
+        if (uriString == null || picked == null) {
+            call.reject("Choisis d'abord un fichier avec le sélecteur.")
+            return
+        }
+
+        val requested = call.getString("endpointId")?.trim().orEmpty()
+        val endpointId = when {
+            requested.isNotEmpty() -> requested
+            connectedEndpoints.size == 1 -> connectedEndpoints.keys.first()
+            connectedEndpoints.isEmpty() -> { call.reject("Aucun appareil Nearby n'est connecté."); return }
+            else -> { call.reject("Choisis l'appareil destinataire du fichier."); return }
+        }
+        if (!connectedEndpoints.containsKey(endpointId)) { call.reject("Cet appareil n'est pas connecté."); return }
+        if (!NearbyPluginRules.isFileSizeAllowed(picked.size)) { call.reject("Ce fichier dépasse la limite de 20 Mo."); return }
+
+        val descriptor = try {
+            context.contentResolver.openFileDescriptor(Uri.parse(uriString), "r")
+        } catch (error: Exception) {
+            null
+        }
+        if (descriptor == null) { call.reject("Impossible d'ouvrir le fichier."); return }
+        if (descriptor.statSize > MAX_FILE_BYTES) {
+            descriptor.close()
+            call.reject("Ce fichier dépasse la limite de 20 Mo.")
+            return
+        }
+
+        val payload = Payload.fromFile(descriptor)
+        val payloadId = payload.id
+        val meta = FileMeta(picked.name, picked.mime, picked.size)
+        outgoingFiles[payloadId] = OutgoingFile(meta, descriptor)
+        pickedFiles.remove(uriString)
+
+        val metadata = JSONObject()
+            .put("v", MESSAGE_PROTOCOL_VERSION)
+            .put("type", "file")
+            .put("id", payloadId.toString())
+            .put("name", meta.name)
+            .put("mime", meta.mime)
+            .put("size", meta.size)
+            .put("ts", System.currentTimeMillis())
+            .toString()
+            .toByteArray(Charsets.UTF_8)
+
+        fun fail(message: String) {
+            closeOutgoing(payloadId)
+            call.reject(message)
+        }
+
+        try {
+            // Les métadonnées partent d'abord ; le destinataire gère aussi l'ordre inverse.
+            client().sendPayload(listOf(endpointId), Payload.fromBytes(metadata))
+                .addOnSuccessListener {
+                    try {
+                        client().sendPayload(listOf(endpointId), payload)
+                            .addOnSuccessListener {
+                                call.resolve(JSObject().apply {
+                                    put("success", true)
+                                    put("payloadId", payloadId.toString())
+                                    put("endpointId", endpointId)
+                                    put("fileName", meta.name)
+                                    put("mimeType", meta.mime)
+                                    put("size", meta.size)
+                                })
+                            }
+                            .addOnFailureListener { error -> fail("Échec de l'envoi du fichier : ${error.message}") }
+                    } catch (error: Exception) {
+                        fail("Échec de l'envoi du fichier : ${error.message}")
+                    }
+                }
+                .addOnFailureListener { error -> fail("Échec de l'envoi du fichier : ${error.message}") }
+        } catch (error: Exception) {
+            fail("Échec de l'envoi du fichier : ${error.message}")
+        }
+    }
+
+    @PluginMethod
+    fun cancelTransfer(call: PluginCall) {
+        val payloadId = call.getString("payloadId")?.toLongOrNull()
+        if (payloadId == null) { call.reject("Identifiant de transfert invalide."); return }
+        if (!::connectionsClient.isInitialized || !isStarted || isStopping) { call.reject("Nearby n'est pas démarré."); return }
+        val known = payloadId in outgoingFiles || payloadId in incomingFiles || payloadId in incomingMeta
+        if (!known) { call.reject("Aucun transfert en cours à annuler."); return }
+
+        try {
+            client().cancelPayload(payloadId)
+                .addOnSuccessListener { call.resolve(JSObject().apply { put("success", true) }) }
+                .addOnFailureListener { error -> call.reject("Impossible d'annuler : ${error.message}") }
+        } catch (error: Exception) {
+            call.reject("Impossible d'annuler : ${error.message}")
+        }
+    }
+
+    @PluginMethod
+    fun openFile(call: PluginCall) {
+        val path = call.getString("path")
+        if (path.isNullOrBlank()) { call.reject("Chemin du fichier manquant."); return }
+
+        // Seuls les fichiers enregistrés par ce plugin peuvent être ouverts.
+        val directory = receivedDir().canonicalFile
+        val file = try { File(path).canonicalFile } catch (_: Exception) { null }
+        if (file == null || !file.path.startsWith(directory.path + File.separator) || !file.isFile) {
+            call.reject("Fichier introuvable.")
+            return
+        }
+
+        val extension = file.extension.lowercase()
+        var mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)
+            ?: call.getString("mimeType")?.takeIf { it.isNotBlank() }
+            ?: "*/*"
+        if (extension == "apk" || mime == "application/vnd.android.package-archive") {
+            call.reject("Ce type de fichier ne peut pas être ouvert depuis BAARO.")
+            return
+        }
+        if (mime == "*/*") mime = "application/octet-stream"
+
+        try {
+            val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, mime)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+            call.resolve(JSObject().apply { put("success", true) })
+        } catch (error: ActivityNotFoundException) {
+            call.reject("Aucune application ne peut ouvrir ce fichier.")
+        } catch (error: Exception) {
+            call.reject("Impossible d'ouvrir le fichier : ${error.message}")
+        }
+    }
+
+    // ───────────── Méthodes Capacitor : vocal et appels ─────────────
+
+    @PluginMethod
+    fun startVoiceRecording(call: PluginCall) {
+        if (currentCall != null) { call.reject("Termine l'appel avant d'enregistrer un vocal."); return }
+        if (voiceRecorder.isRecording) { call.reject("Un enregistrement est déjà en cours."); return }
+        if (!hasMicrophonePermission()) { call.reject("Autorise le micro pour enregistrer un vocal."); return }
+        try {
+            voiceRecorder.start()
+            call.resolve(JSObject().apply {
+                put("success", true)
+                put("maxDurationMs", VoiceRecorder.MAX_DURATION_MS)
+            })
+        } catch (error: Exception) {
+            call.reject("Impossible de démarrer l'enregistrement : ${error.message}")
+        }
+    }
+
+    @PluginMethod
+    fun stopVoiceRecording(call: PluginCall) {
+        val result = voiceRecorder.stop()
+        if (result == null) { call.reject("Message vocal trop court."); return }
+        val size = result.file.length()
+        if (!NearbyPluginRules.isFileSizeAllowed(size)) {
+            result.file.delete()
+            call.reject("Ce vocal dépasse la limite de 20 Mo.")
+            return
+        }
+        val stamp = SimpleDateFormat("dd-MM HH'h'mm", Locale.FRANCE).format(Date())
+        val name = NearbyPluginRules.sanitizeFileName("Vocal $stamp.m4a")
+        val uri = Uri.fromFile(result.file).toString()
+        pickedFiles[uri] = PickedFile(name, "audio/mp4", size)
+        while (pickedFiles.size > MAX_PICKED_FILES) {
+            pickedFiles.remove(pickedFiles.keys.first())
+        }
+        call.resolve(JSObject().apply {
+            put("uri", uri)
+            put("name", name)
+            put("mimeType", "audio/mp4")
+            put("size", size)
+            put("durationMs", result.durationMs)
+            put("path", result.file.absolutePath)
+        })
+    }
+
+    @PluginMethod
+    fun cancelVoiceRecording(call: PluginCall) {
+        voiceRecorder.cancel()
+        call.resolve(JSObject().apply { put("success", true) })
+    }
+
+    @PluginMethod
+    fun startCall(call: PluginCall) {
+        if (!::connectionsClient.isInitialized || !isStarted || isStopping) { call.reject("Nearby n'est pas démarré."); return }
+        if (currentCall != null) { call.reject("Un appel est déjà en cours."); return }
+        if (voiceRecorder.isRecording) { call.reject("Termine l'enregistrement du vocal avant d'appeler."); return }
+        if (!hasMicrophonePermission()) { call.reject("Autorise le micro pour passer un appel."); return }
+
+        val requested = call.getString("endpointId")?.trim().orEmpty()
+        val endpointId = when {
+            requested.isNotEmpty() -> requested
+            connectedEndpoints.size == 1 -> connectedEndpoints.keys.first()
+            connectedEndpoints.isEmpty() -> { call.reject("Aucun appareil Nearby n'est connecté."); return }
+            else -> { call.reject("Choisis l'appareil à appeler."); return }
+        }
+        if (!connectedEndpoints.containsKey(endpointId)) { call.reject("Cet appareil n'est pas connecté."); return }
+
+        val state = CallState(
+            UUID.randomUUID().toString(),
+            endpointId,
+            NearbyPluginRules.parseCallMedia(call.getString("media")),
+            incoming = false
+        )
+        currentCall = state
+        scheduleCallTimeout(state)
+        emitCallState(state)
+        sendControl(endpointId, callEnvelope("invite", state)) { error ->
+            if (currentCall?.id == state.id) finishCall("error", notifyPeer = false)
+            emit("ERROR", endpointId) { put("message", "Appel impossible : ${error.message}") }
+        }
+        call.resolve(JSObject().apply {
+            put("success", true)
+            put("callId", state.id)
+        })
+    }
+
+    @PluginMethod
+    fun answerCall(call: PluginCall) {
+        val state = currentCall
+        val callId = call.getString("callId")
+        if (state == null || !state.incoming || state.active || state.id != callId) {
+            call.reject("Aucun appel entrant à traiter.")
+            return
+        }
+        if (call.getBoolean("accept", false) != true) {
+            sendControl(state.endpointId, callEnvelope("reject", state, "rejected"))
+            finishCall("local", notifyPeer = false)
+            call.resolve(JSObject().apply { put("success", true) })
+            return
+        }
+        if (!hasMicrophonePermission()) {
+            call.reject("Autorise le micro pour répondre à l'appel.")
+            return
+        }
+        sendControl(state.endpointId, callEnvelope("accept", state))
+        activateCall(state)
+        call.resolve(JSObject().apply { put("success", true) })
+    }
+
+    @PluginMethod
+    fun endCall(call: PluginCall) {
+        if (currentCall == null) { call.resolve(JSObject().apply { put("success", true) }); return }
+        finishCall("local", notifyPeer = true)
+        call.resolve(JSObject().apply { put("success", true) })
+    }
+
+    @PluginMethod
+    fun setCallMuted(call: PluginCall) {
+        callAudio.muted = call.getBoolean("muted", false) == true
+        call.resolve(JSObject().apply { put("success", true) })
+    }
+
+    @PluginMethod
+    fun setCallSpeaker(call: PluginCall) {
+        if (currentCall?.active != true) { call.reject("Aucun appel en cours."); return }
+        callAudio.setSpeaker(call.getBoolean("enabled", false) == true)
+        call.resolve(JSObject().apply { put("success", true) })
+    }
+
+    @PluginMethod
+    fun sendVideoFrame(call: PluginCall) {
+        val state = currentCall
+        if (state == null || !state.active || state.media != "video") {
+            call.reject("Aucun appel vidéo en cours.")
+            return
+        }
+        val data = call.getString("data")
+        if (!NearbyPluginRules.isVideoFrameAllowed(data)) {
+            call.reject("Image vidéo invalide ou trop volumineuse.")
+            return
+        }
+        val envelope = JSONObject()
+            .put("v", MESSAGE_PROTOCOL_VERSION)
+            .put("type", "vframe")
+            .put("id", state.id)
+            .put("data", data)
+            .toString()
+            .toByteArray(Charsets.UTF_8)
+        if (envelope.size > MAX_MESSAGE_BYTES) {
+            call.reject("Image vidéo trop volumineuse.")
+            return
+        }
+        try {
+            client().sendPayload(listOf(state.endpointId), Payload.fromBytes(envelope))
+                .addOnSuccessListener { call.resolve(JSObject().apply { put("success", true) }) }
+                .addOnFailureListener { error -> call.reject("Envoi de l'image impossible : ${error.message}") }
+        } catch (error: Exception) {
+            call.reject("Envoi de l'image impossible : ${error.message}")
+        }
+    }
+
+    override fun handleOnDestroy() {
+        super.handleOnDestroy()
+        teardownCallAndVoice()
+        ioExecutor.shutdownNow()
     }
 
     @PluginMethod

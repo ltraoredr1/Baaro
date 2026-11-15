@@ -12,6 +12,10 @@ import {
   onNearbyEvent,
   acceptNearbyConnection,
   rejectNearbyConnection,
+  pickNearbyFile,
+  sendNearbyFile,
+  cancelNearbyTransfer,
+  openNearbyFile,
 } from "../nearby.js";
 
 function getErrorMessage(error) {
@@ -28,6 +32,7 @@ const REQUEST_TIMEOUT_MS = 60_000;
 const MAX_MESSAGE_IDS = 512;
 const MAX_MESSAGE_HISTORY = 200;
 const MAX_SCAN_WINDOW_MS = 5 * 60_000;
+const PAYLOAD_ID_PATTERN = /^-?\d+$/;
 
 export function useNearbyChat(displayName = "Utilisateur BAARO") {
   const [isNative, setIsNative] = useState(() =>
@@ -227,28 +232,65 @@ export function useNearbyChat(displayName = "Utilisateur BAARO") {
           }
 
           case "TRANSFER_UPDATE": {
-            if (!Number.isFinite(Number(event.payloadId))) return;
+            // Les identifiants Nearby sont des entiers 64 bits : on les garde en chaîne.
+            const payloadId = String(event.payloadId ?? "");
+            if (!PAYLOAD_ID_PATTERN.test(payloadId)) return;
             const update = {
               endpointId,
-              payloadId: Number(event.payloadId),
+              payloadId,
               status: event.status || "UNKNOWN",
               bytesTransferred: Number(event.bytesTransferred) || 0,
               totalBytes: Number(event.totalBytes) || 0,
+              direction: event.direction === "outgoing" ? "outgoing" : "incoming",
+              fileName: event.fileName || null,
+              mimeType: event.mimeType || null,
               updatedAt: Date.now(),
             };
-            setTransfers((previous) => [
-              ...previous.filter(
-                (transfer) =>
-                  transfer.endpointId !== update.endpointId ||
-                  transfer.payloadId !== update.payloadId
-              ),
-              update,
-            ].slice(-100));
+            setTransfers((previous) => {
+              const existing = previous.find(
+                (transfer) => transfer.payloadId === payloadId
+              );
+              return [
+                ...previous.filter((transfer) => transfer.payloadId !== payloadId),
+                {
+                  ...update,
+                  fileName: update.fileName || existing?.fileName || null,
+                  mimeType: update.mimeType || existing?.mimeType || null,
+                },
+              ].slice(-100);
+            });
+            // Une annulation est visible dans la bulle du fichier : pas de toast d'erreur.
             if (update.status === "FAILURE") {
               setError("Le transfert Nearby a échoué.");
-            } else if (update.status === "CANCELED") {
-              setError("Le transfert Nearby a été annulé.");
             }
+            break;
+          }
+
+          case "FILE_RECEIVED": {
+            if (typeof event.path !== "string" || !event.path) return;
+            const payloadId = String(event.payloadId ?? "");
+            setMessages((previous) => {
+              if (
+                payloadId &&
+                previous.some((m) => m.type === "file" && m.payloadId === payloadId && !m.isMe)
+              ) {
+                return previous;
+              }
+              return [
+                ...previous,
+                {
+                  type: "file",
+                  from: event.senderName || "Utilisateur inconnu",
+                  fileName: event.fileName || "fichier",
+                  mimeType: event.mimeType || "application/octet-stream",
+                  size: Number(event.size) || 0,
+                  path: event.path,
+                  payloadId,
+                  timestamp: event.timestamp || Date.now(),
+                  isMe: false,
+                },
+              ].slice(-MAX_MESSAGE_HISTORY);
+            });
             break;
           }
 
@@ -432,6 +474,77 @@ export function useNearbyChat(displayName = "Utilisateur BAARO") {
     }
   }, []);
 
+  const pickFile = useCallback(async (kind) => {
+    try {
+      setError(null);
+      if (!scanningRef.current) {
+        throw new Error("Démarre Nearby avant de choisir un fichier.");
+      }
+      return await pickNearbyFile(kind);
+    } catch (err) {
+      const message = getErrorMessage(err);
+      setError(message);
+      throw err instanceof Error ? err : new Error(message);
+    }
+  }, []);
+
+  const sendFile = useCallback(async (file, endpointId = null) => {
+    try {
+      setError(null);
+      if (operationRef.current === "stopping") {
+        throw new Error("Attends la fin de l'arrêt de Nearby avant d'envoyer un fichier.");
+      }
+      if (!scanningRef.current) {
+        throw new Error("Démarre Nearby avant d'envoyer un fichier.");
+      }
+
+      const sent = await sendNearbyFile(file, endpointId);
+
+      setMessages((previous) => [
+        ...previous,
+        {
+          type: "file",
+          from: "Moi",
+          fileName: sent.fileName,
+          mimeType: sent.mimeType,
+          size: sent.size,
+          path: typeof file.path === "string" ? file.path : null,
+          payloadId: sent.payloadId,
+          timestamp: Date.now(),
+          isMe: true,
+        },
+      ].slice(-MAX_MESSAGE_HISTORY));
+
+      return sent;
+    } catch (err) {
+      const message = getErrorMessage(err);
+      setError(message);
+      throw err instanceof Error ? err : new Error(message);
+    }
+  }, []);
+
+  const cancelTransfer = useCallback(async (payloadId) => {
+    try {
+      setError(null);
+      await cancelNearbyTransfer(payloadId);
+    } catch (err) {
+      const message = getErrorMessage(err);
+      setError(message);
+      throw err instanceof Error ? err : new Error(message);
+    }
+  }, []);
+
+  const openFile = useCallback(async (path, mimeType) => {
+    try {
+      setError(null);
+      await openNearbyFile(path, mimeType);
+    } catch (err) {
+      const message = getErrorMessage(err);
+      setError(message);
+      throw err instanceof Error ? err : new Error(message);
+    }
+  }, []);
+
   const requestConnection = useCallback(async (endpointId) => {
     if (!endpointId) throw new Error("Identifiant de l’appareil manquant.");
 
@@ -509,6 +622,10 @@ export function useNearbyChat(displayName = "Utilisateur BAARO") {
     start,
     stop,
     sendMessage,
+    pickFile,
+    sendFile,
+    cancelTransfer,
+    openFile,
     requestConnection,
     acceptConnection,
     rejectConnection,
