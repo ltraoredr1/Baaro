@@ -45,6 +45,7 @@ import {
 } from "./_lib/ai/router.js";
 
 import { callOpenAICompatible } from "./_lib/ai/openai-compatible.js";
+import { sendPushToUsers, processPushNotificationQueue } from "./_lib/push.js";
 
 // ============== DAILY CONFIG ==============
 
@@ -1030,6 +1031,52 @@ async function handleAiGateway(req, res, admin, user) {
 
 // ============== CALLS + LIVE ==============
 
+async function notifyIncomingCall(
+  admin,
+  { callerId, calleeId, conversationId, roomName, type, fallbackName, ringId = "first" }
+) {
+  try {
+    let callerName = cleanLine(fallbackName, 60) || "BAARO";
+    try {
+      const { data } = await admin
+        .from("profiles")
+        .select("display_name")
+        .eq("id", callerId)
+        .maybeSingle();
+      if (data?.display_name) callerName = cleanLine(data.display_name, 60);
+    } catch {}
+
+    const result = await sendPushToUsers(admin, {
+      userIds: [calleeId],
+      title: callerName,
+      body: type === "voice" ? "Appel vocal entrant" : "Appel vidéo entrant",
+      category: "message",
+      url: `/messages?conversation=${encodeURIComponent(conversationId)}&call=${encodeURIComponent(roomName)}`,
+      tag: `call-${roomName}`,
+      idempotencyKey: `incoming-call:${roomName}:${ringId}`,
+      data: {
+        kind: "incoming_call",
+        call_type: type,
+        daily_room_name: roomName,
+        conversation_id: conversationId,
+        caller_id: callerId,
+        caller_name: callerName,
+      },
+    });
+
+    // Envoi immédiat : on n'attend pas le cron pour un appel.
+    if (result.ok && result.deliveryStatus === "queued") {
+      try { await processPushNotificationQueue(admin); } catch (e) {
+        logWarn("live", "call push flush failed", { message: e?.message });
+      }
+    }
+    return result.ok;
+  } catch (err) {
+    logWarn("live", "incoming call push failed", { message: err?.message });
+    return false;
+  }
+}
+
 async function handleCreateRoom(req, res, user, admin) {
   const body = req.body || {};
 
@@ -1116,6 +1163,15 @@ async function handleCreateRoom(req, res, user, admin) {
 
       logInfo("live", "calls inserted", {
         daily_room_name: dailyRoom.name,
+      });
+
+      await notifyIncomingCall(admin, {
+        callerId: user.id,
+        calleeId,
+        conversationId,
+        roomName: dailyRoom.name,
+        type: insertPayload.type,
+        fallbackName: body.userName,
       });
     } catch (err) {
       logError("live", err, {
@@ -1566,8 +1622,25 @@ export default async function handler(req, res) {
       });
     }
 
-    if (action === "notify_call" || body.callee_id) {
-      return res.status(200).json({ ok: true });
+    if (action === "notify_call") {
+      const roomName = String(body.daily_room_name || "").trim();
+      const call = roomName ? await findCall(admin, roomName) : null;
+      if (!call || call.caller_id !== user.id) {
+        return res.status(403).json({ error: "Appel invalide" });
+      }
+      if (call.status !== "ringing") {
+        return res.status(200).json({ ok: true, skipped: true });
+      }
+      const sent = await notifyIncomingCall(admin, {
+        callerId: user.id,
+        calleeId: call.callee_id,
+        conversationId: call.conversation_id,
+        roomName: call.daily_room_name,
+        type: call.type,
+        fallbackName: body.caller_name,
+        ringId: `r${Math.floor(Date.now() / 15000)}`,
+      });
+      return res.status(200).json({ ok: sent });
     }
 
     if (

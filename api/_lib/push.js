@@ -426,6 +426,7 @@ async function sendFcm(token, payload, soundPreference) {
             },
             data,
             android: {
+                ...(payload.data?.kind === "incoming_call" ? { ttl: "45s" } : {}),
               priority:
                 payload.category === "message" || payload.category === "live"
                   ? "HIGH"
