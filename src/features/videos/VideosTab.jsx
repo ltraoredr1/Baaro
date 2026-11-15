@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { recordWatch } from "./lib/feedScore.js";
 
 import CommentsSheet from "./components/CommentsSheet.jsx";
 import {
@@ -303,6 +304,23 @@ export function VideosTab({ onRewardPoints, onExit }) {
   // Clé stable : ne change que si la liste des publications change vraiment
   // (et non à chaque like ou commentaire), pour ne pas relancer les effets.
   const feedKey = visibleVideos.map((video) => String(video.id)).join("|");
+
+  // Temps de visionnage : à chaque changement de vidéo active, on enregistre la
+  // part regardée de la précédente. Placé avant le `if (loading)` (règle des Hooks).
+  const progressMapRef = useRef({});
+  progressMapRef.current = playback.progress || {};
+  const visibleVideosRef = useRef(visibleVideos);
+  visibleVideosRef.current = visibleVideos;
+  const prevActiveRef = useRef(null);
+  useEffect(() => {
+    const prev = prevActiveRef.current;
+    prevActiveRef.current = activeId;
+    if (prev == null || String(prev) === String(activeId)) return;
+    const video = visibleVideosRef.current.find(
+      (v) => String(v.id) === String(prev)
+    );
+    if (video) recordWatch(video, progressMapRef.current[prev]);
+  }, [activeId]);
 
   useEffect(() => {
     const url = new URL(window.location.href);

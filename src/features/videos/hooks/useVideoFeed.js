@@ -39,7 +39,7 @@ function applyCursor(query, cursor) {
 
   // (created_at < cursor) OR (created_at = cursor AND id < cursor.id)
   return query.or(
-    `created_at.lt.\( {cursor.created_at},and(created_at.eq. \){cursor.created_at},id.lt.${cursor.id})`
+    `created_at.lt.${cursor.created_at},and(created_at.eq.${cursor.created_at},id.lt.${cursor.id})`
   );
 }
 
