@@ -960,10 +960,11 @@ export function VideosTab({ onRewardPoints, onExit }) {
       />
 
       {/* Flux vertical plein écran */}
+      <style>{`.baaro-noscroll{scrollbar-width:none;-ms-overflow-style:none}.baaro-noscroll::-webkit-scrollbar{display:none;width:0;height:0}`}</style>
       <div
         ref={scrollRef}
-        className="h-full w-full snap-y snap-mandatory overflow-y-scroll overscroll-contain bg-black scrollbar-none"
-        style={{ WebkitOverflowScrolling: "touch" }}
+        className="baaro-noscroll h-full w-full snap-y snap-mandatory overflow-y-scroll overscroll-contain bg-black"
+        style={{ WebkitOverflowScrolling: "touch", scrollbarWidth: "none" }}
       >
         {loadError ? (
           <div className="flex h-full items-center justify-center">
