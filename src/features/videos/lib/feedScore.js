@@ -6,9 +6,9 @@ const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
 export function loadProfile() {
   try {
     const p = JSON.parse(localStorage.getItem(KEY) || "{}");
-    return { tags: p.tags || {}, authors: p.authors || {}, seen: p.seen || {} };
+    return { tags: p.tags || {}, authors: p.authors || {}, seen: p.seen || {}, fav: p.fav || {} };
   } catch {
-    return { tags: {}, authors: {}, seen: {} };
+    return { tags: {}, authors: {}, seen: {}, fav: {} };
   }
 }
 
@@ -17,7 +17,7 @@ function saveProfile(p) {
     const top = (o, n) => Object.fromEntries(Object.entries(o).slice(-n));
     localStorage.setItem(
       KEY,
-      JSON.stringify({ tags: top(p.tags, 150), authors: top(p.authors, 200), seen: top(p.seen, 300) })
+      JSON.stringify({ tags: top(p.tags, 150), authors: top(p.authors, 200), seen: top(p.seen, 300), fav: top(p.fav || {}, 200) })
     );
   } catch {
     /* stockage indisponible */
@@ -64,7 +64,7 @@ export function scoreVideo(v, p) {
   const ageH = (Date.now() - new Date(v.created_at).getTime()) / 36e5;
   const fresh = Math.max(0.2, Math.pow(0.5, (Number.isFinite(ageH) ? ageH : 0) / 48));
   const score =
-    W.interest * interest + W.engagement * engagement + W.watch * watch +
+    W.interest * clamp(interest + (p.fav?.[v.author_id] ? 0.2 : 0), 0, 1) + W.engagement * engagement + W.watch * watch +
     W.discovery * discoveryScore(v, p) + W.fresh * fresh;
   return p.seen[v.id] != null ? score / 5 : score; // déjà vue : rétrogradée
 }
@@ -88,4 +88,17 @@ export function rankForYou(list, { pinnedId = null, profile = loadProfile() } = 
     pool = pool.filter((x) => x !== pick);
   }
   return out;
+}
+
+// Vidéos enregistrées par l'utilisateur : signal d'intérêt fort.
+// rows = lignes video_bookmarks avec la vidéo jointe (author_id, title, description).
+export function recordBookmarks(rows) {
+  const p = loadProfile();
+  for (const row of rows || []) {
+    const v = row?.videos;
+    if (!v) continue;
+    for (const t of extractTags(v)) p.tags[t] = clamp((p.tags[t] || 0) + 1.5, -2, 5);
+    if (v.author_id) p.fav[v.author_id] = 1;
+  }
+  saveProfile(p);
 }

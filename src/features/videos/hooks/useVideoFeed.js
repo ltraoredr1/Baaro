@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../../../supabaseClient.js";
 import { isMissingColumn } from "../utils/videosApi.js";
-import { rankForYou } from "../lib/feedScore.js";
+import { rankForYou, recordBookmarks } from "../lib/feedScore.js";
 
 const PAGE_SIZE = 24;
 
@@ -210,6 +210,19 @@ export function useVideoFeed() {
               map[item.video_id] = true;
             });
             setLikedMap(map);
+
+            // Enregistrements de l'utilisateur : alimentent son profil d'intérêts.
+            try {
+              const { data: saved } = await supabase
+                .from("video_bookmarks")
+                .select("video_id, videos:video_id(author_id, title, description)")
+                .eq("user_id", userId)
+                .order("created_at", { ascending: false })
+                .limit(100);
+              recordBookmarks(saved);
+            } catch {
+              /* signal facultatif */
+            }
           }
         }
       } catch (error) {
