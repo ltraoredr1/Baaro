@@ -1,10 +1,12 @@
 /**
  * src/features/messaging/lib/chatCalls.js - V5 - Envoie callee_id + conversation_id pour fix RLS
+ * V5.2 : utilise API_BASE de config.js (fix Capacitor Android).
  * V5.1 : lecture de la réponse API corrigée (le corps n'était lu qu'une fois, d'où des erreurs « body already read »
  * qui masquaient le vrai message quand le serveur renvoyait du texte/HTML au lieu de JSON).
  */
 import DailyIframe from "@daily-co/daily-js";
 import { supabase } from "../../../supabaseClient.js";
+import { API_BASE } from "../../../config.js";
 
 let callObject = null;
 let startingLock = null;
@@ -16,11 +18,7 @@ async function authHeaders() {
 }
 
 async function callApi(body) {
-  const base =
-    (typeof import.meta !== "undefined" && import.meta.env?.VITE_API_BASE_URL) ||
-    (typeof window !== "undefined" && window.location?.origin) ||
-    "https://baaro-xi.vercel.app";
-  const endpoint = `${base.replace(/\/$/, "")}/api/live`;
+  const endpoint = `${String(API_BASE || "").replace(/\/$/, "")}/api/live`;
   const res = await fetch(endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...(await authHeaders()) },
