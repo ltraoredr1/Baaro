@@ -44,6 +44,7 @@ import {
   listAudioOutputs,
   canSelectAudioOutput,
 } from "../lib/chatCalls.js";
+import { supabase } from "../../../supabaseClient.js";
 import {
   startIncomingRingtone,
   startOutgoingRingback,
@@ -315,6 +316,55 @@ export function ChatCallModal({
     };
   }, [status === "ended"]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── Connexion établie (une seule fois, quel que soit le déclencheur) ───────
+  const connectedRef = useRef(false);
+  const markConnected = useCallback(() => {
+    if (connectedRef.current || !mountedRef.current || endedRef.current) return;
+    connectedRef.current = true;
+    stopAllSounds();
+    setStatus("active");
+    startedAtRef.current = Date.now();
+    if (callRecord?.id) {
+      updateCallStatus(callRecord.id, {
+        status: "ongoing",
+        started_at: new Date().toISOString(),
+      }).catch(() => {});
+    }
+    onAcceptedRef.current?.();
+  }, [callRecord?.id, stopAllSounds]);
+
+  // ── Appelant : surveiller le statut en base (refus, manqué, fin) ──────────
+  useEffect(() => {
+    if (mode !== "outgoing" || status !== "outgoing" || !callRecord?.id) return;
+    const key = String(callRecord.id);
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(key);
+    const column = isUuid ? "id" : "daily_room_name";
+    const FINAL = ["rejected", "missed", "ended", "cancelled"];
+    const onStatus = (s) => {
+      if (!mountedRef.current || endedRef.current) return;
+      if (FINAL.includes(s)) endCall(s);
+    };
+    const channel = supabase
+      .channel(`call-status-${key}`)
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "calls", filter: `${column}=eq.${key}` },
+        (payload) => onStatus(payload.new?.status)
+      )
+      .subscribe();
+    // Secours si le realtime n'est pas activé sur la table
+    const poll = setInterval(async () => {
+      try {
+        const { data } = await supabase.from("calls").select("status").eq(column, key).maybeSingle();
+        if (data?.status) onStatus(data.status);
+      } catch {}
+    }, 3000);
+    return () => {
+      clearInterval(poll);
+      try { supabase.removeChannel(channel); } catch {}
+    };
+  }, [mode, status, callRecord?.id, endCall]);
+
   // ── Appel sortant : rejoindre la room Daily (une seule fois) ──────────────
   useEffect(() => {
     if (mode !== "outgoing" || !roomUrl || !token) return;
@@ -324,23 +374,12 @@ export function ChatCallModal({
         await startCall({ roomUrl, token, video: callType === "video" });
         if (cancelled || !mountedRef.current) return;
         unsubscribeRef.current = subscribeCallEvents({
-          onParticipantJoined: () => {
-            if (!mountedRef.current) return;
-            stopAllSounds();
-            setStatus("active");
-            startedAtRef.current = Date.now();
-            if (callRecord?.id) {
-              updateCallStatus(callRecord.id, {
-                status: "ongoing",
-                started_at: new Date().toISOString(),
-              }).catch(() => {});
-            }
-            onAcceptedRef.current?.();
-          },
+          onParticipantJoined: () => markConnected(),
           onParticipantLeft: () => endCall("ended"),
           onTrackStarted: () => attachTracks(),
           onLeft: () => endCall("ended"),
         });
+        if (Object.values(getParticipants() || {}).some((p) => !p.local)) markConnected();
         setTimeout(attachTracks, 500);
       } catch (e) {
         console.error(e);
@@ -357,7 +396,7 @@ export function ChatCallModal({
     return () => {
       cancelled = true;
     };
-  }, [mode, roomUrl, token, callType, callRecord?.id, attachTracks, endCall, stopAllSounds]);
+  }, [mode, roomUrl, token, callType, callRecord?.id, attachTracks, endCall, stopAllSounds, markConnected]);
 
   // Appel actif : rattraper les pistes déjà présentes et surveiller les changements
   useEffect(() => {
