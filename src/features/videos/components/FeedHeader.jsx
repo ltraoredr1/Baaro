@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Plus, Sparkles, Volume2, VolumeX } from "lucide-react";
+import { Sparkles, Volume2, VolumeX } from "lucide-react";
 import { COLORS } from "../../../theme.js";
 import { baaroLogo } from "../constants.js";
 
@@ -64,16 +64,6 @@ export default function FeedHeader({
             aria-label={muted ? "Activer le son" : "Couper le son"}
           >
             {muted ? <VolumeX size={17} /> : <Volume2 size={17} />}
-          </button>
-
-          <button
-            onClick={onOpenUpload}
-            className="h-9 w-9 rounded-2xl flex items-center justify-center shadow-xl transition-all hover:scale-105 active:scale-95 border border-amber-400/40"
-            style={{ background: COLORS.gold || "#D9AE52", color: "#000" }}
-            aria-label="Publier"
-            title="Créer une vidéo"
-          >
-            <Plus size={19} className="stroke-[3]" />
           </button>
         </div>
       </div>
