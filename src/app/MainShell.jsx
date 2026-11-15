@@ -502,6 +502,21 @@ export function MainShell() {
 
   const isImmersive = activeTab === "videos";
 
+  // Mode vidéo plein écran : le flux gère son propre défilement, la page ne doit
+  // pas avoir de barre (elle réduit la largeur et décale les boutons).
+  useEffect(() => {
+    if (!isImmersive) return undefined;
+    const html = document.documentElement;
+    const body = document.body;
+    const prev = [html.style.overflow, body.style.overflow];
+    html.style.overflow = "hidden";
+    body.style.overflow = "hidden";
+    return () => {
+      html.style.overflow = prev[0];
+      body.style.overflow = prev[1];
+    };
+  }, [isImmersive]);
+
   const isKeepAliveActive = KEEP_ALIVE_TABS.has(activeTab);
 
   const Tab = activeTab === "messages" && isAnonymous
