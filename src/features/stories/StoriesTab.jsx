@@ -1,5 +1,5 @@
 // Orchestrateur : branche les hooks sur les composants. Aucune logique métier ici.
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { BarChart3 } from 'lucide-react';
 import { COLORS as C } from '../../theme.js';
 import { ConnectionStatus } from '../../components/ConnectionStatus.jsx';
@@ -29,6 +29,8 @@ import { HighlightPicker } from './components/HighlightPicker.jsx';
 import { ProductStatsPanel } from './components/ProductStatsPanel.jsx';
 import { StoryGrid } from './components/StoryGrid.jsx';
 import { StoryViewer } from './components/StoryViewer.jsx';
+import { StoryInsights } from './components/StoryInsights.jsx';
+import { PastStoriesSection } from './components/PastStoriesSection.jsx';
 
 /**
  * Props :
@@ -43,6 +45,10 @@ export function StoriesTab({ id, onOpenProfile, onOpenProduct }) {
   const [engagement, setEngagement] = useState(null);
   const [highlightTarget, setHighlightTarget] = useState(null);
   const [showStats, setShowStats] = useState(false);
+  /** Insights propriétaire : { story, counts } | null */
+  const [insights, setInsights] = useState(null);
+  /** Viewer dédié aux stories passées (historique) */
+  const [pastViewerStories, setPastViewerStories] = useState(null);
 
   const data = useStories(id, setError);
   const products = useMyProducts(id);
@@ -50,6 +56,18 @@ export function StoriesTab({ id, onOpenProfile, onOpenProduct }) {
   const highlights = useHighlights(id);
   const scheduled = useScheduledStories(id);
   const stats = useProductStats(showStats && !!id);
+
+  const openInsights = useCallback(
+    (story, preloadedCounts) => {
+      if (!story || story.author_id !== id) return;
+      const c = preloadedCounts ?? data.counts[story.id] ?? null;
+      setInsights({ story, counts: c });
+      if (!preloadedCounts && !data.counts[story.id]) {
+        data.loadCounts(story.id);
+      }
+    },
+    [id, data]
+  );
 
   const openProduct = useCallback(
     (product, opts) => {
@@ -62,12 +80,13 @@ export function StoriesTab({ id, onOpenProfile, onOpenProduct }) {
     [onOpenProduct]
   );
 
-  const viewer = useStoryViewer(data.stories, async (s) => {
+  const activeList = pastViewerStories || data.stories;
+  const viewer = useStoryViewer(activeList, async (s) => {
     actions.clearMsg();
 
     if (s.author_id === id) {
       data.loadCounts(s.id);
-    } else if (id) {
+    } else if (id && !pastViewerStories) {
       await recordStoryView(s.id);
     }
   });
@@ -76,8 +95,24 @@ export function StoriesTab({ id, onOpenProfile, onOpenProduct }) {
     userId: id,
     toggleReaction: data.toggleReaction,
     removeStory: data.removeStory,
-    onRemoved: viewer.close,
+    onRemoved: () => {
+      viewer.close();
+      setPastViewerStories(null);
+    },
   });
+
+  const closeViewer = useCallback(() => {
+    viewer.close();
+    setPastViewerStories(null);
+  }, [viewer]);
+
+  // Ouvre le viewer dès que la liste « past » est posée
+  useEffect(() => {
+    if (pastViewerStories?.length) {
+      viewer.open(0);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- ouverture ponctuelle sur changement de liste past
+  }, [pastViewerStories]);
 
   const composer = useStoryComposer({
     userId: id,
@@ -200,10 +235,21 @@ export function StoriesTab({ id, onOpenProfile, onOpenProduct }) {
         loading={data.loading}
         userId={id}
         counts={data.counts}
-        onOpen={viewer.open}
+        onOpen={(i) => {
+          setPastViewerStories(null);
+          viewer.open(i);
+        }}
         onCreate={id ? toggleComposer : undefined}
         composerOpen={composer.isOpen}
       />
+
+      {id && (
+        <PastStoriesSection
+          userId={id}
+          onOpenStory={(story) => setPastViewerStories([story])}
+          onOpenInsights={(story, counts) => openInsights(story, counts)}
+        />
+      )}
 
       <FutureModulePanel
         moduleId="stories_ia_filters"
@@ -213,9 +259,9 @@ export function StoriesTab({ id, onOpenProfile, onOpenProduct }) {
       />
 
       <StoryViewer
-        stories={data.stories}
+        stories={activeList}
         userId={id}
-        viewer={viewer}
+        viewer={{ ...viewer, close: closeViewer }}
         actions={actions}
         cart={cart}
         counts={data.counts}
@@ -223,6 +269,7 @@ export function StoriesTab({ id, onOpenProfile, onOpenProduct }) {
         onOpenEngagement={(type, storyId) =>
           setEngagement({ type, id: storyId })
         }
+        onOpenInsights={(story) => openInsights(story)}
         onAddHighlight={setHighlightTarget}
         onOpenProfile={onOpenProfile}
         onOpenProduct={openProduct}
@@ -233,6 +280,15 @@ export function StoriesTab({ id, onOpenProfile, onOpenProduct }) {
           story={highlightTarget}
           highlights={highlights}
           onClose={() => setHighlightTarget(null)}
+        />
+      )}
+
+      {insights && (
+        <StoryInsights
+          story={insights.story}
+          counts={insights.counts || data.counts[insights.story?.id]}
+          userId={id}
+          onClose={() => setInsights(null)}
         />
       )}
 

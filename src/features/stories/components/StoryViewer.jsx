@@ -10,7 +10,7 @@ import { ReplyBar } from './ReplyBar.jsx';
  */
 export function StoryViewer({
   stories, userId, viewer, actions, cart, counts, myReactions,
-  readOnly = false, onOpenEngagement, onAddHighlight, onOpenProfile, onOpenProduct,
+  readOnly = false, onOpenEngagement, onOpenInsights, onAddHighlight, onOpenProfile, onOpenProduct,
 }) {
   const videoRef = useRef(null);
   const story = viewer.currentStory;
@@ -64,6 +64,7 @@ export function StoryViewer({
               onShare={actions.share}
               onRemove={actions.remove}
               onOpenEngagement={(type) => onOpenEngagement(type, story.id)}
+              onOpenInsights={onOpenInsights}
               onAddHighlight={onAddHighlight}
             />
           </div>

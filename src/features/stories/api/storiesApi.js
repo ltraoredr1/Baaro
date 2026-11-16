@@ -58,6 +58,60 @@ export async function fetchScheduledStories(userId) {
   return data || [];
 }
 
+/**
+ * Stories passées du propriétaire (expirées, non supprimées).
+ * Conservées pour l'historique / insights après les 24 h.
+ * @param {string} userId
+ * @param {{ days?: number, limit?: number }} [opts]
+ */
+export async function fetchMyPastStories(userId, opts = {}) {
+  if (!userId) return [];
+  const days = Number.isSafeInteger(opts.days) && opts.days > 0 ? opts.days : 14;
+  const limit = Number.isSafeInteger(opts.limit) && opts.limit > 0 ? Math.min(opts.limit, 100) : 40;
+  const now = new Date();
+  const since = new Date(now.getTime() - days * 24 * 60 * 60 * 1000).toISOString();
+  const { data, error } = await supabase
+    .from('stories')
+    .select(COLUMNS)
+    .eq('author_id', userId)
+    .lte('expires_at', now.toISOString())
+    .gte('publish_at', since)
+    .is('deleted_at', null)
+    .order('publish_at', { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  return data || [];
+}
+
+/**
+ * Compteurs en lot pour plusieurs stories (historique).
+ * @param {string[]} storyIds
+ * @returns {Promise<Record<string, { views: number, likes: number }>>}
+ */
+export async function fetchStoryCountsBatch(storyIds) {
+  const ids = [...new Set((storyIds || []).filter(Boolean))];
+  if (!ids.length) return {};
+  const [viewsRes, likesRes] = await Promise.all([
+    supabase.from('story_views').select('story_id').in('story_id', ids),
+    supabase.from('story_reactions').select('story_id').in('story_id', ids),
+  ]);
+  if (viewsRes.error) throw viewsRes.error;
+  if (likesRes.error) throw likesRes.error;
+  const views = {};
+  const likes = {};
+  for (const row of viewsRes.data || []) {
+    views[row.story_id] = (views[row.story_id] || 0) + 1;
+  }
+  for (const row of likesRes.data || []) {
+    likes[row.story_id] = (likes[row.story_id] || 0) + 1;
+  }
+  const out = {};
+  for (const id of ids) {
+    out[id] = { views: views[id] || 0, likes: likes[id] || 0 };
+  }
+  return out;
+}
+
 /** Map storyId -> emoji choisi par l'utilisateur. */
 export async function fetchMyReactions(userId, storyIds) {
   if (!userId || !storyIds?.length) return new Map();
