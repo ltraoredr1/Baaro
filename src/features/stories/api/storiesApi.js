@@ -1,10 +1,12 @@
 // Seul fichier (avec highlightsApi) qui parle à Supabase pour les stories.
 import { supabase } from '../../../supabaseClient.js';
 import { uploadExternalMedia } from '../../../lib/externalMedia.js';
-import { MAX_UPLOAD_BYTES, FOLLOWS } from '../constants.js';
+import { MAX_UPLOAD_BYTES, FOLLOWS, REACTIONS } from '../constants.js';
 
 const COLUMNS =
   'id, author_id, media_url, media_type, caption, audio_url, audio_title, poll, product, background, stickers, visibility, publish_at, expires_at, created_at';
+const recordedStoryViews = new Set();
+const pendingStoryViews = new Set();
 
 // ---------- Lecture ----------
 export async function fetchActiveStories() {
@@ -176,20 +178,27 @@ export async function fetchProductStats() {
 
 // ---------- Écriture ----------
 export async function recordStoryView(storyId) {
+  if (!storyId) return false;
+  if (recordedStoryViews.has(storyId) || pendingStoryViews.has(storyId)) return true;
+  pendingStoryViews.add(storyId);
   try {
     const { error } = await supabase.rpc('record_story_view', { p_story_id: storyId });
     if (error) {
       console.warn('[Stories] vue non enregistrée :', error.message);
       return false;
     }
+    recordedStoryViews.add(storyId);
     return true;
   } catch (error) {
     console.warn('[Stories] vue non enregistrée :', error?.message || error);
     return false;
+  } finally {
+    pendingStoryViews.delete(storyId);
   }
 }
 
 export async function setReaction(storyId, userId, emoji) {
+  if (!storyId || !userId || !REACTIONS.includes(emoji)) throw new Error('Réaction invalide.');
   const { error } = await supabase
     .from('story_reactions')
     .upsert({ story_id: storyId, user_id: userId, reaction: emoji }, { onConflict: 'story_id,user_id' });
@@ -197,19 +206,24 @@ export async function setReaction(storyId, userId, emoji) {
 }
 
 export async function clearReaction(storyId, userId) {
+  if (!storyId || !userId) throw new Error('Utilisateur ou story invalide.');
   const { error } = await supabase.from('story_reactions').delete().eq('story_id', storyId).eq('user_id', userId);
   if (error) throw error;
 }
 
 export async function sendReply(storyId, userId, body) {
-  const { error } = await supabase.from('story_replies').insert({ story_id: storyId, sender_id: userId, body });
+  const cleanBody = String(body || '').trim();
+  if (!storyId || !userId || cleanBody.length < 1 || cleanBody.length > 2000) throw new Error('Réponse invalide.');
+  const { error } = await supabase.from('story_replies').insert({ story_id: storyId, sender_id: userId, body: cleanBody });
   if (error) throw error;
 }
 
 export async function answerSticker(storyId, stickerId, userId, body) {
+  const cleanBody = String(body || '').trim();
+  if (!storyId || !stickerId || !userId || cleanBody.length < 1 || cleanBody.length > 300) throw new Error('Réponse au sticker invalide.');
   const { error } = await supabase
     .from('story_sticker_responses')
-    .insert({ story_id: storyId, sticker_id: stickerId, user_id: userId, body });
+    .insert({ story_id: storyId, sticker_id: stickerId, user_id: userId, body: cleanBody });
   if (error) throw error;
 }
 

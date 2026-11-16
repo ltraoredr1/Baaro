@@ -19,7 +19,13 @@ export function StoryViewer({
   const msg = actions?.modalMsg;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/95 backdrop-blur-md select-none" onClick={viewer.close}>
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/95 backdrop-blur-md select-none"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Visionneuse de stories"
+      onClick={viewer.close}
+    >
       <div
         className="relative w-full h-full sm:w-[420px] sm:h-[85vh] sm:rounded-2xl overflow-hidden bg-zinc-950 shadow-2xl flex flex-col justify-between border border-zinc-800/50"
         onClick={(e) => e.stopPropagation()}

@@ -36,7 +36,7 @@ export function ViewerHeader({ stories, index, progress, story, videoRef, onClos
               <VideoTranslateControls mediaUrl={story.media_url} videoId={story.id} videoRef={videoRef} />
             </div>
           )}
-          <button onClick={onClose} className="p-2 text-white/80 hover:text-white rounded-full bg-black/20 hover:bg-black/40 transition-colors">
+          <button type="button" onClick={onClose} aria-label="Fermer la visionneuse" className="p-2 text-white/80 hover:text-white rounded-full bg-black/20 hover:bg-black/40 transition-colors">
             <X className="w-5 h-5" />
           </button>
         </div>

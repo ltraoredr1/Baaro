@@ -48,6 +48,10 @@ export function useStoryActions({
       return false;
     }
 
+    if (busy) return false;
+    setBusy(true);
+    setModalMsg(null);
+
     try {
       await sendReply(story.id, userId, text);
       setModalMsg({ type: 'ok', text: 'Message envoyé' });
@@ -55,6 +59,8 @@ export function useStoryActions({
     } catch (e) {
       fail('Envoi impossible', e);
       return false;
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -64,6 +70,10 @@ export function useStoryActions({
       return false;
     }
 
+    if (busy) return false;
+    setBusy(true);
+    setModalMsg(null);
+
     try {
       await answerSticker(story.id, sticker.id, userId, text);
       setModalMsg({ type: 'ok', text: 'Réponse envoyée' });
@@ -71,6 +81,8 @@ export function useStoryActions({
     } catch (e) {
       fail('Envoi impossible', e);
       return false;
+    } finally {
+      setBusy(false);
     }
   };
 
