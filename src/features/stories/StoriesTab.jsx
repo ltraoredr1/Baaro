@@ -95,6 +95,7 @@ export function StoriesTab({ id, onOpenProfile, onOpenProduct }) {
     userId: id,
     toggleReaction: data.toggleReaction,
     removeStory: data.removeStory,
+    getMyReaction: (story) => data.myReactions?.get(story.id) ?? null,
     onRemoved: () => {
       viewer.close();
       setPastViewerStories(null);
@@ -265,7 +266,6 @@ export function StoriesTab({ id, onOpenProfile, onOpenProduct }) {
         actions={actions}
         cart={cart}
         counts={data.counts}
-        myReactions={data.myReactions}
         onOpenEngagement={(type, storyId) =>
           setEngagement({ type, id: storyId })
         }

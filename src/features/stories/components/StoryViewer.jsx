@@ -3,13 +3,14 @@ import { ViewerHeader } from './ViewerHeader.jsx';
 import { ViewerContent } from './ViewerContent.jsx';
 import { ViewerActions } from './ViewerActions.jsx';
 import { ReplyBar } from './ReplyBar.jsx';
+import { QuickReplies } from "./QuickReplies.jsx";
 
 /**
  * Visionneuse plein écran.
  * readOnly = true (highlights) : pas de réactions, réponses, stats ni suppression.
  */
 export function StoryViewer({
-  stories, userId, viewer, actions, cart, counts, myReactions,
+  stories, userId, viewer, actions, cart, counts,
   readOnly = false, onOpenEngagement, onOpenInsights, onAddHighlight, onOpenProfile, onOpenProduct,
 }) {
   const videoRef = useRef(null);
@@ -59,11 +60,11 @@ export function StoryViewer({
                 {msg.text}
               </div>
             )}
-            {!isMine && <ReplyBar key={story.id} story={story} onSend={actions.reply} onPause={viewer.setIsPaused} />}
+            {!isMine && (<><QuickReplies story={story} busy={actions.busy} onSend={actions.quickReply} /><ReplyBar key={story.id} story={story} onSend={actions.reply} onPause={viewer.setIsPaused} /></>)}
             <ViewerActions
               story={story}
               isMine={isMine}
-              current={myReactions.get(story.id)}
+              current={actions.getReaction(story)}
               busy={actions.busy}
               counts={counts[story.id]}
               onReact={actions.react}
