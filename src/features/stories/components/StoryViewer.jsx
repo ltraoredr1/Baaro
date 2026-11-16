@@ -3,7 +3,7 @@ import { ViewerHeader } from './ViewerHeader.jsx';
 import { ViewerContent } from './ViewerContent.jsx';
 import { ViewerActions } from './ViewerActions.jsx';
 import { ReplyBar } from './ReplyBar.jsx';
-import { QuickReplies } from "./QuickReplies.jsx";
+import { QuickReplies } from './QuickReplies.jsx';
 
 /**
  * Visionneuse plein écran.
