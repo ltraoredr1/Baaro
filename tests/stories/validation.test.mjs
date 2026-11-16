@@ -44,6 +44,8 @@ test('file validation cross-checks declared MIME against file signature', async 
   const spoofed = fakeFile('spoof.jpg', 'image/jpeg', [0x1a, 0x45, 0xdf, 0xa3]);
   await assert.rejects(() => validateStoryFiles([spoofed]), /ne correspond pas/);
   await assert.rejects(() => validateStoryFiles([fakeFile('bad.bin', '', [1, 2, 3])]), /non pris en charge/);
+  await assert.rejects(() => validateStoryFiles([fakeFile('unknown.bin', 'application/x-custom', [0xff, 0xd8, 0xff])]), /Type MIME non pris en charge/);
+  await assert.rejects(() => validateStoryFiles([fakeFile('empty.jpg', 'image/jpeg', [], 0)]), /vide ou invalide/);
 });
 
 test('composer payload builder preserves every selected media and explicit expiry', () => {
@@ -58,9 +60,11 @@ test('composer payload builder preserves every selected media and explicit expir
   assert.deepEqual(rows.map((row) => row.media_url), ['https://media/1', 'https://media/2']);
   assert.deepEqual(rows.map((row) => row.media_type), ['image', 'video']);
   assert.ok(rows.every((row) => row.caption === 'catalogue' && row.publish_at && row.expires_at));
+  assert.ok(rows.every((row) => row.expires_at === '2026-11-10T17:00:00.000Z'));
 
-  const text = buildStoryPayloads({ userId: 'author', caption: 'Hello', background: '#123', stickers: [], publishAt: 'now', expiresAt: 'later' });
+  const text = buildStoryPayloads({ userId: 'author', caption: 'Hello', background: '#123', stickers: [], publishAt: '2026-11-09T17:00:00.000Z' });
   assert.equal(text.length, 1);
   assert.equal(text[0].media_type, 'text');
   assert.equal(text[0].media_url, null);
+  assert.equal(text[0].expires_at, '2026-11-10T17:00:00.000Z');
 });

@@ -1,3 +1,11 @@
+export const STORY_LIFETIME_MS = 24 * 60 * 60 * 1000;
+
+export function computeStoryExpiry(publishAt) {
+  const publishTime = new Date(publishAt).getTime();
+  if (!Number.isFinite(publishTime)) throw new Error('Date de publication invalide.');
+  return new Date(publishTime + STORY_LIFETIME_MS).toISOString();
+}
+
 export function buildStoryPayloads({
   userId,
   caption,
@@ -12,6 +20,8 @@ export function buildStoryPayloads({
   publishAt,
   expiresAt,
 }) {
+  const normalizedPublishAt = new Date(publishAt).toISOString();
+  const normalizedExpiresAt = computeStoryExpiry(normalizedPublishAt);
   const media = mediaAssets.length
     ? mediaAssets.map((asset, index) => ({ asset, mediaType: mediaKinds[index]?.mediaType || 'image' }))
     : [{ asset: null, mediaType: 'text' }];
@@ -28,7 +38,7 @@ export function buildStoryPayloads({
     poll: hasPoll ? pollData : null,
     product: product || null,
     stickers: stickers || [],
-    publish_at: publishAt,
-    expires_at: expiresAt,
+    publish_at: normalizedPublishAt,
+    expires_at: normalizedExpiresAt,
   }));
 }

@@ -63,8 +63,8 @@ function loadValidators() {
 }
 
 export function validateStoryMetadataJs({ fileCount, maxFileBytes, publishDelayMs }) {
-  if (fileCount > MAX_MEDIA_ITEMS) return 1;
-  if (maxFileBytes > MAX_UPLOAD_BYTES) return 2;
+  if (!Number.isSafeInteger(fileCount) || fileCount < 0 || fileCount > MAX_MEDIA_ITEMS) return 1;
+  if (!Number.isFinite(maxFileBytes) || maxFileBytes < 0 || maxFileBytes > MAX_UPLOAD_BYTES) return 2;
   if (publishDelayMs !== 0 &&
       (publishDelayMs < 60_000 || publishDelayMs > MAX_SCHEDULE_DAYS * 86_400_000)) return 3;
   return 0;
@@ -110,6 +110,9 @@ export async function validateStoryFiles(files, publishAt = '') {
     throw new Error('Date de programmation invalide');
   }
   const maxFileBytes = list.reduce((max, file) => Math.max(max, Number(file?.size) || 0), 0);
+  if (list.some((file) => !file || !Number.isFinite(Number(file.size)) || Number(file.size) <= 0 || typeof file.slice !== 'function')) {
+    throw new Error('Un fichier média est vide ou invalide.');
+  }
   const wasm = await loadValidators();
   const code = wasm
     ? wasm.policy.story_validate(list.length, BigInt(maxFileBytes), BigInt(Math.trunc(publishDelayMs)))
@@ -124,7 +127,13 @@ export async function validateStoryFiles(files, publishAt = '') {
     if (!kind) {
       throw new Error(`Format média non pris en charge ou fichier invalide : ${file.name || 'fichier'}`);
     }
-    const declared = MIME_TO_CODE.get(String(file.type || '').toLowerCase());
+    const declaredMime = String(file.type || '').toLowerCase();
+    const declared = declaredMime && declaredMime !== 'application/octet-stream'
+      ? MIME_TO_CODE.get(declaredMime)
+      : null;
+    if (declaredMime && declaredMime !== 'application/octet-stream' && !declared) {
+      throw new Error(`Type MIME non pris en charge pour « ${file.name || 'fichier'} ».`);
+    }
     if (declared && declared !== mediaCode) {
       throw new Error(`Le contenu réel de « ${file.name || 'fichier'} » ne correspond pas à son type déclaré.`);
     }

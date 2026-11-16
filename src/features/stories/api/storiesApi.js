@@ -281,6 +281,7 @@ export async function uploadStoryMedia(file, userId, verifiedMime) {
     : file;
   return uploadExternalMedia(uploadFile, {
     folder: 'stories', user_id: userId, maxBytes: MAX_UPLOAD_BYTES,
+    compress: true, maxImageSide: 1080, imageQuality: 0.82,
   });
 }
 

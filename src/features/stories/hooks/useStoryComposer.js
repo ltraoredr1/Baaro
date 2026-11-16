@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { MAX_MEDIA_ITEMS, MAX_SCHEDULE_DAYS, MAX_UPLOAD_BYTES, STORY_LIFETIME_MS } from '../constants.js';
+import { MAX_MEDIA_ITEMS, MAX_SCHEDULE_DAYS, MAX_UPLOAD_BYTES } from '../constants.js';
 import { discardUploadedMedia } from '../../../lib/externalMedia.js';
 import { insertStories, uploadStoryMedia } from '../api/storiesApi.js';
 import { validateStoryFiles } from '../lib/nativeValidation.js';
@@ -126,7 +126,6 @@ export function useStoryComposer({ userId, setError, onCreated }) {
     try {
       const mediaKinds = await validateStoryFiles(mediaItems.map((m) => m.file), publishAt);
       const publishIso = publishDate.toISOString();
-      const expiresIso = new Date(publishTime + STORY_LIFETIME_MS).toISOString();
       const uploadedAssets = [];
 
       // Le schéma actuel stocke un seul media_url par ligne : un lot multi-fichier
@@ -139,7 +138,7 @@ export function useStoryComposer({ userId, setError, onCreated }) {
 
       const rows = buildStoryPayloads({
         userId, caption, background, audio, hasPoll, pollData, product, stickers,
-        mediaAssets: uploadedAssets, mediaKinds, publishAt: publishIso, expiresAt: expiresIso,
+        mediaAssets: uploadedAssets, mediaKinds, publishAt: publishIso,
       });
 
       insertStarted = true;

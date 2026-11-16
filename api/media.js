@@ -86,13 +86,20 @@ export default async function handler(req, res) {
       const r2 = getR2();
       const publicUrl = r2.publicBase ? `${r2.publicBase}/${objectKey}` : null;
 
-      // Garde-fou : on ne supprime jamais un fichier déjà référencé par une vidéo
-      // (ex. insertion réussie mais réponse perdue côté réseau).
+      // Garde-fou : on ne supprime jamais un fichier déjà référencé par une
+      // vidéo, une story ou un highlight (réponse réseau ambiguë après une
+      // insertion réussie).
       if (publicUrl) {
-        const { data: refs, error: refError } = await admin
-          .from("videos").select("id").eq("video_url", publicUrl).limit(1);
-        if (refError) throw refError;
-        if (refs?.length) return res.status(200).json({ ok: true, discarded: false, reason: "referenced" });
+        const checks = await Promise.all([
+          admin.from("videos").select("id").eq("video_url", publicUrl).limit(1),
+          admin.from("stories").select("id").eq("media_url", publicUrl).limit(1),
+          admin.from("story_highlight_items").select("id").eq("media_url", publicUrl).limit(1),
+        ]);
+        const failedCheck = checks.find(({ error }) => error);
+        if (failedCheck) throw failedCheck.error;
+        if (checks.some(({ data }) => data?.length)) {
+          return res.status(200).json({ ok: true, discarded: false, reason: "referenced" });
+        }
       }
 
       await r2.client.send(new DeleteObjectCommand({ Bucket: r2.bucket, Key: objectKey }));
@@ -119,8 +126,9 @@ export default async function handler(req, res) {
     if (isBlocked(mime, objectKey.split(".").pop())) {
       return res.status(415).json({ ok: false, error: "Les fichiers HTML et SVG ne sont pas autorisés." });
     }
+    let r2;
     try {
-      const r2 = getR2();
+      r2 = getR2();
       if (!r2.publicBase) throw new Error("R2_PUBLIC_BASE_URL manquante");
       const expectedUrl = `${r2.publicBase}/${objectKey}`;
       if (publicUrl !== expectedUrl) return res.status(400).json({ ok: false, error: "URL média invalide" });
@@ -175,6 +183,21 @@ export default async function handler(req, res) {
       if (error) throw error;
       return res.status(200).json({ ok: true, asset: data });
     } catch (e) {
+      // Si l’enregistrement échoue avant toute référence, supprimer l’objet
+      // immédiatement pour éviter un orphelin R2. En cas de réponse ambiguë,
+      // la présence de media_assets fait foi.
+      try {
+        if (r2 && objectKey) {
+          const { data: refs, error: refError } = await admin
+            .from("media_assets").select("id")
+            .eq("bucket", r2.bucket).eq("object_key", objectKey).limit(1);
+          if (!refError && !refs?.length) {
+            await r2.client.send(new DeleteObjectCommand({ Bucket: r2.bucket, Key: objectKey }));
+          }
+        }
+      } catch (cleanupError) {
+        console.warn("[media:finalize cleanup]", cleanupError);
+      }
       console.error("[media:finalize]", e);
       return res.status(500).json({ ok: false, error: "Impossible d'enregistrer les métadonnées média", code: e?.code || null });
     }
