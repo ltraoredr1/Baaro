@@ -8,6 +8,21 @@ const COLUMNS =
 const recordedStoryViews = new Set();
 const pendingStoryViews = new Set();
 
+/** Transforme une erreur Supabase en message lisible, en gardant le code d'origine. */
+function friendlyError(error, fallback) {
+  const code = error?.code;
+  const raw = String(error?.message || '');
+  let message = raw || fallback;
+  if (code === '23505') message = 'Tu as déjà fait cette action.';
+  else if (code === '23503') message = 'Cette story n’existe plus.';
+  else if (code === '42501' || /row-level security/i.test(raw)) message = 'Action non autorisée sur cette story.';
+  else if (code === 'PGRST301' || /jwt/i.test(raw)) message = 'Session expirée, reconnecte-toi.';
+  else if (/failed to fetch|networkerror|load failed/i.test(raw)) message = 'Connexion impossible, réessaie.';
+  const wrapped = new Error(message);
+  wrapped.code = code;
+  return wrapped;
+}
+
 // ---------- Lecture ----------
 export async function fetchActiveStories() {
   const now = new Date().toISOString();
@@ -158,16 +173,40 @@ export async function fetchLiveProduct(productId) {
   return data || null;
 }
 
-export async function searchProfiles(query) {
-  const term = (query || '').trim().replace(/[%,()]/g, '');
+/**
+ * Recherche de profils (mentions, identification).
+ * - accepte « @handle » ; les caractères spéciaux du filtre sont neutralisés ;
+ * - les handles qui commencent par la saisie passent en premier ;
+ * - `excludeId` retire l'utilisateur courant des résultats.
+ * @param {string} query
+ * @param {{ excludeId?: string, limit?: number }} [opts]
+ */
+export async function searchProfiles(query, opts = {}) {
+  const term = String(query || '')
+    .trim()
+    .replace(/^@+/, '')
+    .replace(/[%,()*]/g, '')
+    .replace(/[\\_]/g, '\\$&');
   if (term.length < 2) return [];
+  const limit = Number.isSafeInteger(opts.limit) && opts.limit > 0 ? Math.min(opts.limit, 20) : 6;
   const { data, error } = await supabase
     .from('profiles')
-    .select('id, display_name, handle')
+    .select('id, display_name, handle, avatar_url')
     .or(`handle.ilike.%${term}%,display_name.ilike.%${term}%`)
-    .limit(6);
+    .limit(limit + 1 + (opts.excludeId ? 1 : 0));
   if (error) throw error;
-  return data || [];
+
+  const lower = term.replace(/\\/g, '').toLowerCase();
+  const rank = (p) => {
+    const handle = String(p.handle || '').toLowerCase();
+    if (handle === lower) return 0;
+    if (handle.startsWith(lower)) return 1;
+    return 2;
+  };
+  return (data || [])
+    .filter((p) => !opts.excludeId || p.id !== opts.excludeId)
+    .sort((a, b) => rank(a) - rank(b))
+    .slice(0, limit);
 }
 
 export async function fetchProductStats() {
@@ -202,20 +241,20 @@ export async function setReaction(storyId, userId, emoji) {
   const { error } = await supabase
     .from('story_reactions')
     .upsert({ story_id: storyId, user_id: userId, reaction: emoji }, { onConflict: 'story_id,user_id' });
-  if (error) throw error;
+  if (error) throw friendlyError(error, 'Réaction impossible.');
 }
 
 export async function clearReaction(storyId, userId) {
   if (!storyId || !userId) throw new Error('Utilisateur ou story invalide.');
   const { error } = await supabase.from('story_reactions').delete().eq('story_id', storyId).eq('user_id', userId);
-  if (error) throw error;
+  if (error) throw friendlyError(error, 'Réaction impossible.');
 }
 
 export async function sendReply(storyId, userId, body) {
   const cleanBody = String(body || '').trim();
   if (!storyId || !userId || cleanBody.length < 1 || cleanBody.length > 2000) throw new Error('Réponse invalide.');
   const { error } = await supabase.from('story_replies').insert({ story_id: storyId, sender_id: userId, body: cleanBody });
-  if (error) throw error;
+  if (error) throw friendlyError(error, 'Envoi impossible.');
 }
 
 export async function answerSticker(storyId, stickerId, userId, body) {
@@ -224,7 +263,7 @@ export async function answerSticker(storyId, stickerId, userId, body) {
   const { error } = await supabase
     .from('story_sticker_responses')
     .insert({ story_id: storyId, sticker_id: stickerId, user_id: userId, body: cleanBody });
-  if (error) throw error;
+  if (error) throw friendlyError(error, 'Envoi impossible.');
 }
 
 /** type : 'view' | 'click' | 'add_to_cart' | 'purchase' */
