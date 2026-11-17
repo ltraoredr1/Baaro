@@ -106,13 +106,27 @@ export function ViewerContent({ story, userId, viewer, cart, videoRef, readOnly,
             className="w-full h-full object-contain"
             autoPlay
             playsInline
-            onLoadedData={() => setMediaLoading(false)}
+            muted
+            onLoadedData={(e) => {
+              setMediaLoading(false);
+              // Autoplay mobile exige souvent muted ; on tente un play explicite.
+              e.currentTarget.play().catch(() => {});
+            }}
             onTimeUpdate={(e) => {
               const { currentTime, duration } = e.currentTarget;
               if (Number.isFinite(duration) && duration > 0) setProgress((currentTime / duration) * 100);
             }}
             onEnded={next}
             onError={() => { setMediaLoading(false); next(); }}
+            onClick={(e) => {
+              // Premier tap : active le son (politique autoplay navigateurs).
+              e.stopPropagation();
+              const v = e.currentTarget;
+              if (v.muted) {
+                v.muted = false;
+                v.play().catch(() => {});
+              }
+            }}
           />
         ) : (
           <>
@@ -128,7 +142,7 @@ export function ViewerContent({ story, userId, viewer, cart, videoRef, readOnly,
               alt="story content"
               className="relative max-w-full max-h-full w-auto h-auto object-contain"
               onLoad={() => setMediaLoading(false)}
-              onError={() => setMediaLoading(false)}
+              onError={() => { setMediaLoading(false); next(); }}
             />
           </>
         )

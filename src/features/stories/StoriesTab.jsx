@@ -1,5 +1,5 @@
 // Orchestrateur : branche les hooks sur les composants. Aucune logique métier ici.
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { BarChart3 } from 'lucide-react';
 import { COLORS as C } from '../../theme.js';
 import { ConnectionStatus } from '../../components/ConnectionStatus.jsx';
@@ -9,7 +9,7 @@ import { ConfirmDialog } from '../../components/ConfirmDialog.jsx';
 import { callSocial } from '../../lib/notifyInteraction.js';
 
 import { productRoute } from './constants.js';
-import { recordStoryView } from './api/storiesApi.js';
+import { clearStoryViewCache, recordStoryView } from './api/storiesApi.js';
 import { useStories } from './hooks/useStories.js';
 import { useStoryViewer } from './hooks/useStoryViewer.js';
 import { useStoryActions } from './hooks/useStoryActions.js';
@@ -81,15 +81,20 @@ export function StoriesTab({ id, onOpenProfile, onOpenProduct }) {
   );
 
   const activeList = pastViewerStories || data.stories;
+  // Refs pour casser la dépendance circulaire viewer ↔ actions sans TDZ.
+  const actionsRef = useRef(null);
+  const viewerRef = useRef(null);
+
   const viewer = useStoryViewer(activeList, async (s) => {
-    actions.clearMsg();
+    actionsRef.current?.clearMsg();
 
     if (s.author_id === id) {
       data.loadCounts(s.id);
     } else if (id && !pastViewerStories) {
-      await recordStoryView(s.id);
+      await recordStoryView(s.id, id);
     }
   });
+  viewerRef.current = viewer;
 
   const actions = useStoryActions({
     userId: id,
@@ -97,10 +102,16 @@ export function StoriesTab({ id, onOpenProfile, onOpenProduct }) {
     removeStory: data.removeStory,
     getMyReaction: (story) => data.myReactions?.get(story.id) ?? null,
     onRemoved: () => {
-      viewer.close();
+      viewerRef.current?.close();
       setPastViewerStories(null);
     },
   });
+  actionsRef.current = actions;
+
+  // Purge le cache de vues local quand l'utilisateur change (multi-comptes).
+  useEffect(() => {
+    clearStoryViewCache();
+  }, [id]);
 
   const closeViewer = useCallback(() => {
     viewer.close();
@@ -305,7 +316,7 @@ export function StoriesTab({ id, onOpenProfile, onOpenProduct }) {
       <ConfirmDialog
         open={!!actions.pendingRemoval}
         title="Supprimer cette story ?"
-        message="Cette action est irréversible. Veux-tu vraiment supprimer cette story ?"
+        message="La story sera retirée de ton fil et des lecteurs. Confirmer la suppression ?"
         confirmLabel="Supprimer"
         cancelLabel="Annuler"
         danger

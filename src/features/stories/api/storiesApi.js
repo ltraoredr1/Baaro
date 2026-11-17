@@ -5,8 +5,30 @@ import { MAX_UPLOAD_BYTES, FOLLOWS, REACTIONS } from '../constants.js';
 
 const COLUMNS =
   'id, author_id, media_url, media_type, caption, audio_url, audio_title, poll, product, background, stickers, visibility, publish_at, expires_at, created_at';
-const recordedStoryViews = new Set();
-const pendingStoryViews = new Set();
+/** Cache des vues déjà enregistrées, isolé par utilisateur pour éviter les fuites entre sessions. */
+const recordedStoryViews = new Map(); // userKey -> Set(storyId)
+const pendingStoryViews = new Map(); // userKey -> Set(storyId)
+
+function viewSet(map, userKey) {
+  let set = map.get(userKey);
+  if (!set) {
+    set = new Set();
+    map.set(userKey, set);
+  }
+  return set;
+}
+
+/** À appeler au logout / changement de compte pour ne pas bloquer les vues du nouvel utilisateur. */
+export function clearStoryViewCache(userId) {
+  if (userId) {
+    const key = String(userId);
+    recordedStoryViews.delete(key);
+    pendingStoryViews.delete(key);
+  } else {
+    recordedStoryViews.clear();
+    pendingStoryViews.clear();
+  }
+}
 
 /** Transforme une erreur Supabase en message lisible, en gardant le code d'origine. */
 function friendlyError(error, fallback) {
@@ -102,29 +124,29 @@ export async function fetchMyPastStories(userId, opts = {}) {
 
 /**
  * Compteurs en lot pour plusieurs stories (historique).
+ * Utilise count exact par story pour rester correct sous RLS
+ * (évite le sous-comptage d'un SELECT de lignes limité).
  * @param {string[]} storyIds
  * @returns {Promise<Record<string, { views: number, likes: number }>>}
  */
 export async function fetchStoryCountsBatch(storyIds) {
   const ids = [...new Set((storyIds || []).filter(Boolean))];
   if (!ids.length) return {};
-  const [viewsRes, likesRes] = await Promise.all([
-    supabase.from('story_views').select('story_id').in('story_id', ids),
-    supabase.from('story_reactions').select('story_id').in('story_id', ids),
-  ]);
-  if (viewsRes.error) throw viewsRes.error;
-  if (likesRes.error) throw likesRes.error;
-  const views = {};
-  const likes = {};
-  for (const row of viewsRes.data || []) {
-    views[row.story_id] = (views[row.story_id] || 0) + 1;
-  }
-  for (const row of likesRes.data || []) {
-    likes[row.story_id] = (likes[row.story_id] || 0) + 1;
-  }
   const out = {};
-  for (const id of ids) {
-    out[id] = { views: views[id] || 0, likes: likes[id] || 0 };
+  // Parallèle bornée pour ne pas saturer PostgREST sur un long historique.
+  const chunkSize = 8;
+  for (let i = 0; i < ids.length; i += chunkSize) {
+    const chunk = ids.slice(i, i + chunkSize);
+    await Promise.all(
+      chunk.map(async (id) => {
+        try {
+          out[id] = await fetchStoryCounts(id);
+        } catch (e) {
+          console.warn('[Stories] counts batch:', id, e?.message || e);
+          out[id] = { views: 0, likes: 0 };
+        }
+      })
+    );
   }
   return out;
 }
@@ -216,23 +238,31 @@ export async function fetchProductStats() {
 }
 
 // ---------- Écriture ----------
-export async function recordStoryView(storyId) {
+/**
+ * Enregistre une vue dédupliquée (RPC serveur + cache local par utilisateur).
+ * @param {string} storyId
+ * @param {string} [userId] identifiant du viewer — indispensable pour isoler le cache multi-comptes
+ */
+export async function recordStoryView(storyId, userId) {
   if (!storyId) return false;
-  if (recordedStoryViews.has(storyId) || pendingStoryViews.has(storyId)) return true;
-  pendingStoryViews.add(storyId);
+  const userKey = userId ? String(userId) : '_anon';
+  const recorded = viewSet(recordedStoryViews, userKey);
+  const pending = viewSet(pendingStoryViews, userKey);
+  if (recorded.has(storyId) || pending.has(storyId)) return true;
+  pending.add(storyId);
   try {
     const { error } = await supabase.rpc('record_story_view', { p_story_id: storyId });
     if (error) {
       console.warn('[Stories] vue non enregistrée :', error.message);
       return false;
     }
-    recordedStoryViews.add(storyId);
+    recorded.add(storyId);
     return true;
   } catch (error) {
     console.warn('[Stories] vue non enregistrée :', error?.message || error);
     return false;
   } finally {
-    pendingStoryViews.delete(storyId);
+    pending.delete(storyId);
   }
 }
 
@@ -308,8 +338,16 @@ export async function insertStories(payloads) {
   }
 }
 
+/** Soft-delete : aligne lecture (.is('deleted_at', null)) et can_view_story / record_story_view. */
 export async function deleteStory(storyId, authorId) {
-  const { data, error } = await supabase.from('stories').delete().eq('id', storyId).eq('author_id', authorId).select('id');
+  if (!storyId || !authorId) throw new Error('Story ou auteur invalide.');
+  const { data, error } = await supabase
+    .from('stories')
+    .update({ deleted_at: new Date().toISOString() })
+    .eq('id', storyId)
+    .eq('author_id', authorId)
+    .is('deleted_at', null)
+    .select('id');
   if (error) throw new Error(error.message);
   if (!data?.length) throw new Error('Story introuvable ou déjà supprimée.');
 }

@@ -37,7 +37,8 @@ export async function fetchProfile(ownerId) {
 export async function createHighlight(title, story) {
   const cleanTitle = String(title || '').trim().slice(0, 40);
   if (!cleanTitle) throw new Error('Le titre du highlight est obligatoire.');
-  const cover = story.media_type === 'image' ? story.media_url : null;
+  // Image : URL directe. Vidéo : on conserve l'URL média plutôt qu'un cover null.
+  const cover = story.media_url || null;
   const { data, error } = await supabase
     .from('story_highlights')
     .insert({ title: cleanTitle, cover_url: cover })

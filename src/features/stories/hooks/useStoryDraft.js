@@ -11,7 +11,13 @@ const read = (key) => {
 };
 
 export const isSnapshotEmpty = (s) =>
-  !s.caption?.trim() && !s.background && !s.stickers?.length && !s.pollData?.question && !s.product && !s.audio;
+  !s.caption?.trim() &&
+  !s.background &&
+  !s.stickers?.length &&
+  !s.pollData?.question &&
+  !s.product &&
+  !s.audio &&
+  !s.publishAt;
 
 /**
  * Sauvegarde automatique du brouillon (texte, fond, stickers, sondage, produit, musique).

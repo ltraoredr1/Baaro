@@ -184,7 +184,14 @@ export function useStoryActions({
   const share = async (story) => {
     setModalMsg(null);
 
-    const url = isHttpUrl(story?.media_url) ? story.media_url : window.location.origin;
+    // Deep-link app (story id) plutôt que l'URL brute du média CDN.
+    const origin = typeof window !== 'undefined' ? window.location.origin : '';
+    const url =
+      story?.id && origin
+        ? `${origin}/?story=${encodeURIComponent(story.id)}`
+        : isHttpUrl(story?.media_url)
+          ? story.media_url
+          : origin || '';
     const data = {
       title: 'BAARO',
       text: String(story?.caption || '').trim() || 'Story BAARO',

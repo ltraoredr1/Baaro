@@ -28,8 +28,16 @@ export function useStoryComposer({ userId, setError, onCreated }) {
   const isEmpty = !caption.trim() && mediaItems.length === 0 && !audio && !hasPoll && !product && stickers.length === 0;
 
   const snapshot = useMemo(
-    () => ({ caption, background, stickers, pollData: hasPoll ? pollData : null, product, audio }),
-    [caption, background, stickers, pollData, hasPoll, product, audio]
+    () => ({
+      caption,
+      background,
+      stickers,
+      pollData: hasPoll ? pollData : null,
+      product,
+      audio,
+      publishAt,
+    }),
+    [caption, background, stickers, pollData, hasPoll, product, audio, publishAt]
   );
   const draft = useStoryDraft(userId, snapshot, isOpen);
 
@@ -48,6 +56,7 @@ export function useStoryComposer({ userId, setError, onCreated }) {
     setShowPoll(!!d.pollData);
     setProduct(d.product || null);
     setAudio(d.audio || null);
+    setPublishAt(d.publishAt || '');
   };
 
   const addFiles = (e) => {

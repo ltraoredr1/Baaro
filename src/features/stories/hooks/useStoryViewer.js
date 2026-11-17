@@ -89,6 +89,11 @@ export function useStoryViewer(stories, onOpen) {
     };
   }, [currentStory, isPaused, mediaLoading, next]);
 
+  const close = useCallback(() => {
+    setIndex(null);
+    reset();
+  }, []);
+
   useEffect(() => {
     if (index === null) return undefined;
     const onKeyDown = (event) => {
@@ -102,16 +107,17 @@ export function useStoryViewer(stories, onOpen) {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [index, next, previous]);
+  }, [index, next, previous, close]);
 
-  const open = async (i) => {
+  const open = useCallback(async (i) => {
     const s = stories[i];
     if (!s) return;
-    reset(); setMediaLoading(needsMediaLoad(s)); setIndex(i); setIsPaused(false);
+    reset();
+    setMediaLoading(needsMediaLoad(s));
+    setIndex(i);
+    setIsPaused(false);
     await onOpen?.(s);
-  };
-
-  const close = () => { setIndex(null); reset(); };
+  }, [stories, onOpen]);
 
   return {
     index, currentStory, isPaused, setIsPaused, progress, setProgress,

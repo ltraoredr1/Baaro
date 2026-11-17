@@ -58,10 +58,17 @@ export function useStories(userId, setError) {
     setCounts({});
     setMyReactions(new Map());
     setLoading(true);
-    const unsubscribe = api.subscribeToStories(() => load());
+    // Debounce le realtime : un INSERT batch multi-médias ne doit pas
+    // déclencher N rechargements complets en rafale.
+    let debounceTimer = null;
+    const unsubscribe = api.subscribeToStories(() => {
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => load(), 450);
+    });
     load(true);
     return () => {
       requestVersion.current += 1;
+      clearTimeout(debounceTimer);
       unsubscribe();
     };
   }, [load]);

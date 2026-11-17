@@ -26,19 +26,25 @@ export function buildStoryPayloads({
     ? mediaAssets.map((asset, index) => ({ asset, mediaType: mediaKinds[index]?.mediaType || 'image' }))
     : [{ asset: null, mediaType: 'text' }];
 
-  return media.map(({ asset, mediaType }) => ({
-    author_id: userId,
-    media_type: mediaType,
-    media_url: asset?.url || null,
-    caption: String(caption || '').trim() || null,
-    background: mediaType === 'text' ? background : null,
-    visibility: 'public',
-    audio_url: audio?.audio_url || null,
-    audio_title: audio?.title || null,
-    poll: hasPoll ? pollData : null,
-    product: product || null,
-    stickers: stickers || [],
-    publish_at: normalizedPublishAt,
-    expires_at: normalizedExpiresAt,
-  }));
+  // Un lot multi-médias crée une ligne par média. Poll, produit, stickers et
+  // audio ne sont attachés qu'à la première story pour éviter N sondages /
+  // N CTAs identiques et des analytics dispersées. La légende reste sur chaque slide.
+  return media.map(({ asset, mediaType }, index) => {
+    const isPrimary = index === 0;
+    return {
+      author_id: userId,
+      media_type: mediaType,
+      media_url: asset?.url || null,
+      caption: String(caption || '').trim() || null,
+      background: mediaType === 'text' ? background : null,
+      visibility: 'public',
+      audio_url: isPrimary ? audio?.audio_url || null : null,
+      audio_title: isPrimary ? audio?.title || null : null,
+      poll: isPrimary && hasPoll ? pollData : null,
+      product: isPrimary ? product || null : null,
+      stickers: isPrimary ? stickers || [] : [],
+      publish_at: normalizedPublishAt,
+      expires_at: normalizedExpiresAt,
+    };
+  });
 }
