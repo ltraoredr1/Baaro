@@ -16,6 +16,8 @@ const BASE_COLUMNS = `
   reposts_count,
   comments_count,
   views_count,
+  is_shadow,
+  shadow_village,
   profiles:author_id ( display_name, handle, flag, avatar_url )
 `;
 

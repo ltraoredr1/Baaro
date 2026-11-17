@@ -742,6 +742,7 @@ export function FeedTab({
     loading,
     loadingMore,
     reload,
+    refreshLatest,
     loadMore,
   } = useCursorFeed({
     onError: (error) => handleDbError(error, showToast, "Erreur lors du chargement du fil"),
@@ -913,15 +914,11 @@ export function FeedTab({
   }, [loadPosts, newestPostCreatedAt]);
 
   const showNewPosts = useCallback(async () => {
-    const freshRows = await reload({ silent: true });
+    const freshRows = await refreshLatest();
     if (freshRows === null) return;
-    setPosts((current) => {
-      const seen = new Set(current.map((post) => post.id));
-      return [...current, ...rawPosts.filter((post) => !seen.has(post.id))];
-    });
     setNewPostsCount(0);
     window.scrollTo({ top: 0, behavior: "smooth" });
-  }, [rawPosts, reload, setPosts]);
+  }, [refreshLatest]);
 
   useEffect(() => () => releaseOfflinePostUrls(), [releaseOfflinePostUrls]);
 
@@ -1168,22 +1165,33 @@ export function FeedTab({
     }
     if (sharedPostRequestRef.current === sharedPostId) return undefined;
     sharedPostRequestRef.current = sharedPostId;
-    supabase
-      .from("posts")
-      .select("id, text, media_url, media_type, created_at, author_id, likes_count, reposts_count, comments_count, views_count, profiles:author_id ( display_name, handle, flag, avatar_url )")
-      .eq("id", sharedPostId)
-      .maybeSingle()
-      .then(({ data, error }) => {
-        if (error || !data) {
-          showToast("Cette publication n’est pas disponible.", "info");
-          return;
-        }
-        setPosts((current) => [
-          data,
-          ...current.filter((post) => String(post.id) !== String(sharedPostId)),
-        ]);
-      });
-    return undefined;
+    let cancelled = false;
+    (async () => {
+      const withMedia = "id, text, media_url, media_type, media_urls, is_shadow, shadow_village, created_at, author_id, likes_count, reposts_count, comments_count, views_count, profiles:author_id ( display_name, handle, flag, avatar_url )";
+      const withoutMedia = withMedia.replace("media_urls, ", "");
+      let result = await supabase
+        .from("posts")
+        .select(withMedia)
+        .eq("id", sharedPostId)
+        .maybeSingle();
+      if (result.error && /media_urls/i.test(result.error.message || "")) {
+        result = await supabase
+          .from("posts")
+          .select(withoutMedia)
+          .eq("id", sharedPostId)
+          .maybeSingle();
+      }
+      if (cancelled) return;
+      if (result.error || !result.data) {
+        showToast("Cette publication n’est pas disponible.", "info");
+        return;
+      }
+      setPosts((current) => [
+        result.data,
+        ...current.filter((post) => String(post.id) !== String(sharedPostId)),
+      ]);
+    })();
+    return () => { cancelled = true; };
   }, [loading, rawPosts, setPosts, sharedPostId, showToast]);
 
   useEffect(() => {

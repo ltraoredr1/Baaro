@@ -49,8 +49,31 @@ export function useCursorFeed({ onError } = {}) {
     }
   }, []);
 
+  // Recharge la première page sans perdre les pages déjà parcourues.
+  // Le curseur existant est conservé afin que le prochain loadMore ne répète
+  // pas les publications qui étaient déjà chargées.
+  const refreshLatest = useCallback(async () => {
+    if (busyRef.current) return null;
+    busyRef.current = true;
+    try {
+      const { rows, nextCursor } = await fetchFeedPage({ cursor: null });
+      setPosts((previous) => {
+        const incomingIds = new Set(rows.map((row) => row.id));
+        return [...rows, ...previous.filter((row) => !incomingIds.has(row.id))];
+      });
+      if (!cursorRef.current) cursorRef.current = nextCursor;
+      setHasMore(Boolean(cursorRef.current));
+      return rows;
+    } catch (e) {
+      onErrorRef.current?.(e);
+      return null;
+    } finally {
+      busyRef.current = false;
+    }
+  }, []);
+
   const reload = useCallback((opts) => load({ ...opts, reset: true }), [load]);
   const loadMore = useCallback(() => load({ reset: false }), [load]);
 
-  return { posts, setPosts, hasMore, loading, loadingMore, reload, loadMore };
+  return { posts, setPosts, hasMore, loading, loadingMore, reload, refreshLatest, loadMore };
 }
