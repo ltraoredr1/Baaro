@@ -38,6 +38,24 @@ function badRequest(message, status = 400) {
   return error;
 }
 
+function readRawBody(req, limit = 25000) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    req.on("data", (chunk) => {
+      size += chunk.length;
+      if (size > limit) {
+        reject(badRequest("Payload trop volumineux", 413));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => resolve(Buffer.concat(chunks)));
+    req.on("error", reject);
+  });
+}
+
 function readBody(req) {
   return new Promise((resolve, reject) => {
     let data = "";
@@ -83,6 +101,33 @@ const server = http.createServer(async (req, res) => {
       return send(req, res, 200, { ok: true, ...result });
     } catch (error) {
       return send(req, res, error.status || 500, { ok: false, error: String(error?.message || error) });
+    }
+  }
+
+  if (req.method === "POST" && req.url === "/v1/process") {
+    try {
+      const body = await readRawBody(req);
+      const response = await fetch("http://127.0.0.1:8788/v1/process", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-BAARO-Timestamp": req.headers["x-baaro-timestamp"] || "",
+          "X-BAARO-Signature": req.headers["x-baaro-signature"] || ""
+        },
+        body,
+        signal: AbortSignal.timeout(20000)
+      });
+      const result = await response.text();
+      res.writeHead(response.status, {
+        "content-type": response.headers.get("content-type") || "application/json; charset=utf-8",
+        ...corsHeaders(req)
+      });
+      return res.end(result);
+    } catch (error) {
+      return send(req, res, 502, {
+        success: false,
+        error: "Python processing unavailable"
+      });
     }
   }
 
