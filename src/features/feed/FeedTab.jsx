@@ -29,7 +29,6 @@ import { insertStory } from "@/features/stories/api/storiesApi.js";
 import { callSocial } from "@/lib/notifyInteraction.js";
 import { FEED_REFRESH_EVENT } from "@/lib/feedTabRefresh.jsx";
 import { useCursorFeed } from "@/hooks/useCursorFeed.js";
-import { getCachedSavedPublications } from "@/lib/offlineContentCache.js";
 
 import { PollCard, SocialPostEnhancements, SocialSuggestions } from "./SocialEnhancements.jsx";
 import RichTextComposer from "@/components/RichTextComposer.jsx";
@@ -528,12 +527,11 @@ export function FeedTab({
     reload,
     loadMore,
   } = useCursorFeed({
-    feedTab,
-    followingIds: followingIds ? Array.from(followingIds) : [],
     onError: (error) => handleDbError(error, showToast, "Erreur lors du chargement du fil"),
   });
 
   const posts = useMemo(() => rawPosts.map(formatPost), [rawPosts]);
+  const loadPosts = useCallback((opts) => reload(opts), [reload]);
   const [sharedPostId, setSharedPostId] = useState(() =>
     typeof window !== "undefined"
       ? new URLSearchParams(window.location.search).get("post")
@@ -595,98 +593,10 @@ export function FeedTab({
   const fileInputRef = useRef(null);
   const mediaItemsRef = useRef([]);
   const seenRef = useRef(new Set());
-  const sentinelRef = useRef(null);const sentinelRef = useRef(null);
+  const sentinelRef = useRef(null);
   const autoLoadsRef = useRef(0);
-  /* ---------- Nouveaux contenus & Position de scroll ---------- */
-  const [newPostsCount, setNewPostsCount] = useState(0);
-  const pendingNewPostsRef = useRef([]);
-  const scrollPositionRef = useRef(0);
-
-  const handleShowNewPosts = useCallback(() => {
-    if (pendingNewPostsRef.current.length === 0) return;
-    scrollPositionRef.current = window.scrollY;
-    setPosts((prev) => {
-      const existingIds = new Set(prev.map((p) => p.id));
-      const uniqueNew = pendingNewPostsRef.current.filter((p) => !existingIds.has(p.id));
-      return [...uniqueNew, ...prev];
-    });
-    pendingNewPostsRef.current = [];
-    setNewPostsCount(0);
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        window.scrollTo({ top: scrollPositionRef.current, behavior: "auto" });
-      });
-    });
-  }, [setPosts]);
-
-  /* ---------- Gestion de la reprise réseau ---------- */
-  const [isOffline, setIsOffline] = useState(typeof navigator !== "undefined" ? !navigator.onLine : false);
-
-  useEffect(() => {
-    const handleOnline = () => {
-      setIsOffline(false);
-      showToast("Connexion rétablie", "success");
-      loadPosts({ silent: true });
-    };
-    const handleOffline = () => {
-      setIsOffline(true);
-      showToast("Mode hors ligne", "info");
-    };
-    window.addEventListener("online", handleOnline);
-    window.addEventListener("offline", handleOffline);
-    return () => {
-      window.removeEventListener("online", handleOnline);
-      window.removeEventListener("offline", handleOffline);
-    };
-  }, [loadPosts, showToast]);
-
-  /* ---------- Realtime : détection de nouveaux posts ---------- */
-  useEffect(() => {
-    if (!activeUserId) return undefined;
-    const channel = supabase
-      .channel("feed-new-posts")
-      .on(
-        "postgres_changes",
-        { event: "INSERT", schema: "public", table: "posts" },
-        async (payload) => {
-          if (payload.new?.author_id === activeUserId) return;
-          pendingNewPostsRef.current = [payload.new, ...pendingNewPostsRef.current];
-          setNewPostsCount(pendingNewPostsRef.current.length);
-        }
-      )
-      .subscribe();
-    return () => { supabase.removeChannel(channel); };
-  }, [activeUserId]);
-
 
   const activeUserId = currentUserId || propUserId || null;
-  const offlinePostObjectUrlsRef = useRef([]);
-  const releaseOfflinePostUrls = useCallback(() => {
-    offlinePostObjectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
-    offlinePostObjectUrlsRef.current = [];
-  }, []);
-  const loadPosts = useCallback(async (opts) => {
-    const rows = await reload(opts);
-    if (rows !== null) {
-      releaseOfflinePostUrls();
-      return rows;
-    }
-    if (!activeUserId) return rows;
-    try {
-      const cached = await getCachedSavedPublications(activeUserId);
-      if (!cached.length) return rows;
-      releaseOfflinePostUrls();
-      offlinePostObjectUrlsRef.current = cached.flatMap((post) =>
-        (post.media_urls || []).map((media) => media.url).filter((url) => url?.startsWith("blob:"))
-      );
-      setPosts(cached);
-      return cached;
-    } catch (error) {
-      console.warn("[offline-content] Impossible de lire les publications enregistrées :", error);
-      return rows;
-    }
-  }, [activeUserId, reload, releaseOfflinePostUrls, setPosts]);
-  useEffect(() => () => releaseOfflinePostUrls(), [releaseOfflinePostUrls]);
 
   const storyComposer = useStoryComposer({
     userId: activeUserId,
@@ -715,13 +625,7 @@ export function FeedTab({
       .select("followed_id,status")
       .eq("follower_id", activeUserId)
       .then(({ data, error }) => {
-        if (cancelled) return;
-        if (error) {
-          console.error("[BAARO] Erreur chargement abonnements:", error);
-          showToast("Mode Abonnés dégradé : impossible de charger vos suivis", "error");
-          setFollowingIds(new Set()); // Fallback sécurisé
-          return;
-        }
+        if (cancelled || error) return;
         setFollowingIds(
           new Set(
             (data || [])
@@ -886,7 +790,7 @@ export function FeedTab({
     };
   }, [activeUserId, postIdsKey]);
 
-useEffect(() => {
+  useEffect(() => {
     loadPosts();
   }, [loadPosts]);
 
@@ -1013,10 +917,14 @@ useEffect(() => {
       (entries) => {
         if (!entries[0].isIntersecting || loadingMore) return;
 
-        // Le filtrage est maintenant côté serveur, on fait confiance à hasMore
-        if (hasMore) {
-          loadMore();
+        const filtered = feedTab === "following" || Boolean(tagFilter);
+        if (filtered && visiblePosts.length < 5) {
+          if (autoLoadsRef.current >= 10) return;
+          autoLoadsRef.current += 1;
+        } else {
+          autoLoadsRef.current = 0;
         }
+        loadMore();
       },
       { rootMargin: "600px 0px" }
     );
@@ -1563,33 +1471,7 @@ useEffect(() => {
     }
   };
 
-  
-  /* ---------- Gestion de la reprise réseau ---------- */
-  const [isOffline, setIsOffline] = useState(
-    typeof navigator !== "undefined" ? !navigator.onLine : false
-  );
-
-  useEffect(() => {
-    const handleOnline = () => {
-      setIsOffline(false);
-      showToast("Connexion rétablie — synchronisation en cours...", "success");
-      // Relancer le chargement du feed après une reconnexion
-      loadPosts({ silent: true });
-    };
-    const handleOffline = () => {
-      setIsOffline(true);
-      showToast("Mode hors ligne — affichage du cache", "info");
-    };
-
-    window.addEventListener("online", handleOnline);
-    window.addEventListener("offline", handleOffline);
-    return () => {
-      window.removeEventListener("online", handleOnline);
-      window.removeEventListener("offline", handleOffline);
-    };
-  }, [loadPosts, showToast]);
-
-if (loading) {
+  if (loading) {
     return (
       <div className="text-center py-12 text-xs font-medium tracking-widest uppercase opacity-70">
         Chargement du fil d'actualité...
@@ -1602,7 +1484,6 @@ if (loading) {
   );
 
   return (
-
     <div className="flex flex-col gap-6 max-w-2xl mx-auto w-full pb-20">
       {/* Le bouton est rendu via un portail dans document.body : il faut donc le
           démonter explicitement quand l'onglet Feed (gardé en vie) est caché. */}
@@ -1879,18 +1760,6 @@ if (loading) {
           </button>
         ))}
       </div>
-
-      
-      {newPostsCount > 0 && (
-        <button
-          type="button"
-          onClick={handleShowNewPosts}
-          className="sticky top-16 z-40 mx-auto w-fit px-4 py-2 rounded-full shadow-lg text-xs font-bold transition-all hover:scale-105 active:scale-95 animate-in slide-in-from-top"
-          style={{ background: COLORS.gold, color: "#000" }}
-        >
-          ✨ {newPostsCount} nouvelle{newPostsCount > 1 ? "s" : ""} publication{newPostsCount > 1 ? "s" : ""}
-        </button>
-      )}
 
       {tagFilter && (
         <div
