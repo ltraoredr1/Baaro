@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { normalizeText, analyzeText } from "@/lib/pythonEngine.js";
 import {
   Bold,
   Italic,
@@ -88,6 +89,8 @@ export default function RichTextComposer({
     Boolean(pollData)
   );
   const [showAiMenu, setShowAiMenu] = useState(false);
+  const [pythonBusy, setPythonBusy] = useState(false);
+  const [pythonStats, setPythonStats] = useState(null);
   const [pollQuestion, setPollQuestion] = useState(
     String(pollData?.question ?? "").slice(0, 200)
   );
@@ -251,6 +254,33 @@ export default function RichTextComposer({
     restoreSelection(cursor);
   }, [text, updateText, restoreSelection]);
 
+
+  const handlePythonNormalize = useCallback(async () => {
+    if (pythonBusy) return;
+    setPythonBusy(true);
+    try {
+      const result = await normalizeText(text);
+      updateText(result.value);
+      setPythonStats(null);
+    } catch (error) {
+      console.warn("[BAARO normalize]", error);
+    } finally {
+      setPythonBusy(false);
+    }
+  }, [text, updateText, pythonBusy]);
+
+  const handlePythonAnalyze = useCallback(async () => {
+    if (pythonBusy) return;
+    setPythonBusy(true);
+    try {
+      setPythonStats(await analyzeText(text));
+    } catch (error) {
+      console.warn("[BAARO analyze]", error);
+    } finally {
+      setPythonBusy(false);
+    }
+  }, [text, pythonBusy]);
+
   const handleAiAction = useCallback(
     (type) => {
       const source = text.trim();
@@ -396,6 +426,10 @@ export default function RichTextComposer({
 
           {toolButton("Ajouter un lien", LinkIcon, insertLink)}
 
+
+          {toolButton("Normaliser le texte", Type, handlePythonNormalize, pythonBusy)}
+          {toolButton("Analyser le texte", BarChart2, handlePythonAnalyze, pythonBusy)}
+
           {enablePoll &&
             toolButton("Créer un sondage", BarChart2, togglePoll)}
 
@@ -459,6 +493,14 @@ export default function RichTextComposer({
           </button>
         ) : (
           !compact && <span className="opacity-70">Markdown pris en charge</span>
+        )}
+
+
+        {pythonStats && (
+          <span className="text-xs opacity-80" aria-live="polite">
+            {pythonStats.characters} caractères · {pythonStats.words} mots · {pythonStats.lines} lignes
+            {" · "}{pythonStats.engine === "python" ? "Python" : "Secours local"}
+          </span>
         )}
 
         <span className="opacity-70" aria-live="polite">
