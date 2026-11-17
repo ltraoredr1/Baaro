@@ -21,7 +21,7 @@ on:
         default: false
 
 permissions:
-  contents: write # tu l'as déjà corrigé, garde write
+  contents: write
 
 jobs:
   dependencies:
@@ -56,7 +56,7 @@ jobs:
         run: npm ls --depth=0
 
       - name: Commit updated package-lock.json
-        if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') }}
+        if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') }}
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "chore: update package-lock.json [skip ci]"
