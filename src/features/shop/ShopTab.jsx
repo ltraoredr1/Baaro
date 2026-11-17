@@ -8,6 +8,7 @@ import ShopDetail from "./components/ShopDetail.jsx";
 import OrdersBuyer from "./components/OrdersBuyer.jsx";
 import OrdersSeller from "./components/OrdersSeller.jsx";
 import CartDrawer from "./components/CartDrawer.jsx";
+import OrderCheckout from "./components/OrderCheckout.jsx";
 
 export default function ShopTab({ id }) {
   const [mode, setMode] = useState("directory");
@@ -16,6 +17,9 @@ export default function ShopTab({ id }) {
   const [loadingShop, setLoadingShop] = useState(false);
   const [error, setError] = useState(null);
   const [cartOpen, setCartOpen] = useState(false);
+  
+  // CORRECTION : État pour gérer les données de checkout provenant du panier
+  const [checkoutData, setCheckoutData] = useState(null);
 
   useEffect(() => {
     if (!id) { setMyShop(null); return; }
@@ -57,9 +61,6 @@ export default function ShopTab({ id }) {
   const handleDetailBack = useCallback(() => { setSelectedShopId(null); setMode("directory"); }, []);
   const handleShopSelect = useCallback((shop) => { setSelectedShopId(shop.id); setMode("detail"); }, []);
 
-  // Après création, on conserve immédiatement la boutique retournée par Supabase.
-  // Avant cette correction, myShop restait null jusqu'au prochain rechargement,
-  // donc « Mes produits » n'apparaissait pas pour une nouvelle boutique.
   const handleRegistrationComplete = useCallback((shop) => {
     if (shop?.id) {
       setMyShop(shop);
@@ -67,6 +68,23 @@ export default function ShopTab({ id }) {
     } else {
       setMode("directory");
     }
+  }, []);
+
+  // CORRECTION : Handlers pour le flux de commande depuis le tiroir panier
+  const handleCheckout = useCallback((data) => {
+    setCheckoutData(data);
+    setCartOpen(false);
+    setMode("checkout");
+  }, []);
+
+  const handleCheckoutBack = useCallback(() => {
+    setCheckoutData(null);
+    setMode("directory");
+  }, []);
+
+  const handleCheckoutDone = useCallback(() => {
+    setCheckoutData(null);
+    setMode("orders-buyer");
   }, []);
 
   const renderContent = useMemo(() => {
@@ -80,9 +98,11 @@ export default function ShopTab({ id }) {
       case "manage": return myShop ? <ShopProductManager shopId={myShop.id} shopCurrency={myShop.currency} user_id={id} /> : <p className="text-sm" style={{ color: COLORS.muted }}>Aucune boutique trouvée. Créez-en une d'abord.</p>;
       case "orders-seller": return myShop ? <OrdersSeller shopId={myShop.id} /> : null;
       case "orders-buyer": return id ? <OrdersBuyer id={id} /> : null;
+      // CORRECTION : Ajout du cas checkout
+      case "checkout": return checkoutData ? <OrderCheckout shop={checkoutData.shop} items={checkoutData.items} id={id} onBack={handleCheckoutBack} onDone={handleCheckoutDone} /> : null;
       default: return null;
     }
-  }, [mode, loadingShop, error, myShop, id, selectedShopId, handleShopSelect, handleDetailBack, handleRegistrationComplete]);
+  }, [mode, loadingShop, error, myShop, id, selectedShopId, checkoutData, handleShopSelect, handleDetailBack, handleRegistrationComplete, handleCheckoutBack, handleCheckoutDone]);
 
   return (
     <div className="flex flex-col gap-4">
@@ -99,7 +119,8 @@ export default function ShopTab({ id }) {
         </>)}
       </nav>
       <main role="tabpanel">{renderContent}</main>
-      {id && <CartDrawer isOpen={cartOpen} onClose={() => setCartOpen(false)} id={id} />}
+      {/* CORRECTION : Passage de la prop onCheckout au CartDrawer */}
+      {id && <CartDrawer isOpen={cartOpen} onClose={() => setCartOpen(false)} id={id} onCheckout={handleCheckout} />}
     </div>
   );
 }

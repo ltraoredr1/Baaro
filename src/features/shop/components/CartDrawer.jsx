@@ -4,7 +4,7 @@ import { COLORS } from "../../../theme.js";
 import { supabase } from "../../../supabaseClient.js";
 import { useToast } from "../../../components/ToastContext.jsx";
 
-export default function CartDrawer({ isOpen, onClose, id }) {
+export default function CartDrawer({ isOpen, onClose, id, onCheckout }) {
   const { showToast } = useToast();
   const [cartItems, setCartItems] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -18,10 +18,13 @@ export default function CartDrawer({ isOpen, onClose, id }) {
       if (error) throw error;
       const ids = [...new Set((rows || []).map((r) => r.item_id).filter(Boolean))];
       if (!ids.length) { setCartItems([]); return; }
+      
+      // CORRECTION : Ajout de shop_id pour identifier la boutique
       const { data: products, error: productsError } = await supabase.from("shop_products")
-        .select("id, name, price, compare_at_price, currency, stock, images, image_url, is_available, type")
+        .select("id, name, price, compare_at_price, currency, stock, images, image_url, is_available, type, shop_id")
         .in("id", ids);
       if (productsError) throw productsError;
+      
       const byId = new Map((products || []).map((p) => [p.id, p]));
       setCartItems((rows || []).map((row) => ({ ...row, product: byId.get(row.item_id) }))
         .filter((row) => row.product && row.product.is_available));
@@ -59,12 +62,45 @@ export default function CartDrawer({ isOpen, onClose, id }) {
     } catch (err) { console.error(err); showToast(err.message || "Erreur de suppression", "error"); }
   };
 
+  // CORRECTION : Fonction pour lancer le checkout en vérifiant l'unicité de la boutique
+  const handleCheckout = async () => {
+    if (cartItems.length === 0) return;
+    
+    const shopIds = [...new Set(cartItems.map(item => item.product?.shop_id).filter(Boolean))];
+    if (shopIds.length === 0) {
+      showToast("Erreur : boutique introuvable pour ces articles", "error");
+      return;
+    }
+    if (shopIds.length > 1) {
+      showToast("Votre panier contient des articles de plusieurs boutiques. Veuillez commander boutique par boutique.", "error");
+      return;
+    }
+    
+    const shopId = shopIds[0];
+    try {
+      const { data: shop, error } = await supabase.from("shops").select("id, name, currency").eq("id", shopId).single();
+      if (error) throw error;
+      
+      const formattedItems = cartItems.map(item => ({
+        productId: item.product.id,
+        name: item.product.name,
+        unitPrice: Number(item.product.price),
+        currency: item.product.currency,
+        quantity: Number(item.quantity)
+      }));
+      
+      onCheckout?.({ shop, items: formattedItems });
+    } catch (err) {
+      console.error(err);
+      showToast("Erreur lors de la préparation de la commande", "error");
+    }
+  };
+
   const total = cartItems.reduce((sum, item) => sum + Number(item.product?.price || 0) * Number(item.quantity || 0), 0);
   const currency = cartItems[0]?.product?.currency || "XOF";
   const totalItems = cartItems.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
 
   if (!isOpen) return null;
-  // Sur mobile/tablette, le panier s'arrête au-dessus de la barre de navigation fixe (≈ 5 rem)
   return <div className="fixed inset-x-0 top-0 bottom-[calc(5rem+env(safe-area-inset-bottom))] lg:bottom-0 z-50 flex justify-end">
     <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
     <div className="relative w-full max-w-md h-full flex flex-col shadow-2xl" style={{ background: COLORS.surface }}>
@@ -84,7 +120,14 @@ export default function CartDrawer({ isOpen, onClose, id }) {
           </div>;
         })}
       </div>
-      {cartItems.length > 0 && <div className="p-4 border-t" style={{ borderColor: COLORS.border }}><div className="flex justify-between items-center mb-4"><span className="text-sm" style={{ color: COLORS.muted }}>Total</span><span className="text-xl font-black" style={{ color: COLORS.ivory }}>{total.toLocaleString()} {currency}</span></div><button onClick={onClose} className="w-full py-3 rounded-xl font-bold text-sm" style={{ background: COLORS.gold, color: COLORS.bg }}>Passer la commande</button></div>}
+      {cartItems.length > 0 && <div className="p-4 border-t" style={{ borderColor: COLORS.border }}>
+        <div className="flex justify-between items-center mb-4">
+          <span className="text-sm" style={{ color: COLORS.muted }}>Total</span>
+          <span className="text-xl font-black" style={{ color: COLORS.ivory }}>{total.toLocaleString()} {currency}</span>
+        </div>
+        {/* CORRECTION : Appel de handleCheckout au lieu de onClose */}
+        <button onClick={handleCheckout} className="w-full py-3 rounded-xl font-bold text-sm" style={{ background: COLORS.gold, color: COLORS.bg }}>Passer la commande</button>
+      </div>}
     </div>
   </div>;
 }
