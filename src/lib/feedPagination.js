@@ -1,6 +1,7 @@
 import { supabase } from "../supabaseClient.js";
 import { withRetry } from "./perf.js";
 import { FOLLOWS } from "../features/stories/constants.js";
+import { attachRepostCounts } from "./feedState.js";
 
 // Nombre de posts chronologiques récupérés à chaque page, puis classés entre eux.
 const PAGE_SIZE = 30;
@@ -144,8 +145,22 @@ export async function fetchFeedPage({
           ? { created_at: last.created_at, id: last.id }
           : null;
 
+      let rowsForRanking = chronological;
+      const postIds = chronological.map((row) => row.id).filter(Boolean);
+      if (postIds.length) {
+        const { data: repostRows, error: repostError } = await supabase
+          .from("post_reposts")
+          .select("post_id")
+          .in("post_id", postIds);
+        if (repostError) {
+          console.warn("[feed] Impossible de charger les compteurs de reposts :", repostError);
+        } else {
+          rowsForRanking = attachRepostCounts(chronological, repostRows || []);
+        }
+      }
+
       const { userId, ids } = await getFollowingIds();
-      const rows = rankRows(chronological, { userId, following: ids });
+      const rows = rankRows(rowsForRanking, { userId, following: ids });
 
       return { rows, nextCursor };
     },

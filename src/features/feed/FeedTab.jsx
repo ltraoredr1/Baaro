@@ -9,6 +9,7 @@ import {
   Pencil,
   Flag,
   MessageCircle,
+  Quote,
   Eye,
   Repeat2,
   ChevronDown,
@@ -187,7 +188,7 @@ function parseComment(text) {
 }
 
 /** Notification d'interaction (commentaire, etc.) via /api/social */
-async function notifyPost(post, userId, interactionType) {
+async function notifyPost(post, userId, interactionType, eventId = null) {
   if (!post?.id || !post?.author_id || !userId || post.author_id === userId) return;
   try {
     const {
@@ -207,6 +208,7 @@ async function notifyPost(post, userId, interactionType) {
         interaction_type: interactionType,
         target_id: post.id,
         recipient_id: post.author_id,
+        ...(eventId ? { event_id: eventId } : {}),
       }),
     });
   } catch (err) {
@@ -830,6 +832,8 @@ export function FeedTab({
   const mediaItemsRef = useRef([]);
   const uploadProgressRef = useRef(new Map());
   const seenRef = useRef(new Set());
+  const pendingViewsRef = useRef(new Set());
+  const repostInFlightRef = useRef(new Set());
   const sentinelRef = useRef(null);
   const autoLoadsRef = useRef(0);
 
@@ -1223,24 +1227,36 @@ export function FeedTab({
       (entries) => {
         entries.forEach((entry) => {
           const { postId, authorId } = entry.target.dataset;
-          if (!postId || authorId === activeUserId || seenRef.current.has(postId)) return;
+          if (
+            !postId ||
+            authorId === activeUserId ||
+            seenRef.current.has(postId) ||
+            pendingViewsRef.current.has(postId)
+          ) return;
 
           if (entry.isIntersecting) {
+            if (timers.has(postId)) return;
             timers.set(
               postId,
-              setTimeout(() => {
-                seenRef.current.add(postId);
-                supabase
-                  .from("post_views")
-                  .upsert(
-                    { post_id: postId, viewer_id: activeUserId },
-                    { onConflict: "post_id,viewer_id,view_date", ignoreDuplicates: true }
-                  )
-                  .then(() => {});
+              setTimeout(async () => {
+                timers.delete(postId);
+                pendingViewsRef.current.add(postId);
+                try {
+                  const { error } = await supabase.rpc("register_post_view", {
+                    p_post_id: postId,
+                  });
+                  if (error) throw error;
+                  seenRef.current.add(postId);
+                } catch (error) {
+                  console.warn("[feed-view] Impossible d'enregistrer la vue :", error);
+                } finally {
+                  pendingViewsRef.current.delete(postId);
+                }
               }, 1500)
             );
           } else {
-            clearTimeout(timers.get(postId));
+            const timer = timers.get(postId);
+            if (timer !== undefined) clearTimeout(timer);
             timers.delete(postId);
           }
         });
@@ -1364,6 +1380,8 @@ export function FeedTab({
     }
     const postId = post.id;
     const wasReposted = !!repostedPosts[postId];
+    if (repostInFlightRef.current.has(postId)) return;
+    repostInFlightRef.current.add(postId);
     const delta = wasReposted ? -1 : 1;
 
     setRepostedPosts((prev) => ({ ...prev, [postId]: !wasReposted }));
@@ -1385,20 +1403,13 @@ export function FeedTab({
         if (error) throw error;
         showToast("Républication retirée", "info");
       } else {
-        const { error } = await supabase
+        const { data: repost, error } = await supabase
           .from("post_reposts")
-          .insert({ post_id: postId, user_id: activeUserId });
+          .insert({ post_id: postId, user_id: activeUserId })
+          .select("id")
+          .single();
         if (error) throw error;
-
-        if (post.author_id && post.author_id !== activeUserId) {
-          await supabase.from("notifications").insert({
-            user_id: post.author_id,
-            actor_id: activeUserId,
-            type: "repost",
-            source_id: postId,
-            message: "a républié votre publication.",
-          });
-        }
+        void notifyPost(post, activeUserId, "repost", repost?.id);
 
         onRewardPoints?.("repost_post", "Publication républiée", postId);
         showPointsReward?.(3, "Publication républiée !");
@@ -1414,11 +1425,27 @@ export function FeedTab({
         )
       );
       handleDbError(error, showToast, "Impossible de traiter la républication");
+    } finally {
+      repostInFlightRef.current.delete(postId);
     }
   };
 
+  const openQuoteComposer = (post) => {
+    if (!activeUserId) {
+      showToast("Connectez-vous pour citer une publication", "info");
+      return;
+    }
+    setQuotePost(post);
+    setQuoteText("");
+  };
+
   const handleQuoteRepost = async () => {
-    if (!quotePost || !activeUserId || !quoteText.trim() || quoteSubmitting) return;
+    if (!quotePost || quoteSubmitting) return;
+    if (!activeUserId) {
+      showToast("Connectez-vous pour citer une publication", "info");
+      return;
+    }
+    if (!quoteText.trim()) return;
     const excerpt = String(quotePost.text || "Publication média").replace(/\s+/g, " ").slice(0, 500);
     const handle = String(quotePost.handle || quotePost.display_name || "BAARO").replace(/^@/, "");
     const sourceUrl = `${window.location.origin}/?post=${encodeURIComponent(quotePost.id)}`;
@@ -1432,9 +1459,11 @@ export function FeedTab({
         .single();
       if (error) throw error;
       if (!repostedPosts[quotePost.id]) {
-        const { error: repostError } = await supabase
+        const { data: repost, error: repostError } = await supabase
           .from("post_reposts")
-          .insert({ post_id: quotePost.id, user_id: activeUserId });
+          .insert({ post_id: quotePost.id, user_id: activeUserId })
+          .select("id")
+          .single();
         if (repostError) {
           await supabase.from("posts").delete().eq("id", data.id).eq("author_id", activeUserId);
           throw repostError;
@@ -1443,15 +1472,7 @@ export function FeedTab({
         setPosts((previous) => previous.map((post) => post.id === quotePost.id
           ? { ...post, reposts_count: (post.reposts_count || 0) + 1 }
           : post));
-        if (quotePost.author_id && quotePost.author_id !== activeUserId) {
-          void supabase.from("notifications").insert({
-            user_id: quotePost.author_id,
-            actor_id: activeUserId,
-            type: "repost",
-            source_id: quotePost.id,
-            message: "a cité votre publication.",
-          });
-        }
+        void notifyPost(quotePost, activeUserId, "repost", repost?.id);
       }
       setQuotePost(null);
       setQuoteText("");
@@ -1621,7 +1642,8 @@ export function FeedTab({
       notifyPost(
         posts.find((p) => p.id === postId),
         activeUserId,
-        "comment"
+        "comment",
+        created?.id
       );
     } catch (error) {
       handleDbError(error, showToast, "Impossible de commenter");
@@ -2570,12 +2592,13 @@ export function FeedTab({
 
                 <button
                   type="button"
-                  onClick={() => { setQuotePost(post); setQuoteText(""); }}
+                  onClick={() => openQuoteComposer(post)}
                   className="flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 transition active:scale-95 hover:bg-white/5"
                   style={{ color: COLORS.muted }}
-                  aria-label="Citer cette publication avec un commentaire"
+                  aria-label="Citer cette publication"
+                  title="Citer cette publication"
                 >
-                  <MessageCircle size={14} /> Citer
+                  <Quote size={14} /> Citer
                 </button>
 
                 {post.author_id === activeUserId && (
@@ -2625,11 +2648,13 @@ export function FeedTab({
                 <button
                   type="button"
                   onClick={() => toggleComments(post.id)}
+                  aria-label={commentOpen[post.id] ? "Masquer les commentaires" : "Afficher les commentaires"}
+                  aria-expanded={Boolean(commentOpen[post.id])}
                   className="flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-xs transition hover:bg-white/5"
                   style={{ color: COLORS.muted }}
                 >
                   <MessageCircle size={15} />
-                  {post.comments_count || 0}
+                  <span>{post.comments_count || 0} Commentaires</span>
                 </button>
 
                 <TranslateButton
@@ -2864,8 +2889,19 @@ export function FeedTab({
 
       {quotePost && (
         <div className="fixed inset-0 z-[85] bg-black/75 flex items-center justify-center p-4" onClick={() => setQuotePost(null)}>
-          <div className="w-full max-w-md rounded-2xl border p-4 flex flex-col gap-3" style={{ background: COLORS.surface, borderColor: COLORS.border }} onClick={(event) => event.stopPropagation()}>
-            <h3 className="font-bold text-sm" style={{ color: COLORS.ivory }}>Citer cette publication</h3>
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="quote-post-title"
+            className="w-full max-w-md rounded-2xl border p-4 flex flex-col gap-3"
+            style={{ background: COLORS.surface, borderColor: COLORS.border }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h3 id="quote-post-title" className="font-bold text-sm" style={{ color: COLORS.ivory }}>Citer cette publication</h3>
+            <div className="flex items-center justify-between gap-2 text-xs" style={{ color: COLORS.muted }}>
+              <span className="font-semibold">{quotePost.display_name || "Membre BAARO"} <span className="font-normal">{quotePost.handle || ""}</span></span>
+              <span>{getPostMedia(quotePost).length ? `${getPostMedia(quotePost).length} média(s)` : "Publication texte"}</span>
+            </div>
             <textarea
               value={quoteText}
               onChange={(event) => setQuoteText(event.target.value)}

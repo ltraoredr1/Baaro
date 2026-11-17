@@ -91,6 +91,9 @@ jobs:
       - name: Install npm dependencies
         run: npm ci --prefer-offline --no-audit
 
+      - name: Feed unit tests
+        run: npm run test:feed
+
       - name: Check lockfile
         run: npm run check:lock
 

@@ -546,15 +546,23 @@ export const SocialPostEnhancements = memo(
       }
     };
 
+    const interactionReaction = interaction?.reaction || null;
+    const interactionReactionCount = Number(interaction?.reactionCount) || 0;
+    const interactionSaved = Boolean(interaction?.saved);
+    const interactionShareCount = Number(interaction?.shareCount) || 0;
+
     useEffect(() => {
-      setReaction(interaction?.reaction || null);
-      setReactionCount(interaction?.reactionCount || 0);
-      setSaved(Boolean(interaction?.saved));
-      setShareCount(interaction?.shareCount || 0);
-      if (interaction?.saved && isValidAuthUserId(user_id)) {
+      setReaction(interactionReaction);
+      setReactionCount(interactionReactionCount);
+      setSaved(interactionSaved);
+      setShareCount(interactionShareCount);
+    }, [interactionReaction, interactionReactionCount, interactionSaved, interactionShareCount]);
+
+    useEffect(() => {
+      if (interactionSaved && isValidAuthUserId(user_id)) {
         void cacheSavedPublication(user_id, post).catch(() => {});
       }
-    }, [interaction, post, user_id]);
+    }, [interactionSaved, post, user_id]);
 
     const current = useMemo(
       () => REACTIONS.find((item) => item.id === reaction),
@@ -722,17 +730,21 @@ export const SocialPostEnhancements = memo(
         }
 
         if (isValidAuthUserId(user_id)) {
-          const { error } = await supabase.from("post_shares").insert({
-            post_id: post.id,
-            user_id,
-            channel: channelName,
-          });
+          const { data: share, error } = await supabase
+            .from("post_shares")
+            .insert({
+              post_id: post.id,
+              user_id,
+              channel: channelName,
+            })
+            .select("id")
+            .single();
 
           if (error) {
             console.warn("[BAARO] Suivi du partage impossible :", error);
+          } else if (share?.id) {
+            await sendNotification("share", share.id);
           }
-
-          await sendNotification("share");
         }
 
         setShareCount((count) => count + 1);
