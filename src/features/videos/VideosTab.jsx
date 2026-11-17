@@ -119,35 +119,66 @@ export function VideosTab({ onRewardPoints, onExit }) {
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
 
-  const handleFileSelected = async (file) => {
-    if (!file) return;
+  const handleFileSelected = async (fileOrList) => {
+    if (!fileOrList) return;
 
-    if (!settingsRef.current.compressUploads) {
-      creatorRef.current.handleFileSelected(file);
+    const files =
+      typeof fileOrList.length === "number"
+        ? Array.from(fileOrList)
+        : [fileOrList];
+
+    const videos = files.filter(
+      (file) => file && file.type?.startsWith("video/")
+    );
+
+    if (!videos.length) {
+      showToast("Sélectionne au moins une vidéo.", "error");
       return;
     }
 
-    const result = await compression.compress(file);
+    if (!settingsRef.current.compressUploads) {
+      creatorRef.current.handleFileSelected(videos);
+      return;
+    }
 
-    // Fenêtre fermée pendant l'optimisation : on ne sélectionne rien.
-    if (result.status === "aborted" || !result.file) return;
+    const optimizedFiles = [];
+    let originalSize = 0;
+    let optimizedSize = 0;
+    let optimizedCount = 0;
+    let interrupted = false;
 
-    if (result.status === "done") {
-      const toMb = (bytes) => `${(bytes / 1048576).toFixed(1)} Mo`;
+    for (const file of videos) {
+      originalSize += file.size;
 
+      const result = await compression.compress(file);
+
+      if (result.status === "aborted" || !result.file) return;
+
+      const output = result.file;
+
+      if (file._filterBaked) output._filterBaked = true;
+
+      optimizedFiles.push(output);
+      optimizedSize += output.size;
+
+      if (result.status === "done") optimizedCount++;
+      if (result.status === "interrupted") interrupted = true;
+    }
+
+    if (interrupted) {
       showToast(
-        `Vidéo allégée : ${toMb(file.size)} → ${toMb(result.file.size)}`,
-        "success"
-      );
-    } else if (result.status === "interrupted") {
-      showToast(
-        "Optimisation interrompue (application en arrière-plan) : vidéo d'origine conservée",
+        "Optimisation interrompue : vidéos originales conservées.",
         "info"
+      );
+    } else if (optimizedCount > 0) {
+      const toMb = (bytes) => `${(bytes / 1048576).toFixed(1)} Mo`;
+      showToast(
+        `${optimizedCount} vidéo(s) optimisée(s) : ${toMb(originalSize)} → ${toMb(optimizedSize)}`,
+        "success"
       );
     }
 
-    if (file._filterBaked) result.file._filterBaked = true;
-    creatorRef.current.handleFileSelected(result.file);
+    creatorRef.current.handleFileSelected(optimizedFiles);
   };
 
   const creatorForModal = { ...creator, handleFileSelected };
