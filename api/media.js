@@ -73,7 +73,7 @@ export default async function handler(req, res) {
   const body = req.body || {};
 
   // Traitement Python mutualisé dans cet endpoint pour respecter la limite Vercel.
-  if (body.task === "text.analyze" || body.task === "text.normalize") {
+  if (["text.analyze", "text.normalize", "text.correct", "text.rewrite", "text.translate"].includes(body.task)) {
     const {
       SUPABASE_URL,
       VITE_SUPABASE_ANON_KEY,

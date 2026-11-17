@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { normalizeText, analyzeText } from "@/lib/pythonEngine.js";
+import { normalizeText, analyzeText, transformText } from "@/lib/pythonEngine.js";
 import {
   Bold,
   Italic,
@@ -91,6 +91,7 @@ export default function RichTextComposer({
   const [showAiMenu, setShowAiMenu] = useState(false);
   const [pythonBusy, setPythonBusy] = useState(false);
   const [pythonStats, setPythonStats] = useState(null);
+  const [pythonMessage, setPythonMessage] = useState("");
   const [pollQuestion, setPollQuestion] = useState(
     String(pollData?.question ?? "").slice(0, 200)
   );
@@ -282,11 +283,44 @@ export default function RichTextComposer({
   }, [text, pythonBusy]);
 
   const handleAiAction = useCallback(
-    (type) => {
+    async (type) => {
       const source = text.trim();
-      const prompt = AI_PROMPTS[type] || AI_PROMPTS.improve;
+      const pythonTasks = {
+        improve: "text.rewrite",
+        correct: "text.correct",
+        translate: "text.translate",
+      };
 
       setShowAiMenu(false);
+
+      if (pythonTasks[type]) {
+        if (!source) {
+          setPythonMessage("Écris un texte avant de lancer cette action.");
+          return;
+        }
+
+        if (pythonBusy) return;
+
+        setPythonBusy(true);
+        setPythonMessage("");
+
+        try {
+          const result = await transformText(
+            pythonTasks[type],
+            source,
+            "fr"
+          );
+          updateText(result.text);
+          setPythonMessage(`Traitement Python réussi · ${result.provider}`);
+        } catch (error) {
+          setPythonMessage(error.message || "Traitement Python indisponible.");
+        } finally {
+          setPythonBusy(false);
+        }
+        return;
+      }
+
+      const prompt = AI_PROMPTS[type] || AI_PROMPTS.improve;
 
       window.dispatchEvent(
         new CustomEvent("baaro:ask-ai", {
@@ -301,7 +335,7 @@ export default function RichTextComposer({
         })
       );
     },
-    [text]
+    [text, updateText, pythonBusy]
   );
 
   const updatePoll = useCallback(
@@ -378,7 +412,8 @@ export default function RichTextComposer({
       key={type}
       type="button"
       onClick={() => handleAiAction(type)}
-      className="w-full rounded-lg px-3 py-2 text-left text-sm transition hover:bg-white/10"
+      disabled={pythonBusy}
+      className="w-full rounded-lg px-3 py-2 text-left text-sm transition hover:bg-white/10 disabled:opacity-40"
     >
       {label}
     </button>
@@ -495,6 +530,12 @@ export default function RichTextComposer({
           !compact && <span className="opacity-70">Markdown pris en charge</span>
         )}
 
+
+        {pythonMessage && (
+          <span className="text-xs opacity-80" role="status" aria-live="polite">
+            {pythonMessage}
+          </span>
+        )}
 
         {pythonStats && (
           <span className="text-xs opacity-80" aria-live="polite">

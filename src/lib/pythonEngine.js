@@ -1,6 +1,6 @@
 import { supabase } from "@/supabaseClient.js";
 
-async function runPython(task, text) {
+async function runPython(task, text, extra = {}) {
   const value = String(text ?? "");
 
   if (value.length > 20000) {
@@ -21,14 +21,14 @@ async function runPython(task, text) {
     },
     body: JSON.stringify({
       task,
-      input: { text: value },
+      input: { ...extra, text: value },
     }),
   });
 
   const result = await response.json().catch(() => ({}));
 
   if (!response.ok || result.success !== true) {
-    throw new Error(result.error || "Service Python indisponible.");
+    throw new Error(result.detail || result.error || "Service Python indisponible.");
   }
 
   return result.result;
@@ -65,4 +65,18 @@ export async function analyzeText(text) {
       engine: "javascript",
     };
   }
+}
+
+export async function transformText(task, text, language = "fr") {
+  if (!["text.correct", "text.rewrite", "text.translate"].includes(task)) {
+    throw new Error("Opération Python non autorisée.");
+  }
+
+  const result = await runPython(task, text, { language });
+
+  if (!result || typeof result.text !== "string" || !result.text.trim()) {
+    throw new Error("Réponse Python invalide.");
+  }
+
+  return result;
 }
