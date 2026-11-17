@@ -17,6 +17,7 @@ export default function FeedHeader({
   setMode,
   showModeSwitcher = true,
   extraActions = null,
+  headerActions = null,
 }) {
   const [logoFailed, setLogoFailed] = useState(false);
   const [controlsOpen, setControlsOpen] = useState(false);
@@ -47,6 +48,8 @@ export default function FeedHeader({
             </span>
           </div>
         </div>
+
+        {headerActions && <div className="flex items-center gap-2 pointer-events-auto">{headerActions}</div>}
 
         <div className="relative shrink-0">
           <button

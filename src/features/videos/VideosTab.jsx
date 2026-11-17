@@ -69,6 +69,9 @@ export function VideosTab({ onRewardPoints, onExit }) {
 
   const {
     setVideos,
+    videos,
+    friends,
+    friendsLoading,
     user,
     loading,
     loadingMore,
@@ -926,21 +929,18 @@ export function VideosTab({ onRewardPoints, onExit }) {
   // Pagination : charger la page suivante quand on approche de la fin.
   // Doit rester AVANT le return anticipé (règle des Hooks, React #310).
   useEffect(() => {
-    if (
-      !hasMore ||
-      loadingMore ||
-      loading ||
-      visibleVideos.length === 0 ||
-      activeIndex < 0
-    ) {
+    if (!hasMore || loadingMore || loading || friendsLoading) return;
+
+    // Le fil Amis parcourt les pages jusqu'à trouver des vidéos d'amis.
+    if (mode === "friends" && friends.length > 0 && visibleVideos.length < 4) {
+      loadMore();
       return;
     }
 
-    // On déclenche quand il reste 4 vidéos ou moins avant la fin
-    if (activeIndex >= visibleVideos.length - 4) {
-      loadMore();
-    }
-  }, [activeIndex, visibleVideos.length, hasMore, loadingMore, loading, loadMore]);
+    if (visibleVideos.length === 0 || activeIndex < 0) return;
+
+    if (activeIndex >= visibleVideos.length - 4) loadMore();
+  }, [activeIndex, visibleVideos.length, hasMore, loadingMore, loading, loadMore, mode, friends.length, friendsLoading, videos.length]);
 
   if (loading) {
     return <FeedLoading />;
@@ -980,6 +980,26 @@ export function VideosTab({ onRewardPoints, onExit }) {
         onOpenStudio={() => setStudioOpen(true)}
         mode={mode}
         setMode={setMode}
+        headerActions={(
+{/* Commandes vocales, gestes de la main et mouvements de tête */}
+      <HandsFreeControls
+          triggerInHeader
+        activeVideoId={activeId}
+        isPlaying={!!activeId && playback.playingId === activeId}
+        isMuted={playback.muted}
+        onNext={() => goToNext(activeId)}
+        onPrevious={() => goToPrevious(activeId)}
+        onLike={likeActiveVideo}
+        onTogglePlayback={toggleActivePlayback}
+        onPause={pauseActive}
+        onResume={resumeActiveVideo}
+        onToggleMute={playback.toggleMute}
+        onMute={muteActive}
+        onUnmute={unmuteActive}
+        onOpenComments={openActiveComments}
+        onToggleFullscreen={toggleActiveFullscreen}
+        />
+        )}
         showModeSwitcher
         extraActions={(
           <>
@@ -1073,24 +1093,6 @@ export function VideosTab({ onRewardPoints, onExit }) {
           })
         )}
       </div>
-
-      {/* Commandes vocales, gestes de la main et mouvements de tête */}
-      <HandsFreeControls
-        activeVideoId={activeId}
-        isPlaying={!!activeId && playback.playingId === activeId}
-        isMuted={playback.muted}
-        onNext={() => goToNext(activeId)}
-        onPrevious={() => goToPrevious(activeId)}
-        onLike={likeActiveVideo}
-        onTogglePlayback={toggleActivePlayback}
-        onPause={pauseActive}
-        onResume={resumeActiveVideo}
-        onToggleMute={playback.toggleMute}
-        onMute={muteActive}
-        onUnmute={unmuteActive}
-        onOpenComments={openActiveComments}
-        onToggleFullscreen={toggleActiveFullscreen}
-      />
 
       {/* Bouton flottant déplaçable : créer une vidéo */}
       <CreateVideoFab onClick={openUpload} hidden={overlayOpen} />

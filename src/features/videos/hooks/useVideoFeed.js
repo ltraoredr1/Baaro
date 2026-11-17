@@ -58,7 +58,7 @@ export function useVideoFeed() {
   const [likedMap, setLikedMap] = useState({});
   const [mode, setMode] = useState("forYou");
   const [profileRevision, setProfileRevision] = useState(0);
-  const { friends } = useSocial(user?.id);
+  const { friends, loading: friendsLoading } = useSocial(user?.id);
 
   const requestSequence = useRef(0);
   const currentUserId = useRef(null);
@@ -493,5 +493,7 @@ export function useVideoFeed() {
     mode,
     setMode,
     visibleVideos,
+    friends,
+    friendsLoading,
   };
 }

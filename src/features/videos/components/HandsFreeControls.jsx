@@ -91,6 +91,7 @@ export default function HandsFreeControls({
   onUnmute,
   onOpenComments,
   onToggleFullscreen,
+  triggerInHeader = false,
 }) {
   const [voiceEnabled, setVoiceEnabled] = useState(false);
   const [cameraEnabled, setCameraEnabled] = useState(false);
@@ -558,7 +559,7 @@ export default function HandsFreeControls({
       />
 
       {!expanded && (
-        <div className="fixed right-3 z-[60] flex w-11 flex-col items-center gap-1.5" style={{ top: "calc(max(0.75rem, env(safe-area-inset-top, 0px)) + 4.25rem)" }}>
+        <div className={triggerInHeader ? "relative z-[60] flex w-11 flex-col items-center gap-1.5" : "fixed right-3 z-[60] flex w-11 flex-col items-center gap-1.5"} style={triggerInHeader ? undefined : { top: "calc(max(0.75rem, env(safe-area-inset-top, 0px)) + 4.25rem)" }}>
           <button
             type="button"
             onClick={() => setExpanded(true)}
