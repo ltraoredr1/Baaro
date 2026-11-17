@@ -11,55 +11,83 @@ export default function OrderCheckout({ shop, items, id, onBack, onDone }) {
   const [address, setAddress] = useState("");
   const [notes, setNotes] = useState("");
   const [loading, setLoading] = useState(false);
-  const [paymentMethod, setPaymentMethod] = useState("cash"); // cash, mobile_money, card
+  const [paymentMethod, setPaymentMethod] = useState("cash");
 
   const total = items.reduce((sum, x) => sum + x.unitPrice * x.quantity, 0);
   const currency = items[0]?.currency || shop?.currency || "XOF";
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (method === "delivery" && !address.trim()) { showToast("Veuillez entrer une adresse de livraison", "error"); return; }
+    if (method === "delivery" && !address.trim()) {
+      showToast("Veuillez entrer une adresse de livraison", "error");
+      return;
+    }
+
     setLoading(true);
     try {
-      // Créer la commande
-      const order = await createOrder({ 
-        shopId: shop.id, 
-        buyerId: id, 
-        items, 
-        method, 
-        notes: notes.trim(), 
-        dropoffAddress: method === "delivery" ? address.trim() : null 
-      });
+      // CORRECTION CRITIQUE : Vérification stricte du fournisseur AVANT de créer la commande
+      let paymentUrl = null;
 
-      // CORRECTION : Si paiement en ligne, déclencher le flux de paiement
-      if (paymentMethod !== "cash" && order?.id) {
+      if (paymentMethod !== "cash") {
         const providers = getAvailableProviders(shop.country || "ML");
         const provider = providers.find(p => p.id === paymentMethod);
-        
-        if (provider) {
-          const paymentRef = `order_${order.id}_${Date.now()}`;
-          const paymentData = await createPayment({
-            provider: provider.id,
-            orderId: order.id,
-            paymentRef,
-            amount: total,
-            currency,
-            channel: provider.channels?.[0],
-          });
 
-          if (paymentData?.payment_url) {
-            window.location.href = paymentData.payment_url;
-            return;
-          }
+        if (!provider) {
+          throw new Error("Moyen de paiement indisponible pour ce pays. Veuillez choisir le paiement à la livraison.");
         }
+
+        // Créer la commande (elle restera en payment_status = 'pending')
+        const order = await createOrder({
+          shopId: shop.id,
+          buyerId: id,
+          items,
+          method,
+          notes: notes.trim(),
+          dropoffAddress: method === "delivery" ? address.trim() : null
+        });
+
+        // Initialiser le paiement
+        const paymentRef = `order_${order.id}_${Date.now()}`;
+        const paymentData = await createPayment({
+          provider: provider.id,
+          shopId: shop.id,
+          paymentRef,
+          amount: total,
+          currency,
+          channel: provider.channels?.[0],
+        });
+
+        if (!paymentData?.payment_url) {
+          throw new Error("Le prestataire de paiement n'a pas généré d'URL. Contactez le support.");
+        }
+
+        paymentUrl = paymentData.payment_url;
+      } else {
+        // Paiement cash : on crée la commande normalement
+        await createOrder({
+          shopId: shop.id,
+          buyerId: id,
+          items,
+          method,
+          notes: notes.trim(),
+          dropoffAddress: method === "delivery" ? address.trim() : null
+        });
       }
 
-      showToast("Commande passée avec succès !", "success");
-      onDone();
+      // Gestion de la redirection ou du succès
+      if (paymentUrl) {
+        showToast("Redirection vers le paiement sécurisé...", "info");
+        window.location.href = paymentUrl; // Le webhook confirmera le paiement plus tard
+      } else {
+        showToast("Commande passée avec succès !", "success");
+        onDone();
+      }
     } catch (err) {
       console.error(err);
       showToast(err.message || "Erreur lors de la commande", "error");
-    } finally { setLoading(false); }
+    } finally {
+      setLoading(false);
+    }
   };
 
   const providers = getAvailableProviders(shop?.country || "ML");
@@ -94,7 +122,6 @@ export default function OrderCheckout({ shop, items, id, onBack, onDone }) {
           )}
         </div>
 
-        {/* CORRECTION : Sélection du mode de paiement */}
         <div className="rounded-xl border p-4 space-y-3" style={{ background: COLORS.surface2, borderColor: COLORS.border }}>
           <h3 className="text-sm font-bold" style={{ color: COLORS.ivory }}>Mode de paiement</h3>
           <div className="space-y-2">

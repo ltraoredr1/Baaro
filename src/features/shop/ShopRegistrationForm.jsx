@@ -145,9 +145,11 @@ export default function ShopRegistrationForm({ onRegistered }) {
         const trialEnds = new Date();
         trialEnds.setDate(trialEnds.getDate() + TRIAL_DAYS);
 
+        // 1. Créer la boutique
         const { data: shop, error: shopError } = await supabase
           .from("shops")
-          .insert({ logo_url: logoUrl || null,
+          .insert({
+            logo_url: logoUrl || null,
             owner_id: user.id,
             name: name.trim(),
             description: description.trim() || null,
@@ -164,7 +166,7 @@ export default function ShopRegistrationForm({ onRegistered }) {
 
         if (shopError) throw shopError;
 
-        // CORRECTION : Gestion d'erreur pour l'insertion de l'abonnement
+        // 2. Créer l'abonnement d'essai
         const { error: subError } = await supabase.from("shop_subscriptions").insert({
           shop_id: shop.id,
           amount: 0,
@@ -175,15 +177,19 @@ export default function ShopRegistrationForm({ onRegistered }) {
           status: "trial",
         });
 
+        // 3. CORRECTION CRITIQUE : Rollback si l'abonnement échoue
         if (subError) {
-          console.error("Erreur création abonnement essai:", subError);
-          showToast("Boutique créée mais l'abonnement d'essai n'a pas pu être enregistré. Contactez le support.", "error");
+          console.error("Échec abonnement essai, rollback boutique:", subError);
+          await supabase.from("shops").delete().eq("id", shop.id);
+          throw new Error("Échec de l'enregistrement de l'abonnement d'essai. Boutique annulée. Réessayez.");
         }
 
+        // 4. Succès garanti des deux côtés
         onRegistered?.(shop);
         return;
       }
 
+      // --- Parcours payant ---
       if (!pricing || !selectedProvider) {
         setError("Choisissez un moyen de paiement.");
         setLoading(false);
