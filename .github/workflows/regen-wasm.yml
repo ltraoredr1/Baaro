@@ -8,21 +8,30 @@ permissions:
 
 jobs:
   regen:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
+    env:
+      CLANG: clang-18
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24.22.2
-          cache: npm
-
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust 1.99.1 (wasm32)
+        uses: dtolnay/rust-toolchain@1.99.1
         with:
           targets: wasm32-unknown-unknown
 
-      - run: npm ci
+      - name: Install Clang 18 + LLD 18
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y clang-18 lld-18
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+
+      - run: npm ci --prefer-offline --no-audit
 
       - run: npm run test:offline
 
@@ -30,4 +39,4 @@ jobs:
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "chore: régénère les artefacts WASM offline"
-          file_pattern: "public/wasm/*"
+          file_pattern: "public/wasm/offline_*.wasm"
