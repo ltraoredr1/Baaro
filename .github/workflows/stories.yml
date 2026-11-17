@@ -1,0 +1,92 @@
+# CI ciblé module Stories / Statut — rapide, path-filtered.
+# Complète le job « Stories tests » du workflow CI principal.
+name: BAARO — Stories
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'src/features/stories/**'
+      - 'tests/stories/**'
+      - 'scripts/build-stories-wasm.mjs'
+      - 'scripts/test-stories-wasm.mjs'
+      - 'scripts/test-story-policy-rust.mjs'
+      - 'api/_lib/story-media-signature.js'
+      - 'public/wasm/stories_*.wasm'
+      - '.github/workflows/stories.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'src/features/stories/**'
+      - 'tests/stories/**'
+      - 'scripts/build-stories-wasm.mjs'
+      - 'scripts/test-stories-wasm.mjs'
+      - 'scripts/test-story-policy-rust.mjs'
+      - 'api/_lib/story-media-signature.js'
+      - 'public/wasm/stories_*.wasm'
+      - '.github/workflows/stories.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: stories-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  stories:
+    name: Stories tests + WASM
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CLANG: clang-18
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust 1.99.1 (wasm32)
+        uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          targets: wasm32-unknown-unknown
+          components: rustfmt
+
+      - name: Install Clang 18 + LLD 18
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y clang-18 lld-18
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+
+      - name: Ensure lockfile
+        run: |
+          set -euo pipefail
+          if [[ ! -s package-lock.json ]]; then
+            echo "::error::package-lock.json manquant — régénère-le via le workflow Dependencies."
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: npm ci --prefer-offline --no-audit
+
+      - name: Stories unit + Rust + WASM
+        run: npm run test:stories
+        env:
+          VITE_APP_ENV: test
+
+      - name: Verify committed Stories WASM
+        run: |
+          set -euo pipefail
+          test -s public/wasm/stories_policy.wasm
+          test -s public/wasm/stories_media.wasm
+          ls -lh public/wasm/stories_*.wasm
+          sha256sum public/wasm/stories_*.wasm
+          if [[ -n "$(git status --porcelain -- public/wasm/stories_policy.wasm public/wasm/stories_media.wasm)" ]]; then
+            echo "::error::Stories WASM drift — lance npm run test:stories et commit public/wasm/stories_*.wasm"
+            git status --short -- public/wasm/stories_policy.wasm public/wasm/stories_media.wasm
+            exit 1
+          fi
+          echo "Stories WASM OK."
