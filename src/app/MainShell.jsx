@@ -810,6 +810,32 @@ export function MainShell() {
               setInspectingProfileId(pid);
             }}
             onSelectTab={(tid) => setActiveTab(tid)}
+            onSelectResult={(item) => {
+              const data = item?.data || {};
+              const resultId = data.id;
+              if (item?.type === "post" && resultId) {
+                const url = new URL(window.location.href);
+                url.searchParams.set("post", String(resultId));
+                window.history.replaceState({}, document.title, `${url.pathname}${url.search}${url.hash}`);
+                window.dispatchEvent(new CustomEvent("baaro:open-shared-link", { detail: { search: url.search } }));
+                setActiveTab("feed");
+                return;
+              }
+              if (item?.type === "group" && resultId) {
+                const url = new URL(window.location.href);
+                url.searchParams.set("group", String(resultId));
+                window.history.replaceState({}, document.title, `${url.pathname}${url.search}${url.hash}`);
+                window.dispatchEvent(new CustomEvent("baaro:open-shared-link", { detail: { search: url.search } }));
+                setActiveTab("community");
+                return;
+              }
+              if (item?.type === "debate" && resultId) {
+                try { sessionStorage.setItem("baaro:open_debate", String(resultId)); } catch {}
+                setActiveTab("debates");
+                return;
+              }
+              if (item?.type === "hashtag") setActiveTab("videos");
+            }}
             onSelectShop={() => setActiveTab("shop")}
           />
         </Suspense>

@@ -33,7 +33,7 @@ function VerifiedBadge() {
   );
 }
 
-function GlobalSearchModal({ isOpen, onClose, onSelectUser, onSelectTab, onSelectShop, delay = 300 }) {
+function GlobalSearchModal({ isOpen, onClose, onSelectUser, onSelectTab, onSelectResult, onSelectShop, delay = 300 }) {
   const [query, setQuery] = useState('');
   const [activeIndex, setActiveIndex] = useState(-1);
   const [selectedUser, setSelectedUser] = useState(null);
@@ -104,13 +104,10 @@ function GlobalSearchModal({ isOpen, onClose, onSelectUser, onSelectTab, onSelec
         setSelectedUser(item.data);
         return;
       }
-      if (item.type === 'group') onSelectTab?.('community');
-      else if (item.type === 'post') onSelectTab?.('feed');
-      else if (item.type === 'debate') onSelectTab?.('debates');
-      else if (item.type === 'hashtag') onSelectTab?.('videos');
       onClose?.();
+      onSelectResult?.(item);
     },
-    [onSelectTab, onClose]
+    [onSelectResult, onClose]
   );
 
   function handleKeyDown(event) {
