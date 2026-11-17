@@ -71,6 +71,66 @@ export default async function handler(req, res) {
   catch (e) { return res.status(e.status || 401).json({ ok: false, error: e.message || "Non authentifié" }); }
 
   const body = req.body || {};
+
+  // Traitement Python mutualisé dans cet endpoint pour respecter la limite Vercel.
+  if (body.task === "text.analyze" || body.task === "text.normalize") {
+    const {
+      SUPABASE_URL,
+      VITE_SUPABASE_ANON_KEY,
+      SUPABASE_ANON_KEY,
+      BAARO_PYTHON_URL,
+      BAARO_PYTHON_SECRET,
+    } = process.env;
+
+    if (!SUPABASE_URL || !(VITE_SUPABASE_ANON_KEY || SUPABASE_ANON_KEY)
+        || !BAARO_PYTHON_URL || !BAARO_PYTHON_SECRET) {
+      return res.status(503).json({ ok: false, error: "Python service unavailable" });
+    }
+
+    const input = body.input && typeof body.input === "object" && !Array.isArray(body.input)
+      ? body.input : {};
+    const payload = JSON.stringify({ task: body.task, input });
+
+    if (Buffer.byteLength(payload) > 25000) {
+      return res.status(413).json({ ok: false, error: "Payload too large" });
+    }
+
+    if (typeof input.text !== "string" || input.text.length > 20000) {
+      return res.status(400).json({ ok: false, error: "Invalid text" });
+    }
+
+    try {
+      const timestamp = String(Math.floor(Date.now() / 1000));
+      const signature = crypto
+        .createHmac("sha256", BAARO_PYTHON_SECRET)
+        .update(timestamp + "." + payload)
+        .digest("hex");
+
+      const response = await fetch(
+        BAARO_PYTHON_URL.replace(/\/+$/, "") + "/v1/process",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-BAARO-Timestamp": timestamp,
+            "X-BAARO-Signature": signature,
+          },
+          body: payload,
+          signal: AbortSignal.timeout(20000),
+        }
+      );
+
+      const result = await response.json().catch(() => ({
+        ok: false,
+        error: "Invalid Python service response",
+      }));
+      return res.status(response.status).json(result);
+    } catch (e) {
+      console.error("[media:python]", e);
+      return res.status(502).json({ ok: false, error: "Python processing failed" });
+    }
+  }
+
   if (!["prepare", "finalize", "discard"].includes(body.action)) {
     return res.status(400).json({ ok: false, error: "Action invalide" });
   }
