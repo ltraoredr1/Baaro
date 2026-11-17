@@ -21,6 +21,7 @@
  * puis : 1) ligne dans `notifications` (liste dans l'appli), 2) push (FCM / Web Push).
  */
 import { createClient } from "@supabase/supabase-js";
+import crypto from "node:crypto";
 import {
   applyCors,
   getAdminClient,
@@ -330,6 +331,44 @@ async function handleMessageSent(admin, user, body) {
   };
 }
 
+async function moderateComment(text, contentType) {
+  const baseUrl = process.env.BAARO_PYTHON_URL;
+  const secret = process.env.BAARO_PYTHON_SECRET;
+  if (!baseUrl || !secret) return { action: "review", unavailable: true };
+
+  const payload = JSON.stringify({
+    task: "text.moderate",
+    input: { text, content_type: contentType },
+  });
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  const signature = crypto
+    .createHmac("sha256", secret)
+    .update(timestamp + "." + payload)
+    .digest("hex");
+
+  const response = await fetch(
+    baseUrl.replace(/\\/+$/, "") + "/v1/process",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-BAARO-Timestamp": timestamp,
+        "X-BAARO-Signature": signature,
+      },
+      body: payload,
+      signal: AbortSignal.timeout(18000),
+    }
+  );
+
+  if (!response.ok) throw new Error("Python moderation HTTP " + response.status);
+  const data = await response.json();
+  const decision = data?.result;
+  if (!data?.success || !["allow", "review", "block"].includes(decision?.action)) {
+    throw new Error("Invalid Python moderation response");
+  }
+  return decision;
+}
+
 async function handleComment(admin, user, body) {
   const text = sanitizeComment(body.text);
   if (!text) {
@@ -344,6 +383,32 @@ async function handleComment(admin, user, body) {
       status: 400,
       body: { ok: false, error: "Fournir post_id ou video_id, pas les deux" },
     };
+  }
+
+  if (!isUuid(postId) && !isUuid(videoId)) {
+    return { status: 400, body: { ok: false, error: "post_id ou video_id UUID requis" } };
+  }
+
+  // Refuser uniquement les cas graves avec un niveau de confiance élevé.
+  // Les cas ambigus restent publiables.
+  try {
+    const decision = await moderateComment(text, isUuid(postId) ? "post" : "video");
+    if (decision.action === "block" && Number(decision.confidence) >= 0.9) {
+      return {
+        status: 422,
+        body: {
+          ok: false,
+          error: "Ce commentaire ne respecte pas les règles de sécurité de BAARO.",
+          moderation: {
+            action: "block",
+            categories: Array.isArray(decision.categories) ? decision.categories : [],
+          },
+        },
+      };
+    }
+  } catch (error) {
+    // Une panne IA ne bloque pas tous les commentaires.
+    console.warn("[social] moderation unavailable", error?.message || error);
   }
 
   if (isUuid(postId)) {
