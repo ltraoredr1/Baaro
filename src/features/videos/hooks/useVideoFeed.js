@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../../../supabaseClient.js";
 import { useSocial } from "../../../hooks/useSocial.js";
 import { isMissingColumn } from "../utils/videosApi.js";
-import { rankForYou, recordBookmarks, syncWatchHistory } from "../lib/feedScore.js";
+import { rankForYou, rankTrending, recordBookmarks, syncWatchHistory } from "../lib/feedScore.js";
 
 const PAGE_SIZE = 24;
 
@@ -454,17 +454,7 @@ export function useVideoFeed() {
     }
 
     if (mode === "trending") {
-      return list.sort((a, b) => {
-        const scoreA =
-          Number(a.views || 0) +
-          Number(a.likes || 0) * 4 +
-          Number(a.comments_count || 0) * 6;
-        const scoreB =
-          Number(b.views || 0) +
-          Number(b.likes || 0) * 4 +
-          Number(b.comments_count || 0) * 6;
-        return scoreB - scoreA;
-      });
+      return rankTrending(list);
     }
 
     const byId = new Map(list.map((v) => [String(v.id), v]));

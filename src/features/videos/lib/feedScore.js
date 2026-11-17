@@ -104,6 +104,29 @@ export function rankForYou(list, { pinnedId = null, profile = loadProfile() } = 
   return out;
 }
 
+/** Classement Tendance BAARO. */
+export function rankTrending(list, { profile = loadProfile() } = {}) {
+  if (!Array.isArray(list) || list.length < 2) return list || [];
+  const maxViews = Math.max(1, ...list.map(v => Math.max(0, Number(v.views || 0))));
+  return list.map(video => {
+    const views = Math.max(0, Number(video.views || 0));
+    const likes = Math.max(0, Number(video.likes || 0));
+    const comments = Math.max(0, Number(video.comments_count || 0));
+    const shares = Math.max(0, Number(video.shares_count || 0));
+    const saves = Math.max(0, Number(video.saves_count || 0));
+    const popularity = Math.log1p(views) / Math.log1p(maxViews);
+    const engagement = clamp((likes + comments * 2 + shares * 3 + saves * 3) / Math.max(views, 20), 0, 1);
+    const count = Math.max(0, Number(video.watch_ratio_count || 0));
+    const watch = count > 0 ? clamp(Number(video.watch_ratio_sum || 0) / count, 0, 1) : 0.5;
+    const timestamp = new Date(video.created_at || 0).getTime();
+    const ageHours = Number.isFinite(timestamp) ? Math.max(0, (Date.now() - timestamp) / 3600000) : Infinity;
+    const freshness = Number.isFinite(ageHours) ? Math.pow(0.5, ageHours / 36) : 0;
+    const penalty = profile.seen?.[video.id] != null ? 0.72 : 1;
+    const total = popularity * 0.20 + engagement * 0.35 + watch * 0.25 + freshness * 0.20;
+    return { video, score: total * penalty };
+  }).sort((a, b) => b.score - a.score).map(item => item.video);
+}
+
 // Vidéos enregistrées par l'utilisateur : signal d'intérêt fort.
 // rows = lignes video_bookmarks avec la vidéo jointe (author_id, title, description).
 export function recordBookmarks(rows) {
