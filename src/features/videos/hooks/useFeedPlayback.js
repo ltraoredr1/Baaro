@@ -107,29 +107,59 @@ export function useFeedPlayback({ visibleVideos } = {}) { // eslint-disable-line
 
   const toggleFullscreen = async (id) => {
     const video = videoRefs.current[String(id)];
-    if (!video) return;
+    if (!video || typeof document === "undefined") return;
+
     try {
-      // Déjà en plein écran (sur cet élément ou un autre) → on sort
       if (document.fullscreenElement) {
-        await document.exitFullscreen();
+        await document.exitFullscreen?.();
         return;
       }
-      // Attendre un minimum de données pour éviter un plein écran noir
+
+      // Attendre les premières images pour éviter un écran noir.
       if (video.readyState < 2 && video.src) {
         await new Promise((resolve) => {
+          let timer;
           const done = () => {
             video.removeEventListener("loadeddata", done);
             video.removeEventListener("canplay", done);
+            if (timer) clearTimeout(timer);
             resolve();
           };
           video.addEventListener("loadeddata", done, { once: true });
           video.addEventListener("canplay", done, { once: true });
-          setTimeout(done, 600);
+          timer = setTimeout(done, 1200);
         });
       }
-      if (video.requestFullscreen) await video.requestFullscreen();
-      else if (video.webkitEnterFullscreen) video.webkitEnterFullscreen();
-    } catch { /* Plein écran bloqué par le navigateur */ }
+
+      // API vidéo standard.
+      if (typeof video.requestFullscreen === "function") {
+        try {
+          await video.requestFullscreen();
+          return;
+        } catch {
+          // Essayer les solutions de repli.
+        }
+      }
+
+      // Ancienne API WebKit, notamment sur iOS.
+      if (typeof video.webkitEnterFullscreen === "function") {
+        try {
+          video.webkitEnterFullscreen();
+          return;
+        } catch {
+          // Essayer le conteneur.
+        }
+      }
+
+      // Repli utile sur les WebView Android qui n'exposent pas
+      // requestFullscreen directement sur l'élément vidéo.
+      const container = video.closest?.("article") || video.parentElement;
+      if (typeof container?.requestFullscreen === "function") {
+        await container.requestFullscreen();
+      }
+    } catch {
+      // Le navigateur ou la WebView peut refuser le plein écran.
+    }
   };
 
   const handleTimeUpdate = (id, event) => {

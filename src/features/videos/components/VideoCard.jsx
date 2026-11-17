@@ -130,7 +130,7 @@ export default function VideoCard({
 
   // --- PLAY / PAUSE direct sur l'élément (indépendant du hook) ---
   const togglePlayPause = () => {
-    if (isImage) return;
+    if (isImage || !isActive) return;
     const el = videoRefs.current[video.id];
     if (!el) return;
     if (el.paused) el.play().catch(() => {});
@@ -140,6 +140,8 @@ export default function VideoCard({
   // --- TAP (play/pause) ET DOUBLE-TAP (like) ---
   const handleCardClick = (e) => {
     e.stopPropagation();
+    if (!isActive) return;
+
     const now = Date.now();
     const delta = now - lastClickTimeRef.current;
 
@@ -252,8 +254,9 @@ export default function VideoCard({
           preload={videoPreload}
           onPlay={(event) => {
             // Sécurité : une vidéo qui n'est plus active ne doit jamais jouer.
-            if (!isActive && loadMode === "none") {
+            if (!isActive) {
               event.currentTarget.pause();
+              audioRefs.current[video.id]?.pause();
               return;
             }
             setPlayingId(id);
@@ -324,7 +327,7 @@ export default function VideoCard({
                 const el = videoRefs.current[video.id];
                 if (el) {
                   el.load();
-                  el.play().catch(() => {});
+                  if (isActive) el.play().catch(() => {});
                 }
               }}
               className="px-5 py-2.5 rounded-xl font-bold"
