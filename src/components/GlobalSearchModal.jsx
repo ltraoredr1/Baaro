@@ -33,65 +33,79 @@ function VerifiedBadge() {
   );
 }
 
-/**
- * Props réellement attendues par MainShell.jsx :
- * - onSelectUser(profileId) : l'ID du profil, pas l'objet utilisateur
- * - onSelectTab(tabId)       : changement d'onglet (utilisé ici pour "debates")
- * - onSelectShop()           : réservé — aucune donnée "shop" n'est encore
- *                              cherchée par useGlobalSearch, donc cette prop
- *                              est acceptée mais non déclenchée pour l'instant.
- */
 function GlobalSearchModal({ isOpen, onClose, onSelectUser, onSelectTab, onSelectShop, delay = 300 }) {
   const [query, setQuery] = useState('');
   const [activeIndex, setActiveIndex] = useState(-1);
   const [selectedUser, setSelectedUser] = useState(null);
   const [selectedStats, setSelectedStats] = useState(null);
+  const [statsLoading, setStatsLoading] = useState(false);
   const inputRef = useRef(null);
 
   const { results, loading, error } = useGlobalSearch(query, delay);
   const showResults = query.trim().length >= 2;
 
-  const flatItems = useMemo(() => [
-    ...results.users.map((u) => ({ type: 'user', data: u })),
-    ...results.groups.map((g) => ({ type: 'group', data: g })),
-    ...results.posts.map((p) => ({ type: 'post', data: p })),
-    ...results.debates.map((d) => ({ type: 'debate', data: d })),
-  ], [results]);
+  const flatItems = useMemo(() => {
+    const items = [];
+    (results.users || []).forEach((u) => items.push({ type: 'user', data: u }));
+    (results.groups || []).forEach((g) => items.push({ type: 'group', data: g }));
+    (results.posts || []).forEach((p) => items.push({ type: 'post', data: p }));
+    (results.debates || []).forEach((d) => items.push({ type: 'debate', data: d }));
+    (results.hashtags || []).forEach((h) => items.push({ type: 'hashtag', data: h }));
+    return items;
+  }, [results]);
 
   useEffect(() => {
     if (!isOpen) return;
-
     const previouslyFocused = document.activeElement;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     inputRef.current?.focus();
-
     return () => {
       document.body.style.overflow = previousOverflow;
       if (previouslyFocused instanceof HTMLElement) previouslyFocused.focus();
     };
   }, [isOpen]);
 
-  useEffect(() => { setActiveIndex(-1); }, [results]);
+  useEffect(() => {
+    setActiveIndex(-1);
+  }, [results]);
 
   useEffect(() => {
     let cancelled = false;
-    if (!selectedUser?.id) { setSelectedStats(null); return undefined; }
-    (async () => { const { data, error } = await supabase.rpc('get_profile_stats', { p_user_id: selectedUser.id }); if (!cancelled && !error) setSelectedStats(Array.isArray(data) ? data[0] : data); })();
-    return () => { cancelled = true; };
+    if (!selectedUser?.id) {
+      setSelectedStats(null);
+      setStatsLoading(false);
+      return undefined;
+    }
+    setStatsLoading(true);
+    (async () => {
+      const { data, error: statsError } = await supabase.rpc('get_profile_stats', {
+        p_user_id: selectedUser.id,
+      });
+      if (!cancelled) {
+        if (!statsError) setSelectedStats(Array.isArray(data) ? data[0] : data);
+        setStatsLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [selectedUser?.id]);
 
   const selectItem = useCallback(
     (item) => {
       if (!item) return;
-      if (item.type === 'user') { setSelectedUser(item.data); return; } else if (item.type === 'group') { onSelectTab?.('community'); } else if (item.type === 'post') { onSelectTab?.('feed'); } else {
-        // Pas de deep-link vers un débat précis pour l'instant :
-        // on ouvre l'onglet "Débats" en général.
-        onSelectTab?.('debates');
+      if (item.type === 'user') {
+        setSelectedUser(item.data);
+        return;
       }
+      if (item.type === 'group') onSelectTab?.('community');
+      else if (item.type === 'post') onSelectTab?.('feed');
+      else if (item.type === 'debate') onSelectTab?.('debates');
+      else if (item.type === 'hashtag') onSelectTab?.('videos');
       onClose?.();
     },
-    [onSelectUser, onSelectTab, onClose]
+    [onSelectTab, onClose]
   );
 
   function handleKeyDown(event) {
@@ -116,6 +130,7 @@ function GlobalSearchModal({ isOpen, onClose, onSelectUser, onSelectTab, onSelec
   if (!isOpen) return null;
 
   const listboxId = 'baaro-global-search-listbox';
+  let optionIndex = 0;
 
   return (
     <div
@@ -130,8 +145,14 @@ function GlobalSearchModal({ isOpen, onClose, onSelectUser, onSelectTab, onSelec
         aria-modal="true"
         aria-label="Recherche globale"
         className="w-full max-w-5xl flex flex-col overflow-hidden rounded-2xl"
-        style={{ backgroundColor: COLORS.surface, border: `1px solid ${COLORS.border}`, boxShadow: '0 24px 60px rgba(0,0,0,0.5)', maxHeight: '70vh' }}
+        style={{
+          backgroundColor: COLORS.surface,
+          border: `1px solid ${COLORS.border}`,
+          boxShadow: '0 24px 60px rgba(0,0,0,0.5)',
+          maxHeight: '70vh',
+        }}
       >
+        {/* Header */}
         <div className="flex items-center gap-3 px-4 py-3" style={{ borderBottom: `1px solid ${COLORS.border}` }}>
           <SearchIcon style={{ color: COLORS.muted }} />
           <input
@@ -141,7 +162,7 @@ function GlobalSearchModal({ isOpen, onClose, onSelectUser, onSelectTab, onSelec
             aria-expanded={showResults}
             aria-haspopup="listbox"
             aria-controls={listboxId}
-            aria-activedescendant={activeIndex >= 0 ? `${listboxId}-option-${activeIndex}` : undefined}
+            aria-activedescendant={activeIndex >= 0 ? `\( {listboxId}-option- \){activeIndex}` : undefined}
             autoComplete="off"
             className="flex-1 bg-transparent text-[0.95rem] outline-none"
             style={{ color: COLORS.ivory }}
@@ -158,123 +179,298 @@ function GlobalSearchModal({ isOpen, onClose, onSelectUser, onSelectTab, onSelec
             />
           )}
           {!loading && query && (
-            <button type="button" onClick={() => setQuery('')} aria-label="Effacer la recherche" className="rounded-full p-1" style={{ color: COLORS.muted }}>
+            <button
+              type="button"
+              onClick={() => setQuery('')}
+              aria-label="Effacer la recherche"
+              className="rounded-full p-1"
+              style={{ color: COLORS.muted }}
+            >
               <XIcon size={14} />
             </button>
           )}
-          <button type="button" onClick={onClose} aria-label="Fermer la recherche" className="ml-1 rounded-full p-1" style={{ color: COLORS.muted }}>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Fermer la recherche"
+            className="ml-1 rounded-full p-1"
+            style={{ color: COLORS.muted }}
+          >
             <XIcon size={16} />
           </button>
         </div>
 
         <div className="flex-1 min-h-0 grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_320px]">
-        <div className="overflow-y-auto px-2 py-2" role="listbox" id={listboxId}>
-          {!showResults && (
-            <p className="px-3 py-6 text-center text-sm" style={{ color: COLORS.muted }}>
-              Tapez au moins 2 caractères pour lancer la recherche.
-            </p>
-          )}
+          {/* Résultats */}
+          <div className="overflow-y-auto px-2 py-2" role="listbox" id={listboxId}>
+            {!showResults && (
+              <p className="px-3 py-6 text-center text-sm" style={{ color: COLORS.muted }}>
+                Tapez au moins 2 caractères pour lancer la recherche.
+              </p>
+            )}
 
-          {showResults && error && (
-            <p className="px-3 py-4 text-sm" style={{ color: COLORS.muted }}>{error}</p>
-          )}
+            {showResults && error && (
+              <p className="px-3 py-4 text-sm" style={{ color: COLORS.muted }}>
+                {error}
+              </p>
+            )}
 
-          {showResults && !error && !loading && flatItems.length === 0 && (
-            <p className="px-3 py-4 text-sm" style={{ color: COLORS.muted }}>
-              Aucun résultat pour « {query.trim()} ».
-            </p>
-          )}
+            {showResults && !error && !loading && flatItems.length === 0 && (
+              <p className="px-3 py-4 text-sm" style={{ color: COLORS.muted }}>
+                Aucun résultat pour « {query.trim()} ».
+              </p>
+            )}
 
-          {showResults && !error && results.users.length > 0 && (
-            <div className="mb-1">
-              <p className="px-3 pb-1 pt-2 text-xs" style={{ color: COLORS.mutedLight }}>Personnes</p>
-              {results.users.map((user, i) => (
-                <button
-                  key={user.id}
-                  id={`${listboxId}-option-${i}`}
-                  role="option"
-                  aria-selected={activeIndex === i}
-                  type="button"
-                  onMouseEnter={() => setActiveIndex(i)}
-                  onClick={() => selectItem({ type: 'user', data: user })}
-                  className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left"
-                  style={{ backgroundColor: activeIndex === i ? COLORS.goldGlow : 'transparent' }}
-                >
-                  <span
-                    className="flex h-9 w-9 flex-shrink-0 items-center justify-center overflow-hidden rounded-full text-lg"
-                    style={{ backgroundColor: COLORS.surface2 }}
+            {/* Personnes */}
+            {showResults && !error && (results.users || []).length > 0 && (
+              <div className="mb-1">
+                <p className="px-3 pb-1 pt-2 text-xs" style={{ color: COLORS.mutedLight }}>
+                  Personnes
+                </p>
+                {(results.users || []).map((user) => {
+                  const idx = optionIndex++;
+                  return (
+                    <button
+                      key={user.id}
+                      id={`\( {listboxId}-option- \){idx}`}
+                      role="option"
+                      aria-selected={activeIndex === idx}
+                      type="button"
+                      onMouseEnter={() => setActiveIndex(idx)}
+                      onClick={() => selectItem({ type: 'user', data: user })}
+                      className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left"
+                      style={{ backgroundColor: activeIndex === idx ? COLORS.goldGlow : 'transparent' }}
+                    >
+                      <span
+                        className="flex h-9 w-9 flex-shrink-0 items-center justify-center overflow-hidden rounded-full text-lg"
+                        style={{ backgroundColor: COLORS.surface2 }}
+                      >
+                        {user.avatar_url ? (
+                          <img src={user.avatar_url} alt="" loading="lazy" className="h-full w-full object-cover" />
+                        ) : (
+                          <span aria-hidden="true">{user.flag}</span>
+                        )}
+                      </span>
+                      <span className="flex min-w-0 flex-col overflow-hidden">
+                        <span className="flex items-center gap-1 truncate text-sm font-semibold" style={{ color: COLORS.ivory }}>
+                          {user.display_name}
+                          {user.is_verified && <VerifiedBadge />}
+                        </span>
+                        <span className="truncate text-xs" style={{ color: COLORS.muted }}>
+                          {user.handle}
+                        </span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Communautés */}
+            {showResults && !error && (results.groups || []).length > 0 && (
+              <div className="pt-1">
+                <p className="px-3 pb-1 pt-2 text-xs" style={{ color: COLORS.mutedLight }}>
+                  Communautés
+                </p>
+                {(results.groups || []).map((g) => {
+                  const idx = optionIndex++;
+                  return (
+                    <button
+                      key={g.id}
+                      id={`\( {listboxId}-option- \){idx}`}
+                      role="option"
+                      aria-selected={activeIndex === idx}
+                      type="button"
+                      onMouseEnter={() => setActiveIndex(idx)}
+                      onClick={() => selectItem({ type: 'group', data: g })}
+                      className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left"
+                      style={{ backgroundColor: activeIndex === idx ? COLORS.goldGlow : 'transparent' }}
+                    >
+                      <span className="text-lg">🌍</span>
+                      <span className="min-w-0">
+                        <b className="block truncate text-sm" style={{ color: COLORS.ivory }}>
+                          {g.name}
+                        </b>
+                        <span className="text-xs opacity-60 truncate block" style={{ color: COLORS.muted }}>
+                          {g.description}
+                        </span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Publications */}
+            {showResults && !error && (results.posts || []).length > 0 && (
+              <div className="pt-1">
+                <p className="px-3 pb-1 pt-2 text-xs" style={{ color: COLORS.mutedLight }}>
+                  Publications
+                </p>
+                {(results.posts || []).map((p) => {
+                  const idx = optionIndex++;
+                  return (
+                    <button
+                      key={p.id}
+                      id={`\( {listboxId}-option- \){idx}`}
+                      role="option"
+                      aria-selected={activeIndex === idx}
+                      type="button"
+                      onMouseEnter={() => setActiveIndex(idx)}
+                      onClick={() => selectItem({ type: 'post', data: p })}
+                      className="block w-full rounded-xl px-3 py-2 text-left"
+                      style={{ backgroundColor: activeIndex === idx ? COLORS.goldGlow : 'transparent' }}
+                    >
+                      <span className="text-sm line-clamp-2" style={{ color: COLORS.ivory }}>
+                        {p.text || 'Publication média'}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Débats */}
+            {showResults && !error && (results.debates || []).length > 0 && (
+              <div className="pt-1">
+                <p className="px-3 pb-1 pt-2 text-xs" style={{ color: COLORS.mutedLight }}>
+                  Débats
+                </p>
+                {(results.debates || []).map((debate) => {
+                  const idx = optionIndex++;
+                  return (
+                    <button
+                      key={debate.id}
+                      id={`\( {listboxId}-option- \){idx}`}
+                      role="option"
+                      aria-selected={activeIndex === idx}
+                      type="button"
+                      onMouseEnter={() => setActiveIndex(idx)}
+                      onClick={() => selectItem({ type: 'debate', data: debate })}
+                      className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left"
+                      style={{ backgroundColor: activeIndex === idx ? COLORS.tealGlow : 'transparent' }}
+                    >
+                      <span className="ml-1 mr-2 h-2 w-2 flex-shrink-0 rounded-full" style={{ backgroundColor: COLORS.teal }} />
+                      <span className="flex min-w-0 flex-col overflow-hidden">
+                        <span className="truncate text-sm font-semibold" style={{ color: COLORS.ivory }}>
+                          {debate.title}
+                        </span>
+                        <span className="truncate text-xs" style={{ color: COLORS.muted }}>
+                          {debate.topic}
+                        </span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Hashtags */}
+            {showResults && !error && (results.hashtags || []).length > 0 && (
+              <div className="pt-1">
+                <p className="px-3 pb-1 pt-2 text-xs" style={{ color: COLORS.mutedLight }}>
+                  Hashtags
+                </p>
+                {(results.hashtags || []).map((h) => {
+                  const idx = optionIndex++;
+                  return (
+                    <button
+                      key={h.tag}
+                      id={`\( {listboxId}-option- \){idx}`}
+                      role="option"
+                      aria-selected={activeIndex === idx}
+                      type="button"
+                      onMouseEnter={() => setActiveIndex(idx)}
+                      onClick={() => selectItem({ type: 'hashtag', data: h })}
+                      className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left"
+                      style={{ backgroundColor: activeIndex === idx ? COLORS.goldGlow : 'transparent' }}
+                    >
+                      <span className="text-sm font-semibold" style={{ color: COLORS.gold }}>
+                        #{h.tag}
+                      </span>
+                      <span className="text-xs" style={{ color: COLORS.muted }}>
+                        {h.count} vidéos
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Panneau profil */}
+          <aside
+            className="flex flex-col border-t md:border-t-0 md:border-l p-4 overflow-y-auto max-h-[45vh] md:max-h-none"
+            style={{ borderColor: COLORS.border, backgroundColor: COLORS.surface2 }}
+          >
+            {!selectedUser ? (
+              <div className="m-auto text-center text-sm" style={{ color: COLORS.muted }}>
+                Sélectionnez une personne pour afficher son profil ici.
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="flex items-center gap-3">
+                  <div
+                    className="h-16 w-16 rounded-full overflow-hidden flex items-center justify-center"
+                    style={{ background: COLORS.surface }}
                   >
-                    {user.avatar_url ? (
-                      <img src={user.avatar_url} alt="" loading="lazy" className="h-full w-full object-cover" />
+                    {selectedUser.avatar_url ? (
+                      <img src={selectedUser.avatar_url} alt="" className="h-full w-full object-cover" />
                     ) : (
-                      <span aria-hidden="true">{user.flag}</span>
+                      <span className="text-2xl">{selectedUser.flag || '🌍'}</span>
                     )}
-                  </span>
-                  <span className="flex min-w-0 flex-col overflow-hidden">
-                    <span className="flex items-center gap-1 truncate text-sm font-semibold" style={{ color: COLORS.ivory }}>
-                      {user.display_name}
-                      {user.is_verified && <VerifiedBadge />}
-                    </span>
-                    <span className="truncate text-xs" style={{ color: COLORS.muted }}>{user.handle}</span>
-                  </span>
-                </button>
-              ))}
-            </div>
-          )}
-
-          {showResults && !error && results.groups.length > 0 && (
-            <div className="pt-1"><p className="px-3 pb-1 pt-2 text-xs" style={{color:COLORS.mutedLight}}>Communautés</p>{results.groups.map((g,i)=>{const index=results.users.length+i;return <button key={g.id} type="button" role="option" onClick={()=>selectItem({type:'group',data:g})} className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left"><span>🌍</span><span className="min-w-0"><b className="block truncate text-sm">{g.name}</b><span className="text-xs opacity-60 truncate block">{g.description}</span></span></button>})}</div>
-          )}
-
-          {showResults && !error && results.posts.length > 0 && (
-            <div className="pt-1"><p className="px-3 pb-1 pt-2 text-xs" style={{color:COLORS.mutedLight}}>Publications</p>{results.posts.map(p=><button key={p.id} type="button" onClick={()=>selectItem({type:'post',data:p})} className="block w-full rounded-xl px-3 py-2 text-left"><span className="text-sm line-clamp-2">{p.text||'Publication média'}</span></button>)}</div>
-          )}
-
-          {showResults && !error && results.debates.length > 0 && (
-            <div className="pt-1" style={{ borderTop: results.users.length > 0 ? `1px solid ${COLORS.border}` : 'none' }}>
-              <p className="px-3 pb-1 pt-2 text-xs" style={{ color: COLORS.mutedLight }}>Débats</p>
-              {results.debates.map((debate, i) => {
-                const index = results.users.length + results.groups.length + results.posts.length + i;
-                return (
-                  <button
-                    key={debate.id}
-                    id={`${listboxId}-option-${index}`}
-                    role="option"
-                    aria-selected={activeIndex === index}
-                    type="button"
-                    onMouseEnter={() => setActiveIndex(index)}
-                    onClick={() => selectItem({ type: 'debate', data: debate })}
-                    className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left"
-                    style={{ backgroundColor: activeIndex === index ? COLORS.tealGlow : 'transparent' }}
-                  >
-                    <span className="ml-1 mr-2 h-2 w-2 flex-shrink-0 rounded-full" style={{ backgroundColor: COLORS.teal }} aria-hidden="true" />
-                    <span className="flex min-w-0 flex-col overflow-hidden">
-                      <span className="truncate text-sm font-semibold" style={{ color: COLORS.ivory }}>{debate.title}</span>
-                      <span className="truncate text-xs" style={{ color: COLORS.muted }}>{debate.topic}</span>
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </div>
-        <aside className="flex flex-col border-t md:border-t-0 md:border-l p-4 overflow-y-auto max-h-[45vh] md:max-h-none" style={{ borderColor: COLORS.border, backgroundColor: COLORS.surface2 }}>
-          {!selectedUser ? <div className="m-auto text-center text-sm" style={{ color: COLORS.muted }}>Sélectionnez une personne pour afficher son profil ici.</div> : (
-            <div className="space-y-4">
-              <div className="flex items-center gap-3">
-                <div className="h-16 w-16 rounded-full overflow-hidden flex items-center justify-center" style={{ background: COLORS.surface }}>
-                  {selectedUser.avatar_url ? <img src={selectedUser.avatar_url} alt="" className="h-full w-full object-cover" /> : <span className="text-2xl">{selectedUser.flag || '🌍'}</span>}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="font-bold truncate flex items-center gap-1" style={{ color: COLORS.ivory }}>
+                      {selectedUser.display_name}
+                      {selectedUser.is_verified && <VerifiedBadge />}
+                    </div>
+                    <div className="text-xs truncate" style={{ color: COLORS.muted }}>
+                      {selectedUser.handle}
+                    </div>
+                  </div>
                 </div>
-                <div className="min-w-0"><div className="font-bold truncate" style={{ color: COLORS.ivory }}>{selectedUser.display_name}</div><div className="text-xs truncate" style={{ color: COLORS.muted }}>{selectedUser.handle}</div></div>
+
+                <div className="grid grid-cols-2 gap-2 text-center">
+                  {[
+                    ['followers', 'Abonnés'],
+                    ['following', 'Abonnements'],
+                    ['friends', 'Amis'],
+                    ['posts', 'Publications'],
+                    ['likes', 'Likes'],
+                  ].map(([key, label]) => (
+                    <div
+                      key={key}
+                      className="rounded-xl border p-2"
+                      style={{ borderColor: COLORS.border, background: COLORS.surface }}
+                    >
+                      <div className="font-bold">
+                        {statsLoading ? '…' : Number(selectedStats?.[key] || 0).toLocaleString()}
+                      </div>
+                      <div className="text-[10px]" style={{ color: COLORS.muted }}>
+                        {label}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    onSelectUser?.(selectedUser.id);
+                    onClose?.();
+                  }}
+                  className="w-full rounded-xl border py-2 text-sm font-bold"
+                  style={{ borderColor: COLORS.borderGold, color: COLORS.gold, background: COLORS.surface }}
+                >
+                  Ouvrir le profil
+                </button>
+                <p className="text-[10px] leading-relaxed" style={{ color: COLORS.muted }}>
+                  Lecture seule depuis la recherche. La modification du profil se fait uniquement dans Réglages.
+                </p>
               </div>
-              <div className="grid grid-cols-2 gap-2 text-center">
-                {[['followers','Abonnés'],['following','Abonnements'],['friends','Amis'],['posts','Publications'],['likes','Likes']].map(([key,label]) => <div key={key} className="rounded-xl border p-2" style={{ borderColor: COLORS.border, background: COLORS.surface }}><div className="font-bold">{Number(selectedStats?.[key] || 0).toLocaleString()}</div><div className="text-[10px]" style={{ color: COLORS.muted }}>{label}</div></div>)}
-              </div>
-              <button type="button" onClick={() => { onSelectUser?.(selectedUser.id); onClose?.(); }} className="w-full rounded-xl border py-2 text-sm font-bold" style={{ borderColor: COLORS.borderGold, color: COLORS.gold, background: COLORS.surface }}>Ouvrir le profil</button>
-              <p className="text-[10px] leading-relaxed" style={{ color: COLORS.muted }}>Lecture seule depuis la recherche. La modification du profil se fait uniquement dans Réglages.</p>
-            </div>
-          )}
-        </aside>
+            )}
+          </aside>
         </div>
 
         <div className="flex items-center gap-4 px-4 py-2 text-xs" style={{ borderTop: `1px solid ${COLORS.border}`, color: COLORS.muted }}>

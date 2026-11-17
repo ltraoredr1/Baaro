@@ -1,37 +1,72 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { supabase } from '../supabaseClient';
 
 const MIN_QUERY_LENGTH = 2;
-const EMPTY = { users: [], groups: [], debates: [], posts: [] };
+const EMPTY = {
+  users: [],
+  groups: [],
+  debates: [],
+  posts: [],
+  hashtags: [],
+};
 
 export function useGlobalSearch(query, delay = 300) {
   const [results, setResults] = useState(EMPTY);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const abortRef = useRef(null);
 
   useEffect(() => {
     const q = (query || '').trim();
+
+    // Annuler la requête précédente
+    if (abortRef.current) {
+      abortRef.current.abort();
+    }
+
     if (q.length < MIN_QUERY_LENGTH) {
       setResults(EMPTY);
       setError(null);
       setLoading(false);
       return undefined;
     }
-    let cancelled = false;
+
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     setLoading(true);
     setError(null);
-    const t = setTimeout(async () => {
+
+    const timer = setTimeout(async () => {
       try {
-        const { data, error: rpcError } = await supabase.rpc('global_discovery_search', { p_query: q, p_limit: 8 });
+        const { data, error: rpcError } = await supabase.rpc(
+          'global_discovery_search',
+          { p_query: q, p_limit: 8 }
+        );
+
+        if (controller.signal.aborted) return;
+
         if (rpcError) throw rpcError;
-        if (!cancelled) setResults({ ...EMPTY, ...(data || {}) });
+
+        setResults({
+          ...EMPTY,
+          ...(data || {}),
+        });
       } catch (e) {
-        if (!cancelled) { setResults(EMPTY); setError(e.message || 'Recherche indisponible'); }
+        if (controller.signal.aborted) return;
+        setResults(EMPTY);
+        setError(e?.message || 'Recherche indisponible');
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!controller.signal.aborted) {
+          setLoading(false);
+        }
       }
     }, delay);
-    return () => { cancelled = true; clearTimeout(t); };
+
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
   }, [query, delay]);
 
   return { results, loading, error };
