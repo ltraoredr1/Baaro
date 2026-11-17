@@ -960,7 +960,7 @@ export async function processJob(job) {
         return await dub(job, input, dir);
 
       case "moderate":
-        return await moderate(job, input);
+        return await moderate(job, input, dir);
 
       case "features":
         return await features(job, input);
