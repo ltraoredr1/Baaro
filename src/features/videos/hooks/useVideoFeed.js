@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../../../supabaseClient.js";
+import { useSocial } from "../../../hooks/useSocial.js";
 import { isMissingColumn } from "../utils/videosApi.js";
 import { rankForYou, recordBookmarks, syncWatchHistory } from "../lib/feedScore.js";
 
@@ -57,6 +58,7 @@ export function useVideoFeed() {
   const [likedMap, setLikedMap] = useState({});
   const [mode, setMode] = useState("forYou");
   const [profileRevision, setProfileRevision] = useState(0);
+  const { friends } = useSocial(user?.id);
 
   const requestSequence = useRef(0);
   const currentUserId = useRef(null);
@@ -434,39 +436,57 @@ export function useVideoFeed() {
   const visibleVideos = useMemo(() => {
     const list = [...videos];
 
+    if (mode === "friends") {
+      const friendIds = new Set(
+        (friends || []).map((friend) => String(friend.id))
+      );
+      return list.filter((video) =>
+        friendIds.has(String(video.author_id))
+      );
+    }
+
+    if (mode === "newest") {
+      return list.sort(
+        (a, b) =>
+          new Date(b.created_at || 0).getTime() -
+          new Date(a.created_at || 0).getTime()
+      );
+    }
+
     if (mode === "trending") {
       return list.sort((a, b) => {
         const scoreA =
           Number(a.views || 0) +
           Number(a.likes || 0) * 4 +
           Number(a.comments_count || 0) * 6;
-
         const scoreB =
           Number(b.views || 0) +
           Number(b.likes || 0) * 4 +
           Number(b.comments_count || 0) * 6;
-
         return scoreB - scoreA;
       });
     }
 
-    // « Pour toi » : les vidéos déjà placées gardent leur rang, les nouvelles
-    // sont classées par lot puis ajoutées à la suite.
     const byId = new Map(list.map((v) => [String(v.id), v]));
     const known = forYouOrderRef.current.filter((id) => byId.has(id));
     const knownSet = new Set(known);
     const fresh = list.filter((v) => !knownSet.has(String(v.id)));
     let ids = known;
+
     if (fresh.length) {
       const shared =
         known.length === 0 && typeof window !== "undefined"
           ? new URLSearchParams(window.location.search).get("video")
           : null;
-      ids = [...known, ...rankForYou(fresh, { pinnedId: shared }).map((v) => String(v.id))];
+      ids = [
+        ...known,
+        ...rankForYou(fresh, { pinnedId: shared }).map((v) => String(v.id)),
+      ];
     }
+
     forYouOrderRef.current = ids;
     return ids.map((id) => byId.get(id));
-  }, [videos, mode, profileRevision]);
+  }, [videos, mode, profileRevision, friends]);
 
   return {
     videos,

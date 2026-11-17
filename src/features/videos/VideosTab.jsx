@@ -79,6 +79,8 @@ export function VideosTab({ onRewardPoints, onExit }) {
     likedMap,
     setLikedMap,
     visibleVideos,
+    mode,
+    setMode,
   } = feed;
 
   const { sounds, getVideoSound } = useSounds();
@@ -976,7 +978,9 @@ export function VideosTab({ onRewardPoints, onExit }) {
         onToggleMute={playback.toggleMute}
         onOpenUpload={openUpload}
         onOpenStudio={() => setStudioOpen(true)}
-        showModeSwitcher={false}
+        mode={mode}
+        setMode={setMode}
+        showModeSwitcher
         extraActions={(
           <>
             <button
