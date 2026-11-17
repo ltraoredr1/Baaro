@@ -418,6 +418,122 @@ async function moderateTextWithAI(text) {
   };
 }
 
+
+async function moderateFramesWithAI(frames) {
+  const key = process.env.GROQ_API_KEY;
+  const model = process.env.GROQ_VISION_MODEL || "qwen/qwen3.8-27b";
+  const base = String(
+    process.env.GROQ_BASE || "https://api.groq.com/openai/v1"
+  ).replace(/\/+$/, "");
+
+  if (!key || !Array.isArray(frames) || !frames.length) {
+    return {
+      recommendation: "review",
+      categories: [],
+      confidence: 0,
+      reason: "Analyse visuelle indisponible",
+      status: "unavailable",
+    };
+  }
+
+  const content = [{
+    type: "text",
+    text: "Analyse ces images extraites d'une vidéo pour détecter violence graphique, nudité explicite, exploitation sexuelle de mineurs, symboles de haine, menaces et actes dangereux. Ne déduis jamais une infraction de l'origine, religion, couleur de peau, langue ou opinion. En cas de doute, utilise review. block uniquement pour une scène clairement grave et visible. Retourne uniquement un JSON avec recommendation, categories, confidence et reason."
+  }];
+
+  for (const frame of frames) {
+    content.push({
+      type: "image_url",
+      image_url: { url: frame.dataUrl }
+    });
+  }
+
+  try {
+    const response = await fetch(`${base}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${key}`,
+      },
+      body: JSON.stringify({
+        model,
+        temperature: 0,
+        max_completion_tokens: 700,
+        response_format: { type: "json_object" },
+        messages: [
+          {
+            role: "system",
+            content: "Assistant de modération prudent. Réponds uniquement en JSON."
+          },
+          { role: "user", content }
+        ],
+      }),
+      signal: AbortSignal.timeout(20000),
+    });
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data?.error?.message || `Groq HTTP ${response.status}`);
+    }
+
+    const raw = data?.choices?.[0]?.message?.content;
+    if (typeof raw !== "string" || !raw.trim()) {
+      throw new Error("Réponse Groq vide");
+    }
+
+    const result = JSON.parse(raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim());
+    const allowed = ["allow", "review", "block"];
+    const confidence = Number(result.confidence);
+
+    return {
+      recommendation: allowed.includes(result.recommendation)
+        ? result.recommendation : "review",
+      categories: Array.isArray(result.categories)
+        ? result.categories.filter(x => typeof x === "string").slice(0, 10) : [],
+      confidence: Number.isFinite(confidence)
+        ? Math.max(0, Math.min(1, confidence)) : 0,
+      reason: String(result.reason || "Analyse visuelle terminée").slice(0, 500),
+      provider: "groq",
+      model,
+      status: "completed",
+    };
+  } catch (error) {
+    return {
+      recommendation: "review",
+      categories: [],
+      confidence: 0,
+      reason: String(error?.message || error).slice(0, 300),
+      status: "unavailable",
+    };
+  }
+}
+
+async function extractModerationFrames(input, dir, duration) {
+  const frames = [];
+  const points = [0.2, 0.5, 0.8].map(
+    ratio => Math.max(0, Math.min(Math.max(0, duration - 0.2), duration * ratio))
+  );
+
+  for (let i = 0; i < points.length; i++) {
+    const file = join(dir, `moderation-frame-${i + 1}.jpg`);
+    await run(config.ffmpeg, [
+      "-y", "-ss", String(points[i]), "-i", input,
+      "-frames:v", "1", "-vf", "scale=640:640:force_original_aspect_ratio=decrease",
+      "-q:v", "6", file,
+    ]);
+
+    const bytes = await readFile(file);
+    if (bytes.length > 512 * 1024) continue;
+
+    frames.push({
+      timestamp: points[i],
+      dataUrl: `data:image/jpeg;base64,${bytes.toString("base64")}`,
+    });
+  }
+
+  return frames;
+}
+
 async function moderate(job, input, dir) {
   const probe = await ffprobe(input);
   const video = probe.streams?.find(
@@ -471,22 +587,61 @@ async function moderate(job, input, dir) {
     }
   }
 
+  const duration = Number(probe.format?.duration || 0);
+  let visual = {
+    recommendation: "review",
+    categories: [],
+    confidence: 0,
+    reason: "Aucune piste vidéo",
+    status: "unavailable",
+  };
+
+  if (video && duration > 0) {
+    try {
+      const frames = await extractModerationFrames(input, dir, duration);
+      visual = await moderateFramesWithAI(frames);
+    } catch (error) {
+      visual = {
+        recommendation: "review",
+        categories: [],
+        confidence: 0,
+        reason: String(error?.message || error).slice(0, 300),
+        status: "unavailable",
+      };
+    }
+  }
+
+  const visualBlock =
+    visual.recommendation === "block" && visual.confidence >= 0.85;
+  const audioBlock =
+    analysis.recommendation === "block" && analysis.confidence >= 0.85;
+
+  const recommendation = visualBlock || audioBlock
+    ? "block"
+    : analysis.recommendation === "review" || visual.recommendation === "review"
+      ? "review"
+      : "allow";
+
   return {
     status: "completed",
-    recommendation: analysis.recommendation,
-    categories: analysis.categories,
-    confidence: analysis.confidence,
-    reason: analysis.reason,
-    provider: analysis.provider,
-    model: analysis.model || null,
+    recommendation,
+    categories: [...new Set([
+      ...(analysis.categories || []),
+      ...(visual.categories || []),
+    ])].slice(0, 15),
+    confidence: Math.max(analysis.confidence || 0, visual.confidence || 0),
+    reason: `Audio : ${analysis.reason || "indisponible"} | Visuel : ${visual.reason || "indisponible"}`,
+    provider: [analysis.provider, visual.provider].filter(Boolean).join("+") || null,
+    model: analysis.model || visual.model || null,
     transcription,
     sourceLanguage: null,
-    visualAnalysis: "not_implemented",
-    requiresHumanReview: analysis.recommendation !== "allow",
+    visualAnalysis: visual.status,
+    visualDetails: visual,
+    requiresHumanReview: recommendation !== "allow",
     safeBasicChecks: {
       hasVideo: Boolean(video),
       hasAudio: Boolean(audio),
-      duration: Number(probe.format?.duration || 0),
+      duration,
     },
   };
 }
