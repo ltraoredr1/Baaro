@@ -19,7 +19,6 @@ export default function CartDrawer({ isOpen, onClose, id, onCheckout }) {
       const ids = [...new Set((rows || []).map((r) => r.item_id).filter(Boolean))];
       if (!ids.length) { setCartItems([]); return; }
       
-      // CORRECTION : Ajout de shop_id pour identifier la boutique
       const { data: products, error: productsError } = await supabase.from("shop_products")
         .select("id, name, price, compare_at_price, currency, stock, images, image_url, is_available, type, shop_id")
         .in("id", ids);
@@ -62,7 +61,6 @@ export default function CartDrawer({ isOpen, onClose, id, onCheckout }) {
     } catch (err) { console.error(err); showToast(err.message || "Erreur de suppression", "error"); }
   };
 
-  // CORRECTION : Fonction pour lancer le checkout en vérifiant l'unicité de la boutique
   const handleCheckout = async () => {
     if (cartItems.length === 0) return;
     
@@ -73,6 +71,13 @@ export default function CartDrawer({ isOpen, onClose, id, onCheckout }) {
     }
     if (shopIds.length > 1) {
       showToast("Votre panier contient des articles de plusieurs boutiques. Veuillez commander boutique par boutique.", "error");
+      return;
+    }
+
+    // CORRECTION : Vérification des devises
+    const currencies = [...new Set(cartItems.map(item => item.product?.currency).filter(Boolean))];
+    if (currencies.length > 1) {
+      showToast(`Votre panier contient des articles avec des devises différentes (${currencies.join(", ")}). Veuillez séparer vos commandes.`, "error");
       return;
     }
     
@@ -125,7 +130,6 @@ export default function CartDrawer({ isOpen, onClose, id, onCheckout }) {
           <span className="text-sm" style={{ color: COLORS.muted }}>Total</span>
           <span className="text-xl font-black" style={{ color: COLORS.ivory }}>{total.toLocaleString()} {currency}</span>
         </div>
-        {/* CORRECTION : Appel de handleCheckout au lieu de onClose */}
         <button onClick={handleCheckout} className="w-full py-3 rounded-xl font-bold text-sm" style={{ background: COLORS.gold, color: COLORS.bg }}>Passer la commande</button>
       </div>}
     </div>

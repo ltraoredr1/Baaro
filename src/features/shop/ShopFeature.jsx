@@ -64,6 +64,17 @@ export function ShopProductManager({ shopId, shopCurrency, user_id }) {
   const [editingProduct, setEditingProduct] = useState(null);
   const [pendingDeleteId, setPendingDeleteId] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [isOwner, setIsOwner] = useState(false); // CORRECTION : Vérification propriétaire
+
+  // CORRECTION : Vérifier que l'utilisateur est le propriétaire de la boutique
+  useEffect(() => {
+    async function checkOwnership() {
+      if (!shopId || !user_id) return;
+      const { data: shop } = await supabase.from("shops").select("owner_id").eq("id", shopId).single();
+      setIsOwner(shop?.owner_id === user_id);
+    }
+    checkOwnership();
+  }, [shopId, user_id]);
 
   const loadProducts = useCallback(async () => {
     if (!shopId) return;
@@ -77,13 +88,27 @@ export function ShopProductManager({ shopId, shopCurrency, user_id }) {
 
   useEffect(() => { loadProducts(); }, [loadProducts]);
 
-  const openForm = (product = null) => { setEditingProduct(product); setShowForm(true); };
+  const openForm = (product = null) => { 
+    if (!isOwner) {
+      showToast("Vous n'êtes pas autorisé à modifier ces produits", "error");
+      return;
+    }
+    setEditingProduct(product); setShowForm(true); 
+  };
   const closeForm = () => { setShowForm(false); setEditingProduct(null); };
   const handleSaved = () => { closeForm(); loadProducts(); };
 
   const confirmDelete = async () => {
     const productId = pendingDeleteId;
     if (!productId) return;
+    
+    // CORRECTION : Vérification propriétaire avant suppression
+    if (!isOwner) {
+      showToast("Vous n'êtes pas autorisé à supprimer ce produit", "error");
+      setPendingDeleteId(null);
+      return;
+    }
+    
     setPendingDeleteId(null);
     try {
       const { error } = await supabase.from("shop_products").delete().eq("id", productId);
@@ -94,6 +119,12 @@ export function ShopProductManager({ shopId, shopCurrency, user_id }) {
   };
 
   const toggleAvailability = async (product) => {
+    // CORRECTION : Vérification propriétaire avant modification
+    if (!isOwner) {
+      showToast("Vous n'êtes pas autorisé à modifier ce produit", "error");
+      return;
+    }
+    
     try {
       const newAvailability = !product.is_available;
       const { error } = await supabase.from("shop_products").update({ is_available: newAvailability }).eq("id", product.id);
@@ -173,4 +204,4 @@ export function ShopProductManager({ shopId, shopCurrency, user_id }) {
       )}
     </div>
   );
-                                                                                           }
+}

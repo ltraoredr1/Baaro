@@ -2,6 +2,7 @@ import { useState } from "react";
 import { ArrowLeft, Loader2, MapPin, Truck } from "lucide-react";
 import { COLORS } from "../../../theme.js";
 import { createOrder } from "../../../services/shopApi.js";
+import { createPayment, getAvailableProviders } from "../../../lib/paymentProvider.js";
 import { useToast } from "../../../components/ToastContext.jsx";
 
 export default function OrderCheckout({ shop, items, id, onBack, onDone }) {
@@ -10,6 +11,7 @@ export default function OrderCheckout({ shop, items, id, onBack, onDone }) {
   const [address, setAddress] = useState("");
   const [notes, setNotes] = useState("");
   const [loading, setLoading] = useState(false);
+  const [paymentMethod, setPaymentMethod] = useState("cash"); // cash, mobile_money, card
 
   const total = items.reduce((sum, x) => sum + x.unitPrice * x.quantity, 0);
   const currency = items[0]?.currency || shop?.currency || "XOF";
@@ -19,7 +21,39 @@ export default function OrderCheckout({ shop, items, id, onBack, onDone }) {
     if (method === "delivery" && !address.trim()) { showToast("Veuillez entrer une adresse de livraison", "error"); return; }
     setLoading(true);
     try {
-      await createOrder({ shopId: shop.id, buyerId: id, items, method, notes: notes.trim(), dropoffAddress: method === "delivery" ? address.trim() : null });
+      // Créer la commande
+      const order = await createOrder({ 
+        shopId: shop.id, 
+        buyerId: id, 
+        items, 
+        method, 
+        notes: notes.trim(), 
+        dropoffAddress: method === "delivery" ? address.trim() : null 
+      });
+
+      // CORRECTION : Si paiement en ligne, déclencher le flux de paiement
+      if (paymentMethod !== "cash" && order?.id) {
+        const providers = getAvailableProviders(shop.country || "ML");
+        const provider = providers.find(p => p.id === paymentMethod);
+        
+        if (provider) {
+          const paymentRef = `order_${order.id}_${Date.now()}`;
+          const paymentData = await createPayment({
+            provider: provider.id,
+            orderId: order.id,
+            paymentRef,
+            amount: total,
+            currency,
+            channel: provider.channels?.[0],
+          });
+
+          if (paymentData?.payment_url) {
+            window.location.href = paymentData.payment_url;
+            return;
+          }
+        }
+      }
+
       showToast("Commande passée avec succès !", "success");
       onDone();
     } catch (err) {
@@ -27,6 +61,8 @@ export default function OrderCheckout({ shop, items, id, onBack, onDone }) {
       showToast(err.message || "Erreur lors de la commande", "error");
     } finally { setLoading(false); }
   };
+
+  const providers = getAvailableProviders(shop?.country || "ML");
 
   return (
     <div className="flex flex-col gap-4 pb-24">
@@ -46,6 +82,7 @@ export default function OrderCheckout({ shop, items, id, onBack, onDone }) {
             <span style={{ color: COLORS.gold }}>{total.toLocaleString()} {currency}</span>
           </div>
         </div>
+
         <div className="rounded-xl border p-4 space-y-3" style={{ background: COLORS.surface2, borderColor: COLORS.border }}>
           <h3 className="text-sm font-bold" style={{ color: COLORS.ivory }}>Mode de réception</h3>
           <div className="grid grid-cols-2 gap-2">
@@ -56,6 +93,18 @@ export default function OrderCheckout({ shop, items, id, onBack, onDone }) {
             <textarea placeholder="Adresse complète de livraison..." value={address} onChange={(e) => setAddress(e.target.value)} rows={3} className="w-full rounded-xl border px-3 py-2 text-sm outline-none resize-none" style={{ background: COLORS.surface, borderColor: COLORS.border, color: COLORS.ivory }} required />
           )}
         </div>
+
+        {/* CORRECTION : Sélection du mode de paiement */}
+        <div className="rounded-xl border p-4 space-y-3" style={{ background: COLORS.surface2, borderColor: COLORS.border }}>
+          <h3 className="text-sm font-bold" style={{ color: COLORS.ivory }}>Mode de paiement</h3>
+          <div className="space-y-2">
+            <button type="button" onClick={() => setPaymentMethod("cash")} className="w-full text-left p-3 rounded-xl border text-sm font-bold" style={{ background: paymentMethod === "cash" ? `${COLORS.gold}22` : COLORS.surface, borderColor: paymentMethod === "cash" ? COLORS.gold : COLORS.border, color: paymentMethod === "cash" ? COLORS.gold : COLORS.muted }}>💵 Paiement à la livraison</button>
+            {providers.map(p => (
+              <button key={p.id} type="button" onClick={() => setPaymentMethod(p.id)} className="w-full text-left p-3 rounded-xl border text-sm font-bold" style={{ background: paymentMethod === p.id ? `${COLORS.gold}22` : COLORS.surface, borderColor: paymentMethod === p.id ? COLORS.gold : COLORS.border, color: paymentMethod === p.id ? COLORS.gold : COLORS.muted }}>{p.label}</button>
+            ))}
+          </div>
+        </div>
+
         <div>
           <label className="text-xs font-bold mb-1 block" style={{ color: COLORS.muted }}>Notes pour le vendeur (optionnel)</label>
           <textarea placeholder="Ex: Appeler avant d'arriver..." value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} className="w-full rounded-xl border px-3 py-2 text-sm outline-none resize-none" style={{ background: COLORS.surface2, borderColor: COLORS.border, color: COLORS.ivory }} />

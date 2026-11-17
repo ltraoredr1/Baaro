@@ -2,22 +2,17 @@ import ImageUpload from "../../components/ImageUpload.jsx";
 import { useState, useEffect } from "react";
 import { supabase } from "../../supabaseClient.js";
 import { createPayment, getAvailableProviders } from "../../lib/paymentProvider.js";
-import { COLORS } from "../../theme.js"; // 🆕 Import du thème pour la cohérence visuelle
+import { COLORS } from "../../theme.js";
 import { CURRENCIES } from "../../components/ProductForm.jsx";
 
 const COUNTRY_CURRENCY = {
-  // UEMOA
   ML: "XOF", CI: "XOF", SN: "XOF", BF: "XOF", BJ: "XOF", TG: "XOF", NE: "XOF", GW: "XOF",
-  // CEMAC
   CM: "XAF", GA: "XAF", CG: "XAF", TD: "XAF", CF: "XAF", GQ: "XAF",
-  // Autres pays africains
   GN: "GNF", MA: "MAD", DZ: "DZD", TN: "TND", NG: "NGN", GH: "GHS", EG: "EGP",
   KE: "KES", ZA: "ZAR", CD: "CDF", MR: "MRU", RW: "RWF",
-  // Reste du monde
   FR: "EUR", BE: "EUR", DE: "EUR", ES: "EUR", IT: "EUR", CH: "CHF", GB: "GBP", US: "USD", CA: "CAD",
 };
 
-// Le fuseau horaire est plus fiable que la langue du téléphone ("fr" ne dit pas le pays)
 const TIMEZONE_COUNTRY = {
   "Africa/Bamako": "ML", "Africa/Dakar": "SN", "Africa/Abidjan": "CI", "Africa/Ouagadougou": "BF",
   "Africa/Niamey": "NE", "Africa/Lome": "TG", "Africa/Porto-Novo": "BJ", "Africa/Bissau": "GW",
@@ -46,14 +41,8 @@ function guessDefaultCountry() {
   return "ML";
 }
 
-/**
- * Inscription boutique
- * - Nouveaux users : 30 jours gratuits (trial)
- * - Après / renouvellement : paiement annuel
- */
 export default function ShopRegistrationForm({ onRegistered }) {
   const [country, setCountry] = useState(guessDefaultCountry);
-  // Devise de la boutique : celle du pays par défaut, modifiable par l'utilisateur
   const [currencyChoice, setCurrencyChoice] = useState(null);
   const shopCurrency = currencyChoice || COUNTRY_CURRENCY[country] || "XOF";
   const [isPremium, setIsPremium] = useState(false);
@@ -67,7 +56,6 @@ export default function ShopRegistrationForm({ onRegistered }) {
   const [description, setDescription] = useState("");
   const [logoUrl, setLogoUrl] = useState("");
   const [ownerId, setOwnerId] = useState(null);
-  // logo via ImageUpload
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [eligibleForTrial, setEligibleForTrial] = useState(false);
@@ -91,7 +79,6 @@ export default function ShopRegistrationForm({ onRegistered }) {
         .maybeSingle();
       setIsPremium(!!profile?.is_premium);
 
-      // Essai = jamais eu de boutique (première création)
       const { count } = await supabase
         .from("shops")
         .select("id", { count: "exact", head: true })
@@ -177,7 +164,8 @@ export default function ShopRegistrationForm({ onRegistered }) {
 
         if (shopError) throw shopError;
 
-        await supabase.from("shop_subscriptions").insert({
+        // CORRECTION : Gestion d'erreur pour l'insertion de l'abonnement
+        const { error: subError } = await supabase.from("shop_subscriptions").insert({
           shop_id: shop.id,
           amount: 0,
           currency: shopCurrency,
@@ -187,11 +175,15 @@ export default function ShopRegistrationForm({ onRegistered }) {
           status: "trial",
         });
 
+        if (subError) {
+          console.error("Erreur création abonnement essai:", subError);
+          showToast("Boutique créée mais l'abonnement d'essai n'a pas pu être enregistré. Contactez le support.", "error");
+        }
+
         onRegistered?.(shop);
         return;
       }
 
-      // --- Parcours payant ---
       if (!pricing || !selectedProvider) {
         setError("Choisissez un moyen de paiement.");
         setLoading(false);

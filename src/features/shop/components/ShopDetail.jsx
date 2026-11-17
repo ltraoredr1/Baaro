@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback } from "react";
 import { ArrowLeft, ShoppingCart, Loader2 } from "lucide-react";
 import { COLORS } from "../../../theme.js";
 import { fetchShopById, fetchShopProducts } from "../../../services/shopApi.js";
-import OrderCheckout from "./OrderCheckout.jsx";
 import ShopReviews from "../../../components/ShopReviews.jsx";
 import ProductCard from "../../../components/ProductCard.jsx";
 import { useToast } from "../../../components/ToastContext.jsx";
@@ -12,10 +11,9 @@ export default function ShopDetail({ shopId, id, onBack }) {
   const { showToast } = useToast();
   const [shop, setShop] = useState(null);
   const [products, setProducts] = useState([]);
-  const [cart, setCart] = useState([]);
+  const [cart, setCart] = useState([]); // CORRECTION : Synchronisé avec la table cart
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [checkout, setCheckout] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -31,6 +29,42 @@ export default function ShopDetail({ shopId, id, onBack }) {
     return () => { cancelled = true; };
   }, [shopId]);
 
+  // CORRECTION : Charger le panier depuis Supabase
+  const loadCart = useCallback(async () => {
+    if (!id) return;
+    try {
+      const { data: rows, error } = await supabase.from("cart")
+        .select("id, item_id, quantity").eq("user_id", id);
+      if (error) throw error;
+      
+      const ids = [...new Set((rows || []).map(r => r.item_id))];
+      if (!ids.length) { setCart([]); return; }
+      
+      const { data: products, error: prodError } = await supabase.from("shop_products")
+        .select("id, name, price, currency, stock, type, shop_id")
+        .in("id", ids);
+      if (prodError) throw prodError;
+      
+      const byId = new Map((products || []).map(p => [p.id, p]));
+      const cartItems = (rows || []).map(row => {
+        const product = byId.get(row.item_id);
+        return {
+          productId: row.item_id,
+          name: product?.name,
+          unitPrice: Number(product?.price || 0),
+          currency: product?.currency || shop?.currency || "XOF",
+          quantity: row.quantity
+        };
+      }).filter(item => item.productId);
+      
+      setCart(cartItems);
+    } catch (err) {
+      console.error("Erreur chargement panier:", err);
+    }
+  }, [id, shop?.currency]);
+
+  useEffect(() => { loadCart(); }, [loadCart]);
+
   const addToCart = useCallback(async (product) => {
     if (!id) { showToast("Connectez-vous pour ajouter au panier", "info"); return; }
     const stock = product.type === "service" ? 100 : Number(product.stock ?? 0);
@@ -38,43 +72,29 @@ export default function ShopDetail({ shopId, id, onBack }) {
       showToast("Ce produit est en rupture de stock", "error"); return;
     }
     try {
-      const { error: rpcError } = await supabase.rpc("add_to_cart", {
-        p_user_id: id, p_item_id: product.id, p_quantity: 1,
-      });
-
-      if (rpcError && rpcError.code !== "42883") throw rpcError;
-
-      // Compatibility fallback for databases where the legacy RPC is absent.
-      if (rpcError?.code === "42883") {
-        const { data: existing, error: findError } = await supabase
-          .from("cart").select("id, quantity")
-          .eq("user_id", id).eq("item_id", product.id).maybeSingle();
-        if (findError) throw findError;
-        if (existing?.id) {
-          const nextQuantity = Math.min(stock, Number(existing.quantity || 0) + 1);
-          const { error } = await supabase.from("cart").update({ quantity: nextQuantity })
-            .eq("id", existing.id).eq("user_id", id);
-          if (error) throw error;
-        } else {
-          const { error } = await supabase.from("cart")
-            .insert({ user_id: id, item_id: product.id, quantity: 1 });
-          if (error) throw error;
-        }
+      const { data: existing, error: findError } = await supabase
+        .from("cart").select("id, quantity")
+        .eq("user_id", id).eq("item_id", product.id).maybeSingle();
+      if (findError) throw findError;
+      
+      if (existing?.id) {
+        const nextQuantity = Math.min(stock, Number(existing.quantity || 0) + 1);
+        const { error } = await supabase.from("cart").update({ quantity: nextQuantity })
+          .eq("id", existing.id).eq("user_id", id);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.from("cart")
+          .insert({ user_id: id, item_id: product.id, quantity: 1 });
+        if (error) throw error;
       }
 
-      setCart((items) => {
-        const old = items.find((x) => x.productId === product.id);
-        if (old) return items.map((x) => x.productId === product.id
-          ? { ...x, quantity: Math.min(product.type === "service" ? 100 : stock, x.quantity + 1) } : x);
-        return [...items, { productId: product.id, name: product.name,
-          unitPrice: Number(product.price), currency: product.currency || shop?.currency || "XOF", quantity: 1 }];
-      });
+      await loadCart();
       showToast(`${product.name} ajouté au panier`, "success");
     } catch (e) {
       console.error("Erreur ajout panier:", e);
       showToast(e.message || "Impossible d'ajouter au panier", "error");
     }
-  }, [id, shop?.currency, showToast]);
+  }, [id, showToast, loadCart]);
 
   const changeQuantity = useCallback(async (productId, delta) => {
     if (!id) return;
@@ -92,18 +112,16 @@ export default function ShopDetail({ shopId, id, onBack }) {
           .eq("item_id", productId).eq("user_id", id);
         if (error) throw error;
       }
-      setCart((items) => items.map((x) => x.productId === productId ? { ...x, quantity: newQty } : x)
-        .filter((x) => x.quantity > 0));
+      await loadCart();
     } catch (e) {
       console.error("Erreur mise à jour panier:", e);
       showToast(e.message || "Erreur de mise à jour", "error");
     }
-  }, [id, cart, products, showToast]);
+  }, [id, cart, products, showToast, loadCart]);
 
   if (loading) return <div className="flex flex-col items-center justify-center py-12 gap-3"><Loader2 className="animate-spin" size={32} style={{ color: COLORS.gold }} /><p className="text-sm" style={{ color: COLORS.muted }}>Chargement de la boutique…</p></div>;
   if (error) return <div className="space-y-4 text-center py-8"><p className="text-sm" style={{ color: "#ef4444" }}>{error}</p><button onClick={onBack} className="text-sm underline" style={{ color: COLORS.ivory }}>Retour</button></div>;
   if (!shop) return null;
-  if (checkout) return <OrderCheckout shop={shop} id={id} items={cart} onBack={() => setCheckout(false)} onDone={() => { setCart([]); setCheckout(false); }} />;
 
   const total = cart.reduce((sum, x) => sum + x.unitPrice * x.quantity, 0);
   const currency = cart[0]?.currency || shop.currency || "XOF";
@@ -125,11 +143,6 @@ export default function ShopDetail({ shopId, id, onBack }) {
         })}
       </div>
       <div className="mt-4 px-1"><h3 className="text-sm font-bold mb-3" style={{ color: COLORS.ivory }}>Avis clients</h3><ShopReviews shopId={shopId} id={id} /></div>
-      {cart.length > 0 && <div className="fixed bottom-4 left-4 right-4 max-w-2xl mx-auto flex items-center gap-3 rounded-xl border p-3 shadow-2xl backdrop-blur-md z-40" style={{ background: `${COLORS.surface}E6`, borderColor: COLORS.borderGold }}>
-        <div className="p-2 rounded-full flex-shrink-0" style={{ background: COLORS.gold }}><ShoppingCart size={18} style={{ color: COLORS.bg }} /></div>
-        <div className="flex-1 text-sm min-w-0"><div className="font-semibold truncate" style={{ color: COLORS.ivory }}>{totalItems} article(s)</div><div className="text-xs" style={{ color: COLORS.muted }}>Total: <span className="font-bold" style={{ color: COLORS.gold }}>{total.toLocaleString()} {currency}</span></div></div>
-        <button type="button" disabled={!id} onClick={() => setCheckout(true)} className="rounded-lg px-4 py-2.5 text-sm font-bold transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0" style={{ background: COLORS.gold, color: COLORS.bg }}>Commander</button>
-      </div>}
     </div>
   );
 }

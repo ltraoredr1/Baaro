@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Package, Loader2, Clock, CheckCircle, Truck } from "lucide-react";
+import { Package, Loader2, Clock, CheckCircle, Truck, AlertCircle } from "lucide-react";
 import { COLORS } from "../../../theme.js";
 import { fetchBuyerOrders } from "../../../services/shopApi.js";
 
@@ -14,18 +14,31 @@ const STATUS_CONFIG = {
 export default function OrdersBuyer({ id }) {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null); // CORRECTION : État d'erreur
 
   useEffect(() => { if (id) loadOrders(); }, [id]);
 
   const loadOrders = async () => {
     setLoading(true);
+    setError(null);
     try {
       const data = await fetchBuyerOrders(id);
       setOrders(data || []);
-    } catch (err) { console.error("Erreur commandes:", err); } finally { setLoading(false); }
+    } catch (err) {
+      console.error("Erreur commandes:", err);
+      setError(err.message || "Impossible de charger vos commandes");
+    } finally { setLoading(false); }
   };
 
   if (loading) return <div className="flex justify-center py-12"><Loader2 className="animate-spin" style={{ color: COLORS.gold }} /></div>;
+  
+  if (error) return (
+    <div className="flex flex-col items-center justify-center py-12 gap-3 text-center">
+      <AlertCircle size={32} style={{ color: "#ef4444" }} />
+      <p className="text-sm" style={{ color: "#ef4444" }}>{error}</p>
+      <button onClick={loadOrders} className="px-4 py-2 rounded-xl text-xs font-bold border transition-all active:scale-95" style={{ borderColor: COLORS.border, color: COLORS.ivory }}>Réessayer</button>
+    </div>
+  );
 
   return (
     <div className="flex flex-col gap-3">
