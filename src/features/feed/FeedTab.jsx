@@ -34,6 +34,7 @@ import { insertStory } from "@/features/stories/api/storiesApi.js";
 import { callSocial } from "@/lib/notifyInteraction.js";
 import { FEED_REFRESH_EVENT } from "@/lib/feedTabRefresh.jsx";
 import { useCursorFeed } from "@/hooks/useCursorFeed.js";
+import { useFeedInteractions } from "@/lib/feedInteractions.js";
 import { getCachedSavedPublications } from "@/lib/offlineContentCache.js";
 import { getSecureItem, setSecureItem } from "@/lib/messageOutbox.js";
 
@@ -741,6 +742,7 @@ export function FeedTab({
     hasMore,
     loading,
     loadingMore,
+    error: feedError,
     reload,
     refreshLatest,
     loadMore,
@@ -749,6 +751,7 @@ export function FeedTab({
   });
 
   const [newPostsCount, setNewPostsCount] = useState(0);
+  const [offlineFallback, setOfflineFallback] = useState(false);
   const posts = useMemo(() => rawPosts.map(formatPost), [rawPosts]);
   const newestPostCreatedAt = useMemo(() => {
     let newest = null;
@@ -875,6 +878,7 @@ export function FeedTab({
     offlinePostObjectUrlsRef.current = [];
   }, []);
   const loadPosts = useCallback(async (opts) => {
+    setOfflineFallback(false);
     const rows = await reload(opts);
     if (rows !== null) {
       releaseOfflinePostUrls();
@@ -884,6 +888,7 @@ export function FeedTab({
     try {
       const cached = await getCachedSavedPublications(activeUserId);
       if (!cached.length) return rows;
+      setOfflineFallback(true);
       releaseOfflinePostUrls();
       offlinePostObjectUrlsRef.current = cached.flatMap((post) =>
         (post.media_urls || []).map((media) => media.url).filter((url) => url?.startsWith("blob:"))
@@ -1021,6 +1026,11 @@ export function FeedTab({
 
     return list;
   }, [feedTab, posts, followingIds, activeUserId, tagFilter, countryFilter, languageFilter]);
+
+  const interactionMap = useFeedInteractions(
+    visiblePosts.map((post) => post.id),
+    activeUserId
+  );
 
   const handleHashtagClick = useCallback((tag) => {
     if (!/^[\p{L}_][\p{L}\p{N}_]*$/u.test(tag || "")) return;
@@ -1925,6 +1935,24 @@ export function FeedTab({
     );
   }
 
+  if (feedError && !rawPosts.length) {
+    return (
+      <div className="text-center py-12 space-y-3" role="alert">
+        <p className="text-sm" style={{ color: COLORS.muted }}>
+          Impossible de charger le fil pour le moment.
+        </p>
+        <button
+          type="button"
+          onClick={() => loadPosts()}
+          className="rounded-xl border px-4 py-2 text-xs font-bold"
+          style={{ borderColor: COLORS.borderTeal, color: COLORS.teal }}
+        >
+          Réessayer
+        </button>
+      </div>
+    );
+  }
+
   const canPublish = Boolean(
     newText.trim() || mediaItems.length || audioBlob || pollData?.question?.trim()
   );
@@ -2186,6 +2214,12 @@ export function FeedTab({
             ),
           }}
         />
+      )}
+
+      {offlineFallback && (
+        <div className="rounded-xl border px-3 py-2 text-xs" role="status" style={{ borderColor: COLORS.borderGold, color: COLORS.gold, background: COLORS.surface }}>
+          Hors connexion : affichage de vos publications enregistrées hors ligne.
+        </div>
       )}
 
       <GuestBanner
@@ -2502,6 +2536,12 @@ export function FeedTab({
             <SocialPostEnhancements
               post={post}
               user_id={activeUserId}
+              interaction={interactionMap.get(post.id) || {
+                reactionCount: Number(post.likes_count || 0),
+                shareCount: Number(post.shares_count || 0),
+                saved: false,
+                reaction: null,
+              }}
               isFollowing={
                 followingIds ? followingIds.has(post.author_id) : null
               }
@@ -2740,14 +2780,14 @@ export function FeedTab({
           </article>
         ))}
 
-        {visiblePosts.length === 0 &&
-          !hasMore &&
-          (tagFilter || countryFilter || languageFilter || (feedTab === "following" && followingIds)) && (
+        {visiblePosts.length === 0 && !hasMore && (
             <p className="text-center text-xs py-10" style={{ color: COLORS.muted }}>
-              {tagFilter ? `Aucune publication avec #${tagFilter} pour l'instant.`
+              {offlineFallback ? "Aucune publication enregistrée n’est disponible hors ligne."
+                : tagFilter ? `Aucune publication avec #${tagFilter} pour l'instant.`
                 : countryFilter ? `Aucune publication chargée pour ${COUNTRY_BY_FLAG.get(countryFilter)?.label || "ce pays"}.`
                   : languageFilter ? `Aucune publication chargée correspondant à la langue ${POST_LANGUAGE_OPTIONS.find(([code]) => code === languageFilter)?.[1] || "choisie"}.`
-                    : "Aucune publication de vos abonnements pour l'instant."}
+                    : feedTab === "following" ? "Aucune publication de vos abonnements pour l'instant."
+                      : "Aucune publication disponible pour le moment."}
             </p>
           )}
       </div>

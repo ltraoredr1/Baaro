@@ -7,7 +7,7 @@ import TranslatedText from "../../components/TranslatedText.jsx";
 import { checkRateLimit, rateLimitMessage } from "../../lib/rateLimit.js";
 import { isTransientOfflineError, runOrEnqueue } from "../../lib/offlineActions.js";
 import { recordFeedEvent } from "../../lib/feedEvents.js";
-import { cacheSavedPublication, hasCachedSavedPublication, removeCachedPublication } from "../../lib/offlineContentCache.js";
+import { cacheSavedPublication, removeCachedPublication } from "../../lib/offlineContentCache.js";
 
 function isValidAuthUserId(value) {
   if (typeof value !== "string" || !value.trim()) return false;
@@ -502,6 +502,7 @@ export const SocialPostEnhancements = memo(
     post,
     user_id,
     isFollowing = null,
+    interaction = null,
     onFollowChange,
     onLiked,
     onSaved,
@@ -509,10 +510,10 @@ export const SocialPostEnhancements = memo(
   }) {
     const { showToast } = useToast();
 
-    const [reaction, setReaction] = useState(null);
-    const [reactionCount, setReactionCount] = useState(0);
-    const [saved, setSaved] = useState(false);
-    const [shareCount, setShareCount] = useState(0);
+    const [reaction, setReaction] = useState(interaction?.reaction || null);
+    const [reactionCount, setReactionCount] = useState(interaction?.reactionCount || 0);
+    const [saved, setSaved] = useState(Boolean(interaction?.saved));
+    const [shareCount, setShareCount] = useState(interaction?.shareCount || 0);
     const [busy, setBusy] = useState(false);
     const [pop, setPop] = useState(false);
 
@@ -545,93 +546,15 @@ export const SocialPostEnhancements = memo(
       }
     };
 
-    // L'état d'abonnement n'est PLUS chargé ici (une requête par publication en moins) :
-    // il vient de FeedTab.
-    const load = useCallback(async () => {
-      if (!post?.id) return;
-
-      try {
-        const [
-          likesResult,
-          sharesResult,
-          bookmarkResult,
-        ] = await Promise.all([
-          supabase
-            .from("post_likes")
-            .select("user_id")
-            .eq("post_id", post.id),
-
-          supabase
-            .from("post_shares")
-            .select("post_id", { count: "exact", head: true })
-            .eq("post_id", post.id),
-
-          isValidAuthUserId(user_id)
-            ? supabase
-                .from("post_bookmarks")
-                .select("post_id")
-                .eq("post_id", post.id)
-                .eq("user_id", user_id)
-                .maybeSingle()
-            : Promise.resolve({ data: null, error: null }),
-        ]);
-
-        if (likesResult.error) throw likesResult.error;
-        if (sharesResult.error) throw sharesResult.error;
-        if (bookmarkResult.error) throw bookmarkResult.error;
-
-        const likeRows = likesResult.data || [];
-
-        setReactionCount(likeRows.length);
-        setReaction(
-          isValidAuthUserId(user_id) &&
-            likeRows.some((row) => row.user_id === user_id)
-            ? "like"
-            : null
-        );
-        setSaved(!!bookmarkResult.data);
-        if (bookmarkResult.data && isValidAuthUserId(user_id)) {
-          void cacheSavedPublication(user_id, post).catch(() => {});
-        }
-        setShareCount(sharesResult.count || 0);
-      } catch (error) {
-        if (isValidAuthUserId(user_id) && post?.id) {
-          void hasCachedSavedPublication(user_id, post.id).then(setSaved).catch(() => {});
-        }
-        console.error(
-          "[BAARO] Erreur chargement interactions :",
-          error
-        );
+    useEffect(() => {
+      setReaction(interaction?.reaction || null);
+      setReactionCount(interaction?.reactionCount || 0);
+      setSaved(Boolean(interaction?.saved));
+      setShareCount(interaction?.shareCount || 0);
+      if (interaction?.saved && isValidAuthUserId(user_id)) {
+        void cacheSavedPublication(user_id, post).catch(() => {});
       }
-    }, [post?.id, user_id]);
-
-    useEffect(() => {
-      load();
-    }, [load]);
-
-    useEffect(() => {
-      if (!post?.id) return undefined;
-
-      const channel = supabase
-        .channel(`post-likes-${post.id}`)
-        .on(
-          "postgres_changes",
-          {
-            event: "*",
-            schema: "public",
-            table: "post_likes",
-            filter: `post_id=eq.${post.id}`,
-          },
-          () => {
-            load();
-          }
-        )
-        .subscribe();
-
-      return () => {
-        supabase.removeChannel(channel);
-      };
-    }, [post?.id, load]);
+    }, [interaction, post, user_id]);
 
     const current = useMemo(
       () => REACTIONS.find((item) => item.id === reaction),
@@ -666,7 +589,6 @@ export const SocialPostEnhancements = memo(
           }
           setReaction(null);
           setReactionCount((count) => Math.max(0, count - 1));
-          if (!result?.offline) await load();
           return;
         }
 
@@ -676,7 +598,6 @@ export const SocialPostEnhancements = memo(
         } else {
           await sendNotification("like");
           void recordFeedEvent(post.id, "like");
-          await load();
         }
 
         setReaction("like");

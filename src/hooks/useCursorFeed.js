@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef } from "react";
 import { fetchFeedPage } from "../lib/feedPagination.js";
+import { mergeLatestFeedRows } from "../lib/feedState.js";
 
 /**
  * Pagination du fil par curseur.
@@ -13,6 +14,7 @@ export function useCursorFeed({ onError } = {}) {
   const [hasMore, setHasMore] = useState(true);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [error, setError] = useState(null);
 
   const cursorRef = useRef(null);
   const busyRef = useRef(false);
@@ -24,6 +26,7 @@ export function useCursorFeed({ onError } = {}) {
     if (!reset && !cursorRef.current) return null;
 
     busyRef.current = true;
+    setError(null);
     if (reset && !silent) setLoading(true);
     if (!reset) setLoadingMore(true);
 
@@ -37,6 +40,7 @@ export function useCursorFeed({ onError } = {}) {
       return rows;
     } catch (e) {
       onErrorRef.current?.(e);
+      setError(e);
       if (reset) {
         if (!silent) setPosts([]);
         setHasMore(false);
@@ -55,17 +59,18 @@ export function useCursorFeed({ onError } = {}) {
   const refreshLatest = useCallback(async () => {
     if (busyRef.current) return null;
     busyRef.current = true;
+    setError(null);
     try {
       const { rows, nextCursor } = await fetchFeedPage({ cursor: null });
       setPosts((previous) => {
-        const incomingIds = new Set(rows.map((row) => row.id));
-        return [...rows, ...previous.filter((row) => !incomingIds.has(row.id))];
+        return mergeLatestFeedRows(previous, rows);
       });
       if (!cursorRef.current) cursorRef.current = nextCursor;
       setHasMore(Boolean(cursorRef.current));
       return rows;
     } catch (e) {
       onErrorRef.current?.(e);
+      setError(e);
       return null;
     } finally {
       busyRef.current = false;
@@ -75,5 +80,5 @@ export function useCursorFeed({ onError } = {}) {
   const reload = useCallback((opts) => load({ ...opts, reset: true }), [load]);
   const loadMore = useCallback(() => load({ reset: false }), [load]);
 
-  return { posts, setPosts, hasMore, loading, loadingMore, reload, refreshLatest, loadMore };
+  return { posts, setPosts, hasMore, loading, loadingMore, error, reload, refreshLatest, loadMore };
 }
