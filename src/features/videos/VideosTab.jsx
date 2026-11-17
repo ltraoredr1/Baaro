@@ -31,6 +31,7 @@ import { useVideoActions } from "./hooks/useVideoActions.js";
 import { useVideoComments } from "./hooks/useVideoComments.js";
 import { useVideoCreator } from "./hooks/useVideoCreator.js";
 import { useVideoFeed } from "./hooks/useVideoFeed.js";
+import { looksLikeVideo } from "../../services/mediaService.js";
 
 import VideoNextGenStudio from "./VideoNextGenStudio.jsx";
 
@@ -127,9 +128,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
         ? Array.from(fileOrList)
         : [fileOrList];
 
-    const videos = files.filter(
-      (file) => file && file.type?.startsWith("video/")
-    );
+    const videos = files.filter((file) => looksLikeVideo(file));
 
     if (!videos.length) {
       showToast("Sélectionne au moins une vidéo.", "error");

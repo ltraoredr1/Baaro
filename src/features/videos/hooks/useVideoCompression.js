@@ -5,7 +5,6 @@ import { useCallback, useRef, useState } from "react";
 // 1. Tentative locale légère (MediaRecorder → MP4 H.264) quand le navigateur
 //    le supporte vraiment et que le fichier n'est pas trop long / trop lourd.
 // 2. Si échec, interruption, ou gain insuffisant → on renvoie l'original
-//    avec le flag _needsServerTranscode = true pour que le worker fasse
 //    le vrai travail (FFmpeg).
 // 3. Sur mobile / faible mémoire on est plus agressif (720p, bitrate plus bas)
 //    et on abandonne plus vite pour ne pas bloquer Termux / WebView Android.
@@ -55,21 +54,6 @@ function pickMimeType() {
   );
 }
 
-function markNeedsServer(file) {
-  if (!file) return file;
-  try {
-    // Propriété non-énumérable pour ne pas polluer les sérialisations
-    Object.defineProperty(file, "_needsServerTranscode", {
-      value: true,
-      writable: false,
-      configurable: true,
-    });
-  } catch {
-    file._needsServerTranscode = true;
-  }
-  return file;
-}
-
 export function useVideoCompression() {
   const [compressing, setCompressing] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -86,7 +70,6 @@ export function useVideoCompression() {
    * done | skipped | cancelled | interrupted | failed | aborted (file = null).
    *
    * Quand status !== "done", le fichier original est renvoyé et peut porter
-   * _needsServerTranscode = true pour le worker.
    */
   const compress = useCallback(async (file) => {
     const mimeType = pickMimeType();
@@ -95,16 +78,17 @@ export function useVideoCompression() {
     const maxSide = mobile ? MAX_SIDE_MOBILE : MAX_SIDE_DESKTOP;
     const videoBps = mobile ? VIDEO_BPS_MOBILE : VIDEO_BPS_DESKTOP;
 
-    // Conditions trop mauvaises → skip immédiat + flag serveur
+    // Conditions non prises en charge : conserver le fichier original.
     if (
       !file ||
       !file.type?.startsWith("video/") ||
       file.size < MIN_SIZE_BYTES ||
-      !HTMLCanvasElement.prototype.captureStream ||
+      typeof HTMLCanvasElement === "undefined" ||
+      typeof HTMLCanvasElement.prototype.captureStream !== "function" ||
       !mimeType
     ) {
       return {
-        file: markNeedsServer(file),
+        file: file,
         status: "skipped",
       };
     }
@@ -113,6 +97,7 @@ export function useVideoCompression() {
     const video = document.createElement("video");
 
     let audioCtx = null;
+    let captureStream = null;
     let frameHandle = 0;
     let usesVideoFrameCallback = false;
     let onVisibility = null;
@@ -134,6 +119,8 @@ export function useVideoCompression() {
       video.removeAttribute("src");
       video.load();
       URL.revokeObjectURL(url);
+      captureStream?.getTracks?.().forEach((track) => track.stop());
+      captureStream = null;
       audioCtx?.close?.().catch(() => {});
     };
 
@@ -178,7 +165,7 @@ export function useVideoCompression() {
         video.setAttribute("playsinline", "");
         video.setAttribute("webkit-playsinline", "");
         video.preload = "auto";
-        video.onerror = () => finish({ status: "failed" });
+        video.onerror = () => requestStop("failed");
 
         video.onloadedmetadata = () => {
           const { duration, videoWidth, videoHeight } = video;
@@ -218,28 +205,31 @@ export function useVideoCompression() {
             return;
           }
 
-          const stream = canvas.captureStream(mobile ? 24 : 30);
+          captureStream = canvas.captureStream(mobile ? 24 : 30);
 
-          // Audio via Web Audio (jamais par les haut-parleurs)
+          // Si Web Audio est indisponible, garder la vidéo originale.
           try {
             const AudioContextClass =
               window.AudioContext || window.webkitAudioContext;
-            if (AudioContextClass) {
-              audioCtx = new AudioContextClass();
-              const source = audioCtx.createMediaElementSource(video);
-              const destination = audioCtx.createMediaStreamDestination();
-              source.connect(destination);
-              destination.stream
-                .getAudioTracks()
-                .forEach((track) => stream.addTrack(track));
-              audioCtx.resume?.().catch(() => {});
+            if (!AudioContextClass) {
+              finish({ status: "failed" });
+              return;
             }
+            audioCtx = new AudioContextClass();
+            const source = audioCtx.createMediaElementSource(video);
+            const destination = audioCtx.createMediaStreamDestination();
+            source.connect(destination);
+            destination.stream
+              .getAudioTracks()
+              .forEach((track) => captureStream.addTrack(track));
+            audioCtx.resume?.().catch(() => {});
           } catch {
-            // Pas d'audio dans le résultat local → le worker pourra ré-encoder
+            finish({ status: "failed" });
+            return;
           }
 
           try {
-            recorder = new MediaRecorder(stream, {
+            recorder = new MediaRecorder(captureStream, {
               mimeType,
               videoBitsPerSecond: videoBps,
               audioBitsPerSecond: AUDIO_BPS,
@@ -267,7 +257,7 @@ export function useVideoCompression() {
             } else {
               finish({
                 status: "recorded",
-                blob: new Blob(chunks, { type: "video/mp4" }),
+                blob: new Blob(chunks, { type: recorder?.mimeType || mimeType }),
               });
             }
           };
@@ -336,9 +326,9 @@ export function useVideoCompression() {
           blob.size === 0 ||
           blob.size > file.size * KEEP_IF_SMALLER_THAN
         ) {
-          // Pas assez de gain → worker
+          // Pas assez de gain : on conserve l'original.
           return {
-            file: markNeedsServer(file),
+            file: file,
             status: "skipped",
           };
         }
@@ -362,12 +352,12 @@ export function useVideoCompression() {
 
       // skipped / cancelled / interrupted / failed → original + flag serveur
       return {
-        file: markNeedsServer(file),
+        file: file,
         status: outcome.status || "failed",
       };
     } catch {
       return {
-        file: markNeedsServer(file),
+        file: file,
         status: "failed",
       };
     } finally {

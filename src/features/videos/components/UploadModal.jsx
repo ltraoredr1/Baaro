@@ -130,7 +130,7 @@ export default function UploadModal({
                   Alléger la vidéo avant l'envoi
                 </div>
                 <div className="text-[11px] text-white/40">
-                  Vidéos de plus de 10 Mo et de moins de 3 min, en 720p+ MP4.
+                  Fichiers de plus de 8 Mo : jusqu'à 75 s sur mobile et 120 s sur ordinateur. Si l'appareil ne le permet pas, l'original est conservé.
                 </div>
               </div>
               <button
