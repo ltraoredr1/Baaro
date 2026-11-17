@@ -829,7 +829,7 @@ export const SocialPostEnhancements = memo(
     };
 
     return (
-      <div className="flex items-center justify-between w-full gap-2 pt-1">
+      <div className="flex w-full flex-col gap-2 pt-1 sm:flex-row sm:items-center sm:justify-between">
         {post?.author_id && post.author_id !== user_id ? (
           <button
             type="button"
@@ -849,14 +849,14 @@ export const SocialPostEnhancements = memo(
           <div />
         )}
 
-        <div className="flex items-center gap-2">
+        <div className="grid w-full grid-cols-3 gap-1.5 sm:w-auto sm:flex sm:items-center sm:gap-2">
           <button
             type="button"
             onClick={() => chooseReaction("like")}
             disabled={busy}
             aria-pressed={reaction === "like"}
             aria-label={reaction === "like" ? "Retirer mon J’aime" : "J’aime"}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border transition-all duration-200 active:scale-95 disabled:opacity-50"
+            className="flex min-w-0 items-center justify-center gap-1.5 rounded-lg border px-2 py-2 text-xs transition-all duration-200 active:scale-95 disabled:opacity-50 sm:px-3 sm:py-1.5"
             style={{
               borderColor: COLORS.border,
               color: current ? COLORS.ivory : COLORS.muted,
@@ -885,7 +885,7 @@ export const SocialPostEnhancements = memo(
             onClick={bookmark}
             disabled={busy}
             aria-label={saved ? "Retirer des favoris" : "Enregistrer"}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border transition-all active:scale-95 disabled:opacity-50"
+            className="flex min-w-0 items-center justify-center gap-1.5 rounded-lg border px-2 py-2 text-xs transition-all active:scale-95 disabled:opacity-50 sm:px-3 sm:py-1.5"
             style={{
               borderColor: COLORS.border,
               color: saved ? COLORS.gold : COLORS.muted,
@@ -903,7 +903,7 @@ export const SocialPostEnhancements = memo(
             onClick={share}
             disabled={busy}
             aria-label="Partager cette publication"
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border transition-all active:scale-95 disabled:opacity-50"
+            className="flex min-w-0 items-center justify-center gap-1.5 rounded-lg border px-2 py-2 text-xs transition-all active:scale-95 disabled:opacity-50 sm:px-3 sm:py-1.5"
             style={{
               borderColor: COLORS.border,
               color: COLORS.muted,

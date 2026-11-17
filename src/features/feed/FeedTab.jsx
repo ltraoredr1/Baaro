@@ -2549,17 +2549,17 @@ export function FeedTab({
             />
 
             <div
-              className="flex items-center justify-between gap-2 pt-2 border-t flex-wrap"
+              className="flex flex-col gap-2 pt-2 border-t"
               style={{ borderColor: COLORS.border }}
             >
               <div
-                className="flex items-center gap-3 text-[11px] font-medium flex-wrap"
+                className="flex w-full items-center gap-2 overflow-x-auto pb-0.5 text-[11px] font-medium"
                 style={{ color: COLORS.muted }}
               >
                 <button
                   type="button"
                   onClick={() => handleRepost(post)}
-                  className="flex items-center gap-1 transition active:scale-95"
+                  className="flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 transition active:scale-95 hover:bg-white/5"
                   style={{
                     color: repostedPosts[post.id] ? "#10B981" : COLORS.muted,
                   }}
@@ -2571,7 +2571,7 @@ export function FeedTab({
                 <button
                   type="button"
                   onClick={() => { setQuotePost(post); setQuoteText(""); }}
-                  className="flex items-center gap-1 transition active:scale-95"
+                  className="flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 transition active:scale-95 hover:bg-white/5"
                   style={{ color: COLORS.muted }}
                   aria-label="Citer cette publication avec un commentaire"
                 >
@@ -2579,7 +2579,7 @@ export function FeedTab({
                 </button>
 
                 {post.author_id === activeUserId && (
-                  <div className="flex items-center gap-1.5 ml-1">
+                  <div className="flex shrink-0 items-center gap-1.5 ml-1">
                     <button
                       type="button"
                       onClick={() =>
@@ -2621,11 +2621,11 @@ export function FeedTab({
                 )}
               </div>
 
-              <div className="flex items-center gap-2 flex-wrap">
+              <div className="flex w-full items-center gap-2 overflow-x-auto pb-1">
                 <button
                   type="button"
                   onClick={() => toggleComments(post.id)}
-                  className="flex items-center gap-1 text-xs transition hover:opacity-80"
+                  className="flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-xs transition hover:bg-white/5"
                   style={{ color: COLORS.muted }}
                 >
                   <MessageCircle size={15} />
