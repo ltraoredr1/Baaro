@@ -103,8 +103,8 @@ export default function FeedHeader({
       </div>
 
       {showModeSwitcher && (
-        <div className="mt-2 flex justify-center pointer-events-auto">
-          <div className="flex max-w-full items-center gap-0.5 rounded-full border border-white/15 bg-black/30 p-1 backdrop-blur-md">
+        <div className="mt-1 flex justify-center pointer-events-auto">
+          <div className="flex max-w-full items-center gap-0.5 rounded-full border border-white/10 bg-transparent p-1 backdrop-blur-md">
             {tabs.map((tab) => (
               <button
                 key={tab.id}
