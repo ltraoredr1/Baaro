@@ -17,6 +17,7 @@ export function useCursorFeed({ onError } = {}) {
   const [hasMore, setHasMore] = useState(true);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
+  const queryIdRef = useRef(0);
 
   const cursorRef = useRef(null);
   const busyRef = useRef(false);

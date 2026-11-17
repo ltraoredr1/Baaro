@@ -528,6 +528,8 @@ export function FeedTab({
     reload,
     loadMore,
   } = useCursorFeed({
+    feedTab,
+    followingIds: followingIds ? Array.from(followingIds) : [],
     onError: (error) => handleDbError(error, showToast, "Erreur lors du chargement du fil"),
   });
 
@@ -652,7 +654,13 @@ export function FeedTab({
       .select("followed_id,status")
       .eq("follower_id", activeUserId)
       .then(({ data, error }) => {
-        if (cancelled || error) return;
+        if (cancelled) return;
+        if (error) {
+          console.error("[BAARO] Erreur chargement abonnements:", error);
+          showToast("Mode Abonnés dégradé : impossible de charger vos suivis", "error");
+          setFollowingIds(new Set()); // Fallback sécurisé
+          return;
+        }
         setFollowingIds(
           new Set(
             (data || [])
@@ -944,14 +952,10 @@ export function FeedTab({
       (entries) => {
         if (!entries[0].isIntersecting || loadingMore) return;
 
-        const filtered = feedTab === "following" || Boolean(tagFilter);
-        if (filtered && visiblePosts.length < 5) {
-          if (autoLoadsRef.current >= 10) return;
-          autoLoadsRef.current += 1;
-        } else {
-          autoLoadsRef.current = 0;
+        // Le filtrage est maintenant côté serveur, on fait confiance à hasMore
+        if (hasMore) {
+          loadMore();
         }
-        loadMore();
       },
       { rootMargin: "600px 0px" }
     );

@@ -1,3 +1,5 @@
+// ATTENTION : Le classement est désormais géré côté serveur via get_feed_posts RPC.
+// Ce fichier est conservé pour rétrocompatibilité mais ne doit plus trier les lots.
 import { supabase } from "../supabaseClient.js";
 import { withRetry } from "./perf.js";
 import { FOLLOWS } from "../features/stories/constants.js";
