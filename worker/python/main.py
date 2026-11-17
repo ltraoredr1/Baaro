@@ -13,7 +13,13 @@ from fastapi import FastAPI, Request, HTTPException
 app = FastAPI(title="BAARO Python Engine", version="1.2.0")
 SECRET = os.getenv("BAARO_PYTHON_SECRET", "")
 
+
 MAX_TEXT = 20000
+MAX_BODY_BYTES = 25000
+PROVIDER_FAILURE_THRESHOLD = 3
+PROVIDER_COOLDOWN_SECONDS = 60
+provider_failures = {}
+
 
 TASK_PROMPTS = {
     "text.moderate": (
@@ -110,9 +116,15 @@ def call_ai(task, text, language):
     if task == "text.translate":
         instruction += f" Langue cible : {language}."
 
-    last_error = "Fournisseurs IA indisponibles."
+
+    now = time.time()
 
     for provider in providers:
+        name = provider["name"]
+        state = provider_failures.get(name, {})
+        if state.get("open_until", 0) > now:
+            continue
+
         try:
             url = provider["base"].rstrip("/") + "/chat/completions"
 
@@ -131,10 +143,7 @@ def call_ai(task, text, language):
                             "Retourne uniquement le texte final, sans commentaire."
                         ),
                     },
-                    {
-                        "role": "user",
-                        "content": text,
-                    },
+                    {"role": "user", "content": text},
                 ],
             }
 
@@ -148,7 +157,9 @@ def call_ai(task, text, language):
                 method="POST",
             )
 
-            with urllib.request.urlopen(request, timeout=provider["timeout"]) as response:
+            with urllib.request.urlopen(
+                request, timeout=provider["timeout"]
+            ) as response:
                 data = json.loads(response.read().decode("utf-8"))
 
             result = data.get("choices", [{}])[0].get(
@@ -156,21 +167,34 @@ def call_ai(task, text, language):
             ).get("content")
 
             if not isinstance(result, str) or not result.strip():
-                raise ValueError("Réponse IA vide.")
+                raise ValueError("Empty AI response")
+
+            provider_failures.pop(name, None)
 
             return {
                 "text": result.strip(),
-                "provider": provider["name"],
+                "provider": name,
                 "model": provider["model"],
             }
 
-        except Exception:
-            continue
+        except Exception as error:
+            state = provider_failures.get(name, {"count": 0})
+            state["count"] = state.get("count", 0) + 1
 
-    raise HTTPException(
-        502,
-        "Traitement IA indisponible."
-    )
+            if state["count"] >= PROVIDER_FAILURE_THRESHOLD:
+                state["open_until"] = (
+                    time.time() + PROVIDER_COOLDOWN_SECONDS
+                )
+                state["count"] = 0
+
+            provider_failures[name] = state
+            print(
+                "[ai-provider] failure:",
+                name,
+                type(error).__name__,
+            )
+
+    raise HTTPException(502, "Traitement IA indisponible.")
 
 
 @app.get("/health")
@@ -185,6 +209,9 @@ async def health():
 @app.post("/v1/process")
 async def process(request: Request):
     body = await request.body()
+    if len(body) > MAX_BODY_BYTES:
+        raise HTTPException(413, "Payload too large")
+
     timestamp = request.headers.get("x-baaro-timestamp", "")
     signature = request.headers.get("x-baaro-signature", "")
 
@@ -210,16 +237,31 @@ async def process(request: Request):
     except Exception:
         raise HTTPException(400, "Invalid JSON")
 
-    task = data.get("task")
-    input_data = data.get("input", {})
+    if not isinstance(data, dict):
+        raise HTTPException(400, "Invalid request")
 
+    task = data.get("task")
+    allowed_tasks = {
+        "text.normalize", "text.analyze", "text.correct",
+        "text.rewrite", "text.translate", "text.moderate",
+    }
+    if task not in allowed_tasks:
+        raise HTTPException(400, "Unsupported task")
+
+    input_data = data.get("input", {})
     if not isinstance(input_data, dict):
         raise HTTPException(400, "Invalid input")
 
-    text = input_data.get("text", "")
+    if set(input_data) - {"text", "language"}:
+        raise HTTPException(400, "Invalid input fields")
 
+    text = input_data.get("text", "")
     if not isinstance(text, str) or len(text) > MAX_TEXT:
         raise HTTPException(400, "Invalid text")
+
+    language = input_data.get("language", "fr")
+    if not isinstance(language, str) or not language.strip() or len(language) > 40:
+        raise HTTPException(400, "Invalid language")
 
     if task == "text.normalize":
         result = unicodedata.normalize("NFC", text.strip())
@@ -232,10 +274,7 @@ async def process(request: Request):
         }
 
     elif task in TASK_PROMPTS:
-        language = input_data.get("language", "fr")
-
-        if not isinstance(language, str) or not language.strip():
-            raise HTTPException(400, "Invalid language")
+        language = language.strip()
 
         if not text.strip():
             raise HTTPException(400, "Empty text")
