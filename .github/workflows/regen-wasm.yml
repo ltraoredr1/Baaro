@@ -1,0 +1,33 @@
+name: BAARO - Regenerate offline WASM
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  regen:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.22.2
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - run: npm ci
+
+      - run: npm run test:offline
+
+      - name: Commit regenerated WASM
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: régénère les artefacts WASM offline"
+          file_pattern: "public/wasm/*"
