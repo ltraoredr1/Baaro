@@ -3,11 +3,7 @@ import { fetchFeedPage } from "../lib/feedPagination.js";
 
 /**
  * Pagination du fil par curseur.
- * Le classement est entièrement géré par fetchFeedPage (lib/feedPagination.js) :
- * le hook ne reclasse plus rien et ne lit plus les abonnements, il affiche les pages
- * dans l'ordre reçu. Le curseur est opaque : on le renvoie tel quel.
- *
- * - posts : lignes brutes Supabase, dans l'ordre de pertinence
+ * - posts : lignes brutes Supabase (à formater côté composant)
  * - setPosts : pour les mises à jour optimistes (reposts, commentaires, etc.)
  * - reload({ silent }) : recharge la première page
  * - loadMore() : charge la page suivante
@@ -17,27 +13,14 @@ export function useCursorFeed({ onError } = {}) {
   const [hasMore, setHasMore] = useState(true);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
-  const queryIdRef = useRef(0);
 
   const cursorRef = useRef(null);
   const busyRef = useRef(false);
-  const pendingResetRef = useRef(null);
   const onErrorRef = useRef(onError);
   onErrorRef.current = onError;
 
   const load = useCallback(async ({ reset = false, silent = false } = {}) => {
-    if (busyRef.current) {
-      // Ne pas perdre un refresh demandé pendant le chargement d'une page.
-      if (reset) {
-        return new Promise((resolve) => {
-          const pending = pendingResetRef.current || { silent, waiters: [] };
-          pending.silent = pending.silent && silent;
-          pending.waiters.push(resolve);
-          pendingResetRef.current = pending;
-        });
-      }
-      return null;
-    }
+    if (busyRef.current) return null;
     if (!reset && !cursorRef.current) return null;
 
     busyRef.current = true;
@@ -48,13 +31,7 @@ export function useCursorFeed({ onError } = {}) {
       const { rows, nextCursor } = await fetchFeedPage({
         cursor: reset ? null : cursorRef.current,
       });
-
-      setPosts((prev) => {
-        if (reset) return rows;
-        const seen = new Set(prev.map((p) => p.id));
-        return [...prev, ...rows.filter((r) => !seen.has(r.id))];
-      });
-
+      setPosts((prev) => (reset ? rows : [...prev, ...rows]));
       cursorRef.current = nextCursor;
       setHasMore(Boolean(nextCursor));
       return rows;
@@ -69,13 +46,6 @@ export function useCursorFeed({ onError } = {}) {
       busyRef.current = false;
       setLoading(false);
       setLoadingMore(false);
-      const pendingReset = pendingResetRef.current;
-      pendingResetRef.current = null;
-      if (pendingReset) {
-        void load({ reset: true, silent: pendingReset.silent }).then((rows) => {
-          pendingReset.waiters.forEach((resolve) => resolve(rows));
-        });
-      }
     }
   }, []);
 
