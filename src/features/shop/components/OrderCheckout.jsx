@@ -25,7 +25,6 @@ export default function OrderCheckout({ shop, items, id, onBack, onDone }) {
 
     setLoading(true);
     try {
-      // CORRECTION CRITIQUE : Vérification stricte du fournisseur AVANT de créer la commande
       let paymentUrl = null;
 
       if (paymentMethod !== "cash") {
@@ -36,7 +35,7 @@ export default function OrderCheckout({ shop, items, id, onBack, onDone }) {
           throw new Error("Moyen de paiement indisponible pour ce pays. Veuillez choisir le paiement à la livraison.");
         }
 
-        // Créer la commande (elle restera en payment_status = 'pending')
+        // 1. Créer la commande d'abord
         const order = await createOrder({
           shopId: shop.id,
           buyerId: id,
@@ -46,7 +45,7 @@ export default function OrderCheckout({ shop, items, id, onBack, onDone }) {
           dropoffAddress: method === "delivery" ? address.trim() : null
         });
 
-        // Initialiser le paiement
+        // 2. Initialiser le paiement avec les 3 champs ajoutés pour le backend
         const paymentRef = `order_${order.id}_${Date.now()}`;
         const paymentData = await createPayment({
           provider: provider.id,
@@ -55,6 +54,9 @@ export default function OrderCheckout({ shop, items, id, onBack, onDone }) {
           amount: total,
           currency,
           channel: provider.channels?.[0],
+          user_id: id,         // ✅ Ajouté : pour que le backend sache qui paie
+          orderId: order.id,   // ✅ Ajouté : pour lier explicitement la transaction à la commande
+          country: shop.country // ✅ Ajouté : pour aider le provider à valider le numéro de téléphone
         });
 
         if (!paymentData?.payment_url) {
@@ -74,10 +76,10 @@ export default function OrderCheckout({ shop, items, id, onBack, onDone }) {
         });
       }
 
-      // Gestion de la redirection ou du succès
+      // 3. Gestion de la redirection ou du succès
       if (paymentUrl) {
         showToast("Redirection vers le paiement sécurisé...", "info");
-        window.location.href = paymentUrl; // Le webhook confirmera le paiement plus tard
+        window.location.href = paymentUrl;
       } else {
         showToast("Commande passée avec succès !", "success");
         onDone();
