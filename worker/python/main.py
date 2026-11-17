@@ -10,7 +10,7 @@ import urllib.error
 
 from fastapi import FastAPI, Request, HTTPException
 
-app = FastAPI(title="BAARO Python Engine", version="1.1.0")
+app = FastAPI(title="BAARO Python Engine", version="1.2.0")
 SECRET = os.getenv("BAARO_PYTHON_SECRET", "")
 
 MAX_TEXT = 20000
@@ -41,34 +41,60 @@ TASK_PROMPTS = {
 
 
 def ai_providers():
-    providers = []
+    configured = {}
+
+    lumen_key = os.getenv("LUMEN_API_KEY", "")
+    lumen_base = os.getenv("LUMEN_BASE_URL", "").rstrip("/")
+    if lumen_key and lumen_base:
+        configured["lumen"] = {
+            "name": "lumen",
+            "key": lumen_key,
+            "base": lumen_base,
+            "model": os.getenv("LUMEN_MODEL", "lumen"),
+            "timeout": max(5, min(120, int(os.getenv("LUMEN_TIMEOUT_MS", "45000")) / 1000)),
+        }
 
     if os.getenv("GROQ_API_KEY"):
-        providers.append({
+        configured["groq"] = {
             "name": "groq",
             "key": os.getenv("GROQ_API_KEY"),
-            "base": os.getenv(
-                "GROQ_BASE", "https://api.groq.com/openai/v1"
-            ),
-            "model": os.getenv(
-                "GROQ_MODEL", "openai/gpt-oss-20b"
-            ),
-        })
+            "base": os.getenv("GROQ_BASE", "https://api.groq.com/openai/v1").rstrip("/"),
+            "model": os.getenv("GROQ_MODEL", "openai/gpt-oss-20b"),
+            "timeout": 30,
+        }
 
     if os.getenv("MISTRAL_API_KEY"):
-        providers.append({
+        configured["mistral"] = {
             "name": "mistral",
             "key": os.getenv("MISTRAL_API_KEY"),
-            "base": os.getenv(
-                "MISTRAL_BASE", "https://api.mistral.ai/v1"
-            ),
-            "model": os.getenv(
-                "MISTRAL_MODEL", "ministral-3b-latest"
-            ),
-        })
+            "base": os.getenv("MISTRAL_BASE", "https://api.mistral.ai/v1").rstrip("/"),
+            "model": os.getenv("MISTRAL_MODEL", "ministral-3b-latest"),
+            "timeout": 30,
+        }
 
-    return providers
+    if os.getenv("OPENAI_API_KEY"):
+        configured["openai"] = {
+            "name": "openai",
+            "key": os.getenv("OPENAI_API_KEY"),
+            "base": os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1").rstrip("/"),
+            "model": os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+            "timeout": 30,
+        }
 
+    configured_order = [
+        item.strip().lower()
+        for item in os.getenv(
+            "BAARO_AI_PROVIDER_ORDER",
+            "lumen,groq,mistral,openai"
+        ).split(",")
+        if item.strip()
+    ]
+
+    return [
+        configured[name]
+        for name in dict.fromkeys(configured_order)
+        if name in configured
+    ]
 
 def call_ai(task, text, language):
     providers = ai_providers()
@@ -122,7 +148,7 @@ def call_ai(task, text, language):
                 method="POST",
             )
 
-            with urllib.request.urlopen(request, timeout=45) as response:
+            with urllib.request.urlopen(request, timeout=provider["timeout"]) as response:
                 data = json.loads(response.read().decode("utf-8"))
 
             result = data.get("choices", [{}])[0].get(
@@ -138,12 +164,12 @@ def call_ai(task, text, language):
                 "model": provider["model"],
             }
 
-        except Exception as error:
-            last_error = str(error)[:250]
+        except Exception:
+            continue
 
     raise HTTPException(
         502,
-        "Traitement IA indisponible : " + last_error
+        "Traitement IA indisponible."
     )
 
 
@@ -152,7 +178,7 @@ async def health():
     return {
         "service": "baaro-python",
         "status": "ok",
-        "version": "1.1.0",
+        "version": "1.2.0",
     }
 
 

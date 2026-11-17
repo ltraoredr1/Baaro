@@ -89,6 +89,25 @@ export default async function handler(req, res) {
 
     const input = body.input && typeof body.input === "object" && !Array.isArray(body.input)
       ? body.input : {};
+
+    if (Object.keys(input).some((key) => !["text", "language"].includes(key))) {
+      return res.status(400).json({ ok: false, error: "Invalid input fields" });
+    }
+    if (input.language !== undefined &&
+        (typeof input.language !== "string" || !input.language.trim() || input.language.length > 40)) {
+      return res.status(400).json({ ok: false, error: "Invalid language" });
+    }
+
+    const aiLimiter = await rateLimitAsync(req, {
+      key: `python-${body.task}-${user.id}`,
+      max: ["text.analyze", "text.normalize"].includes(body.task) ? 60 : 12,
+      windowMs: 60_000,
+    });
+    if (!aiLimiter.ok) {
+      Object.entries(aiLimiter.headers || {}).forEach(([k, v]) => res.setHeader(k, v));
+      return res.status(aiLimiter.status).json(aiLimiter.body);
+    }
+
     const payload = JSON.stringify({ task: body.task, input });
 
     if (Buffer.byteLength(payload) > 25000) {
