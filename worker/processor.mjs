@@ -239,8 +239,36 @@ async function captions(job, input, dir) {
 }
 
 async function features(job, input) {
+  // Métadonnées natives Rust + validation C/libavformat.
+  const [probe, native] = await Promise.all([
+    ffprobe(input),
+    sniffFile(input),
+  ]);
+
+  if (
+    !native ||
+    native.danger ||
+    !native.media ||
+    !native.containerValid
+  ) {
+    const error = new Error("Média refusé par le contrôle Rust/C");
+    error.status = 422;
+    throw error;
+  }
+
   return {
-    probe: await ffprobe(input),
+    native: {
+      kind: native.kind,
+      mime: native.mime,
+      size: native.size,
+      containerValid: native.containerValid,
+      hasVideo: native.hasVideo,
+      hasAudio: native.hasAudio,
+      width: native.width,
+      height: native.height,
+      durationMs: native.durationMs,
+    },
+    probe,
     extractedAt: new Date().toISOString(),
   };
 }
