@@ -1,28 +1,39 @@
-import { useEffect, useState, useRef } from 'react';
-import { supabase } from '../supabaseClient';
+import { useEffect, useState } from "react";
+import { supabase } from "../supabaseClient.js";
 
 const MIN_QUERY_LENGTH = 2;
-const EMPTY = {
+const MAX_QUERY_LENGTH = 100;
+const DEFAULT_DELAY = 300;
+const EMPTY = Object.freeze({
   users: [],
   groups: [],
   debates: [],
   posts: [],
   hashtags: [],
-};
+});
 
-export function useGlobalSearch(query, delay = 300) {
+function normalizeResults(data) {
+  return {
+    users: Array.isArray(data?.users) ? data.users : [],
+    groups: Array.isArray(data?.groups) ? data.groups : [],
+    debates: Array.isArray(data?.debates) ? data.debates : [],
+    posts: Array.isArray(data?.posts) ? data.posts : [],
+    hashtags: Array.isArray(data?.hashtags) ? data.hashtags : [],
+  };
+}
+
+export function useGlobalSearch(query, delay = DEFAULT_DELAY) {
   const [results, setResults] = useState(EMPTY);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const abortRef = useRef(null);
 
   useEffect(() => {
-    const q = (query || '').trim();
-
-    // Annuler la requête précédente
-    if (abortRef.current) {
-      abortRef.current.abort();
-    }
+    const q = typeof query === "string"
+      ? query.replace(/\s+/g, " ").trim().slice(0, MAX_QUERY_LENGTH)
+      : "";
+    const wait = Number.isFinite(Number(delay))
+      ? Math.max(0, Math.min(Number(delay), 1500))
+      : DEFAULT_DELAY;
 
     if (q.length < MIN_QUERY_LENGTH) {
       setResults(EMPTY);
@@ -31,41 +42,34 @@ export function useGlobalSearch(query, delay = 300) {
       return undefined;
     }
 
-    const controller = new AbortController();
-    abortRef.current = controller;
-
+    // PostgREST RPC ne reçoit pas de signal AbortController ici.
+    // Le drapeau active empêche une réponse obsolète de modifier l'interface.
+    let active = true;
+    setResults(EMPTY);
     setLoading(true);
     setError(null);
 
     const timer = setTimeout(async () => {
       try {
         const { data, error: rpcError } = await supabase.rpc(
-          'global_discovery_search',
+          "global_discovery_search",
           { p_query: q, p_limit: 8 }
         );
-
-        if (controller.signal.aborted) return;
-
+        if (!active) return;
         if (rpcError) throw rpcError;
-
-        setResults({
-          ...EMPTY,
-          ...(data || {}),
-        });
-      } catch (e) {
-        if (controller.signal.aborted) return;
+        setResults(normalizeResults(data));
+      } catch (requestError) {
+        if (!active) return;
         setResults(EMPTY);
-        setError(e?.message || 'Recherche indisponible');
+        setError(requestError?.message || "Recherche indisponible");
       } finally {
-        if (!controller.signal.aborted) {
-          setLoading(false);
-        }
+        if (active) setLoading(false);
       }
-    }, delay);
+    }, wait);
 
     return () => {
+      active = false;
       clearTimeout(timer);
-      controller.abort();
     };
   }, [query, delay]);
 

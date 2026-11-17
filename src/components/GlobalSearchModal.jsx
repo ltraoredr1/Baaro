@@ -79,12 +79,17 @@ function GlobalSearchModal({ isOpen, onClose, onSelectUser, onSelectTab, onSelec
     }
     setStatsLoading(true);
     (async () => {
-      const { data, error: statsError } = await supabase.rpc('get_profile_stats', {
-        p_user_id: selectedUser.id,
-      });
-      if (!cancelled) {
-        if (!statsError) setSelectedStats(Array.isArray(data) ? data[0] : data);
-        setStatsLoading(false);
+      try {
+        const { data, error: statsError } = await supabase.rpc("get_profile_stats", {
+          p_user_id: selectedUser.id,
+        });
+        if (cancelled) return;
+        if (statsError) throw statsError;
+        setSelectedStats(Array.isArray(data) ? data[0] || null : data || null);
+      } catch {
+        if (!cancelled) setSelectedStats(null);
+      } finally {
+        if (!cancelled) setStatsLoading(false);
       }
     })();
     return () => {
@@ -162,7 +167,7 @@ function GlobalSearchModal({ isOpen, onClose, onSelectUser, onSelectTab, onSelec
             aria-expanded={showResults}
             aria-haspopup="listbox"
             aria-controls={listboxId}
-            aria-activedescendant={activeIndex >= 0 ? `\( {listboxId}-option- \){activeIndex}` : undefined}
+            aria-activedescendant={activeIndex >= 0 ? `${listboxId}-option-${activeIndex}` : undefined}
             autoComplete="off"
             className="flex-1 bg-transparent text-[0.95rem] outline-none"
             style={{ color: COLORS.ivory }}
@@ -232,7 +237,7 @@ function GlobalSearchModal({ isOpen, onClose, onSelectUser, onSelectTab, onSelec
                   return (
                     <button
                       key={user.id}
-                      id={`\( {listboxId}-option- \){idx}`}
+                      id={`${listboxId}-option-${idx}`}
                       role="option"
                       aria-selected={activeIndex === idx}
                       type="button"
@@ -277,7 +282,7 @@ function GlobalSearchModal({ isOpen, onClose, onSelectUser, onSelectTab, onSelec
                   return (
                     <button
                       key={g.id}
-                      id={`\( {listboxId}-option- \){idx}`}
+                      id={`${listboxId}-option-${idx}`}
                       role="option"
                       aria-selected={activeIndex === idx}
                       type="button"
@@ -312,7 +317,7 @@ function GlobalSearchModal({ isOpen, onClose, onSelectUser, onSelectTab, onSelec
                   return (
                     <button
                       key={p.id}
-                      id={`\( {listboxId}-option- \){idx}`}
+                      id={`${listboxId}-option-${idx}`}
                       role="option"
                       aria-selected={activeIndex === idx}
                       type="button"
@@ -341,7 +346,7 @@ function GlobalSearchModal({ isOpen, onClose, onSelectUser, onSelectTab, onSelec
                   return (
                     <button
                       key={debate.id}
-                      id={`\( {listboxId}-option- \){idx}`}
+                      id={`${listboxId}-option-${idx}`}
                       role="option"
                       aria-selected={activeIndex === idx}
                       type="button"
@@ -376,7 +381,7 @@ function GlobalSearchModal({ isOpen, onClose, onSelectUser, onSelectTab, onSelec
                   return (
                     <button
                       key={h.tag}
-                      id={`\( {listboxId}-option- \){idx}`}
+                      id={`${listboxId}-option-${idx}`}
                       role="option"
                       aria-selected={activeIndex === idx}
                       type="button"
