@@ -980,10 +980,10 @@ export function VideosTab({ onRewardPoints, onExit }) {
         onOpenStudio={() => setStudioOpen(true)}
         mode={mode}
         setMode={setMode}
-        headerActions={(
+        showModeSwitcher
+        extraActions={(
           <>
-          {/* Commandes vocales, gestes de la main et mouvements de tête */}
-      <HandsFreeControls
+            <HandsFreeControls
           triggerInHeader={true}
         activeVideoId={activeId}
         isPlaying={!!activeId && playback.playingId === activeId}
@@ -1000,11 +1000,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
         onOpenComments={openActiveComments}
         onToggleFullscreen={toggleActiveFullscreen}
         />
-          </>
-        )}
-        showModeSwitcher
-        extraActions={(
-          <>
+
             <button
               type="button"
               onClick={cycleSpeed}
