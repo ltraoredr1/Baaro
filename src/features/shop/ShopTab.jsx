@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
-import { Store, PlusCircle, Package, ClipboardList, Loader2, ShoppingCart } from "lucide-react";
+import { Store, PlusCircle, Package, ClipboardList, Loader2, ShoppingCart, Shield } from "lucide-react";
 import { COLORS } from "../../theme.js";
 import { supabase } from "../../supabaseClient.js";
 import { LocalShopDirectory, ShopProductManager } from "./ShopFeature.jsx";
@@ -9,6 +9,7 @@ import OrdersBuyer from "./components/OrdersBuyer.jsx";
 import OrdersSeller from "./components/OrdersSeller.jsx";
 import CartDrawer from "./components/CartDrawer.jsx";
 import OrderCheckout from "./components/OrderCheckout.jsx";
+import ShopAdmin from "./components/ShopAdmin.jsx";
 
 export default function ShopTab({ id }) {
   const [mode, setMode] = useState("directory");
@@ -17,9 +18,22 @@ export default function ShopTab({ id }) {
   const [loadingShop, setLoadingShop] = useState(false);
   const [error, setError] = useState(null);
   const [cartOpen, setCartOpen] = useState(false);
-  
-  // CORRECTION : État pour gérer les données de checkout provenant du panier
   const [checkoutData, setCheckoutData] = useState(null);
+  const [isAdmin, setIsAdmin] = useState(false);
+
+  // Vérifier si l'utilisateur est admin
+  useEffect(() => {
+    async function checkAdmin() {
+      if (!id) return;
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("is_admin")
+        .eq("id", id)
+        .maybeSingle();
+      setIsAdmin(!!profile?.is_admin);
+    }
+    checkAdmin();
+  }, [id]);
 
   useEffect(() => {
     if (!id) { setMyShop(null); return; }
@@ -70,7 +84,6 @@ export default function ShopTab({ id }) {
     }
   }, []);
 
-  // CORRECTION : Handlers pour le flux de commande depuis le tiroir panier
   const handleCheckout = useCallback((data) => {
     setCheckoutData(data);
     setCartOpen(false);
@@ -98,11 +111,11 @@ export default function ShopTab({ id }) {
       case "manage": return myShop ? <ShopProductManager shopId={myShop.id} shopCurrency={myShop.currency} user_id={id} /> : <p className="text-sm" style={{ color: COLORS.muted }}>Aucune boutique trouvée. Créez-en une d'abord.</p>;
       case "orders-seller": return myShop ? <OrdersSeller shopId={myShop.id} /> : null;
       case "orders-buyer": return id ? <OrdersBuyer id={id} /> : null;
-      // CORRECTION : Ajout du cas checkout
       case "checkout": return checkoutData ? <OrderCheckout shop={checkoutData.shop} items={checkoutData.items} id={id} onBack={handleCheckoutBack} onDone={handleCheckoutDone} /> : null;
+      case "admin": return isAdmin ? <ShopAdmin /> : <p className="text-sm" style={{ color: "#ef4444" }}>Accès non autorisé</p>;
       default: return null;
     }
-  }, [mode, loadingShop, error, myShop, id, selectedShopId, checkoutData, handleShopSelect, handleDetailBack, handleRegistrationComplete, handleCheckoutBack, handleCheckoutDone]);
+  }, [mode, loadingShop, error, myShop, id, selectedShopId, checkoutData, isAdmin, handleShopSelect, handleDetailBack, handleRegistrationComplete, handleCheckoutBack, handleCheckoutDone]);
 
   return (
     <div className="flex flex-col gap-4">
@@ -117,9 +130,12 @@ export default function ShopTab({ id }) {
           <button type="button" onClick={() => setMode("orders-buyer")} className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold border" style={getButtonStyle(mode === "orders-buyer")} disabled={loadingShop}>Mes commandes</button>
           <button type="button" onClick={() => setCartOpen(true)} className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold border" style={{ borderColor: COLORS.borderGold, color: COLORS.gold }} aria-label="Ouvrir le panier"><ShoppingCart size={14} /> Panier</button>
         </>)}
+        {/* 👇 BOUTON ADMIN 👇 */}
+        {isAdmin && (
+          <button type="button" onClick={() => setMode("admin")} className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold border" style={getButtonStyle(mode === "admin", "teal")} disabled={loadingShop}><Shield size={14} /> Admin</button>
+        )}
       </nav>
       <main role="tabpanel">{renderContent}</main>
-      {/* CORRECTION : Passage de la prop onCheckout au CartDrawer */}
       {id && <CartDrawer isOpen={cartOpen} onClose={() => setCartOpen(false)} id={id} onCheckout={handleCheckout} />}
     </div>
   );
