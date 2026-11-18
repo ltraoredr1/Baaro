@@ -21,6 +21,9 @@ MAX_BODY_BYTES = 25000
 MAX_AI_RESPONSE_BYTES = 128 * 1024
 MAX_AI_OUTPUT_CHARS = 20000
 MAX_AI_EXECUTION_SECONDS = 16
+AI_CONCURRENCY_LIMIT = 8
+AI_QUEUE_WAIT_SECONDS = 1
+ai_semaphore = asyncio.Semaphore(AI_CONCURRENCY_LIMIT)
 PROVIDER_FAILURE_THRESHOLD = 3
 PROVIDER_COOLDOWN_SECONDS = 60
 provider_failures = {}
@@ -377,12 +380,27 @@ async def process(request: Request):
         if not text.strip():
             raise HTTPException(400, "Empty text")
 
-        result = await asyncio.to_thread(
-            call_ai,
-            task,
-            text,
-            language.strip()[:40],
-        )
+        try:
+            await asyncio.wait_for(
+                ai_semaphore.acquire(),
+                timeout=AI_QUEUE_WAIT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            raise HTTPException(
+                503,
+                "Moteur IA temporairement saturé. Réessayez dans quelques secondes.",
+                headers={"Retry-After": "2"},
+            )
+
+        try:
+            result = await asyncio.to_thread(
+                call_ai,
+                task,
+                text,
+                language.strip()[:40],
+            )
+        finally:
+            ai_semaphore.release()
 
         if task == "text.moderate":
             try:
