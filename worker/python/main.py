@@ -247,10 +247,33 @@ def call_ai(task, text, language):
 
 @app.get("/health")
 async def health():
+    now = time.time()
+    configured = ai_providers()
+
+    providers = []
+    for provider in configured:
+        name = provider["name"]
+        state = provider_failures.get(name, {})
+        cooldown = max(0, int(state.get("open_until", 0) - now))
+
+        providers.append({
+            "name": name,
+            "available": cooldown == 0,
+            "cooldown_seconds": cooldown,
+        })
+
     return {
         "service": "baaro-python",
         "status": "ok",
         "version": "1.2.0",
+        "authentication_configured": bool(SECRET),
+        "ai": {
+            "configured_count": len(configured),
+            "available_count": sum(
+                1 for provider in providers if provider["available"]
+            ),
+            "providers": providers,
+        },
     }
 
 
