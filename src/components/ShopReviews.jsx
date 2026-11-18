@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import TranslateButton from "./TranslateButton.jsx";
 import { Star } from "lucide-react";
 import { COLORS } from "../theme.js";
 import { supabase } from "../supabaseClient.js";
@@ -16,6 +17,7 @@ export default function ShopReviews({ shopId, user_id }) {
   const [loading, setLoading] = useState(true);
   const [canReview, setCanReview] = useState(false);
   const [eligibleOrderId, setEligibleOrderId] = useState(null);
+  const [translations, setTranslations] = useState({});
 
   const [rating, setRating] = useState(5);
   const [comment, setComment] = useState("");
@@ -219,9 +221,30 @@ export default function ShopReviews({ shopId, user_id }) {
                 </span>
               </div>
               {r.comment && (
-                <p className="text-xs" style={{ color: COLORS.ivory }}>
-                  {r.comment}
-                </p>
+                <div className="space-y-1.5">
+                  <p className="text-xs" style={{ color: COLORS.ivory }}>
+                    {translations[r.id] || r.comment}
+                  </p>
+                  <TranslateButton
+                    text={r.comment}
+                    preferredLang="fr"
+                    quickLangs={["bm", "wo", "fuc", "dyu", "snk"]}
+                    isTranslated={!!translations[r.id]}
+                    onTranslated={(translated) =>
+                      setTranslations((prev) => ({
+                        ...prev,
+                        [r.id]: translated,
+                      }))
+                    }
+                    onClear={() =>
+                      setTranslations((prev) => {
+                        const next = { ...prev };
+                        delete next[r.id];
+                        return next;
+                      })
+                    }
+                  />
+                </div>
               )}
             </div>
           ))}
