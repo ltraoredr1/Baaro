@@ -1,10 +1,10 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useLayoutEffect } from "react";
+import { createPortal } from "react-dom";
+import { useTranslation } from "react-i18next";
 import { Languages, Loader2, ChevronDown, X } from "lucide-react";
 import { COLORS } from "../theme.js";
 import { TRANSLATE_LANGS, translateText } from "../lib/translateApi.js";
 import { useToast } from "./ToastContext.jsx";
-
-const QUICK_LANGUAGE_LABELS = { bm: "Bamanan", wo: "WO", fuc: "Pulaar", dyu: "Dioula", snk: "Soninké" };
 
 /**
  * Bouton + sélecteur de langue pour traduire un texte (post, commentaire…).
@@ -25,21 +25,47 @@ export function TranslateButton({
   quickLangs = [],
 }) {
   const { showToast } = useToast();
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState(null);
+  const menuRef = useRef(null);
   const [loading, setLoading] = useState(false);
   const [lang, setLang] = useState(preferredLang);
   const ref = useRef(null);
-  const quickLanguages = quickLangs
-    .map((code) => TRANSLATE_LANGS.find((item) => item.code === code))
-    .filter(Boolean);
+
+  // Le menu est affiché hors du conteneur (portail) : la ligne d'actions du
+  // post défile horizontalement et coupait le menu, qui restait invisible.
+  useLayoutEffect(() => {
+    if (!open || !ref.current) return;
+    const r = ref.current.getBoundingClientRect();
+    const width = 176;
+    const maxH = 224;
+    const above = r.top > maxH + 12 || r.top > window.innerHeight - r.bottom;
+    setPos({
+      left: Math.max(8, Math.min(r.left, window.innerWidth - width - 8)),
+      top: above ? Math.max(8, r.top - maxH - 8) : r.bottom + 8,
+      maxH: Math.min(maxH, above ? r.top - 16 : window.innerHeight - r.bottom - 16),
+    });
+  }, [open]);
 
   useEffect(() => {
+    if (!open) return undefined;
     const close = (e) => {
-      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+      if (ref.current?.contains(e.target) || menuRef.current?.contains(e.target)) return;
+      setOpen(false);
     };
+    const hide = () => setOpen(false);
     document.addEventListener("mousedown", close);
-    return () => document.removeEventListener("mousedown", close);
-  }, []);
+    document.addEventListener("touchstart", close, { passive: true });
+    window.addEventListener("resize", hide);
+    window.addEventListener("scroll", hide, true);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("touchstart", close);
+      window.removeEventListener("resize", hide);
+      window.removeEventListener("scroll", hide, true);
+    };
+  }, [open]);
 
   const run = async (targetLang) => {
     if (!text?.trim() || loading) return;
@@ -53,100 +79,90 @@ export function TranslateButton({
         cached: data.cached,
       });
     } catch (err) {
-      showToast(err.message || "Traduction impossible", "error");
+      showToast(err.message || t("video_translate.failed"), "error");
     } finally {
       setLoading(false);
     }
   };
 
-  const quickActions = quickLanguages.map((language) => (
-    <button
-      key={language.code}
-      type="button"
-      disabled={loading || !text?.trim()}
-      onClick={() => { setLang(language.code); run(language.code); }}
-      className="rounded-md border px-1.5 py-1 text-[9px] font-bold transition hover:bg-white/5 disabled:opacity-40"
-      style={{ color: COLORS.teal, borderColor: COLORS.border }}
-      title={`Traduire en ${language.label}`}
-      aria-label={`Traduire en ${language.label}`}
-    >
-      {loading && lang === language.code
-        ? <Loader2 size={11} className="animate-spin" />
-        : QUICK_LANGUAGE_LABELS[language.code] || language.code.toUpperCase()}
-    </button>
-  ));
+  // Langues rapides d'abord (bm, wo, ...), puis la langue préférée, puis le reste.
+  const orderedLangs = [...TRANSLATE_LANGS].sort((x, y) => {
+    const rank = (code) => {
+      const q = quickLangs.indexOf(code);
+      if (q >= 0) return q;
+      return code === preferredLang ? quickLangs.length : quickLangs.length + 1;
+    };
+    return rank(x.code) - rank(y.code);
+  });
 
   if (isTranslated) {
     return (
-      <div className="flex items-center gap-1.5">
+      <div className="flex shrink-0 items-center gap-1.5">
         <button
           type="button"
           onClick={onClear}
-          className="flex items-center gap-1.5 text-xs transition hover:opacity-80"
+          className="flex min-h-[36px] items-center gap-1.5 rounded-lg px-2 text-xs transition hover:opacity-80"
           style={{ color: COLORS.teal }}
-          title="Afficher l'original"
+          title={t("video_translate.original")}
         >
           <X size={14} />
-          Original
+          {t("video_translate.original")}
         </button>
-        {quickActions}
       </div>
     );
   }
 
   return (
-    <div className="relative flex items-center gap-1.5" ref={ref}>
+    <div className="relative flex shrink-0 items-center gap-1.5" ref={ref}>
       <button
         type="button"
         disabled={loading || !text?.trim()}
         onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-1.5 text-xs transition hover:opacity-80 disabled:opacity-40"
+        className="flex min-h-[36px] items-center gap-1.5 rounded-lg px-2 text-xs transition hover:opacity-80 disabled:opacity-40"
         style={{ color: COLORS.muted }}
-        title="Traduire"
+        title={t("video_translate.translate")}
       >
         {loading ? (
           <Loader2 size={16} className="animate-spin" style={{ color: COLORS.gold }} />
         ) : (
           <Languages size={16} />
         )}
-        <span className="hidden sm:inline">Traduire</span>
+        <span className="hidden sm:inline">{t("video_translate.translate")}</span>
         <ChevronDown size={12} />
       </button>
-      {quickActions}
-
-      {open && (
-        <div
-          className="absolute left-0 bottom-full mb-2 z-50 w-44 max-h-56 overflow-y-auto rounded-xl border shadow-2xl p-1.5"
-          style={{
-            background: COLORS.surface2,
-            borderColor: COLORS.borderGold,
-          }}
-        >
-          <p
-            className="px-2 py-1 text-[10px] uppercase tracking-wider"
-            style={{ color: COLORS.muted }}
+      {open && pos &&
+        createPortal(
+          <div
+            ref={menuRef}
+            className="fixed z-[9999] w-44 overflow-y-auto rounded-xl border shadow-2xl p-1.5"
+            style={{
+              left: pos.left,
+              top: pos.top,
+              maxHeight: pos.maxH,
+              background: COLORS.surface2,
+              borderColor: COLORS.borderGold,
+            }}
           >
-            Traduire en
-          </p>
-          {TRANSLATE_LANGS.map((l) => (
-            <button
-              key={l.code}
-              type="button"
-              onClick={() => {
-                setLang(l.code);
-                run(l.code);
-              }}
-              className="w-full text-left px-2.5 py-1.5 text-xs rounded-lg transition"
-              style={{
-                background: lang === l.code ? COLORS.goldGlow : "transparent",
-                color: lang === l.code ? COLORS.gold : COLORS.ivory,
-              }}
-            >
-              {l.label}
-            </button>
-          ))}
-        </div>
-      )}
+            {orderedLangs.map((l) => (
+                <button
+                  key={l.code}
+                  type="button"
+                  onClick={() => {
+                    setLang(l.code);
+                    run(l.code);
+                  }}
+                  className="w-full text-left px-3 py-2.5 text-sm rounded-lg transition"
+                  style={{
+                    background: lang === l.code ? COLORS.goldGlow : "transparent",
+                    color: lang === l.code ? COLORS.gold : COLORS.ivory,
+                  }}
+                >
+                  {l.label}
+                </button>
+            ))}
+          </div>,
+          document.body
+        )}
     </div>
   );
 }
