@@ -12,7 +12,7 @@ import urllib.error
 
 from fastapi import FastAPI, Request, HTTPException
 
-app = FastAPI(title="BAARO Python Engine", version="1.2.0")
+app = FastAPI(title="BAARO Python Engine", version="1.2.1")
 SECRET = os.getenv("BAARO_PYTHON_SECRET", "")
 
 
@@ -24,6 +24,7 @@ MAX_AI_EXECUTION_SECONDS = 16
 AI_CONCURRENCY_LIMIT = 8
 AI_QUEUE_WAIT_SECONDS = 1
 ai_semaphore = asyncio.Semaphore(AI_CONCURRENCY_LIMIT)
+active_ai_requests = 0
 PROVIDER_FAILURE_THRESHOLD = 3
 PROVIDER_COOLDOWN_SECONDS = 60
 provider_failures = {}
@@ -295,9 +296,14 @@ async def health():
     return {
         "service": "baaro-python",
         "status": "ok",
-        "version": "1.2.0",
+        "version": "1.2.1",
         "authentication_configured": bool(SECRET),
         "ai": {
+            "max_concurrent": AI_CONCURRENCY_LIMIT,
+            "active_requests": active_ai_requests,
+            "available_slots": max(
+                0, AI_CONCURRENCY_LIMIT - active_ai_requests
+            ),
             "configured_count": len(configured),
             "available_count": sum(
                 1 for provider in providers if provider["available"]
@@ -392,6 +398,9 @@ async def process(request: Request):
                 headers={"Retry-After": "2"},
             )
 
+        global active_ai_requests
+        active_ai_requests += 1
+
         try:
             result = await asyncio.to_thread(
                 call_ai,
@@ -400,6 +409,7 @@ async def process(request: Request):
                 language.strip()[:40],
             )
         finally:
+            active_ai_requests = max(0, active_ai_requests - 1)
             ai_semaphore.release()
 
         if task == "text.moderate":
