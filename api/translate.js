@@ -170,6 +170,21 @@ async function invokeGeminiTranslation({ messages, system, maxTokens }) {
   });
 }
 
+async function invokeMistralTranslation({ messages, system, maxTokens }) {
+  const cfg = providerConfig("mistral");
+
+  if (!cfg) return null;
+
+  return callOpenAICompatible({
+    key: cfg.key,
+    base: cfg.base,
+    model: cfg.model,
+    messages,
+    system,
+    maxTokens: maxTokens || 1200,
+  });
+}
+
 function validateMediaUrl(value) {
   if (typeof value !== "string") return null;
 
@@ -659,27 +674,44 @@ export default async function handler(req, res) {
 
   try {
     let result = null;
-    let provider = "groq";
+    let provider = null;
+    let lastProviderError = null;
 
-    if (involvesLocalLanguage) {
+    const providerOrder = involvesLocalLanguage
+      ? ["gemini", "groq", "mistral"]
+      : ["groq", "mistral", "gemini"];
+
+    for (const currentProvider of providerOrder) {
       try {
-        result = await invokeGeminiTranslation(requestPayload);
-        if (result) provider = "gemini";
+        if (currentProvider === "gemini") {
+          result = await invokeGeminiTranslation(requestPayload);
+        } else if (currentProvider === "groq") {
+          result = await invokeGroqTranslation(requestPayload);
+        } else if (currentProvider === "mistral") {
+          result = await invokeMistralTranslation(requestPayload);
+        }
+
+        if (result && result.reply) {
+          provider = currentProvider;
+          break;
+        }
       } catch (error) {
+        lastProviderError = error;
         console.warn(
-          "[translate-gemini warning, repli Groq]",
+          `[translate-${currentProvider} fallback]`,
           error?.message || error
         );
-        result = null;
       }
     }
 
-    if (!result) {
-      result = await invokeGroqTranslation(requestPayload);
-      provider = "groq";
+    if (!result || !result.reply) {
+      throw lastProviderError || Object.assign(
+        new Error("Aucun fournisseur de traduction n'est disponible. Vérifie les clés Groq, Mistral et Gemini."),
+        { status: 503 }
+      );
     }
 
-    const translated = String(result.reply || "").trim();
+    const translated = String(result.reply || "").trim();    const translated = String(result.reply || "").trim();
 
     if (!translated) {
       throw Object.assign(
