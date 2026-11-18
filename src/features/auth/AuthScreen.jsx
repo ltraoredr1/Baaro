@@ -92,7 +92,10 @@ export default function AuthScreen() {
         sessionStorage.setItem("baaro_guest_ok", "1");
       } catch {}
 
-      const useCaptcha = captchaToken && captchaToken !== "dev-bypass";
+      // Les tokens de contournement sont réservés à l'APK / aux invités.
+      // Ne jamais les envoyer à Supabase comme de vrais tokens Turnstile.
+      const useCaptcha =
+        typeof captchaToken === "string" && !captchaToken.endsWith("-bypass");
 
       const { data, error: authError } = await supabase.auth.signInAnonymously(
         useCaptcha ? { options: { captchaToken } } : undefined

@@ -3,6 +3,7 @@ import { Capacitor } from "@capacitor/core";
 import { Fingerprint } from "lucide-react";
 import { supabase } from "../../supabaseClient.js";
 import { useSettings } from "../../hooks/useSettings.js";
+import { useApp } from "../../contexts/AppContext.jsx";
 import {
   isBiometricAvailable,
   hasBiometric,
@@ -24,6 +25,7 @@ const ss = {
 
 export default function BiometricGate({ children }) {
   const { settings } = useSettings();
+  const { user: currentUser } = useApp();
   const biometricSetting = !!settings?.biometric;
 
   const [state, setState] = useState("checking"); // checking | locked | enroll | open
@@ -34,6 +36,9 @@ export default function BiometricGate({ children }) {
 
   useEffect(() => {
     let cancelled = false;
+    setState("checking");
+    setUserId(null);
+    setError("");
     (async () => {
       // Sur l'APK, le verrou natif (nativeSettings.js) fait déjà le travail
       if (Capacitor.isNativePlatform()) {
@@ -77,7 +82,7 @@ export default function BiometricGate({ children }) {
       setState("open");
     })();
     return () => { cancelled = true; };
-  }, [biometricSetting]);
+  }, [biometricSetting, currentUser?.id]);
 
   const unlock = async () => {
     setError("");

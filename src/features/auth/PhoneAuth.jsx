@@ -72,7 +72,7 @@ async function phoneAccountExists(normalizedPhone) {
   if (!error) return !!data;
 
   console.warn('[BAARO] RPC phone_account_exists indisponible :', error);
-  return false;
+  throw new Error('Vérification du numéro indisponible. Réessaie dans un instant.');
 }
 
 export default function PhoneAuth({ onAuthSuccess }) {
@@ -97,14 +97,20 @@ export default function PhoneAuth({ onAuthSuccess }) {
   const expiryTimerRef = useRef(null);
   const otpInputRef = useRef(null);
 
+  function stopAuthTimers() {
+    if (timerRef.current) clearInterval(timerRef.current);
+    if (expiryTimerRef.current) clearInterval(expiryTimerRef.current);
+    timerRef.current = null;
+    expiryTimerRef.current = null;
+  }
+
   useEffect(() => {
     isBiometricAvailable().then(setBioAvailable);
   }, []);
 
   useEffect(() => {
     return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-      if (expiryTimerRef.current) clearInterval(expiryTimerRef.current);
+      stopAuthTimers();
     };
   }, []);
 
@@ -202,6 +208,7 @@ export default function PhoneAuth({ onAuthSuccess }) {
   // ÉTAPE 1 : Vérifier si le numéro existe déjà en base
   async function handleCheckPhone(event) {
     if (event) event.preventDefault();
+    stopAuthTimers();
     setError('');
 
     const normalizedPhone = normalizePhone(phone);
@@ -472,7 +479,7 @@ export default function PhoneAuth({ onAuthSuccess }) {
           <div className="flex justify-between text-xs pt-1">
             <button
               type="button"
-              onClick={() => { setStep('phone'); setPassword(''); }}
+              onClick={() => { stopAuthTimers(); setStep('phone'); setPassword(''); }}
               className="text-slate-400 hover:text-slate-200 hover:underline"
             >
               Changer de numéro
@@ -539,7 +546,7 @@ export default function PhoneAuth({ onAuthSuccess }) {
 
           <button
             type="button"
-            onClick={() => setStep('phone')}
+            onClick={() => { stopAuthTimers(); setStep('phone'); }}
             className="w-full text-center text-xs text-slate-400 hover:underline"
           >
             Changer de numéro
@@ -605,7 +612,7 @@ export default function PhoneAuth({ onAuthSuccess }) {
           <div className="flex justify-between text-xs pt-1">
             <button
               type="button"
-              onClick={() => setStep('phone')}
+              onClick={() => { stopAuthTimers(); setStep('phone'); }}
               className="text-slate-400 hover:text-slate-200 hover:underline"
             >
               Annuler
