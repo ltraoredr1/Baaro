@@ -210,6 +210,7 @@ export default async function handler(req, res) {
     });
   }
 
+  let reservedPayoutId = null;
   try {
     const body = req.body || {};
     const amount = Number(body.amount);
@@ -285,6 +286,7 @@ export default async function handler(req, res) {
         error: "Demande de retrait introuvable après réservation.",
       });
     }
+    reservedPayoutId = payout.id;
 
     if (method === "bank_transfer") {
       await admin
@@ -336,6 +338,14 @@ export default async function handler(req, res) {
       transaction_id: transfer.transaction_id,
     });
   } catch (e) {
+    if (reservedPayoutId) {
+      try {
+        await admin.rpc("cancel_economy_payout", {
+          p_payout_id: reservedPayoutId,
+          p_reason: "PAYOUT_PROVIDER_FAILURE",
+        });
+      } catch {}
+    }
     if (e?.safe) {
       return json(res, e.status || 400, { ok: false, error: e.message });
     }

@@ -854,7 +854,7 @@ async function fulfillPayment(supabase, { paymentRef, kind, userId, provider, am
     const expected = majorToMinor(order.total_amount, order.currency);
     const amountOk = provider === 'paypal'
       ? paypalAmountMatches(paypalPaid, expected, order.currency || 'XOF')
-      : Number(amount) === expected;
+      : Number(amount) === expected && String(currency || '').toUpperCase() === String(order.currency || 'XOF').toUpperCase();
     if (!amountOk) throw new Error('MONTANT_PAIEMENT_INATTENDU');
     const { error } = await supabase.rpc('mark_order_paid', {
       p_order_id: match[1],
@@ -866,19 +866,22 @@ async function fulfillPayment(supabase, { paymentRef, kind, userId, provider, am
   }
 
   if (k === 'shop_sub' || String(paymentRef).startsWith('shop_')) {
-    const { data: sub } = await supabase
+    const { data: sub, error: subError } = await supabase
       .from('shop_subscriptions')
       .select('id, shop_id, amount, currency, was_premium_rate, status')
       .eq('payment_ref', paymentRef)
       .maybeSingle();
 
+    if (subError) throw subError;
+    if (!sub) throw new Error('SHOP_SUBSCRIPTION_NOT_FOUND');
+
     if (sub && sub.status === 'pending') {
       const expected = majorToMinor(sub.amount, sub.currency);
       const amountOk = provider === 'paypal'
         ? paypalAmountMatches(paypalPaid, expected, sub.currency || 'XOF')
-        : Number(amount) === expected;
+        : Number(amount) === expected && String(currency || '').toUpperCase() === String(sub.currency || 'XOF').toUpperCase();
       if (!amountOk) throw new Error('MONTANT_PAIEMENT_INATTENDU');
-      await supabase.rpc('activate_shop_subscription', {
+      const { error: activateError } = await supabase.rpc('activate_shop_subscription', {
         p_shop_id: sub.shop_id,
         p_payment_ref: paymentRef,
         p_amount: sub.amount,
@@ -886,24 +889,28 @@ async function fulfillPayment(supabase, { paymentRef, kind, userId, provider, am
         p_provider: provider,
         p_was_premium: sub.was_premium_rate,
       });
+      if (activateError) throw activateError;
     }
     return;
   }
 
   if (k === 'company_sub' || String(paymentRef).startsWith('company_')) {
-    const { data: sub } = await supabase
+    const { data: sub, error: subError } = await supabase
       .from('company_subscriptions')
       .select('id, company_id, amount, currency, was_premium_rate, status')
       .eq('payment_ref', paymentRef)
       .maybeSingle();
 
+    if (subError) throw subError;
+    if (!sub) throw new Error('COMPANY_SUBSCRIPTION_NOT_FOUND');
+
     if (sub && sub.status === 'pending') {
       const expected = majorToMinor(sub.amount, sub.currency);
       const amountOk = provider === 'paypal'
         ? paypalAmountMatches(paypalPaid, expected, sub.currency || 'XOF')
-        : Number(amount) === expected;
+        : Number(amount) === expected && String(currency || '').toUpperCase() === String(sub.currency || 'XOF').toUpperCase();
       if (!amountOk) throw new Error('MONTANT_PAIEMENT_INATTENDU');
-      await supabase.rpc('activate_company_subscription', {
+      const { error: activateError } = await supabase.rpc('activate_company_subscription', {
         p_company_id: sub.company_id,
         p_payment_ref: paymentRef,
         p_amount: sub.amount,
@@ -911,6 +918,7 @@ async function fulfillPayment(supabase, { paymentRef, kind, userId, provider, am
         p_provider: provider,
         p_was_premium: sub.was_premium_rate,
       });
+      if (activateError) throw activateError;
     }
     return;
   }

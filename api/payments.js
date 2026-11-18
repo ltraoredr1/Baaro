@@ -164,7 +164,11 @@ async function resolvePayment(admin, user, body) {
       return { error: "Checkout non autorisé.", status: 403 };
     }
 
-    if (!["pending", "processing"].includes(data.status)) {
+    if (data.status === "processing") {
+      return { error: "Ce checkout est déjà en cours de paiement.", status: 409 };
+    }
+
+    if (data.status !== "pending") {
       return { error: "Ce checkout n'est plus payable.", status: 409 };
     }
 
@@ -704,7 +708,7 @@ export default async function handler(req, res) {
     }
 
     if (payment.kind === "monetization") {
-      const { error: updateError } = await admin
+      const { data: claimedCheckout, error: updateError } = await admin
         .from("monetization_checkout_intents")
         .update({
           status: "processing",
@@ -713,7 +717,9 @@ export default async function handler(req, res) {
         })
         .eq("id", payment.checkoutIntentId)
         .eq("user_id", user.id)
-        .in("status", ["pending", "processing"]);
+        .eq("status", "pending")
+        .select("id")
+        .maybeSingle();
 
       if (updateError) {
         console.error("[payments] Could not update checkout status.");
@@ -721,6 +727,12 @@ export default async function handler(req, res) {
         return json(res, 503, {
           ok: false,
           error: "Impossible de préparer le paiement. Réessaie plus tard.",
+        });
+      }
+      if (!claimedCheckout) {
+        return json(res, 409, {
+          ok: false,
+          error: "Ce checkout est déjà en cours de paiement.",
         });
       }
     }
