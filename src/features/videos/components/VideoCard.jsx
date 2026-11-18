@@ -16,7 +16,6 @@ import {
 } from "lucide-react";
 import { COLORS } from "../../../theme.js";
 import { VideoTranslateControls } from "../../../components/VideoTranslateControls.jsx";
-import TranslateButton from "../../../components/TranslateButton.jsx";
 import { TipButton } from "../../../components/TipButton.jsx";
 import { baaroLogo } from "../constants.js";
 import { formatCount, formatPublished, formatPublishedFull } from "../utils/format.js";
@@ -74,7 +73,6 @@ export default function VideoCard({
   const handleLike = actions.handleLike || actions.toggleLike;
 
   const [captionOpen, setCaptionOpen] = useState(false);
-  const [translatedCaption, setTranslatedCaption] = useState(null);
   const [showHeartAnim, setShowHeartAnim] = useState(false);
   const [dragging, setDragging] = useState(false);
 
@@ -399,7 +397,7 @@ export default function VideoCard({
               captionOpen ? "" : "line-clamp-2"
             }`}
           >
-            {translatedCaption || caption || "Publication BAARO"}
+            {caption || "Publication BAARO"}
           </p>
 
           {caption.length > 90 && (
@@ -408,19 +406,6 @@ export default function VideoCard({
             </span>
           )}
         </button>
-
-        {caption && (
-          <div className="mt-1" onClick={(event) => event.stopPropagation()}>
-            <TranslateButton
-              text={caption}
-              preferredLang="fr"
-              quickLangs={["bm", "wo", "fuc", "dyu", "snk"]}
-              isTranslated={!!translatedCaption}
-              onTranslated={(value) => setTranslatedCaption(value)}
-              onClear={() => setTranslatedCaption(null)}
-            />
-          </div>
-        )}
 
         {!isImage && isActive && (
           <div className="mt-2">
