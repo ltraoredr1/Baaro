@@ -9,6 +9,8 @@ import {
 } from "lucide-react";
 import { CHAT_REACTIONS } from "../lib/chatFeatures.js";
 import { VoiceTranscript } from "./VoiceTranscript.jsx";
+import { ImageTranslateControls } from "../../../components/ImageTranslateControls.jsx";
+import { VideoTranslateControls } from "../../../components/VideoTranslateControls.jsx";
 import { ChatTranslate } from "./ChatTranslate.jsx";
 import { useAutoTranslate } from "../lib/autoTranslate.js";
 
@@ -189,6 +191,7 @@ export function MessageBubble({
   onPin,
 }) {
   const [lightbox, setLightbox] = useState(false);
+  const videoRef = useRef(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -287,11 +290,29 @@ export function MessageBubble({
                       <X size={22} />
                     </button>
                     <img src={mediaUrl} alt="" className="max-w-full max-h-full object-contain" />
+                    {!pending && !message.failed && !isExpired && (
+                      <ImageTranslateControls mediaUrl={mediaUrl} />
+                    )}
                   </div>
                 )}
               </>
             ) : message.type === "video" ? (
-              <video src={mediaUrl} controls preload="metadata" className="rounded-lg max-w-full max-h-72" />
+              <div className="space-y-2">
+                <video
+                  ref={videoRef}
+                  src={mediaUrl}
+                  controls
+                  preload="metadata"
+                  playsInline
+                  className="rounded-lg max-w-full max-h-72"
+                />
+                {!pending && !message.failed && !isExpired && (
+                  <VideoTranslateControls
+                    mediaUrl={mediaUrl}
+                    videoRef={videoRef}
+                  />
+                )}
+              </div>
             ) : message.type === "voice" ? (
               <>
                 <VoicePlayer src={mediaUrl} duration={message.media_duration} isMe={isMe} />
