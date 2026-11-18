@@ -16,6 +16,7 @@ import ProfilePhotosEditor from "./ProfilePhotosEditor.jsx";
 import FollowButton from "../features/friends/FollowButton.jsx";
 import { useToast } from "./ToastContext.jsx";
 import { COLORS } from "../theme.js";
+import InlineTranslate from "./InlineTranslate.jsx";
 import FriendRequestButton from "../features/friends/FriendRequestButton.jsx";
 
 function formatDate(value) {
@@ -234,9 +235,12 @@ export function ProfileModal({
               </div>
 
               {profile?.bio && (
-                <div className="mt-4">
-                  <p className="whitespace-pre-wrap text-sm leading-6" style={{ color: COLORS.ivory }}>{profile.bio}</p>
-                </div>
+                <InlineTranslate
+                  text={profile.bio}
+                  as="p"
+                  className="mt-4"
+                  style={{ color: COLORS.ivory }}
+                />
               )}
 
               <div className="mt-4 flex flex-wrap gap-2">

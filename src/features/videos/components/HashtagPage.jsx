@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ArrowLeft, Hash, Trophy } from "lucide-react";
 import { COLORS } from "../../../theme.js";
+import InlineTranslate from "../../../components/InlineTranslate.jsx";
 import {
   getHashtagLeaderboard,
   listActiveChallenges,
@@ -74,11 +75,14 @@ export default function HashtagPage({ tag, onBack, onOpenVideo }) {
             <Trophy size={16} />
             Défi BAARO
           </div>
-          <h2 className="mt-1 font-black text-lg">{challenge.title}</h2>
+          <InlineTranslate text={challenge.title} as="h2" className="mt-1 font-black text-lg" />
           {challenge.description && (
-            <p className="mt-1 text-xs text-white/60 leading-relaxed">
-              {challenge.description}
-            </p>
+            <InlineTranslate
+              text={challenge.description}
+              as="p"
+              className="mt-1 text-xs leading-relaxed"
+              style={{ color: "rgba(255,255,255,0.6)" }}
+            />
           )}
           {challenge.reward_points > 0 && (
             <p className="mt-2 text-[11px] font-bold text-amber-200/80">

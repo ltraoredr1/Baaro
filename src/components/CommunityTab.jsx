@@ -37,6 +37,7 @@ import VoiceChannelUI from "./community/VoiceChannelUI.jsx";
 import { formatDuration, getBestAudioMime } from "../lib/chatMedia.js";
 import { parseEphemeralVoice } from "../lib/ephemeralVoice.js";
 import TranslateButton from "./TranslateButton.jsx";
+import InlineTranslate from "./InlineTranslate.jsx";
 
 /* ──────────────────────────────────────────────
    Thème de secours (fusionné avec theme.js)
@@ -745,7 +746,7 @@ export default function CommunityTab({ onOpenProfile }) {
                       </div>
                     )}
                   </div>
-                  <p className="text-[10px] mt-1 truncate" style={{ color: C.muted }}>{selectedGroup.description || "—"}</p>
+                  {selectedGroup.description ? <InlineTranslate text={selectedGroup.description} as="p" className="text-[10px] mt-1" style={{ color: C.muted }} /> : <p className="text-[10px] mt-1" style={{ color: C.muted }}>—</p>}
                   <button
                     type="button"
                     onClick={handleOpenRadio}
