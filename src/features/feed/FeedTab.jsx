@@ -46,6 +46,7 @@ import { EngagementList } from "@/components/EngagementList.jsx";
 import { TipButton } from "@/components/TipButton.jsx";
 import { AskAiButton } from "@/components/AskAiButton.jsx";
 import { TranslateButton } from "@/components/TranslateButton.jsx";
+import { ImageTranslateControls } from "@/components/ImageTranslateControls.jsx";
 import { GuestBanner } from "@/components/GuestBanner.jsx";
 import { FloatingCreateButton } from "@/components/FloatingCreateButton.jsx";
 import { LazyImage, LazyVideo } from "@/components/LazyMedia.jsx";
@@ -359,6 +360,10 @@ function MediaViewer({ items, startIndex = 0, onClose }) {
             draggable={false}
             style={{ transform: `scale(${scale})`, transition: scale === 1 ? "transform 180ms ease-out" : "none" }}
           />
+        )}
+
+        {current.type !== "video" && (
+          <ImageTranslateControls mediaUrl={current.url} />
         )}
 
         {items.length > 1 && (
