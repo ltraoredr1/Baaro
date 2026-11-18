@@ -85,5 +85,20 @@
     "payment_cancelled": "Malipo yameghairiwa.",
     "payment_return": "Malipo yamepokelewa; uthibitisho wa mwisho baada ya webhook.",
     "creator_subscription": "Usajili wa mbunifu"
+  },
+  "video_translate": {
+    "translate": "Tafsiri",
+    "translating": "Inatafsiri…",
+    "original": "Asili",
+    "mode": "Hali",
+    "subtitles": "Manukuu",
+    "voice": "Sauti",
+    "language": "Lugha",
+    "dub_hint": "Kuigiza kwa sauti kunaweza kuchukua sekunde 20 hadi 60.",
+    "dub_ready": "Uigizaji wa {{lang}} uko tayari",
+    "subs_ready": "Manukuu ya {{lang}} yako tayari",
+    "dub_unavailable": "Uigizaji haupatikani: sauti asili imerudishwa",
+    "dub_failed_subs_ok": "Sauti haipatikani: manukuu yako tayari",
+    "failed": "Imeshindwa kutafsiri video"
   }
 }

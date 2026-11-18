@@ -85,5 +85,20 @@
     "payment_cancelled": "Payment cancelled.",
     "payment_return": "Payment return received; final confirmation follows the provider webhook.",
     "creator_subscription": "Creator subscription"
+  },
+  "video_translate": {
+    "translate": "Translate",
+    "translating": "Translating…",
+    "original": "Original",
+    "mode": "Mode",
+    "subtitles": "Subtitles",
+    "voice": "Voice",
+    "language": "Language",
+    "dub_hint": "Voice dubbing can take 20 to 60 s.",
+    "dub_ready": "{{lang}} dubbing ready",
+    "subs_ready": "{{lang}} subtitles ready",
+    "dub_unavailable": "Dubbing unavailable: original sound restored",
+    "dub_failed_subs_ok": "Voice unavailable: subtitles ready",
+    "failed": "Video translation failed"
   }
 }

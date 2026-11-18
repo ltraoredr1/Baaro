@@ -85,5 +85,20 @@
     "payment_cancelled": "Pagamento cancelado.",
     "payment_return": "Retorno do pagamento recebido; confirmação final após o webhook.",
     "creator_subscription": "Assinatura de criador"
+  },
+  "video_translate": {
+    "translate": "Traduzir",
+    "translating": "A traduzir…",
+    "original": "Original",
+    "mode": "Modo",
+    "subtitles": "Legendas",
+    "voice": "Voz",
+    "language": "Idioma",
+    "dub_hint": "A dobragem de voz pode demorar de 20 a 60 s.",
+    "dub_ready": "Dobragem {{lang}} pronta",
+    "subs_ready": "Legendas {{lang}} prontas",
+    "dub_unavailable": "Dobragem indisponível: som original reposto",
+    "dub_failed_subs_ok": "Voz indisponível: legendas prontas",
+    "failed": "Não foi possível traduzir o vídeo"
   }
 }

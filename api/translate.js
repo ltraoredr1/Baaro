@@ -431,48 +431,48 @@ export default async function handler(req, res) {
       }
 
       // Doublage : texte du VTT traduit -> job "dub" (TTS) du worker.
+      // Un échec du doublage ne fait pas perdre les sous-titres déjà produits.
       let dubAudioUrl = null;
+      let dubError = null;
 
       if (mode === "dub") {
-        const speech = vttToPlainText(vttText);
+        try {
+          const speech = vttToPlainText(vttText);
 
-        if (!speech) {
-          return jsonError(
-            res,
-            502,
-            "Aucun texte à synthétiser pour le doublage."
-          );
-        }
+          if (!speech) {
+            throw new Error("Aucun texte à synthétiser pour le doublage.");
+          }
 
-        const dubResult = await runWorkerJob({
-          workerUrl,
-          workerSecret,
-          timeoutMs: MEDIA_DUB_TIMEOUT_MS,
-          job: {
-            id: crypto.randomUUID(),
-            job_type: "dub",
-            owner_id: user.id,
-            video_id:
-              typeof body.videoId === "string" ||
-              typeof body.videoId === "number"
-                ? String(body.videoId).slice(0, 80)
-                : null,
-            payload: {
-              sourceKey,
-              text: speech,
-              targetLanguage: targetLang,
+          const dubResult = await runWorkerJob({
+            workerUrl,
+            workerSecret,
+            timeoutMs: MEDIA_DUB_TIMEOUT_MS,
+            job: {
+              id: crypto.randomUUID(),
+              job_type: "dub",
+              owner_id: user.id,
+              video_id:
+                typeof body.videoId === "string" ||
+                typeof body.videoId === "number"
+                  ? String(body.videoId).slice(0, 80)
+                  : null,
+              payload: {
+                sourceKey,
+                text: speech,
+                targetLanguage: targetLang,
+              },
             },
-          },
-        });
+          });
 
-        dubAudioUrl = dubResult.url || null;
+          dubAudioUrl = dubResult.url || null;
 
-        if (!dubAudioUrl) {
-          return jsonError(
-            res,
-            503,
-            "La synthèse vocale n'est pas configurée sur le worker."
-          );
+          if (!dubAudioUrl) {
+            throw new Error("Synthèse vocale non configurée.");
+          }
+        } catch (dubFailure) {
+          console.error("[translate-media dub]", dubFailure?.message || dubFailure);
+          dubError = "dub_failed";
+          dubAudioUrl = null;
         }
       }
 
@@ -489,6 +489,7 @@ export default async function handler(req, res) {
         vttText,
         translatedText: vttText,
         dubAudioUrl,
+        dubError,
         provider: result.provider || "worker",
       });
     } catch (error) {

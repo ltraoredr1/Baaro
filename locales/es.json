@@ -85,5 +85,20 @@
     "payment_cancelled": "Pago cancelado.",
     "payment_return": "Pago recibido; confirmación final tras el webhook.",
     "creator_subscription": "Suscripción de creador"
+  },
+  "video_translate": {
+    "translate": "Traducir",
+    "translating": "Traduciendo…",
+    "original": "Original",
+    "mode": "Modo",
+    "subtitles": "Subtítulos",
+    "voice": "Voz",
+    "language": "Idioma",
+    "dub_hint": "El doblaje de voz puede tardar de 20 a 60 s.",
+    "dub_ready": "Doblaje {{lang}} listo",
+    "subs_ready": "Subtítulos {{lang}} listos",
+    "dub_unavailable": "Doblaje no disponible: sonido original restablecido",
+    "dub_failed_subs_ok": "Voz no disponible: subtítulos listos",
+    "failed": "No se pudo traducir el vídeo"
   }
 }

@@ -7,6 +7,8 @@ import {
   ChevronDown,
   X,
 } from "lucide-react";
+import { useTranslation } from "react-i18next";
+import i18n, { translationLang } from "../../i18n.js";
 import { COLORS } from "../theme.js";
 import { TRANSLATE_LANGS, translateMedia } from "../lib/translateApi.js";
 import { useToast } from "./ToastContext.jsx";
@@ -20,13 +22,15 @@ export function VideoTranslateControls({
   videoRef,
   audioRefs,
   audioId,
-  preferredLang = "en",
+  preferredLang,
   // Préférence de son de l'utilisateur (bouton muet du flux). Si elle est fournie,
   // c'est elle qui décide du son pendant et après le doublage.
   userMuted,
   muteOriginal = false,
 }) {
   const { showToast } = useToast();
+  const { t } = useTranslation();
+  const uiLang = preferredLang || translationLang(i18n.language);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [mode, setMode] = useState("subtitles"); // subtitles | dub
@@ -47,10 +51,7 @@ export function VideoTranslateControls({
   const dropDubRef = useRef(() => {});
   dropDubRef.current = () => {
     setActive((prev) => (prev ? { ...prev, dubAudioUrl: null } : prev));
-    showToastRef.current?.(
-      "Doublage indisponible : son d'origine rétabli",
-      "error"
-    );
+    showToastRef.current?.(t("video_translate.dub_unavailable"), "error");
   };
 
   const dubUrl = active?.dubAudioUrl || null;
@@ -306,8 +307,8 @@ export function VideoTranslateControls({
 
     const track = document.createElement("track");
     track.kind = "subtitles";
-    track.label = `BAARO (${(lang || preferredLang).toUpperCase()})`;
-    track.srclang = lang || preferredLang;
+    track.label = `BAARO (${(lang || uiLang).toUpperCase()})`;
+    track.srclang = lang || uiLang;
     track.src = src;
     track.default = true;
     track.setAttribute("data-baaro-translate", "1");
@@ -354,15 +355,20 @@ export function VideoTranslateControls({
         applyVtt(data.vttUrl, data.vttText, data.targetLang || targetLang);
       }
 
-      showToast(
-        chosenMode === "dub"
-          ? `Doublage ${targetLang.toUpperCase()} prêt`
-          : `Sous-titres ${targetLang.toUpperCase()} prêts`,
-        "success"
-      );
+      const lang = targetLang.toUpperCase();
+      if (chosenMode === "dub" && data.dubError) {
+        showToast(t("video_translate.dub_failed_subs_ok"), "error");
+      } else {
+        showToast(
+          chosenMode === "dub"
+            ? t("video_translate.dub_ready", { lang })
+            : t("video_translate.subs_ready", { lang }),
+          "success"
+        );
+      }
     } catch (err) {
       console.error("Erreur Traduction Vidéo:", err);
-      showToast(err.message || "Traduction vidéo impossible", "error");
+      showToast(err.message || t("video_translate.failed"), "error");
     } finally {
       setLoading(false);
     }
@@ -382,7 +388,7 @@ export function VideoTranslateControls({
           }}
         >
           <X size={12} />
-          Original
+          {t("video_translate.original")}
         </button>
       )}
 
@@ -402,7 +408,7 @@ export function VideoTranslateControls({
         ) : (
           <Languages size={14} style={{ color: COLORS.gold }} />
         )}
-        {loading ? "Traduction…" : "Traduire"}
+        {loading ? t("video_translate.translating") : t("video_translate.translate")}
         <ChevronDown size={12} style={{ color: COLORS.muted }} />
       </button>
 
@@ -415,7 +421,7 @@ export function VideoTranslateControls({
             className="px-2 py-1 text-[10px] uppercase tracking-wider"
             style={{ color: COLORS.muted }}
           >
-            Mode
+            {t("video_translate.mode")}
           </p>
           <div className="flex gap-1 mb-2 px-1">
             <button
@@ -430,7 +436,7 @@ export function VideoTranslateControls({
               }}
             >
               <Captions size={12} />
-              Sous-titres
+              {t("video_translate.subtitles")}
             </button>
             <button
               type="button"
@@ -443,7 +449,7 @@ export function VideoTranslateControls({
               }}
             >
               <AudioLines size={12} />
-              Voix
+              {t("video_translate.voice")}
             </button>
           </div>
 
@@ -451,10 +457,10 @@ export function VideoTranslateControls({
             className="px-2 py-1 text-[10px] uppercase tracking-wider"
             style={{ color: COLORS.muted }}
           >
-            Langue
+            {t("video_translate.language")}
           </p>
           <div className="max-h-40 overflow-y-auto scrollbar-thin">
-            {TRANSLATE_LANGS.map((l) => (
+            {[...TRANSLATE_LANGS].sort((a, b) => (b.code === uiLang) - (a.code === uiLang)).map((l) => (
               <button
                 key={l.code}
                 type="button"
@@ -468,7 +474,7 @@ export function VideoTranslateControls({
           </div>
           {mode === "dub" && (
             <p className="px-2 pt-2 text-[10px] leading-relaxed" style={{ color: COLORS.muted }}>
-              Le doublage vocal utilise Whisper + TTS (peut prendre 20–60 s).
+              {t("video_translate.dub_hint")}
             </p>
           )}
         </div>

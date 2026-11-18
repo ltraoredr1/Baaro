@@ -194,8 +194,36 @@ export async function translateText(text, targetLang, sourceLang = null, options
   return data;
 }
 
+const MEDIA_CACHE_KEY = "baaro_media_tr_v1";
+const MEDIA_CACHE_MAX = 20;
+const mediaInflight = new Map();
+
+function readMediaCache() {
+  try {
+    return JSON.parse(sessionStorage.getItem(MEDIA_CACHE_KEY) || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function writeMediaCache(key, value) {
+  try {
+    const cache = readMediaCache();
+    cache[key] = value;
+    const keys = Object.keys(cache);
+    if (keys.length > MEDIA_CACHE_MAX) {
+      keys.slice(0, keys.length - MEDIA_CACHE_MAX).forEach((k) => delete cache[k]);
+    }
+    sessionStorage.setItem(MEDIA_CACHE_KEY, JSON.stringify(cache));
+  } catch {
+    // stockage plein ou indisponible : on s'en passe
+  }
+}
+
 /**
- * Traduit une vidéo / audio via Gemini (Sous-titres ou Doublage).
+ * Traduit une vidéo / audio (sous-titres ou doublage).
+ * Le résultat est gardé pour la session et les demandes identiques en cours
+ * sont regroupées : pas de nouveau traitement serveur pour la même vidéo.
  */
 export async function translateMedia(
   { mediaUrl, targetLang, mode = "subtitles", videoId = null, sourceLang = null },
@@ -208,11 +236,18 @@ export async function translateMedia(
     throw new TranslateError("Mode de traduction inconnu (sous-titres ou doublage).", 400);
   }
   const target = assertTargetLang(targetLang);
+  const url = mediaUrl.trim();
+  const cacheKey = `${mode}|${target}|${url}`;
 
-  return post(
+  const cached = readMediaCache()[cacheKey];
+  if (cached) return cached;
+
+  if (mediaInflight.has(cacheKey)) return mediaInflight.get(cacheKey);
+
+  const request = post(
     "/api/translate",
     {
-      mediaUrl: mediaUrl.trim(),
+      mediaUrl: url,
       targetLang: target,
       mode,
       videoId,
@@ -220,5 +255,14 @@ export async function translateMedia(
     },
     { timeoutMs: 290000, ...options },
     "Traduction du média impossible. Réessaie dans un instant."
-  );
+  )
+    .then((data) => {
+      // On ne garde que les résultats complets (pas un doublage raté).
+      if (data && !data.dubError) writeMediaCache(cacheKey, data);
+      return data;
+    })
+    .finally(() => mediaInflight.delete(cacheKey));
+
+  mediaInflight.set(cacheKey, request);
+  return request;
 }

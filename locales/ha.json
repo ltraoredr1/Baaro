@@ -85,5 +85,20 @@
     "payment_cancelled": "An soke biyan kuɗi.",
     "payment_return": "An karɓi martanin biyan kuɗi; tabbatarwa ta ƙarshe bayan webhook.",
     "creator_subscription": "Biyan kuɗin mai ƙirƙira"
+  },
+  "video_translate": {
+    "translate": "Fassara",
+    "translating": "Ana fassara…",
+    "original": "Na asali",
+    "mode": "Yanayi",
+    "subtitles": "Rubutun fassara",
+    "voice": "Murya",
+    "language": "Harshe",
+    "dub_hint": "Fassarar murya na iya ɗaukar daga daƙiƙa 20 zuwa 60.",
+    "dub_ready": "Fassarar murya ta {{lang}} ta shirya",
+    "subs_ready": "Rubutun fassara na {{lang}} sun shirya",
+    "dub_unavailable": "Fassarar murya ba ta samu ba: an dawo da sautin asali",
+    "dub_failed_subs_ok": "Murya ba ta samu ba: rubutun fassara sun shirya",
+    "failed": "Fassarar bidiyo ta gaza"
   }
 }
