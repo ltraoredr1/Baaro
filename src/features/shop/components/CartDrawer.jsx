@@ -3,6 +3,7 @@ import { X, Trash2, Loader2, ShoppingCart, AlertTriangle } from "lucide-react";
 import { COLORS } from "../../../theme.js";
 import { supabase } from "../../../supabaseClient.js";
 import { useToast } from "../../../components/ToastContext.jsx";
+import InlineTranslate from "../../../components/InlineTranslate.jsx";
 
 export default function CartDrawer({ isOpen, onClose, id, onCheckout }) {
   const { showToast } = useToast();
@@ -118,7 +119,7 @@ export default function CartDrawer({ isOpen, onClose, id, onCheckout }) {
           const product = item.product; const imageUrl = product?.images?.[0] || product?.image_url; const max = product?.type === "service" ? 100 : Number(product?.stock ?? 0);
           return <div key={item.id} className="flex gap-3 p-3 rounded-xl border" style={{ background: COLORS.surface2, borderColor: COLORS.border }}>
             <div className="w-16 h-16 rounded-lg overflow-hidden shrink-0" style={{ background: "rgba(255,255,255,0.05)" }}>{imageUrl ? <img src={imageUrl} alt={product.name} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center"><ShoppingCart size={16} style={{ color: COLORS.muted }} /></div>}</div>
-            <div className="flex-1 min-w-0"><h4 className="text-sm font-bold truncate" style={{ color: COLORS.ivory }}>{product.name}</h4><p className="text-xs font-bold mt-1" style={{ color: COLORS.gold }}>{Number(product.price).toLocaleString()} {product.currency}</p>
+            <div className="flex-1 min-w-0"><InlineTranslate text={product.name} as="h4" className="text-sm font-bold" style={{ color: COLORS.ivory }} /><p className="text-xs font-bold mt-1" style={{ color: COLORS.gold }}>{Number(product.price).toLocaleString()} {product.currency}</p>
               <div className="flex items-center justify-between mt-2"><div className="flex items-center gap-2 rounded-lg border px-1" style={{ borderColor: COLORS.border }}><button onClick={() => updateQuantity(item.id, product, item.quantity - 1)} className="p-1" style={{ color: COLORS.ivory }}>−</button><span className="text-xs font-bold min-w-[20px] text-center" style={{ color: COLORS.ivory }}>{item.quantity}</span><button onClick={() => updateQuantity(item.id, product, item.quantity + 1)} disabled={product.type !== "service" && item.quantity >= max} className="p-1 disabled:opacity-30" style={{ color: COLORS.ivory }}>+</button></div><button onClick={() => removeFromCart(item.id)} className="p-1.5 rounded-lg hover:bg-red-500/10" style={{ color: "#ef4444" }}><Trash2 size={14} /></button></div>
               {product.type !== "service" && max <= 5 && max > 0 && <p className="text-[10px] mt-1 flex items-center gap-1" style={{ color: "#f59e0b" }}><AlertTriangle size={10} /> Plus que {max} en stock</p>}
             </div>

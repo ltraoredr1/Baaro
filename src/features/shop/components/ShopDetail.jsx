@@ -6,6 +6,7 @@ import ShopReviews from "../../../components/ShopReviews.jsx";
 import ProductCard from "../../../components/ProductCard.jsx";
 import { useToast } from "../../../components/ToastContext.jsx";
 import { supabase } from "../../../supabaseClient.js";
+import InlineTranslate from "../../../components/InlineTranslate.jsx";
 
 export default function ShopDetail({ shopId, id, onBack }) {
   const { showToast } = useToast();
@@ -134,7 +135,7 @@ export default function ShopDetail({ shopId, id, onBack }) {
         {shop.logo_url && <img src={shop.logo_url} alt={shop.name} className="mb-3 h-32 w-full rounded-xl object-cover" />}
         <h2 className="text-xl font-bold" style={{ color: COLORS.ivory }}>{shop.name}</h2>
         <p className="mt-1 text-xs flex flex-wrap gap-1" style={{ color: COLORS.muted }}>{[shop.category, shop.city, shop.country].filter(Boolean).map((item, i, arr) => (<span key={i}>{item}{i < arr.length - 1 ? " · " : ""}</span>))}</p>
-        {shop.description && <p className="mt-3 text-sm leading-relaxed" style={{ color: COLORS.muted }}>{shop.description}</p>}
+        {shop.description && <InlineTranslate text={shop.description} as="p" className="mt-3 text-sm leading-relaxed" style={{ color: COLORS.muted }} />}
       </section>
       <div className="flex flex-col gap-3">
         {products.length === 0 ? <div className="text-center py-8"><p className="text-sm" style={{ color: COLORS.muted }}>Aucun produit disponible pour le moment.</p></div> : products.map((p) => {

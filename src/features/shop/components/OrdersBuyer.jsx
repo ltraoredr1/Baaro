@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { Package, Loader2, Clock, CheckCircle, Truck, AlertCircle } from "lucide-react";
 import { COLORS } from "../../../theme.js";
 import { fetchBuyerOrders } from "../../../services/shopApi.js";
+import InlineTranslate from "../../../components/InlineTranslate.jsx";
 
 const STATUS_CONFIG = {
   pending: { label: "En attente", icon: Clock, color: "#f59e0b", bg: "rgba(245,158,11,0.15)" },
@@ -54,18 +55,19 @@ export default function OrdersBuyer({ id }) {
               <div className="flex justify-between items-start mb-3">
                 <div>
                   <p className="text-xs font-bold" style={{ color: COLORS.muted }}>Commande du {new Date(order.created_at).toLocaleDateString("fr-FR")}</p>
-                  <p className="text-sm font-bold mt-1" style={{ color: COLORS.ivory }}>{order.shops?.name || "Boutique"}</p>
+                  <InlineTranslate text={order.shops?.name || "Boutique"} as="p" className="text-sm font-bold mt-1" style={{ color: COLORS.ivory }} />
                 </div>
                 <span className="flex items-center gap-1 text-[10px] font-bold px-2 py-1 rounded-full" style={{ background: status.bg, color: status.color }}><StatusIcon size={10} /> {status.label}</span>
               </div>
               <div className="space-y-1 mb-3">
                 {order.order_items?.map((item, idx) => (
                   <div key={idx} className="flex justify-between text-xs" style={{ color: COLORS.muted }}>
-                    <span>{item.quantity}x {item.name}</span>
+                    <span>{item.quantity}x <InlineTranslate text={item.name} /></span>
                     <span>{(item.unit_price * item.quantity).toLocaleString()} {item.currency}</span>
                   </div>
                 ))}
               </div>
+              {order.notes && <InlineTranslate text={order.notes} as="p" className="text-xs mb-2" style={{ color: COLORS.muted }} />}
               <div className="border-t pt-3 flex justify-between items-center" style={{ borderColor: COLORS.border }}>
                 <span className="text-xs" style={{ color: COLORS.muted }}>
                   {order.method === "delivery" ? "🚚 Livraison" : "📍 Retrait"}

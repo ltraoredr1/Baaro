@@ -3,6 +3,7 @@ import { Loader2, Package, CheckCircle, Truck, XCircle, AlertCircle } from "luci
 import { COLORS } from "../../../theme.js";
 import { fetchSellerOrders, updateOrderStatus } from "../../../services/shopApi.js";
 import { useToast } from "../../../components/ToastContext.jsx";
+import InlineTranslate from "../../../components/InlineTranslate.jsx";
 
 export default function OrdersSeller({ shopId }) {
   const { showToast } = useToast();
@@ -58,14 +59,14 @@ export default function OrdersSeller({ shopId }) {
               <div>
                 <p className="text-xs font-bold" style={{ color: COLORS.muted }}>{new Date(order.created_at).toLocaleDateString("fr-FR", { day: 'numeric', month: 'short', hour: '2-digit', minute:'2-digit' })}</p>
                 <p className="text-sm font-bold mt-1" style={{ color: COLORS.ivory }}>{order.method === "delivery" ? "🚚 Livraison" : "📍 Retrait en boutique"}</p>
-                {order.notes && <p className="text-xs mt-1 italic" style={{ color: COLORS.muted }}>"{order.notes}"</p>}
+                {order.notes && <InlineTranslate text={order.notes} as="p" className="text-xs mt-1 italic" style={{ color: COLORS.muted }} />}
               </div>
               <span className="text-sm font-black" style={{ color: COLORS.gold }}>{Number(order.total_amount).toLocaleString()} {order.currency}</span>
             </div>
             <div className="space-y-1 mb-4">
               {order.order_items?.map((item, idx) => (
                 <div key={idx} className="flex justify-between text-xs" style={{ color: COLORS.ivory }}>
-                  <span>{item.quantity}x {item.name}</span>
+                  <span>{item.quantity}x <InlineTranslate text={item.name} /></span>
                   <span>{(item.unit_price * item.quantity).toLocaleString()} {item.currency}</span>
                 </div>
               ))}

@@ -4,6 +4,7 @@ import { COLORS } from "../../../theme.js";
 import { createOrder } from "../../../services/shopApi.js";
 import { createPayment, getAvailableProviders } from "../../../lib/paymentProvider.js";
 import { useToast } from "../../../components/ToastContext.jsx";
+import InlineTranslate from "../../../components/InlineTranslate.jsx";
 
 export default function OrderCheckout({ shop, items, id, onBack, onDone }) {
   const { showToast } = useToast();
@@ -103,7 +104,7 @@ export default function OrderCheckout({ shop, items, id, onBack, onDone }) {
           <h3 className="text-sm font-bold" style={{ color: COLORS.ivory }}>Récapitulatif</h3>
           {items.map((item, idx) => (
             <div key={idx} className="flex justify-between text-sm">
-              <span style={{ color: COLORS.muted }}>{item.quantity}x {item.name}</span>
+              <div className="flex-1 min-w-0" style={{ color: COLORS.muted }}><span>{item.quantity}x </span><InlineTranslate text={item.name} /></div>
               <span style={{ color: COLORS.ivory }}>{(item.unitPrice * item.quantity).toLocaleString()} {currency}</span>
             </div>
           ))}
