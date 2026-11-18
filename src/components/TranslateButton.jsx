@@ -150,3 +150,5 @@ export function TranslateButton({
     </div>
   );
 }
+
+export default TranslateButton;
