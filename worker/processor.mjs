@@ -1161,36 +1161,42 @@ async function editPlan(job) {
 }
 
 async function dub(job, input, dir) {
-  const endpoint = process.env.BAARO_TTS_URL;
+  const endpoint = String(process.env.BAARO_TTS_URL || "").trim();
+  const secret = String(process.env.BAARO_TTS_SECRET || "").trim();
 
   if (!endpoint) {
-    return {
-      status: "queued",
-      message: "BAARO_TTS_URL non configurée",
-      input: publicUrl(keyFromJob(job)),
-    };
+    throw new Error("Doublage indisponible : BAARO_TTS_URL non configurée.");
   }
 
-  const text = String(
-    job.payload?.text || ""
-  ).slice(0, MAX_TRANSLATION_CHARS);
-
-  if (!text.trim()) {
-    throw new Error(
-      "payload.text est requis pour la synthèse vocale"
-    );
+  if (!secret) {
+    throw new Error("Doublage indisponible : BAARO_TTS_SECRET non configurée.");
   }
 
-  const response = await fetch(endpoint, {
+  let parsedEndpoint;
+  try {
+    parsedEndpoint = new URL(endpoint);
+  } catch {
+    throw new Error("BAARO_TTS_URL invalide.");
+  }
+
+  if (parsedEndpoint.protocol !== "https:") {
+    throw new Error("BAARO_TTS_URL doit utiliser HTTPS.");
+  }
+
+  const text = String(job.payload?.text || "")
+    .trim()
+    .slice(0, MAX_TRANSLATION_CHARS);
+
+  if (!text) {
+    throw new Error("payload.text est requis pour la synthèse vocale.");
+  }
+
+  const response = await fetch(parsedEndpoint.toString(), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      ...(process.env.BAARO_TTS_SECRET
-        ? {
-            Authorization:
-              `Bearer ${process.env.BAARO_TTS_SECRET}`,
-          }
-        : {}),
+      "Accept": "audio/mpeg",
+      Authorization: `Bearer ${secret}`,
     },
     body: JSON.stringify({
       text,
@@ -1201,21 +1207,67 @@ async function dub(job, input, dir) {
   });
 
   if (!response.ok) {
-    throw new Error(`TTS HTTP ${response.status}`);
+    const detail = (await response.text().catch(() => "")).slice(0, 300);
+    throw new Error(
+      `TTS HTTP ${response.status}${detail ? `: ${detail}` : ""}`
+    );
+  }
+
+  const contentType = String(
+    response.headers.get("content-type") || ""
+  ).toLowerCase();
+
+  if (
+    contentType.includes("application/json") ||
+    contentType.includes("text/")
+  ) {
+    throw new Error(
+      "Le service TTS a renvoyé du texte au lieu d'un fichier audio MP3."
+    );
+  }
+
+  const declaredLength = Number(response.headers.get("content-length") || 0);
+  const maxAudioBytes = 30 * 1024 * 1024;
+
+  if (declaredLength > maxAudioBytes) {
+    throw new Error("Fichier audio TTS trop volumineux (maximum 30 Mo).");
+  }
+
+  const bytes = Buffer.from(await response.arrayBuffer());
+
+  if (!bytes.length || bytes.length > maxAudioBytes) {
+    throw new Error("Fichier audio TTS vide ou trop volumineux.");
+  }
+
+  const hasId3 = bytes.length >= 3 &&
+    bytes[0] === 0x49 &&
+    bytes[1] === 0x44 &&
+    bytes[2] === 0x33;
+
+  const hasMpegFrame = bytes.length >= 2 &&
+    bytes[0] === 0xff &&
+    (bytes[1] & 0xe0) === 0xe0;
+
+  if (!hasId3 && !hasMpegFrame) {
+    throw new Error("Le service TTS n'a pas renvoyé un MP3 valide.");
   }
 
   const audio = join(dir, "dub.mp3");
-
-  await writeFile(
-    audio,
-    Buffer.from(await response.arrayBuffer())
-  );
+  await writeFile(audio, bytes);
 
   const key = outputKey(job, "dub", "mp3");
+  const url = await putFile(key, audio, MIME.mp3);
+
+  if (!url) {
+    throw new Error("Publication du doublage sur R2 impossible.");
+  }
 
   return {
-    url: await putFile(key, audio, MIME.mp3),
+    status: "completed",
+    url,
     key,
+    format: "mp3",
+    bytes: bytes.length,
   };
 }
 
