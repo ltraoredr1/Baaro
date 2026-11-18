@@ -67,7 +67,7 @@ async function source(job, dir) {
 
   if (!key) {
     throw new Error(
-      "payload.sourceKey est requis pour un traitement vidéo"
+      "payload.sourceKey est requis pour le traitement du média"
     );
   }
 
@@ -78,14 +78,22 @@ async function source(job, dir) {
 
   await downloadToFile(key, input);
 
-  // L'extension de la clé ne prouve rien : Rust vérifie la signature, puis
-  // libavformat (C) confirme le conteneur et la présence d'un flux A/V.
-  // Tout échec ou type inconnu est refusé avant FFmpeg.
+  // Rust vérifie la signature réelle du fichier.
+  // Les images JPEG/PNG reconnues peuvent être traitées sans
+  // dépendre de la détection de conteneur multimédia de FFmpeg.
   const sniffed = await sniffFile(input);
+  const imageKind = ["jpg", "png"].includes(sniffed?.kind);
+  const validImage = Boolean(
+    sniffed && !sniffed.danger && sniffed.media && imageKind
+  );
+  const validAvMedia = Boolean(
+    sniffed && !sniffed.danger && sniffed.media &&
+    sniffed.containerValid && !imageKind
+  );
 
-  if (!sniffed || sniffed.danger || !sniffed.media || !sniffed.containerValid) {
+  if (!validImage && !validAvMedia) {
     const error = new Error(
-      `Fichier source refusé : type « ${sniffed?.kind || "inconnu"} », conteneur ${sniffed?.containerValid ? "valide" : "invalide ou non vérifié"}`
+      `Fichier source refusé : type « ${sniffed?.kind || "inconnu"} », signature ou conteneur invalide`
     );
     error.status = 422;
     throw error;
