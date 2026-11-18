@@ -266,6 +266,14 @@ export default function VideoCard({
             setPlayingId((current) => (current === id ? null : current));
             audioRefs.current[video.id]?.pause();
           }}
+          onEnded={() => {
+            const audio = audioRefs.current[video.id];
+            if (audio) {
+              audio.pause();
+              try { audio.currentTime = 0; } catch {}
+            }
+            setPlayingId((current) => (current === id ? null : current));
+          }}
           onSeeked={(event) =>
             syncAudioTime(event.currentTarget, audioRefs.current[video.id])
           }
