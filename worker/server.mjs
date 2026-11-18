@@ -94,7 +94,14 @@ const server = http.createServer(async (req, res) => {
       if (!response.ok) throw new Error("Python health check failed");
 
       const health = await response.json();
-      if (health.status !== "ok") throw new Error("Python engine unhealthy");
+      if (
+        health.status !== "ok" ||
+        health.authentication_configured !== true ||
+        !health.ai ||
+        health.ai.available_count < 1
+      ) {
+        throw new Error("Python AI engine not ready");
+      }
 
       return send(req, res, 200, {
         ok: true,

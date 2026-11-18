@@ -293,9 +293,14 @@ async def health():
             "cooldown_seconds": cooldown,
         })
 
+    available_count = sum(
+        1 for provider in providers if provider["available"]
+    )
+    ready = bool(SECRET) and len(configured) > 0 and available_count > 0
+
     return {
         "service": "baaro-python",
-        "status": "ok",
+        "status": "ok" if ready else "degraded",
         "version": "1.2.1",
         "authentication_configured": bool(SECRET),
         "ai": {
@@ -305,9 +310,7 @@ async def health():
                 0, AI_CONCURRENCY_LIMIT - active_ai_requests
             ),
             "configured_count": len(configured),
-            "available_count": sum(
-                1 for provider in providers if provider["available"]
-            ),
+            "available_count": available_count,
             "providers": providers,
         },
     }
