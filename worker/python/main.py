@@ -18,6 +18,7 @@ MAX_TEXT = 20000
 MAX_BODY_BYTES = 25000
 MAX_AI_RESPONSE_BYTES = 128 * 1024
 MAX_AI_OUTPUT_CHARS = 20000
+MAX_AI_EXECUTION_SECONDS = 16
 PROVIDER_FAILURE_THRESHOLD = 3
 PROVIDER_COOLDOWN_SECONDS = 60
 provider_failures = {}
@@ -120,12 +121,20 @@ def call_ai(task, text, language):
 
 
     now = time.time()
+    deadline = time.monotonic() + MAX_AI_EXECUTION_SECONDS
 
     for provider in providers:
+        if time.monotonic() >= deadline:
+            break
+
         name = provider["name"]
         state = provider_failures.get(name, {})
-        if state.get("open_until", 0) > now:
+        if state.get("open_until", 0) > time.time():
             continue
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
 
         try:
             url = provider["base"].rstrip("/") + "/chat/completions"
@@ -160,7 +169,8 @@ def call_ai(task, text, language):
             )
 
             with urllib.request.urlopen(
-                request, timeout=provider["timeout"]
+                request,
+                timeout=min(provider["timeout"], max(1, remaining))
             ) as response:
                 raw_response = response.read(MAX_AI_RESPONSE_BYTES + 1)
 
