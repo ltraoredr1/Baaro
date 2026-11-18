@@ -3,6 +3,7 @@ import { PollDisplay } from '../../../components/PollDisplay.jsx';
 import ProductCard from '../../../components/ProductCard.jsx';
 import { RichTextRenderer } from '../../../components/RichTextRenderer.jsx';
 import { TranslateButton } from '../../../components/TranslateButton.jsx';
+import { ImageTranslateControls } from '../../../components/ImageTranslateControls.jsx';
 import { AutoTranslate } from '../../../components/TranslatedText.jsx';
 import { recordProductEvent } from '../api/storiesApi.js';
 import { useLiveProduct } from '../hooks/useLiveProduct.js';
@@ -144,6 +145,12 @@ export function ViewerContent({ story, userId, viewer, cart, videoRef, readOnly,
               onLoad={() => setMediaLoading(false)}
               onError={() => { setMediaLoading(false); next(); }}
             />
+            <div
+              className="absolute bottom-36 left-3 right-3 z-40"
+              onClick={stop}
+            >
+              <ImageTranslateControls mediaUrl={story.media_url} />
+            </div>
           </>
         )
       ) : (
