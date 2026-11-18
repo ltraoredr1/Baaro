@@ -110,6 +110,7 @@ export function useMessaging(conversation_id, current_user_id, recipient_id) {
   const typingReadyRef = useRef(false);
   const typingTimerRef = useRef(null);
   const lastTypingSentRef = useRef(0);
+  const loadingOlderRef = useRef(false);
 
   messagesRef.current = messages;
   conversationRef.current = conversation_id;
@@ -296,8 +297,6 @@ export function useMessaging(conversation_id, current_user_id, recipient_id) {
     // « En train d'écrire » : un canal au nom STABLE, partagé par les deux participants
     // (avec un nom unique par abonnement, la diffusion n'atteignait jamais l'autre).
     const typingTopic = `typing:${conversation_id}`;
-    const staleTyping = supabase.getChannels?.().find((c) => c.topic === `realtime:${typingTopic}`);
-    if (staleTyping) supabase.removeChannel(staleTyping);
     const typingChannel = supabase
       .channel(typingTopic)
       .on("broadcast", { event: "typing" }, ({ payload }) => {
@@ -356,10 +355,11 @@ export function useMessaging(conversation_id, current_user_id, recipient_id) {
 
   // Charge les messages plus anciens ; renvoie le nombre de messages ajoutés
   const loadOlder = useCallback(async () => {
-    if (loadingOlder || !hasMore || !conversation_id) return 0;
+    if (loadingOlderRef.current || !hasMore || !conversation_id) return 0;
     const oldest = messagesRef.current.find((m) => !isTmp(m.id) && m.created_at);
     if (!oldest) return 0;
     const convAtStart = conversation_id;
+    loadingOlderRef.current = true;
     setLoadingOlder(true);
     try {
       const { data, error } = await supabase
@@ -379,6 +379,7 @@ export function useMessaging(conversation_id, current_user_id, recipient_id) {
       console.warn("[useMessaging] loadOlder:", e);
       return 0;
     } finally {
+      loadingOlderRef.current = false;
       setLoadingOlder(false);
     }
   }, [loadingOlder, hasMore, conversation_id, decryptOne]);
@@ -504,13 +505,19 @@ export function useMessaging(conversation_id, current_user_id, recipient_id) {
             error.message?.includes("duplicate") ||
             error.message?.includes("unique")
           ) {
+            const existing = await supabase
+              .from("messages")
+              .select("id")
+              .eq("conversation_id", conversation_id)
+              .eq("client_message_id", clientId)
+              .maybeSingle();
             setMessages((prev) =>
               prev.map((m) =>
                 m.client_message_id === clientId ? { ...m, pending: false, failed: false } : m
               )
             );
             removeFromOutbox(current_user_id, clientId);
-            return { ok: true, data: { id: clientId, duplicate: true } };
+            return { ok: true, data: { id: existing.data?.id || null, duplicate: true } };
           }
           throw error;
         }
@@ -569,6 +576,7 @@ export function useMessaging(conversation_id, current_user_id, recipient_id) {
           ? crypto.randomUUID()
           : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
       try {
+        const { text, type, media_url, media_mime, media_size, file_name, media_duration } = fields || {};
         const { data, error } = await supabase
           .from("messages")
           .insert({
@@ -577,7 +585,13 @@ export function useMessaging(conversation_id, current_user_id, recipient_id) {
             recipient_id,
             client_message_id: clientId,
             reply_to_id: options.replyToId || null,
-            ...fields,
+            text: text || "",
+            type: type || "file",
+            media_url: media_url || null,
+            media_mime: media_mime || null,
+            media_size: media_size ?? null,
+            file_name: file_name || null,
+            media_duration: media_duration ?? null,
           })
           .select()
           .single();
@@ -587,7 +601,13 @@ export function useMessaging(conversation_id, current_user_id, recipient_id) {
             error.message?.includes("duplicate") ||
             error.message?.includes("unique")
           ) {
-            return { ok: true, data: { id: clientId, duplicate: true } };
+            const existing = await supabase
+              .from("messages")
+              .select("id")
+              .eq("conversation_id", conversation_id)
+              .eq("client_message_id", clientId)
+              .maybeSingle();
+            return { ok: true, data: { id: existing.data?.id || null, duplicate: true } };
           }
           throw error;
         }
