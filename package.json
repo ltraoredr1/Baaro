@@ -76,6 +76,7 @@
     "@mediapipe/tasks-vision": "^0.10.14",
     "@reduxjs/toolkit": "^2.2.7",
     "@supabase/supabase-js": "^2.45.0",
+    "@vercel/speed-insights": "latest",
     "i18next": "^23.15.1",
     "i18next-browser-languagedetector": "^8.0.2",
     "jszip": "^3.10.2",
