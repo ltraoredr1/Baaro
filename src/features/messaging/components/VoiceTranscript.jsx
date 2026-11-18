@@ -15,6 +15,7 @@ import {
   isModelReady,
   transcribeVoice,
 } from "../../../lib/whisperTranscribe.js";
+import { TRANSLATE_LANGS, translateText } from "../../../lib/translateApi.js";
 
 const STAGE_LABEL = {
   decode: "Préparation du vocal…",
@@ -30,6 +31,10 @@ export function VoiceTranscript({ src, isMe = false }) {
   const [progress, setProgress] = useState({ stage: "decode", percent: null });
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
+  const [targetLang, setTargetLang] = useState("en");
+  const [translatedText, setTranslatedText] = useState("");
+  const [translating, setTranslating] = useState(false);
+  const [translateError, setTranslateError] = useState("");
   const aliveRef = useRef(true);
 
   useEffect(() => {
@@ -45,6 +50,8 @@ export function VoiceTranscript({ src, isMe = false }) {
     setLang(code);
     setPreferredLang(code);
     setError("");
+    setTranslatedText("");
+    setTranslateError("");
     setPhase("working");
     setProgress({ stage: "decode", percent: null });
     try {
@@ -171,14 +178,80 @@ export function VoiceTranscript({ src, isMe = false }) {
 
   // phase === "done"
   const langLabel = TRANSCRIBE_LANGS.find((l) => l.code === lang)?.label || "";
+
+  const translateTranscript = async () => {
+    if (!text.trim() || translating) return;
+    setTranslating(true);
+    setTranslateError("");
+    try {
+      const result = await translateText(text, targetLang, lang, {
+        private: true,
+        preferBambara: lang === "bm",
+      });
+      if (aliveRef.current) {
+        setTranslatedText(result.translatedText || result.translation || "");
+      }
+    } catch (e) {
+      if (aliveRef.current) {
+        setTranslateError(e?.message || "Traduction impossible.");
+      }
+    } finally {
+      if (aliveRef.current) setTranslating(false);
+    }
+  };
+
   return (
     <div className="mt-2 text-sm rounded-xl bg-black/15 p-2.5 max-w-[280px]">
       <p className="whitespace-pre-wrap break-words not-italic">
         {text || <span className="opacity-70 italic">Aucune parole détectée.</span>}
       </p>
       <div className="flex flex-wrap items-center gap-1.5 mt-2 text-[11px]">
-        <span className="opacity-60">{langLabel} · transcription automatique</span>
+        <span className="opacity-60">{langLabel} · transcription automatique sur cet appareil</span>
       </div>
+
+      {text && (
+        <div className="mt-3 space-y-2">
+          <div className="flex flex-wrap gap-2 items-center">
+            <select
+              value={targetLang}
+              onChange={(e) => {
+                setTargetLang(e.target.value);
+                setTranslatedText("");
+                setTranslateError("");
+              }}
+              className="min-w-0 flex-1 rounded-lg bg-black/20 px-2 py-1.5 text-xs text-current"
+              aria-label="Langue de traduction"
+            >
+              {TRANSLATE_LANGS.map((item) => (
+                <option key={item.code} value={item.code}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={translateTranscript}
+              disabled={translating}
+              className="px-3 py-1.5 rounded-full bg-[#D9AE52] text-[#0B1220] text-xs font-semibold disabled:opacity-50"
+            >
+              {translating ? "Traduction…" : "Traduire"}
+            </button>
+          </div>
+
+          {translateError && (
+            <p className="text-xs text-red-300" role="alert">{translateError}</p>
+          )}
+
+          {translatedText && (
+            <div className="rounded-lg bg-black/20 p-2.5">
+              <p className="text-[11px] opacity-60 mb-1">
+                Traduction · {TRANSLATE_LANGS.find((l) => l.code === targetLang)?.label || targetLang}
+              </p>
+              <p className="whitespace-pre-wrap break-words">{translatedText}</p>
+            </div>
+          )}
+        </div>
+      )}
       <div className="flex flex-wrap gap-1.5 mt-1.5 text-xs">
         {text && (
           <button type="button" onClick={copy} className={`flex items-center gap-1 px-2.5 py-1 rounded-full ${pill}`}>
