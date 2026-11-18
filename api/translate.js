@@ -196,7 +196,7 @@ function validateMediaUrl(value) {
   }
 }
 
-const MEDIA_DUB_TIMEOUT_MS = 120_000;
+const MEDIA_DUB_TIMEOUT_MS = 150_000;
 
 async function runWorkerJob({ workerUrl, workerSecret, job, timeoutMs }) {
   const response = await fetch(workerUrl, {
@@ -459,6 +459,7 @@ export default async function handler(req, res) {
               payload: {
                 sourceKey,
                 text: speech,
+                vtt: vttText,
                 targetLanguage: targetLang,
               },
             },

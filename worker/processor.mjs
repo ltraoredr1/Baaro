@@ -1160,7 +1160,160 @@ async function editPlan(job) {
   }
 }
 
+const MAX_DUB_CUES = 150;
+const DUB_CONCURRENCY = 3;
+const MAX_DUB_SPEEDUP = 1.8;
+
+// "00:01:02.500" ou "01:02.500" -> secondes
+function vttSeconds(value) {
+  const m = /^(?:(\d+):)?(\d{1,2}):(\d{2})[.,](\d{1,3})/.exec(
+    String(value || "").trim()
+  );
+  if (!m) return null;
+  return (
+    Number(m[1] || 0) * 3600 +
+    Number(m[2]) * 60 +
+    Number(m[3]) +
+    Number(m[4].padEnd(3, "0")) / 1000
+  );
+}
+
+// Appel TTS d'une phrase -> octets MP3 (mêmes contrôles que le doublage simple).
+async function ttsBytes(text, language, voice) {
+  const endpoint = String(process.env.BAARO_TTS_URL || "").trim();
+  const secret = String(process.env.BAARO_TTS_SECRET || "").trim();
+
+  if (!endpoint || !secret) {
+    throw new Error("Doublage indisponible : service TTS non configuré.");
+  }
+
+  const url = new URL(endpoint);
+  if (url.protocol !== "https:") {
+    throw new Error("BAARO_TTS_URL doit utiliser HTTPS.");
+  }
+
+  const response = await fetch(url.toString(), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "audio/mpeg",
+      Authorization: `Bearer ${secret}`,
+    },
+    body: JSON.stringify({ text, language, voice }),
+    signal: AbortSignal.timeout(30000),
+  });
+
+  if (!response.ok) {
+    throw new Error(`TTS HTTP ${response.status}`);
+  }
+
+  const type = String(response.headers.get("content-type") || "").toLowerCase();
+  if (type.includes("application/json") || type.includes("text/")) {
+    throw new Error("Le service TTS a renvoyé du texte au lieu d'un MP3.");
+  }
+
+  const bytes = Buffer.from(await response.arrayBuffer());
+  const hasId3 = bytes.length >= 3 && bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33;
+  const hasFrame = bytes.length >= 2 && bytes[0] === 0xff && (bytes[1] & 0xe0) === 0xe0;
+
+  if (!bytes.length || bytes.length > 5 * 1024 * 1024 || (!hasId3 && !hasFrame)) {
+    throw new Error("Le service TTS n'a pas renvoyé un MP3 valide.");
+  }
+
+  return bytes;
+}
+
+/**
+ * Doublage synchronisé : une voix par phrase (VTT traduit), placée à
+ * l'instant exact de la phrase, accélérée si elle déborde sur la suivante.
+ */
+async function dubFromCues(job, dir) {
+  const cues = [];
+
+  for (const block of parseVtt(job.payload.vtt)) {
+    if (!block.timing) continue;
+    const [from, to] = block.timing.split("-->");
+    const start = vttSeconds(from);
+    const end = vttSeconds(String(to || "").trim().split(/\s+/)[0]);
+    const text = block.text.join(" ").replace(/<[^>]+>/g, "").trim();
+
+    if (start == null || end == null || end <= start || !text) continue;
+    cues.push({ start, end, text });
+  }
+
+  if (!cues.length) throw new Error("Aucune phrase à doubler.");
+  if (cues.length > MAX_DUB_CUES) {
+    throw new Error("Vidéo trop longue pour le doublage phrase par phrase.");
+  }
+
+  const language = job.payload?.targetLanguage || "fr";
+  const voice = job.payload?.voice || "default";
+  const files = new Array(cues.length);
+  let next = 0;
+
+  await Promise.all(
+    Array.from({ length: Math.min(DUB_CONCURRENCY, cues.length) }, async () => {
+      for (;;) {
+        const i = next++;
+        if (i >= cues.length) return;
+        const file = join(dir, `cue-${i}.mp3`);
+        await writeFile(file, await ttsBytes(cues[i].text, language, voice));
+        files[i] = file;
+      }
+    })
+  );
+
+  const args = ["-y"];
+  const filters = [];
+
+  for (let i = 0; i < cues.length; i++) {
+    args.push("-i", files[i]);
+
+    const probe = await ffprobe(files[i]);
+    const duration = Number(probe.format?.duration) || 0;
+    const slot = Math.max(
+      (cues[i + 1] ? cues[i + 1].start : cues[i].end + 1) - cues[i].start,
+      cues[i].end - cues[i].start,
+      0.3
+    );
+    const tempo = duration > slot ? Math.min(duration / slot, MAX_DUB_SPEEDUP) : 1;
+    const delay = Math.round(cues[i].start * 1000);
+
+    filters.push(
+      `[${i}:a]${tempo > 1.001 ? `atempo=${tempo.toFixed(3)},` : ""}adelay=${delay}|${delay}[a${i}]`
+    );
+  }
+
+  const labels = cues.map((_, i) => `[a${i}]`).join("");
+  filters.push(
+    `${labels}amix=inputs=${cues.length}:dropout_transition=0,volume=${cues.length},alimiter=limit=0.95[out]`
+  );
+
+  const audio = join(dir, "dub.mp3");
+
+  await run(config.ffmpeg, [
+    ...args,
+    "-filter_complex", filters.join(";"),
+    "-map", "[out]",
+    "-c:a", "libmp3lame",
+    "-q:a", "4",
+    audio,
+  ]);
+
+  const key = outputKey(job, "dub", "mp3");
+  const url = await putFile(key, audio, MIME.mp3);
+
+  if (!url) throw new Error("Publication du doublage sur R2 impossible.");
+
+  return { status: "completed", url, key, format: "mp3", cues: cues.length };
+}
+
 async function dub(job, input, dir) {
+  if (typeof job.payload?.vtt === "string" && job.payload.vtt.trim()) {
+    return dubFromCues(job, dir);
+  }
+
+
   const endpoint = String(process.env.BAARO_TTS_URL || "").trim();
   const secret = String(process.env.BAARO_TTS_SECRET || "").trim();
 
