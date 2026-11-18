@@ -178,48 +178,87 @@ async function thumbnail(job, input, dir) {
  * dans l'environnement du worker.
  */
 async function transcribeVtt(job, input, dir, prefix = "whisper") {
-  const model =
-    job.payload?.whisperModel ||
-    process.env.WHISPER_MODEL ||
-    "small";
+  const key = process.env.GROQ_API_KEY;
+  if (!key) {
+    throw new Error("GROQ_API_KEY manquante pour la transcription audio.");
+  }
 
-  const outputDir = join(dir, prefix);
-  await mkdir(outputDir, { recursive: true });
+  // Extraction audio légère : mono, 32 kbit/s, compatible avec Groq.
+  const audioFile = join(dir, `${prefix}.mp3`);
 
-  await run(config.whisper, [
-    input,
-    "--model", model,
-    "--output_format", "all",
-    "--output_dir", outputDir,
-    "--task", "transcribe",
+  await run(config.ffmpeg, [
+    "-y", "-i", input,
+    "-vn", "-ac", "1", "-ar", "16000",
+    "-b:a", "32k", "-f", "mp3",
+    audioFile,
   ]);
 
-  const all = await readdir(outputDir);
-  const vttFile = all.find((file) => file.endsWith(".vtt"));
-  const jsonFile = all.find((file) => file.endsWith(".json"));
+  const audio = await readFile(audioFile);
 
-  if (!vttFile) {
-    throw new Error("Whisper n'a produit aucun fichier WebVTT");
+  if (!audio.length || audio.length > 24 * 1024 * 1024) {
+    throw new Error("Audio vide ou trop volumineux pour la transcription Groq.");
   }
 
-  const vtt = await readFile(join(outputDir, vttFile), "utf8");
+  const form = new FormData();
+  form.append(
+    "file",
+    new Blob([audio], { type: "audio/mpeg" }),
+    `${prefix}.mp3`
+  );
+  form.append("model", process.env.GROQ_WHISPER_MODEL || "whisper-large-v3-turbo");
+  form.append("response_format", "verbose_json");
+  form.append("timestamp_granularities[]", "segment");
 
-  // Langue détectée (code ISO) : lue dans le JSON de Whisper.
-  let language = null;
-  if (jsonFile) {
-    try {
-      const meta = JSON.parse(
-        await readFile(join(outputDir, jsonFile), "utf8")
-      );
-      if (typeof meta.language === "string" && meta.language.trim()) {
-        language = meta.language.trim().toLowerCase().slice(0, 8);
-      }
-    } catch {
-      // langue inconnue : on retombe sur "auto"
-    }
+  const base = String(
+    process.env.GROQ_BASE || "https://api.groq.com/openai/v1"
+  ).replace(/\/+$/, "");
+
+  const response = await fetch(`${base}/audio/transcriptions`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${key}` },
+    body: form,
+    signal: AbortSignal.timeout(180000),
+  });
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    throw new Error(
+      data?.error?.message || `Groq transcription HTTP ${response.status}`
+    );
   }
 
-  return { vtt, language };
+  if (!Array.isArray(data.segments) || !data.segments.length) {
+    throw new Error("Groq n'a retourné aucun segment audio.");
+  }
+
+  const stamp = (seconds) => {
+    const ms = Math.max(0, Math.round(Number(seconds || 0) * 1000));
+    const h = Math.floor(ms / 3600000);
+    const m = Math.floor((ms % 3600000) / 60000);
+    const sec = Math.floor((ms % 60000) / 1000);
+    const milli = ms % 1000;
+    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}.${String(milli).padStart(3, "0")}`;
+  };
+
+  const cues = data.segments
+    .filter(segment => typeof segment.text === "string" && segment.text.trim())
+    .map((segment, index) => [
+      String(index + 1),
+      `${stamp(segment.start)} --> ${stamp(segment.end)}`,
+      segment.text.trim(),
+    ].join("\n"));
+
+  if (!cues.length) {
+    throw new Error("Aucun texte exploitable dans la transcription.");
+  }
+
+  return {
+    vtt: "WEBVTT\n\n" + cues.join("\n\n") + "\n",
+    language: typeof data.language === "string"
+      ? data.language.toLowerCase().slice(0, 8)
+      : null,
+  };
 }
 
 async function captions(job, input, dir) {
