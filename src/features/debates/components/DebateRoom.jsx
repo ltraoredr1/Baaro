@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { COLORS } from "../../../theme.js";
 import { supabase } from "../../../supabaseClient.js";
+import TranslateButton from "../../../components/TranslateButton.jsx";
 
 // Couleurs avec valeurs de secours
 const C = {
@@ -55,6 +56,7 @@ function mergeMsgs(prev, incoming) {
 const CODE_RE = /^[a-z0-9]{4,12}$/i;
 
 const ChatMessage = memo(function ChatMessage({ msg, currentId, name, isRoomHost }) {
+  const [translated, setTranslated] = useState(null);
   const isMe = msg.sender_id === currentId;
   const isAI = msg.sender_type === "ai";
   return (
@@ -81,7 +83,19 @@ const ChatMessage = memo(function ChatMessage({ msg, currentId, name, isRoomHost
             {isRoomHost && !isAI ? " · Hôte" : ""}
           </p>
         )}
-        <p className="break-words">{msg.text}</p>
+        <p className="break-words">{translated || msg.text}</p>
+        {!isMe && msg.text && (
+          <div className="mt-1.5">
+            <TranslateButton
+              text={msg.text}
+              preferredLang="fr"
+              quickLangs={["bm", "wo", "fuc", "dyu", "snk"]}
+              isTranslated={!!translated}
+              onTranslated={setTranslated}
+              onClear={() => setTranslated(null)}
+            />
+          </div>
+        )}
         <p
           className={`text-[10px] mt-1.5 ${
             isMe ? "text-black/60" : "text-gray-400"
