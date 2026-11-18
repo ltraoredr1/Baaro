@@ -193,10 +193,17 @@ def call_ai(task, text, language):
                     "Retourne uniquement le texte final, sans commentaire."
                 )
 
+            task_token_limits = {
+                "text.moderate": 500,
+                "text.correct": 3000,
+                "text.rewrite": 4000,
+                "text.translate": 4000,
+            }
+
             payload = {
                 "model": provider["model"],
                 "temperature": 0.2,
-                "max_tokens": 6000,
+                "max_tokens": task_token_limits.get(task, 1500),
                 "messages": [
                     {
                         "role": "system",
