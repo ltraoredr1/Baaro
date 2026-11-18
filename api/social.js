@@ -338,7 +338,8 @@ async function moderateComment(text, contentType) {
 
   const payload = JSON.stringify({
     task: "text.moderate",
-    input: { text, content_type: contentType },
+    // Le moteur Python n'accepte que text/language.
+    input: { text },
   });
   const timestamp = String(Math.floor(Date.now() / 1000));
   const signature = crypto

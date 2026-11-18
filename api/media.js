@@ -74,16 +74,12 @@ export default async function handler(req, res) {
 
   // Traitement Python mutualisé dans cet endpoint pour respecter la limite Vercel.
   if (["text.analyze", "text.normalize", "text.correct", "text.rewrite", "text.translate", "text.moderate"].includes(body.task)) {
-    const {
-      SUPABASE_URL,
-      VITE_SUPABASE_ANON_KEY,
-      SUPABASE_ANON_KEY,
-      BAARO_PYTHON_URL,
-      BAARO_PYTHON_SECRET,
-    } = process.env;
+    const { BAARO_PYTHON_URL, BAARO_PYTHON_SECRET } = process.env;
 
-    if (!SUPABASE_URL || !(VITE_SUPABASE_ANON_KEY || SUPABASE_ANON_KEY)
-        || !BAARO_PYTHON_URL || !BAARO_PYTHON_SECRET) {
+    // requireUser() a déjà validé la session avec le client admin.
+    // Les variables Supabase publiques ne sont donc pas un prérequis du
+    // relais Python.
+    if (!BAARO_PYTHON_URL || !BAARO_PYTHON_SECRET) {
       return res.status(503).json({ ok: false, error: "Python service unavailable" });
     }
 

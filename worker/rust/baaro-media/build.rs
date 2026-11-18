@@ -68,7 +68,10 @@ fn main() {
             println!("cargo:rustc-link-search=native={path}");
         } else if let Some(name) = flag.strip_prefix("-l") {
             println!("cargo:rustc-link-lib={name}");
-        } else if flag == "-pthread" || flag.starts_with("-Wl,") {
+        } else if flag == "-pthread" {
+            // Termux expose souvent pthread via ce flag pkg-config.
+            println!("cargo:rustc-link-lib=pthread");
+        } else if flag.starts_with("-Wl,") {
             println!("cargo:rustc-link-arg={flag}");
         }
     }
