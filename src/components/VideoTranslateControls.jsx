@@ -18,6 +18,8 @@ export function VideoTranslateControls({
   mediaUrl,
   videoId,
   videoRef,
+  audioRefs,
+  audioId,
   preferredLang = "en",
   // Préférence de son de l'utilisateur (bouton muet du flux). Si elle est fournie,
   // c'est elle qui décide du son pendant et après le doublage.
@@ -217,6 +219,37 @@ export function VideoTranslateControls({
       restoreOriginalTrack();
     };
   }, [dubUrl, videoEl]);
+
+
+  // Couper aussi la piste musicale séparée pendant le doublage.
+  const soundtrackSuppressedRef = useRef(false);
+
+  useEffect(() => {
+    const soundtrack = audioRefs?.current?.[String(audioId)];
+    if (!soundtrack) return;
+
+    if (dubUrl) {
+      soundtrackSuppressedRef.current = true;
+      soundtrack.pause();
+      soundtrack.muted = true;
+      return;
+    }
+
+    if (soundtrackSuppressedRef.current) {
+      soundtrackSuppressedRef.current = false;
+      soundtrack.muted = Boolean(userMuted);
+
+      const video = videoEl;
+      if (video && !video.paused && !userMuted) {
+        if (Number.isFinite(soundtrack.duration) && soundtrack.duration > 0) {
+          try {
+            soundtrack.currentTime = video.currentTime % soundtrack.duration;
+          } catch {}
+        }
+        soundtrack.play().catch(() => {});
+      }
+    }
+  }, [dubUrl, userMuted, videoEl, audioRefs, audioId]);
 
   const clear = () => {
     setActive(null);

@@ -421,6 +421,8 @@ export default function VideoCard({
               mediaUrl={video.media_url || video.video_url}
               videoId={video.id}
               videoRef={{ current: videoRefs.current[video.id] }}
+              audioRefs={audioRefs}
+              audioId={video.id}
               userMuted={muted}
               muteOriginal={!!video.mute_original}
             />
