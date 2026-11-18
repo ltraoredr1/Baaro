@@ -1,7 +1,31 @@
 import { Plus, Minus, ShoppingCart, AlertTriangle, XCircle, CheckCircle2 } from "lucide-react";
 import { COLORS } from "../theme.js";
+import { useState } from "react";
+import TranslateButton from "./TranslateButton.jsx";
 
 export default function ProductCard({ product, quantity = 0, onAdd, onRemove }) {
+  const [translations, setTranslations] = useState({});
+  const translatedField = (key, value) => {
+    if (!value || typeof value !== "string") return null;
+    return (
+      <div className="space-y-1">
+        <TranslateButton
+          text={value}
+          preferredLang="fr"
+          quickLangs={["bm", "wo", "fuc", "dyu", "snk"]}
+          isTranslated={!!translations[key]}
+          onTranslated={(result) => setTranslations(prev => ({
+            ...prev, [key]: result
+          }))}
+          onClear={() => setTranslations(prev => {
+            const next = { ...prev };
+            delete next[key];
+            return next;
+          })}
+        />
+      </div>
+    );
+  };
   const hasDiscount = product.compare_at_price && Number(product.compare_at_price) > Number(product.price);
   const discountPercent = hasDiscount 
     ? Math.round((1 - Number(product.price) / Number(product.compare_at_price)) * 100) 
@@ -43,9 +67,27 @@ export default function ProductCard({ product, quantity = 0, onAdd, onRemove }) 
         <div className="flex-1 min-w-0 flex flex-col justify-between">
           <div>
             <div className="flex items-start justify-between gap-2">
-              <h3 className="text-sm font-bold truncate leading-tight" style={{ color: COLORS.ivory }}>{product.name}</h3>
+              <h3 className="text-sm font-bold leading-tight break-words" style={{ color: COLORS.ivory }}>
+                {translations.name || product.name}
+              </h3>
+              {translatedField("name", product.name)}
             </div>
-            {product.category && <p className="text-[10px] mt-0.5" style={{ color: COLORS.muted }}>{product.category}</p>}
+            {product.category && (
+              <div>
+                <p className="text-[10px] mt-0.5" style={{ color: COLORS.muted }}>
+                  {translations.category || product.category}
+                </p>
+                {translatedField("category", product.category)}
+              </div>
+            )}
+            {product.description && (
+              <div className="mt-2">
+                <p className="text-xs leading-relaxed whitespace-pre-wrap" style={{ color: COLORS.muted }}>
+                  {translations.description || product.description}
+                </p>
+                {translatedField("description", product.description)}
+              </div>
+            )}
             <div className="flex items-baseline gap-2 mt-1">
               <span className="text-base font-black" style={{ color: COLORS.gold }}>{Number(product.price).toLocaleString()} {product.currency}</span>
               {hasDiscount && <span className="text-xs line-through" style={{ color: COLORS.muted }}>{Number(product.compare_at_price).toLocaleString()}</span>}
