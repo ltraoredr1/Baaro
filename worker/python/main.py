@@ -16,6 +16,8 @@ SECRET = os.getenv("BAARO_PYTHON_SECRET", "")
 
 MAX_TEXT = 20000
 MAX_BODY_BYTES = 25000
+MAX_AI_RESPONSE_BYTES = 128 * 1024
+MAX_AI_OUTPUT_CHARS = 20000
 PROVIDER_FAILURE_THRESHOLD = 3
 PROVIDER_COOLDOWN_SECONDS = 60
 provider_failures = {}
@@ -160,14 +162,32 @@ def call_ai(task, text, language):
             with urllib.request.urlopen(
                 request, timeout=provider["timeout"]
             ) as response:
-                data = json.loads(response.read().decode("utf-8"))
+                raw_response = response.read(MAX_AI_RESPONSE_BYTES + 1)
 
-            result = data.get("choices", [{}])[0].get(
-                "message", {}
-            ).get("content")
+            if len(raw_response) > MAX_AI_RESPONSE_BYTES:
+                raise ValueError("AI response too large")
 
-            if not isinstance(result, str) or not result.strip():
-                raise ValueError("Empty AI response")
+            data = json.loads(raw_response.decode("utf-8"))
+
+            if not isinstance(data, dict):
+                raise ValueError("Invalid AI response")
+
+            choices = data.get("choices")
+            if not isinstance(choices, list) or not choices:
+                raise ValueError("Missing AI choices")
+
+            message = choices[0].get("message", {})
+            if not isinstance(message, dict):
+                raise ValueError("Invalid AI message")
+
+            result = message.get("content")
+
+            if (
+                not isinstance(result, str)
+                or not result.strip()
+                or len(result) > MAX_AI_OUTPUT_CHARS
+            ):
+                raise ValueError("Invalid AI output")
 
             provider_failures.pop(name, None)
 
