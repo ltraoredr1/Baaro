@@ -11,7 +11,7 @@
  * mémoire uniquement (jamais écrites sur le disque).
  */
 import { useSyncExternalStore } from "react";
-import i18n from "../../../../i18n.js";
+import i18n, { translationLang } from "../../../../i18n.js";
 import { supabase } from "../../../supabaseClient.js";
 import { TRANSLATE_LANGS, translateText } from "../../../lib/translateApi.js";
 import { createTranslateQueue } from "./translateQueue.js";
@@ -19,13 +19,9 @@ import { createTranslateQueue } from "./translateQueue.js";
 const AUTO_KEY = "baaro:chat-autotranslate";
 const CONSENT_KEY = "baaro:chat-translate-consent";
 
-// Langues locales de l'interface sans traduction directe : on traduit alors vers le français.
-const UI_LANG_FALLBACK = { boz: "fr", dog: "fr", snk: "fr", nqo: "fr", wo: "fr", ff: "fr" };
-
 /** Langue dans laquelle l'utilisateur veut lire : celle de son interface. */
 export function chatTargetLang() {
-  const raw = String(i18n.language || "fr").split("-")[0].toLowerCase();
-  const mapped = UI_LANG_FALLBACK[raw] || raw;
+  const mapped = translationLang(i18n.language);
   return TRANSLATE_LANGS.some((l) => l.code === mapped) ? mapped : "fr";
 }
 

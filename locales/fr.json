@@ -45,7 +45,9 @@
     "back": "Retour",
     "error": "Erreur",
     "success": "Succès",
-    "search": "Rechercher"
+    "search": "Rechercher",
+    "view_original": "Voir l'original",
+    "view_translation": "Voir la traduction"
   },
   "nav": {
     "feed": "Fil",

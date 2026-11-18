@@ -69,19 +69,33 @@ function guessDefaultLanguage() {
   if (stored) return stored;
 
   try {
-    const browserLanguage =
-      navigator.language ||
-      navigator.languages?.[0] ||
-      "fr";
+    const candidates = [
+      ...(navigator.languages || []),
+      navigator.language,
+    ].filter(Boolean);
 
-    const lang = normalizeLanguage(browserLanguage);
-
-    if (SUPPORTED_LANGUAGES.includes(lang)) return lang;
+    for (const code of candidates) {
+      const lang = normalizeLanguage(code);
+      if (SUPPORTED_LANGUAGES.includes(lang)) return lang;
+    }
   } catch {
     // Utiliser le français par défaut.
   }
 
   return "fr";
+}
+
+/**
+ * Langue cible pour le service de traduction (API) à partir de la langue
+ * de l'interface. Une seule table pour toute l'app.
+ * - nqo, boz, dog : pas de traduction directe -> français
+ * - ff (interface) = fuc (API)
+ */
+const API_LANG_MAP = { nqo: "fr", boz: "fr", dog: "fr", ff: "fuc" };
+
+export function translationLang(code) {
+  const lang = normalizeLanguage(code || i18n.language);
+  return API_LANG_MAP[lang] || lang;
 }
 
 /**
@@ -132,8 +146,15 @@ if (!i18n.isInitialized) {
     },
 
     lng: guessDefaultLanguage(),
-    fallbackLng: "fr",
+    fallbackLng: {
+      sw: ["en", "fr"],
+      ha: ["en", "fr"],
+      default: ["fr"],
+    },
     supportedLngs: SUPPORTED_LANGUAGES,
+    load: "languageOnly",
+    returnEmptyString: false,
+    returnNull: false,
 
     interpolation: {
       escapeValue: false,

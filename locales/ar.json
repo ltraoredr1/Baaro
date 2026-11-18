@@ -45,7 +45,9 @@
     "back": "رجوع",
     "error": "حدث خطأ",
     "success": "تمت العملية بنجاح",
-    "search": "بحث"
+    "search": "بحث",
+    "view_original": "عرض الأصل",
+    "view_translation": "عرض الترجمة"
   },
   "nav": {
     "feed": "الرئيسية",

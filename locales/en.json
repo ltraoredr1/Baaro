@@ -45,7 +45,9 @@
     "back": "Back",
     "error": "Error",
     "success": "Success",
-    "search": "Search"
+    "search": "Search",
+    "view_original": "View original",
+    "view_translation": "View translation"
   },
   "nav": {
     "feed": "Feed",
