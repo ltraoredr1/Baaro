@@ -380,6 +380,30 @@ export default async function handler(req, res) {
       }
 
       const result = payload.result || {};
+
+      // Les images renvoient directement le texte OCR traduit.
+      if (result.mediaType === "image") {
+        if (!result.translatedText) {
+          return jsonError(
+            res,
+            502,
+            "Aucun texte traduit n'a été produit pour cette image."
+          );
+        }
+
+        return res.status(200).json({
+          ok: true,
+          mediaType: "image",
+          targetLang,
+          sourceLang: "auto",
+          mode: "text",
+          extractedText: result.extractedText || "",
+          translatedText: result.translatedText,
+          provider: result.provider || "worker",
+          model: result.model || null,
+        });
+      }
+
       const vttUrl = result.subtitles?.url || null;
 
       if (!vttUrl) {
