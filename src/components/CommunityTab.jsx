@@ -36,6 +36,7 @@ import GroupModerationPanel from "./community/GroupModerationPanel.jsx";
 import VoiceChannelUI from "./community/VoiceChannelUI.jsx";
 import { formatDuration, getBestAudioMime } from "../lib/chatMedia.js";
 import { parseEphemeralVoice } from "../lib/ephemeralVoice.js";
+import TranslateButton from "./TranslateButton.jsx";
 
 /* ──────────────────────────────────────────────
    Thème de secours (fusionné avec theme.js)
@@ -182,6 +183,7 @@ export default function CommunityTab({ onOpenProfile }) {
   const [groupSearch, setGroupSearch] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("all");
   const [msgText, setMsgText] = useState("");
+  const [messageTranslations, setMessageTranslations] = useState({});
   const [sending, setSending] = useState(false);
   const [voiceRecording, setVoiceRecording] = useState(false);
   const [voiceBlob, setVoiceBlob] = useState(null);
@@ -868,9 +870,30 @@ export default function CommunityTab({ onOpenProfile }) {
 
                                 if (!voice) {
                                   return (
-                                    <p className="break-words whitespace-pre-wrap">
-                                      {m.text}
-                                    </p>
+                                    <div className="space-y-1.5">
+                                      <p className="break-words whitespace-pre-wrap">
+                                        {messageTranslations[m.id] || m.text}
+                                      </p>
+                                      <TranslateButton
+                                        text={m.text}
+                                        preferredLang="fr"
+                                        quickLangs={["bm", "wo", "fuc", "dyu", "snk"]}
+                                        isTranslated={!!messageTranslations[m.id]}
+                                        onTranslated={(translated) =>
+                                          setMessageTranslations((prev) => ({
+                                            ...prev,
+                                            [m.id]: translated,
+                                          }))
+                                        }
+                                        onClear={() =>
+                                          setMessageTranslations((prev) => {
+                                            const next = { ...prev };
+                                            delete next[m.id];
+                                            return next;
+                                          })
+                                        }
+                                      />
+                                    </div>
                                   );
                                 }
 
