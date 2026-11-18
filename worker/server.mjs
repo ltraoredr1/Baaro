@@ -194,6 +194,39 @@ const server = http.createServer(async (req, res) => {
 });
 
 const nativeVersion = await assertNativeReady();
+let shuttingDown = false;
+
+function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+
+  console.log(`[worker] ${signal} received; graceful shutdown started`);
+
+  const forceExit = setTimeout(() => {
+    console.error("[worker] Graceful shutdown timeout; closing remaining connections");
+    server.closeAllConnections();
+    process.exit(1);
+  }, 10000);
+
+  server.close((error) => {
+    clearTimeout(forceExit);
+
+    if (error) {
+      console.error("[worker] Shutdown error:", error.message);
+      process.exitCode = 1;
+      return;
+    }
+
+    console.log("[worker] HTTP server closed cleanly");
+    process.exitCode = 0;
+  });
+
+  server.closeIdleConnections();
+}
+
+process.once("SIGTERM", () => shutdown("SIGTERM"));
+process.once("SIGINT", () => shutdown("SIGINT"));
+
 server.listen(config.port, "0.0.0.0", () => {
   console.log(`BAARO worker listening on :${config.port} (${nativeVersion})`);
 });
