@@ -452,6 +452,17 @@ async function ensureAndroidChannel(PushNotifications) {
   if (nativePlatform !== "android") return;
 
   const channels = [
+    // Canal dédié aux appels entrants : indépendant des préférences
+    // sonores des notifications ordinaires.
+    {
+      id: "baaro_calls_v1",
+      name: "Appels BAARO",
+      description: "Appels vocaux et vidéo entrants",
+      importance: 5,
+      visibility: 1,
+      vibration: true,
+      sound: "baaro_pulse",
+    },
     // Canal historique (appareils pas encore synchronisés).
     {
       id: ANDROID_CHANNEL_ID,

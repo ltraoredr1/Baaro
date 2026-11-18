@@ -391,9 +391,12 @@ async function sendFcm(token, payload, soundPreference) {
     // Son : celui choisi par l'utilisateur (préférence synchronisée), sinon
     // comportement historique. Voir api/_lib/push-sounds.js.
     const soundFields = fcmSoundFields(soundPreference);
-    const androidChannelId = soundPreference?.synced
-      ? soundFields.androidChannelId
-      : ANDROID_CHANNEL_ID;
+    const isIncomingCall = payload.data?.kind === "incoming_call";
+    const androidChannelId = isIncomingCall
+      ? "baaro_calls_v1"
+      : soundPreference?.synced
+        ? soundFields.androidChannelId
+        : ANDROID_CHANNEL_ID;
 
     const data = toStringMap({
       ...(payload.data || {}),
@@ -426,13 +429,19 @@ async function sendFcm(token, payload, soundPreference) {
             },
             data,
             android: {
-                ...(payload.data?.kind === "incoming_call" ? { ttl: "45s" } : {}),
+                ...(isIncomingCall ? { ttl: "60s" } : {}),
               priority:
-                payload.category === "message" || payload.category === "live"
+                isIncomingCall || payload.category === "message" || payload.category === "live"
                   ? "HIGH"
                   : "NORMAL",
               notification: {
                 tag: payload.tag || undefined,
+                ...(isIncomingCall ? {
+                  priority: "PRIORITY_MAX",
+                  visibility: "PUBLIC",
+                  default_vibrate_timings: true,
+                  notification_count: 1,
+                } : {}),
                 // Android 8+ : le son appartient au canal (un canal par son
                 // + un canal muet). `sound` ne sert qu'à Android < 8.
                 channel_id: androidChannelId,

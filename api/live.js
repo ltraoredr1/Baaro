@@ -1033,7 +1033,7 @@ async function handleAiGateway(req, res, admin, user) {
 
 async function notifyIncomingCall(
   admin,
-  { callerId, calleeId, conversationId, roomName, type, fallbackName, ringId = "first" }
+  { callerId, calleeId, conversationId, roomName, type, fallbackName, callId, ringId = "first" }
 ) {
   try {
     let callerName = cleanLine(fallbackName, 60) || "BAARO";
@@ -1051,11 +1051,12 @@ async function notifyIncomingCall(
       title: callerName,
       body: type === "voice" ? "Appel vocal entrant" : "Appel vidéo entrant",
       category: "message",
-      url: `/messages?conversation=${encodeURIComponent(conversationId)}&call=${encodeURIComponent(roomName)}`,
+      url: `/messages?conversation=${encodeURIComponent(conversationId)}&call=${encodeURIComponent(roomName)}&call_id=${encodeURIComponent(callId || "")}`,
       tag: `call-${roomName}`,
       idempotencyKey: `incoming-call:${roomName}:${ringId}`,
       data: {
         kind: "incoming_call",
+        call_id: callId || "",
         call_type: type,
         daily_room_name: roomName,
         conversation_id: conversationId,
@@ -1145,9 +1146,11 @@ async function handleCreateRoom(req, res, user, admin) {
         status: "ringing",
       };
 
-      const { error } = await admin
+      const { data: insertedCall, error } = await admin
         .from("calls")
-        .insert(insertPayload);
+        .insert(insertPayload)
+        .select("id")
+        .single();
 
       if (error) {
         logError("live", error, {
@@ -1172,6 +1175,7 @@ async function handleCreateRoom(req, res, user, admin) {
         roomName: dailyRoom.name,
         type: insertPayload.type,
         fallbackName: body.userName,
+        callId: insertedCall?.id,
       });
     } catch (err) {
       logError("live", err, {
