@@ -84,6 +84,36 @@ const server = http.createServer(async (req, res) => {
     return res.end();
   }
 
+  if (req.method === "GET" && req.url === "/health/python") {
+    try {
+      const response = await fetch("http://127.0.0.1:8788/health", {
+        method: "GET",
+        signal: AbortSignal.timeout(2500),
+      });
+
+      if (!response.ok) throw new Error("Python health check failed");
+
+      const health = await response.json();
+      if (health.status !== "ok") throw new Error("Python engine unhealthy");
+
+      return send(req, res, 200, {
+        ok: true,
+        service: "baaro-python-health",
+        python: {
+          status: health.status,
+          version: health.version,
+          ai: health.ai,
+        },
+      });
+    } catch {
+      return send(req, res, 503, {
+        ok: false,
+        service: "baaro-python-health",
+        error: "Python engine unavailable",
+      });
+    }
+  }
+
   if (req.method === "GET" && req.url === "/health") {
     return send(req, res, 200, { ok: true, service: "baaro-media-worker", native: nativeVersion, time: new Date().toISOString() });
   }
