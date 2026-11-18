@@ -6,6 +6,7 @@ import json
 import math
 import unicodedata
 import asyncio
+import threading
 import urllib.request
 import urllib.error
 
@@ -23,6 +24,36 @@ MAX_AI_EXECUTION_SECONDS = 16
 PROVIDER_FAILURE_THRESHOLD = 3
 PROVIDER_COOLDOWN_SECONDS = 60
 provider_failures = {}
+provider_failures_lock = threading.Lock()
+
+
+def provider_is_open(name):
+    with provider_failures_lock:
+        state = provider_failures.get(name, {})
+        return state.get("open_until", 0) > time.time()
+
+
+def provider_mark_success(name):
+    with provider_failures_lock:
+        provider_failures.pop(name, None)
+
+
+def provider_mark_failure(name):
+    with provider_failures_lock:
+        state = provider_failures.get(name, {"count": 0})
+        state["count"] = state.get("count", 0) + 1
+
+        if state["count"] >= PROVIDER_FAILURE_THRESHOLD:
+            state["open_until"] = time.time() + PROVIDER_COOLDOWN_SECONDS
+            state["count"] = 0
+
+        provider_failures[name] = state
+
+
+def provider_cooldown(name, now):
+    with provider_failures_lock:
+        state = provider_failures.get(name, {})
+        return max(0, int(state.get("open_until", 0) - now))
 
 
 TASK_PROMPTS = {
@@ -129,8 +160,7 @@ def call_ai(task, text, language):
             break
 
         name = provider["name"]
-        state = provider_failures.get(name, {})
-        if state.get("open_until", 0) > time.time():
+        if provider_is_open(name):
             continue
 
         remaining = deadline - time.monotonic()
@@ -217,7 +247,7 @@ def call_ai(task, text, language):
             ):
                 raise ValueError("Invalid AI output")
 
-            provider_failures.pop(name, None)
+            provider_mark_success(name)
 
             return {
                 "text": result.strip(),
@@ -226,16 +256,7 @@ def call_ai(task, text, language):
             }
 
         except Exception as error:
-            state = provider_failures.get(name, {"count": 0})
-            state["count"] = state.get("count", 0) + 1
-
-            if state["count"] >= PROVIDER_FAILURE_THRESHOLD:
-                state["open_until"] = (
-                    time.time() + PROVIDER_COOLDOWN_SECONDS
-                )
-                state["count"] = 0
-
-            provider_failures[name] = state
+            provider_mark_failure(name)
             print(
                 "[ai-provider] failure:",
                 name,
@@ -253,8 +274,7 @@ async def health():
     providers = []
     for provider in configured:
         name = provider["name"]
-        state = provider_failures.get(name, {})
-        cooldown = max(0, int(state.get("open_until", 0) - now))
+        cooldown = provider_cooldown(name, now)
 
         providers.append({
             "name": name,
