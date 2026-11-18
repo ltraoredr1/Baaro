@@ -1,6 +1,8 @@
+import { useState } from "react";
 import { Camera, Send, X } from "lucide-react";
 import { COLORS } from "../../../theme.js";
 import { baaroLogo } from "../constants.js";
+import { TranslateButton } from "../../../components/TranslateButton.jsx";
 
 /**
  * Feuille commentaires + bouton « Répondre en vidéo ».
@@ -14,6 +16,8 @@ export default function CommentsSheet({
   onReplyWithVideo,
   canReplyWithVideo = true,
 }) {
+  const [translations, setTranslations] = useState({});
+
   return (
     <div className="fixed inset-0 z-[70] bg-black/70 backdrop-blur-sm flex items-end justify-center">
       <div className="w-full max-w-xl max-h-[78dvh] bg-zinc-950 rounded-t-3xl border border-white/10 flex flex-col">
@@ -68,7 +72,31 @@ export default function CommentsSheet({
                         </span>
                       )}
                     </div>
-                    <p className="text-sm text-white/75">{comment.content}</p>
+                    <p className="text-sm text-white/75 whitespace-pre-wrap break-words">
+                      {translations[comment.id] || comment.content}
+                    </p>
+                    {comment.content?.trim() && (
+                      <div className="mt-1.5">
+                        <TranslateButton
+                          text={comment.content}
+                          preferredLang="fr"
+                          quickLangs={["bm", "wo", "fuc", "dyu", "snk"]}
+                          isTranslated={!!translations[comment.id]}
+                          onTranslated={(translated) =>
+                            setTranslations((prev) => ({
+                              ...prev,
+                              [comment.id]: translated,
+                            }))
+                          }
+                          onClear={() =>
+                            setTranslations((prev) => ({
+                              ...prev,
+                              [comment.id]: null,
+                            }))
+                          }
+                        />
+                      </div>
+                    )}
                     {canReplyWithVideo && onReplyWithVideo && (
                       <button
                         type="button"
