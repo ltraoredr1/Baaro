@@ -5,7 +5,7 @@
 
 const GROQ_DEFAULT_MODEL = "openai/gpt-oss-20b";
 const MISTRAL_DEFAULT_MODEL = "ministral-3b-latest";
-const GEMINI_DEFAULT_MODEL = "gemini-2.5-flash-lite";
+const GEMINI_DEFAULT_MODEL = "gemini-3.8-flash";
 
 // Température basse par défaut : moins d'inventions sur les faits.
 // BAARO_AI_TEMPERATURE (0 à 1), si définie, s'applique à tous les modes ;
@@ -163,12 +163,15 @@ export async function callOpenAICompatible({
           process.env.GEMINI_MODELS
       );
 
+  // Gemini 3.8 en priorité. Les anciens modèles 2.5
+  // sont volontairement exclus pour éviter les replis obsolètes.
   const modelList = [
     ...new Set(
       [
-        ...configuredModels,
+        ...configuredModels.filter(
+          (name) => !/^gemini-2\.5-flash(?:-lite)?$/.test(name)
+        ),
         GEMINI_DEFAULT_MODEL,
-        "gemini-2.5-flash",
       ].filter(Boolean)
     ),
   ];

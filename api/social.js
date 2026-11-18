@@ -347,7 +347,7 @@ async function moderateComment(text, contentType) {
     .digest("hex");
 
   const response = await fetch(
-    baseUrl.replace(/\\/+$/, "") + "/v1/process",
+    baseUrl.replace(/\/+$/, "") + "/v1/process",
     {
       method: "POST",
       headers: {
