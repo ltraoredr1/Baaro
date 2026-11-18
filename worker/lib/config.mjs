@@ -1,5 +1,5 @@
 export const config = {
-  port: Number(process.env.BAARO_WORKER_PORT || 8787),
+  port: Number(process.env.BAARO_WORKER_PORT || process.env.PORT || 10000),
   secret: process.env.BAARO_WORKER_SECRET || "",
   tmpDir: process.env.BAARO_WORKER_TMP_DIR || "/tmp/baaro-worker",
   ffmpeg: process.env.FFMPEG_BIN || "ffmpeg",

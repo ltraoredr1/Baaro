@@ -18,7 +18,7 @@ COPY . .
 RUN pip install --no-cache-dir -r python/requirements.txt
 ENV NODE_ENV=production
 ENV BAARO_MEDIA_BIN=/usr/local/bin/baaro-media
-ENV BAARO_WORKER_PORT=8787
-EXPOSE 8787
+ENV BAARO_WORKER_PORT=10000
+EXPOSE 10000
 ENV PYTHONPATH=/app
 CMD ["sh", "-c", "uvicorn python.main:app --host 127.0.0.1 --port 8788 & exec node server.mjs"]
