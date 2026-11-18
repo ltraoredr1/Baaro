@@ -11,6 +11,7 @@ import {
   DAYS_LABELS,
 } from "../services/companyApi.js";
 import CompanyReviews from "./CompanyReviews.jsx";
+import TranslateButton from "./TranslateButton.jsx";
 
 function formatTime(t) {
   if (!t) return "";
@@ -29,6 +30,7 @@ export default function CompanyDetail({ companyId, user_id, onBack }) {
   const [infos, setInfos] = useState([]);
   const [tab, setTab] = useState("programs");
   const [loading, setLoading] = useState(true);
+  const [translations, setTranslations] = useState({});
 
   useEffect(() => {
     (async () => {
@@ -65,6 +67,31 @@ export default function CompanyDetail({ companyId, user_id, onBack }) {
     );
   }
 
+  const translatedField = (key, value, className = "", style = {}) => {
+    if (!value || typeof value !== "string") return null;
+    return (
+      <div className={className}>
+        <p style={style}>{translations[key] || value}</p>
+        <TranslateButton
+          text={value}
+          preferredLang="fr"
+          quickLangs={["bm", "wo", "fuc", "dyu", "snk"]}
+          isTranslated={!!translations[key]}
+          onTranslated={(translated) =>
+            setTranslations((prev) => ({ ...prev, [key]: translated }))
+          }
+          onClear={() =>
+            setTranslations((prev) => {
+              const next = { ...prev };
+              delete next[key];
+              return next;
+            })
+          }
+        />
+      </div>
+    );
+  };
+
   const typeMeta = COMPANY_TYPES.find((t) => t.id === company.company_type);
 
   return (
@@ -100,11 +127,7 @@ export default function CompanyDetail({ companyId, user_id, onBack }) {
           </div>
         </div>
 
-        {company.description && (
-          <p className="text-sm mt-3" style={{ color: COLORS.muted }}>
-            {company.description}
-          </p>
-        )}
+        {translatedField("company-description", company.description, "mt-3 space-y-1.5 text-sm", { color: COLORS.muted })}
 
         <div className="flex flex-wrap gap-3 mt-3 text-xs" style={{ color: COLORS.muted }}>
           {company.phone && (
@@ -166,14 +189,8 @@ export default function CompanyDetail({ companyId, user_id, onBack }) {
                 className="rounded-xl border p-3"
                 style={{ background: COLORS.surface2, borderColor: COLORS.border }}
               >
-                <div className="font-bold text-sm" style={{ color: COLORS.ivory }}>
-                  {p.title}
-                </div>
-                {p.description && (
-                  <p className="text-xs mt-1" style={{ color: COLORS.muted }}>
-                    {p.description}
-                  </p>
-                )}
+                {translatedField(`program-${p.id}-title`, p.title, "space-y-1.5 font-bold text-sm", { color: COLORS.ivory })}
+                {translatedField(`program-${p.id}-description`, p.description, "mt-1 space-y-1.5 text-xs", { color: COLORS.muted })}
                 <div className="text-xs mt-2 flex flex-wrap gap-2" style={{ color: COLORS.muted }}>
                   {p.program_type === "route" && (p.origin || p.destination) && (
                     <span>
@@ -214,19 +231,9 @@ export default function CompanyDetail({ companyId, user_id, onBack }) {
                 style={{ background: COLORS.surface2, borderColor: COLORS.border }}
               >
                 <div>
-                  <div className="font-bold text-sm" style={{ color: COLORS.ivory }}>
-                    {t.name}
-                  </div>
-                  {t.description && (
-                    <p className="text-xs mt-1" style={{ color: COLORS.muted }}>
-                      {t.description}
-                    </p>
-                  )}
-                  {t.unit && (
-                    <p className="text-[11px] mt-1" style={{ color: COLORS.muted }}>
-                      {t.unit}
-                    </p>
-                  )}
+                  {translatedField(`tariff-${t.id}-name`, t.name, "space-y-1.5 font-bold text-sm", { color: COLORS.ivory })}
+                  {translatedField(`tariff-${t.id}-description`, t.description, "mt-1 space-y-1.5 text-xs", { color: COLORS.muted })}
+                  {translatedField(`tariff-${t.id}-unit`, t.unit, "mt-1 space-y-1.5 text-[11px]", { color: COLORS.muted })}
                 </div>
                 <div className="text-sm font-bold shrink-0" style={{ color: COLORS.gold }}>
                   {Number(t.price).toLocaleString()} {t.currency}
@@ -250,12 +257,8 @@ export default function CompanyDetail({ companyId, user_id, onBack }) {
                 className="rounded-xl border p-3"
                 style={{ background: COLORS.surface2, borderColor: COLORS.border }}
               >
-                <div className="font-bold text-sm" style={{ color: COLORS.ivory }}>
-                  {i.title}
-                </div>
-                <p className="text-xs mt-2 whitespace-pre-wrap" style={{ color: COLORS.muted }}>
-                  {i.content}
-                </p>
+                {translatedField(`info-${i.id}-title`, i.title, "space-y-1.5 font-bold text-sm", { color: COLORS.ivory })}
+                {translatedField(`info-${i.id}-content`, i.content, "mt-2 space-y-1.5 text-xs whitespace-pre-wrap", { color: COLORS.muted })}
               </div>
             ))
           )}
