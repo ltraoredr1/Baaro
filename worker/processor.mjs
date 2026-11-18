@@ -926,6 +926,78 @@ async function translateVtt(vtt, targetLanguage) {
  * - payload.sourceKey : transcription de la vidéo, traduction
  *   des sous-titres, puis publication du VTT traduit dans R2.
  */
+
+async function extractImageText(input) {
+  const key = process.env.GROQ_API_KEY;
+  if (!key) throw new Error("GROQ_API_KEY manquante pour l'OCR.");
+
+  const sniffed = await sniffFile(input);
+  const mimeByKind = {
+    jpg: "image/jpeg",
+    png: "image/png",
+  };
+  const mime = mimeByKind[sniffed?.kind];
+
+  if (!mime || sniffed.danger || !sniffed.media) {
+    throw new Error("Format image non pris en charge pour l'OCR.");
+  }
+
+  const bytes = await readFile(input);
+  if (!bytes.length || bytes.length > 10 * 1024 * 1024) {
+    throw new Error("Image vide ou trop volumineuse pour l'OCR.");
+  }
+
+  const base = String(
+    process.env.GROQ_BASE || "https://api.groq.com/openai/v1"
+  ).replace(/\/+$/, "");
+
+  const response = await fetch(`${base}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${key}`,
+    },
+    body: JSON.stringify({
+      model: process.env.GROQ_VISION_MODEL || "qwen/qwen3.8-27b",
+      temperature: 0,
+      max_completion_tokens: 3000,
+      messages: [{
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "Extrais fidèlement tout le texte lisible de cette image. " +
+              "Respecte l'ordre de lecture, les paragraphes et les lignes. " +
+              "Ne résume pas, ne traduis pas et n'invente rien. " +
+              "Si aucun texte n'est visible, réponds exactement: NO_TEXT."
+          },
+          {
+            type: "image_url",
+            image_url: {
+              url: `data:${mime};base64,${bytes.toString("base64")}`
+            }
+          }
+        ]
+      }]
+    }),
+    signal: AbortSignal.timeout(90000),
+  });
+
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(
+      data?.error?.message || `OCR Groq HTTP ${response.status}`
+    );
+  }
+
+  const text = data?.choices?.[0]?.message?.content;
+  if (typeof text !== "string" || !text.trim() || text.trim() === "NO_TEXT") {
+    throw new Error("Aucun texte lisible détecté dans cette image.");
+  }
+
+  return text.trim().slice(0, MAX_TRANSLATION_CHARS);
+}
+
 async function translate(job, input, dir) {
   const target = String(
     job.payload?.targetLanguage || "fr"
@@ -936,6 +1008,27 @@ async function translate(job, input, dir) {
   }
 
   if (input) {
+    const sniffed = await sniffFile(input);
+
+    if (sniffed?.kind === "jpg" || sniffed?.kind === "png") {
+      const extractedText = await extractImageText(input);
+      const result = await translateWithAI(
+        [{ role: "user", content: extractedText }],
+        target
+      );
+
+      return {
+        status: "completed",
+        mediaType: "image",
+        targetLanguage: target,
+        extractedText,
+        translatedText: result.text,
+        provider: result.provider,
+        model: result.model,
+        format: "plain_text",
+      };
+    }
+
     const { vtt: sourceVtt, language: detectedLanguage } =
       await transcribeVtt(job, input, dir, "whisper-translate");
 
