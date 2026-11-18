@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { X, Eye, Heart, Clock, Calendar } from 'lucide-react';
 import { COLORS as C } from '../../../theme.js';
+import TranslateButton from '../../../components/TranslateButton.jsx';
 import { EngagementList } from '../../../components/EngagementList.jsx';
 import {
   formatAbsoluteShort,
@@ -23,6 +24,7 @@ export function StoryInsights({
   onClose,
 }) {
   const [listType, setListType] = useState(null); // 'storyViews' | 'storyLikes' | null
+  const [translatedCaption, setTranslatedCaption] = useState(null);
   const [now, setNow] = useState(Date.now());
 
   // Rafraîchir le temps restant chaque minute
@@ -188,7 +190,17 @@ export function StoryInsights({
               <div className="text-xs font-semibold mb-1" style={{ color: C.muted }}>
                 Légende
               </div>
-              <p className="text-sm whitespace-pre-wrap break-words">{story.caption}</p>
+              <p className="text-sm whitespace-pre-wrap break-words">{translatedCaption || story.caption}</p>
+              <div className="mt-2">
+                <TranslateButton
+                  text={story.caption}
+                  preferredLang="fr"
+                  quickLangs={["bm", "wo", "fuc", "dyu", "snk"]}
+                  isTranslated={!!translatedCaption}
+                  onTranslated={(value) => setTranslatedCaption(value)}
+                  onClear={() => setTranslatedCaption(null)}
+                />
+              </div>
             </div>
           )}
         </div>
