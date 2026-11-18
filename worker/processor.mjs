@@ -1279,8 +1279,10 @@ export async function processJob(job) {
 
     // Une traduction peut être textuelle ou porter sur une vidéo.
     // Dans le second cas, la source doit être téléchargée depuis R2.
+    // Le doublage utilise le texte fourni dans payload.text :
+    // il ne doit pas télécharger à nouveau la vidéo source.
     const needsSource =
-      job.job_type !== "edit_plan" &&
+      !["edit_plan", "dub"].includes(job.job_type) &&
       (
         job.job_type !== "translate" ||
         Boolean(keyFromJob(job))
