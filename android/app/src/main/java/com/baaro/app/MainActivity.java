@@ -75,6 +75,10 @@ public class MainActivity extends BridgeActivity {
             "baaro_pulse"
         );
 
+        // Canal réservé aux appels entrants.
+        // Créé nativement pour rester disponible même lorsque l'app est fermée.
+        createIncomingCallChannel(manager);
+
         // Un canal par son.
         for (String[] sound : SOUND_CHANNELS) {
             createSoundChannel(
@@ -102,6 +106,50 @@ public class MainActivity extends BridgeActivity {
 
             manager.createNotificationChannel(silent);
         }
+    }
+
+
+    private void createIncomingCallChannel(NotificationManager manager) {
+        final String channelId = "baaro_calls_v1";
+
+        // Android conserve les réglages d'un canal déjà créé.
+        if (manager.getNotificationChannel(channelId) != null) {
+            return;
+        }
+
+        int rawId = getResources().getIdentifier(
+            "baaro_pulse",
+            "raw",
+            getPackageName()
+        );
+
+        Uri soundUri = rawId == 0
+            ? null
+            : Uri.parse(
+                "android.resource://" + getPackageName() + "/" + rawId
+            );
+
+        AudioAttributes callAudio = new AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            .build();
+
+        NotificationChannel channel = new NotificationChannel(
+            channelId,
+            "Appels BAARO",
+            NotificationManager.IMPORTANCE_HIGH
+        );
+
+        channel.setDescription("Appels vocaux et vidéo entrants");
+        channel.setLockscreenVisibility(android.app.Notification.VISIBILITY_PUBLIC);
+        channel.enableVibration(true);
+        channel.setVibrationPattern(new long[] { 0, 500, 300, 500, 300, 900 });
+
+        if (soundUri != null) {
+            channel.setSound(soundUri, callAudio);
+        }
+
+        manager.createNotificationChannel(channel);
     }
 
     private void createSoundChannel(
