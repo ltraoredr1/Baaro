@@ -4,6 +4,7 @@ import ProductCard from '../../../components/ProductCard.jsx';
 import { RichTextRenderer } from '../../../components/RichTextRenderer.jsx';
 import { TranslateButton } from '../../../components/TranslateButton.jsx';
 import { ImageTranslateControls } from '../../../components/ImageTranslateControls.jsx';
+import { VideoTranslateControls } from '../../../components/VideoTranslateControls.jsx';
 import { AutoTranslate } from '../../../components/TranslatedText.jsx';
 import { recordProductEvent } from '../api/storiesApi.js';
 import { useLiveProduct } from '../hooks/useLiveProduct.js';
@@ -101,7 +102,7 @@ export function ViewerContent({ story, userId, viewer, cart, videoRef, readOnly,
 
       {hasMedia ? (
         story.media_type === 'video' ? (
-          <video
+<>\n          <video
             ref={videoRef}
             src={story.media_url}
             className="w-full h-full object-contain"
@@ -129,6 +130,10 @@ export function ViewerContent({ story, userId, viewer, cart, videoRef, readOnly,
               }
             }}
           />
+          <div className="absolute bottom-36 left-3 z-40" onClick={stop}>
+            <VideoTranslateControls mediaUrl={story.media_url} videoRef={videoRef} />
+          </div>
+        </>
         ) : (
           <>
             {/* Fond flouté : remplit les bandes sans rogner l'image principale */}

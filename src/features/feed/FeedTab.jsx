@@ -47,6 +47,7 @@ import { TipButton } from "@/components/TipButton.jsx";
 import { AskAiButton } from "@/components/AskAiButton.jsx";
 import { TranslateButton } from "@/components/TranslateButton.jsx";
 import { ImageTranslateControls } from "@/components/ImageTranslateControls.jsx";
+import { VideoTranslateControls } from "@/components/VideoTranslateControls.jsx";
 import { GuestBanner } from "@/components/GuestBanner.jsx";
 import { FloatingCreateButton } from "@/components/FloatingCreateButton.jsx";
 import { LazyImage, LazyVideo } from "@/components/LazyMedia.jsx";
@@ -242,6 +243,7 @@ async function createPollForPost(postId, question, options) {
 /** Viewer plein écran un-à-un (swipe + flèches) */
 function MediaViewer({ items, startIndex = 0, onClose }) {
   const [index, setIndex] = useState(startIndex);
+  const videoRef = useRef(null);
   const [scale, setScale] = useState(1);
   const touchStartX = useRef(null);
   const pinchRef = useRef(null);
@@ -342,15 +344,21 @@ function MediaViewer({ items, startIndex = 0, onClose }) {
         style={{ touchAction: current.type === "video" ? "pan-y" : "none" }}
       >
         {current.type === "video" ? (
-          <video
-            key={current.url}
-            src={current.url}
-            controls
-            autoPlay
-            playsInline
-            className="max-w-full max-h-full object-contain"
-            style={{ transform: `scale(${scale})`, transition: scale === 1 ? "transform 180ms ease-out" : "none" }}
-          />
+          <>
+            <video
+              key={current.url}
+              ref={videoRef}
+              src={current.url}
+              controls
+              autoPlay
+              playsInline
+              className="max-w-full max-h-full object-contain"
+              style={{ transform: `scale(${scale})`, transition: scale === 1 ? "transform 180ms ease-out" : "none" }}
+            />
+            <div className="absolute bottom-3 left-3 z-30" onClick={(e) => e.stopPropagation()}>
+              <VideoTranslateControls mediaUrl={current.url} videoRef={videoRef} />
+            </div>
+          </>
         ) : (
           <img
             key={current.url}
