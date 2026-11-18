@@ -390,10 +390,11 @@ async def process(request: Request):
                 if raw.startswith("```"):
                     raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
                 decision = json.loads(raw)
-                action = decision.get("action")
+
                 if not isinstance(decision, dict):
                     raise ValueError("Invalid moderation object")
 
+                action = decision.get("action")
                 confidence = decision.get("confidence")
                 categories = decision.get("categories", [])
                 reason = decision.get("reason", "")
@@ -408,7 +409,11 @@ async def process(request: Request):
                 ):
                     raise ValueError("Invalid moderation confidence")
 
-                if not isinstance(categories, list):
+                if (
+                    not isinstance(categories, list)
+                    or len(categories) > 8
+                    or any(not isinstance(item, str) for item in categories)
+                ):
                     raise ValueError("Invalid moderation categories")
 
                 if not isinstance(reason, str):
@@ -417,10 +422,7 @@ async def process(request: Request):
                 result = {
                     "action": action,
                     "confidence": max(0.0, min(1.0, float(confidence))),
-                    "categories": [
-                        item[:40] for item in categories[:8]
-                        if isinstance(item, str)
-                    ],
+                    "categories": [item[:40] for item in categories],
                     "reason": reason[:240],
                     "provider": result.get("provider"),
                     "model": result.get("model"),
