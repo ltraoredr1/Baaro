@@ -1,6 +1,7 @@
 import "../i18n.js";
 import React from "react";
 import ReactDOM from "react-dom/client";
+import { SpeedInsights } from "@vercel/speed-insights/react";
 import { BrowserRouter } from "react-router-dom";
 import { Provider } from "react-redux";
 import { Capacitor } from "@capacitor/core";
@@ -96,6 +97,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(
           <AppProvider>
             <ToastProvider>
               <App />
+              <SpeedInsights />
             </ToastProvider>
           </AppProvider>
         </BrowserRouter>
