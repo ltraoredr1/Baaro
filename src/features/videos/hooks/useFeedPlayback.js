@@ -45,11 +45,29 @@ export function useFeedPlayback({ visibleVideos } = {}) { // eslint-disable-line
   };
 
   const playAudioFor = (id, videoEl) => {
-    const audio = audioRefs.current[String(id)];
+    const key = String(id);
+    const audio = audioRefs.current[key];
+
+    // Une seule piste audio peut jouer à la fois dans le flux.
+    Object.entries(audioRefs.current).forEach(([otherId, otherAudio]) => {
+      if (otherId !== key && otherAudio && !otherAudio.paused) {
+        otherAudio.pause();
+      }
+    });
+
     if (!audio) return;
+
     audio.muted = mutedRef.current;
     syncAudioTime(videoEl, audio);
-    if (!mutedRef.current) audio.play().catch(() => {});
+
+    if (!mutedRef.current) {
+      const result = audio.play();
+      if (result && typeof result.catch === "function") {
+        result.catch(() => {});
+      }
+    } else {
+      audio.pause();
+    }
   };
 
   const pause = (id) => {
