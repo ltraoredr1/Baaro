@@ -178,27 +178,30 @@ export function DebateRoom({ inviteCode, onBack }) {
         const roomData = await getRoomByCodeOrId(inviteCode);
         if (mounted) setRoom(roomData);
 
-        // Les liens directs passent par la même RPC SQL que le bouton Rejoindre.
+        // Un seul chemin d'inscription : RPC pour les invités.
+        // L'hôte est déjà inscrit à la création.
         const { data: participant, error: participantError } = await supabase
-          .from("debate_participants").select("user_id")
-          .eq("room_id", roomData.id).eq("user_id", uid)
-          .is("left_at", null).maybeSingle();
-        if (participantError) throw participantError;
-        if (!participant) await joinDebateByCode(roomData.invite_code);
-
-        // Participant : user_id = auth.users.id
-        const { error: partErr } = await supabase
           .from("debate_participants")
-          .upsert(
-            {
-              room_id: roomData.id,
-              user_id: uid,
-              role: roomData.host_id === uid ? "host" : "member",
-              left_at: null,
-            },
-            { onConflict: "room_id,user_id" }
-          );
-        if (partErr) console.warn("participant upsert", partErr.message);
+          .select("user_id")
+          .eq("room_id", roomData.id)
+          .eq("user_id", uid)
+          .is("left_at", null)
+          .maybeSingle();
+        if (participantError) throw participantError;
+
+        if (!participant) {
+          if (roomData.host_id === uid) {
+            const { error: hostError } = await supabase
+              .from("debate_participants")
+              .upsert(
+                { room_id: roomData.id, user_id: uid, role: "host", left_at: null },
+                { onConflict: "room_id,user_id" }
+              );
+            if (hostError) throw hostError;
+          } else {
+            await joinDebateByCode(roomData.invite_code);
+          }
+        }
 
         const { data: msgs } = await supabase
           .from("debate_messages")
