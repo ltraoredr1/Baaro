@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { recordWatch } from "./lib/feedScore.js";
 
 import CommentsSheet from "./components/CommentsSheet.jsx";
+import VideoActivityHistory from "./components/VideoActivityHistory.jsx";
 import {
   FeedEmpty,
   FeedError,
@@ -38,7 +39,7 @@ import VideoNextGenStudio from "./VideoNextGenStudio.jsx";
 import { useToast } from "../../components/ToastContext.jsx";
 import { EngagementList } from "../../components/EngagementList.jsx";
 
-import { Gauge, Leaf } from "lucide-react";
+import { Gauge, Leaf, History } from "lucide-react";
 
 const IMAGE_DURATION_MS = 6000;
 
@@ -260,6 +261,8 @@ export function VideosTab({ onRewardPoints, onExit, onOpenProfile }) {
   };
 
   const [studioOpen, setStudioOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyTargetId, setHistoryTargetId] = useState(null);
   const [studioFeatures, setStudioFeatures] = useState([]);
   const [viewersVideoId, setViewersVideoId] = useState(null);
 
@@ -374,6 +377,14 @@ export function VideosTab({ onRewardPoints, onExit, onOpenProfile }) {
     });
     return () => window.cancelAnimationFrame(frame);
   }, [feedKey, sharedVideoId, visibleVideos]);
+
+  useEffect(() => {
+    if (historyTargetId == null) return;
+    const node = slideRefs.current[String(historyTargetId)];
+    if (!node) return;
+    node.scrollIntoView({ behavior: "smooth", block: "start" });
+    setHistoryTargetId(null);
+  }, [feedKey, historyTargetId]);
 
   const activeVideo =
     activeId == null
@@ -984,6 +995,15 @@ export function VideosTab({ onRewardPoints, onExit, onOpenProfile }) {
         showModeSwitcher
         extraActions={(
           <>
+            <button
+              type="button"
+              onClick={() => setHistoryOpen(true)}
+              className="flex h-9 items-center gap-2 rounded-xl bg-white/10 px-3 text-sm font-bold text-white hover:bg-white/20"
+              aria-label="Ouvrir l’historique vidéo"
+            >
+              <History size={16} />
+              Historique
+            </button>
             <HandsFreeControls
           triggerInHeader={true}
         activeVideoId={activeId}
@@ -1133,6 +1153,23 @@ export function VideosTab({ onRewardPoints, onExit, onOpenProfile }) {
         onSettingsChange={updateSettings}
         dataSaverActive={dataSaverActive}
       />
+
+      {historyOpen && (
+        <VideoActivityHistory
+          user={user}
+          onClose={() => setHistoryOpen(false)}
+          onOpenVideo={(video) => {
+            if (!video?.id) return;
+            setVideos((current) => [
+              video,
+              ...current.filter((item) => String(item.id) !== String(video.id)),
+            ]);
+            setMode("newest");
+            setHistoryTargetId(video.id);
+            setHistoryOpen(false);
+          }}
+        />
+      )}
 
       {/* Liste des spectateurs */}
       {viewersVideoId && (
