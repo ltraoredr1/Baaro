@@ -18,7 +18,8 @@ import {
 import { COLORS } from "../../../theme.js";
 import { VideoTranslateControls } from "../../../components/VideoTranslateControls.jsx";
 import { TipButton } from "../../../components/TipButton.jsx";
-import VideoPollWidget from "./VideoPollWidget.jsx";\nimport VideoProductWidget from "./VideoProductWidget.jsx";
+import VideoPollWidget from "./VideoPollWidget.jsx";
+import VideoProductWidget from "./VideoProductWidget.jsx";
 import { baaroLogo } from "../constants.js";
 import {
   loadGoogleCast,
@@ -531,7 +532,8 @@ export default function VideoCard({
             Utiliser ce son
           </button>
         </div>
-        <VideoPollWidget video={video} user={user} isOwner={isOwner} />\n        <VideoProductWidget video={video} user={user} isOwner={isOwner} />
+        <VideoPollWidget video={video} user={user} isOwner={isOwner} />
+        <VideoProductWidget video={video} user={user} isOwner={isOwner} />
       </div>
 
       {/* Colonne d'actions (droite) */}
