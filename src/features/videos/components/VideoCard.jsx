@@ -13,7 +13,6 @@ import {
   Trash2,
   Volume2,
   VolumeX,
-  Cast,
   Radio,
 } from "lucide-react";
 import { COLORS } from "../../../theme.js";
@@ -87,7 +86,6 @@ export default function VideoCard({
   const [dragging, setDragging] = useState(false);
   const [castAvailable, setCastAvailable] = useState(false);
   const [airPlayAvailable, setAirPlayAvailable] = useState(false);
-  const [castMenuOpen, setCastMenuOpen] = useState(false);
   const [castBusy, setCastBusy] = useState(false);
 
   const clickTimeoutRef = useRef(null);
@@ -155,6 +153,23 @@ export default function VideoCard({
       setCastBusy(false);
     }
   };
+
+  useEffect(() => {
+    if (!isActive) return;
+
+    const openCastFromHeader = () => {
+      if (!castAvailable) {
+        window.alert("Google Cast n'est pas disponible pour cette vidéo.");
+        return;
+      }
+      handleCast(false);
+    };
+
+    window.addEventListener("baaro:cast-active-video", openCastFromHeader);
+    return () => {
+      window.removeEventListener("baaro:cast-active-video", openCastFromHeader);
+    };
+  }, [isActive, castAvailable, castBusy]);
 
   const handleAirPlay = () => {
     try {
@@ -586,43 +601,8 @@ export default function VideoCard({
           <TipButton recipientId={authorId} videoId={video.id} iconOnly />
         )}
 
-        {!isImage && isActive && (castAvailable || airPlayAvailable) && (
+        {!isImage && isActive && airPlayAvailable && (
           <div className="relative">
-            {castAvailable && (
-              <button
-                type="button"
-                disabled={castBusy}
-                onClick={() => setCastMenuOpen((value) => !value)}
-                className="h-11 w-11 rounded-full bg-white/10 backdrop-blur-md flex items-center justify-center disabled:opacity-50"
-                aria-label="Diffuser sur un téléviseur"
-                title="Google Cast"
-              >
-                <Cast size={21} />
-              </button>
-            )}
-
-            {castMenuOpen && castAvailable && (
-              <div className="absolute right-12 bottom-0 z-50 w-52 rounded-xl border border-white/15 bg-zinc-950/95 p-2 shadow-2xl">
-                <p className="px-2 py-1 text-[10px] font-bold uppercase text-white/50">
-                  Diffuser la vidéo
-                </p>
-                <button
-                  type="button"
-                  onClick={() => handleCast(false)}
-                  className="w-full rounded-lg px-3 py-2 text-left text-xs font-semibold hover:bg-white/10"
-                >
-                  TV uniquement
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleCast(true)}
-                  className="w-full rounded-lg px-3 py-2 text-left text-xs font-semibold hover:bg-white/10"
-                >
-                  TV + téléphone
-                </button>
-              </div>
-            )}
-
             {airPlayAvailable && (
               <button
                 type="button"

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import {
   Sparkles,
+  Cast,
   Volume2,
   VolumeX,
   SlidersHorizontal,
@@ -100,6 +101,18 @@ export default function FeedHeader({
                       {extraActions}
                     </div>
                   )}
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setControlsOpen(false);
+                      window.dispatchEvent(new Event("baaro:cast-active-video"));
+                    }}
+                    className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm font-semibold text-white hover:bg-white/10"
+                  >
+                    <Cast size={17} />
+                    Diffuser sur un téléviseur
+                  </button>
 
                   <button
                     type="button"
