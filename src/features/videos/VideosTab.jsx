@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { recordWatch } from "./lib/feedScore.js";
 
 import CommentsSheet from "./components/CommentsSheet.jsx";
-import VideoActivityHistory from "./components/VideoActivityHistory.jsx";
+import VideoActivityHistory from "./components/VideoActivityHistory.jsx";\nimport CreatorInsights from "./components/CreatorInsights.jsx";
 import {
   FeedEmpty,
   FeedError,
@@ -39,7 +39,7 @@ import VideoNextGenStudio from "./VideoNextGenStudio.jsx";
 import { useToast } from "../../components/ToastContext.jsx";
 import { EngagementList } from "../../components/EngagementList.jsx";
 
-import { Gauge, Leaf, History } from "lucide-react";
+import { Gauge, Leaf, History, BarChart3 } from "lucide-react";
 
 const IMAGE_DURATION_MS = 6000;
 
@@ -119,8 +119,12 @@ export function VideosTab({ onRewardPoints, onExit, onOpenProfile }) {
     feed.insertVideoAtPosition(video, id, index);
   };
 
+
+  const [studioFeatures, setStudioFeatures] = useState([]);
+
   const creator = useVideoCreator({
     user,
+    studioFeatures,
     loadVideos,
     onRewardPoints,
     soundPicker,
@@ -284,9 +288,8 @@ export function VideosTab({ onRewardPoints, onExit, onOpenProfile }) {
   };
 
   const [studioOpen, setStudioOpen] = useState(false);
-  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);\n  const [insightsOpen, setInsightsOpen] = useState(false);
   const [historyTargetId, setHistoryTargetId] = useState(null);
-  const [studioFeatures, setStudioFeatures] = useState([]);
   const [viewersVideoId, setViewersVideoId] = useState(null);
 
   const handleStudioCreate = (selectedFeatures) => {
@@ -306,7 +309,7 @@ export function VideosTab({ onRewardPoints, onExit, onOpenProfile }) {
   };
 
   const overlayOpen =
-    historyOpen ||
+    historyOpen ||\n    insightsOpen ||
     !!creator.showUpload ||
     studioOpen ||
     !!commentsState.showComments ||
@@ -1055,6 +1058,15 @@ export function VideosTab({ onRewardPoints, onExit, onOpenProfile }) {
               <History size={16} />
               Historique
             </button>
+            <button
+              type="button"
+              onClick={() => setInsightsOpen(true)}
+              className="flex h-9 items-center gap-2 rounded-xl bg-white/10 px-3 text-sm font-bold text-white hover:bg-white/20"
+              aria-label="Ouvrir les statistiques créateur"
+            >
+              <BarChart3 size={16} />
+              Stats
+            </button>
             <HandsFreeControls
           triggerInHeader={true}
         activeVideoId={activeId}
@@ -1220,7 +1232,7 @@ export function VideosTab({ onRewardPoints, onExit, onOpenProfile }) {
             setHistoryOpen(false);
           }}
         />
-      )}
+      )}\n      {insightsOpen && <CreatorInsights user={user} onClose={() => setInsightsOpen(false)} />}
 
       {/* Liste des spectateurs */}
       {viewersVideoId && (
