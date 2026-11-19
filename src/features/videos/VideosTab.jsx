@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { recordWatch } from "./lib/feedScore.js";
 
 import CommentsSheet from "./components/CommentsSheet.jsx";
-import VideoActivityHistory from "./components/VideoActivityHistory.jsx";\nimport CreatorInsights from "./components/CreatorInsights.jsx";
+import VideoActivityHistory from "./components/VideoActivityHistory.jsx";
+import CreatorInsights from "./components/CreatorInsights.jsx";
 import {
   FeedEmpty,
   FeedError,
@@ -1232,7 +1233,8 @@ export function VideosTab({ onRewardPoints, onExit, onOpenProfile }) {
             setHistoryOpen(false);
           }}
         />
-      )}\n      {insightsOpen && <CreatorInsights user={user} onClose={() => setInsightsOpen(false)} />}
+      )}
+      {insightsOpen && <CreatorInsights user={user} onClose={() => setInsightsOpen(false)} />}
 
       {/* Liste des spectateurs */}
       {viewersVideoId && (
