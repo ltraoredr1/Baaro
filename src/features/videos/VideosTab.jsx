@@ -1180,7 +1180,28 @@ export function VideosTab({ onRewardPoints, onExit, onOpenProfile }) {
       </div>
 
       {/* Bouton flottant déplaçable : créer une vidéo */}
-      <CreateVideoFab onClick={openUpload} hidden={overlayOpen} />
+      <CreateVideoFab
+        onClick={openUpload}
+        onCreatePoll={() => {
+          if (!activeIdForPublishRef.current) {
+            showToast("Sélectionne une vidéo pour créer un sondage.", "info");
+            return;
+          }
+          window.dispatchEvent(new CustomEvent("baaro:open-video-poll-create", {
+            detail: { videoId: activeIdForPublishRef.current },
+          }));
+        }}
+        onAddProduct={() => {
+          if (!activeIdForPublishRef.current) {
+            showToast("Sélectionne une vidéo pour ajouter un produit.", "info");
+            return;
+          }
+          window.dispatchEvent(new CustomEvent("baaro:open-video-product-create", {
+            detail: { videoId: activeIdForPublishRef.current },
+          }));
+        }}
+        hidden={overlayOpen}
+      />
 
       {/* Commentaires */}
       {commentsState.showComments && (

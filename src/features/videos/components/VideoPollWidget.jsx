@@ -12,6 +12,16 @@ export default function VideoPollWidget({ video, user, isOwner }) {
   const [loading,setLoading]=useState(true), [busy,setBusy]=useState(false), [error,setError]=useState("");
   const [question,setQuestion]=useState(""), [options,setOptions]=useState(["",""]), [selected,setSelected]=useState([]);
 
+  useEffect(() => {
+    const openCreator = (event) => {
+      if (!isOwner || String(event.detail?.videoId) !== String(video.id)) return;
+      if (poll) { setOpen(true); return; }
+      setOpen(true);
+    };
+    window.addEventListener("baaro:open-video-poll-create", openCreator);
+    return () => window.removeEventListener("baaro:open-video-poll-create", openCreator);
+  }, [video.id, isOwner, poll]);
+
   useEffect(()=>{
     let active=true;
     (async()=>{
@@ -64,10 +74,11 @@ export default function VideoPollWidget({ video, user, isOwner }) {
   };
 
   if(loading||(!poll&&!isOwner))return null;
+  if (!poll && !open) return null;
   return <div className="mt-2" onClick={e=>e.stopPropagation()}>
-    <button type="button" onClick={()=>setOpen(x=>!x)} className="inline-flex items-center gap-2 rounded-full border border-yellow-400/40 bg-black/70 px-3 py-2 text-xs font-bold text-yellow-200">
-      <BarChart3 size={15}/>{poll?"Sondage":"Créer un sondage"}
-    </button>
+    {poll && <button type="button" onClick={()=>setOpen(x=>!x)} className="inline-flex items-center gap-2 rounded-full border border-yellow-400/40 bg-black/70 px-3 py-2 text-xs font-bold text-yellow-200">
+      <BarChart3 size={15}/>Sondage
+    </button>}
     {open&&<div className="mt-2 rounded-2xl border border-white/15 bg-black/95 p-3 shadow-xl">
       {!poll?<div className="space-y-2">
         <input value={question} onChange={e=>setQuestion(e.target.value)} maxLength={240} placeholder="Pose ta question…" className="w-full rounded-xl border border-white/15 bg-white/10 px-3 py-2 text-sm text-white"/>

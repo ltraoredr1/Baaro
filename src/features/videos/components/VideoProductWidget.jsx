@@ -35,6 +35,15 @@ export default function VideoProductWidget({ video, user, isOwner }) {
   };
 
   useEffect(() => {
+    const openCreator = (event) => {
+      if (!isOwner || String(event.detail?.videoId) !== String(video.id)) return;
+      loadOwnProducts();
+    };
+    window.addEventListener("baaro:open-video-product-create", openCreator);
+    return () => window.removeEventListener("baaro:open-video-product-create", openCreator);
+  }, [video.id, isOwner, user?.id]);
+
+  useEffect(() => {
     let active = true;
     (async () => {
       await load();
@@ -144,11 +153,6 @@ export default function VideoProductWidget({ video, user, isOwner }) {
             );
           })}
         </div>
-      )}
-      {isOwner && linked.length < 3 && (
-        <button type="button" disabled={busy} onClick={loadOwnProducts} className="mt-1 inline-flex items-center gap-1 rounded-full border border-emerald-300/40 bg-black/70 px-3 py-2 text-[11px] font-bold text-emerald-200">
-          {busy ? <Loader2 size={13} className="animate-spin"/> : <Plus size={13}/>} Ajouter un produit
-        </button>
       )}
       {open && (
         <div className="mt-2 max-h-56 space-y-2 overflow-y-auto rounded-xl border border-white/15 bg-black/95 p-3">

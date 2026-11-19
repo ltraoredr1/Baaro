@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Plus } from "lucide-react";
+import { Plus, Video, BarChart3, ShoppingBag, X } from "lucide-react";
 import { COLORS } from "../../../theme.js";
 
 const SIZE = 44;
@@ -37,7 +37,7 @@ function save(value) {
 // Bouton flottant « Créer une vidéo » : un appui ouvre le formulaire de création
 // (l'utilisateur choisit ensuite : caméra, galerie, etc.).
 // Déplaçable au doigt, se colle au bord le plus proche, position mémorisée.
-export default function CreateVideoFab({ onClick, hidden = false }) {
+export default function CreateVideoFab({ onClick, onCreatePoll, onAddProduct, canCreateExtras = false, hidden = false }) {
   const btnRef = useRef(null);
   const dragRef = useRef({
     active: false,
@@ -50,6 +50,7 @@ export default function CreateVideoFab({ onClick, hidden = false }) {
 
   const [pos, setPos] = useState(null);
   const [dragging, setDragging] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   const getBounds = () => {
     const parent = btnRef.current?.parentElement;
@@ -88,6 +89,7 @@ export default function CreateVideoFab({ onClick, hidden = false }) {
 
   const handlePointerDown = (e) => {
     if (!pos) return;
+    setMenuOpen(false);
     e.stopPropagation();
 
     dragRef.current = {
@@ -167,19 +169,25 @@ export default function CreateVideoFab({ onClick, hidden = false }) {
       dragRef.current.moved = false;
       return;
     }
-    onClick?.();
+    setMenuOpen((value) => !value);
   };
 
   const handleKeyDown = (e) => {
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
-      onClick?.();
+      setMenuOpen((value) => !value);
     }
   };
 
   if (hidden) return null;
 
+  const runAction = (callback) => {
+    setMenuOpen(false);
+    callback?.();
+  };
+
   return (
+    <>
     <button
       ref={btnRef}
       type="button"
@@ -221,7 +229,7 @@ export default function CreateVideoFab({ onClick, hidden = false }) {
             : "0 5px 14px rgba(0,0,0,0.5), 0 0 10px rgba(255,190,0,0.5)",
         }}
       >
-        <Plus size={22} strokeWidth={3.5} />
+        {menuOpen ? <X size={21} strokeWidth={3.5} /> : <Plus size={22} strokeWidth={3.5} />}
       </span>
 
       {dragging && (
@@ -230,5 +238,26 @@ export default function CreateVideoFab({ onClick, hidden = false }) {
         </span>
       )}
     </button>
+    {menuOpen && !dragging && (
+      <div
+        className={`absolute z-[70] w-52 rounded-2xl border border-white/15 bg-zinc-950/95 p-2 shadow-2xl backdrop-blur-xl ${
+          pos && pos.x > getBounds().w / 2 ? "right-0" : "left-0"
+        }`}
+        style={{ top: Math.min((pos?.y ?? TOP_LIMIT) + SIZE + 10, getBounds().h - 190) }}
+        onPointerDown={(event) => event.stopPropagation()}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <button type="button" onClick={() => runAction(onClick)} className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-bold text-white hover:bg-white/10">
+          <Video size={18} className="text-yellow-300" /> Créer une vidéo
+        </button>
+        <button type="button" onClick={() => runAction(onCreatePoll)} className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-bold text-yellow-200 hover:bg-white/10">
+          <BarChart3 size={18} /> Créer un sondage
+        </button>
+        <button type="button" onClick={() => runAction(onAddProduct)} className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-bold text-emerald-200 hover:bg-white/10">
+          <ShoppingBag size={18} /> Ajouter un produit
+        </button>
+      </div>
+    )}
+    </>
   );
 }
