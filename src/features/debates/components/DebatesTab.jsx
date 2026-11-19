@@ -193,7 +193,7 @@ export default function DebatesTab({
   onOpenProfile,
 }) {
   const user_id = currentUserId || id || null;
-  const { rooms: myRooms } = useDebates(user_id) || {};
+  const { rooms: myRooms, createRoom, joinByCode } = useDebates(user_id) || {};
   const [debates, setDebates] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -310,16 +310,9 @@ export default function DebatesTab({
     setJoining(true);
     setError(null);
     try {
-      // Normaliser en minuscules (aligné CreateDebateModal)
-      const code = raw.toLowerCase();
-      const { data, error: rpcErr } = await supabase.rpc(
-        "join_debate_by_code",
-        { p_code: code }
-      );
-      if (rpcErr) throw rpcErr;
-      const row = Array.isArray(data) ? data[0] : data;
-      if (!row) throw new Error("Code invalide");
-      const resolved = String(row.invite_code || code).trim() || code;
+      const result = await joinByCode(raw);
+      if (!result?.ok || !result.room) throw new Error(result?.reason || "Code invalide");
+      const resolved = String(result.room.invite_code || result.room.id).trim();
       setActiveDebateCode(resolved);
       setJoinCode("");
       fetchDebates();
@@ -525,6 +518,7 @@ export default function DebatesTab({
         isOpen={isCreateOpen}
         onClose={() => setIsCreateOpen(false)}
         id={user_id}
+        createRoom={createRoom}
         onSuccess={(room) => {
           setIsCreateOpen(false);
           if (room?.id) {

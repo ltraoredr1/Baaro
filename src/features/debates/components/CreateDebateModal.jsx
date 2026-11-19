@@ -11,9 +11,6 @@ import {
   Layers,
 } from "lucide-react";
 import { COLORS } from "../../../theme.js";
-import { supabase } from "../../../supabaseClient.js";
-import { API_BASE } from "../../../config.js";
-import { callSocial } from "../../../lib/notifyInteraction.js";
 
 // Couleurs avec valeurs de secours : évite un bouton invisible si une clé manque dans theme.js
 const C = {
@@ -49,73 +46,11 @@ const MODES = [
   { id: "text", icon: MessageSquare, label: "Texte", hint: "Chat + fichiers" },
 ];
 
-function randomCode(n) {
-  var len = n || 6;
-  var chars = "abcdefghijklmnopqrstuvwxyz0123456789";
-  var out = "";
-  for (var i = 0; i < len; i++) {
-    out += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return out;
-}
-
-function apiUrl(path) {
-  var base = (API_BASE || "").replace(/\/$/, "");
-  var p = path.startsWith("/") ? path : "/" + path;
-  return base + p;
-}
-
-// Insère la salle ; réessaie si le code d'invitation existe déjà
-// ou si la colonne max_participants n'existe pas dans la table.
-async function insertRoomWithRetry(base) {
-  var withMax = true;
-  for (var attempt = 0; attempt < 5; attempt++) {
-    var payload = Object.assign({}, base, { invite_code: randomCode(6) });
-    if (withMax) payload.max_participants = 12;
-
-    var res = await supabase
-      .from("debate_rooms")
-      .insert(payload)
-      .select("*")
-      .single();
-
-    if (!res.error) return res.data;
-
-    var err = res.error;
-    var msg = err.message || "";
-
-    if (err.code === "23505") continue; // code déjà pris -> nouveau code
-
-    if (
-      withMax &&
-      (err.code === "PGRST204" ||
-        err.code === "42703" ||
-        /max_participants/i.test(msg))
-    ) {
-      withMax = false;
-      continue;
-    }
-
-    throw err;
-  }
-  throw new Error("Impossible de générer un code d'invitation unique.");
-}
-
-function friendlyError(err) {
-  var raw = (err && err.message) || String(err);
-  if (/Failed to fetch|NetworkError|Load failed|fetch/i.test(raw)) {
-    return "Connexion impossible. Vérifie ta connexion internet et réessaie.";
-  }
-  if (/row-level security|permission|policy|RLS/i.test(raw)) {
-    return "Permission refusée par la base (RLS). Reconnecte-toi puis réessaie. Détail : " + raw;
-  }
-  return raw || "Impossible de créer la salle.";
-}
-
 export function CreateDebateModal(props) {
   var isOpen = props.isOpen;
   var onClose = props.onClose;
   var onSuccess = props.onSuccess;
+  var createRoom = props.createRoom;
 
   var titleState = useState("");
   var title = titleState[0];
@@ -148,136 +83,21 @@ export function CreateDebateModal(props) {
   async function handleCreate(e) {
     if (e && e.preventDefault) e.preventDefault();
     if (loading) return;
-
     var titleVal = title.trim();
     var topicVal = topic.trim();
-    if (!titleVal || !topicVal) {
-      setError("Titre et thème requis.");
-      return;
-    }
-
+    if (!titleVal || !topicVal) { setError("Titre et thème requis."); return; }
+    if (typeof createRoom !== "function") { setError("Service de création indisponible."); return; }
     setLoading(true);
     setError(null);
-
     try {
-      var sessionRes = await supabase.auth.getSession();
-      var session = sessionRes.data && sessionRes.data.session;
-      var user_id = session && session.user && session.user.id;
-      if (!user_id) {
-        throw new Error(
-          "Tu dois être connecté pour créer un live. Reconnecte-toi."
-        );
-      }
-
-      var finalMode = mode === "hybrid" ? "video" : mode;
-      var finalTopic =
-        mode === "hybrid" ? topicVal + " - Tout-en-un" : topicVal;
-
-      var room = await insertRoomWithRetry({
-        title: titleVal,
-        topic: finalTopic,
-        mode: finalMode,
-        host_id: user_id,
-        status: "active",
-      });
-
-      // Participant hôte (non bloquant)
-      try {
-        var partRes = await supabase.from("debate_participants").insert({
-          room_id: room.id,
-          user_id: user_id,
-          role: "host",
-        });
-        if (partRes.error) {
-          console.warn("participant warn:", partRes.error.message);
-        }
-      } catch (pErr) {
-        console.warn("participant warn:", pErr && pErr.message);
-      }
-
-      // Salle Daily pour audio/vidéo (non bloquant, timeout 8 s)
-      if (finalMode !== "text") {
-        // Vrai nom de l'hôte (avant : « Hote » en dur pour tout le monde)
-        var hostName = "Hôte";
-        try {
-          var profRes = await supabase
-            .from("profiles")
-            .select("display_name")
-            .eq("id", user_id)
-            .maybeSingle();
-          if (profRes.data && profRes.data.display_name) {
-            hostName = profRes.data.display_name;
-          }
-        } catch (nameErr) {
-          console.warn("Nom de l'hôte indisponible:", nameErr && nameErr.message);
-        }
-        var controller =
-          typeof AbortController !== "undefined" ? new AbortController() : null;
-        var timer = setTimeout(function () {
-          if (controller) controller.abort();
-        }, 8000);
-        try {
-          var res = await fetch(apiUrl("/api/create-room"), {
-            method: "POST",
-            signal: controller ? controller.signal : undefined,
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: "Bearer " + session.access_token,
-            },
-            body: JSON.stringify({
-              action: "create-room",
-              userName: hostName,
-              title: titleVal,
-              topic: finalTopic,
-              mode: finalMode,
-              inviteCode: room.invite_code,
-            }),
-          });
-          var dailyData = await res.json().catch(function () {
-            return {};
-          });
-          var name = dailyData.roomName || dailyData.daily_room_name;
-          if (name) {
-            await supabase
-              .from("debate_rooms")
-              .update({ daily_room_name: name })
-              .eq("id", room.id);
-            room.daily_room_name = name;
-          } else if (!res.ok) {
-            console.warn(
-              "Daily create-room:",
-              dailyData.error || res.statusText
-            );
-          }
-        } catch (dailyErr) {
-          console.warn(
-            "Daily API non dispo, salle chat créée quand même:",
-            dailyErr && dailyErr.message
-          );
-        } finally {
-          clearTimeout(timer);
-        }
-      }
-
-      setTitle("");
-      setTopic("");
-      setMode("hybrid");
-      setLoading(false);
-
-      // Le serveur détermine lui-même les amis et abonnés destinataires,
-      // puis crée la notification interne et envoie le push avec sonnerie.
-      // Une panne push ne doit jamais annuler la création de la salle.
-      callSocial("debate_started", { room_id: room.id }).catch(function (notifyErr) {
-        console.warn("Notification débat/live non envoyée:", notifyErr?.message || notifyErr);
-      });
-
-      if (onSuccess) onSuccess(room);
-      return;
+      var result = await createRoom({ title: titleVal, topic: topicVal, mode: mode, maxParticipants: 12 });
+      if (!result?.ok || !result.room) throw new Error(result?.reason || "Impossible de créer le débat.");
+      setTitle(""); setTopic(""); setMode("hybrid");
+      if (onSuccess) onSuccess(result.room);
     } catch (err) {
       console.error("Création débat:", err);
-      setError(friendlyError(err));
-    }
-    setLoading(false);
+      setError(err?.message || "Impossible de créer le débat.");
+    } finally { setLoading(false); }
   }
 
   var canSubmit = title.trim() && topic.trim() && !loading;

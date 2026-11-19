@@ -1,4 +1,4 @@
-import { useDebateLive } from "../hooks/useDebates.js";
+import { getRoomByCodeOrId, joinDebateByCode, useDebateLive } from "../hooks/useDebates.js";
 import * as liveRoles from "../../../lib/liveRoles.js";
 import { useState, useEffect, useRef, useCallback, memo } from "react";
 import {
@@ -168,92 +168,23 @@ export function DebateRoom({ inviteCode, onBack }) {
     let poll = null;
     let onWake = null;
 
-    const tryEq = async (column, value) => {
-      const { data, error } = await supabase
-        .from("debate_rooms")
-        .select("*")
-        .eq(column, value)
-        .maybeSingle();
-      return { data, error };
-    };
-
     const init = async () => {
       try {
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
+        const { data: { session } } = await supabase.auth.getSession();
         const uid = session?.user?.id;
         if (!uid) throw new Error("Non connecté");
         if (mounted) setUserId(uid);
 
-        const raw = String(inviteCode || "").trim();
-        if (!raw) throw new Error("Code de salle manquant");
-
-        const codeLower = raw.toLowerCase();
-        const codeUpper = raw.toUpperCase();
-        const isUuid = UUID_RE.test(raw);
-        // Refuse tout code contenant des caractères spéciaux (jokers ilike % et _)
-        if (!isUuid && !CODE_RE.test(raw)) throw new Error("Code de salle invalide");
-
-        let roomData = null;
-        let roomErr = null;
-
-        // Recherche progressive (casse mixte + UUID)
-        if (isUuid) {
-          ({ data: roomData, error: roomErr } = await tryEq("id", raw));
-          if (!roomData && !roomErr) {
-            ({ data: roomData, error: roomErr } = await tryEq(
-              "invite_code",
-              codeLower
-            ));
-          }
-        } else {
-          // 1) minuscules (format CreateDebateModal)
-          ({ data: roomData, error: roomErr } = await tryEq(
-            "invite_code",
-            codeLower
-          ));
-
-          // 2) MAJUSCULES
-          if (!roomData && !roomErr && codeUpper !== codeLower) {
-            ({ data: roomData, error: roomErr } = await tryEq(
-              "invite_code",
-              codeUpper
-            ));
-          }
-
-          // 3) casse exacte / mixte
-          if (
-            !roomData &&
-            !roomErr &&
-            raw !== codeLower &&
-            raw !== codeUpper
-          ) {
-            ({ data: roomData, error: roomErr } = await tryEq(
-              "invite_code",
-              raw
-            ));
-          }
-
-          // 4) ilike (insensible à la casse)
-          if (!roomData && !roomErr) {
-            const { data, error } = await supabase
-              .from("debate_rooms")
-              .select("*")
-              .ilike("invite_code", codeLower)
-              .maybeSingle();
-            roomData = data;
-            roomErr = error;
-          }
-        }
-
-        if (roomErr) {
-          console.error("debate_rooms select", roomErr);
-          throw new Error(roomErr.message || "Salle introuvable");
-        }
-        if (!roomData) throw new Error("Salle introuvable");
-
+        const roomData = await getRoomByCodeOrId(inviteCode);
         if (mounted) setRoom(roomData);
+
+        // Les liens directs passent par la même RPC SQL que le bouton Rejoindre.
+        const { data: participant, error: participantError } = await supabase
+          .from("debate_participants").select("user_id")
+          .eq("room_id", roomData.id).eq("user_id", uid)
+          .is("left_at", null).maybeSingle();
+        if (participantError) throw participantError;
+        if (!participant) await joinDebateByCode(roomData.invite_code);
 
         // Participant : user_id = auth.users.id
         const { error: partErr } = await supabase

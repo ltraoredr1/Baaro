@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "../../../supabaseClient.js";
 import { API_BASE } from "../../../config.js";
+import { callSocial } from "../../../lib/notifyInteraction.js";
 import DailyIframe from "@daily-co/daily-js";
 
 const canSend = (() => {
@@ -52,6 +53,16 @@ async function tryEq(column, value) {
 /**
  * Recherche centralisée d'une salle par UUID ou code d'invitation (insensible à la casse)
  */
+export async function joinDebateByCode(rawCode) {
+  const code = String(rawCode || "").trim().toLowerCase();
+  if (!/^[a-z0-9]{4,12}$/.test(code)) throw new Error("Code d'invitation invalide.");
+  const { data, error } = await supabase.rpc("join_debate_by_code", { p_code: code });
+  if (error) throw error;
+  const room = Array.isArray(data) ? data[0] : data;
+  if (!room?.id) throw new Error("Aucun live actif avec ce code.");
+  return room;
+}
+
 export async function getRoomByCodeOrId(rawCode) {
   const raw = String(rawCode || "").trim();
   if (!raw) throw new Error("Code de salle manquant");
@@ -59,6 +70,7 @@ export async function getRoomByCodeOrId(rawCode) {
   const codeLower = raw.toLowerCase();
   const codeUpper = raw.toUpperCase();
   const isUuid = UUID_RE.test(raw);
+  if (!isUuid && !/^[a-z0-9]{4,12}$/i.test(raw)) throw new Error("Code de salle invalide");
 
   let roomData = null;
   let roomErr = null;
@@ -282,53 +294,68 @@ export function useDebates(user_id) {
       if (!user_id) return { ok: false, reason: "Non authentifié" };
       let room = null;
       try {
+        const { data: authData, error: authError } = await supabase.auth.getSession();
+        if (authError) throw authError;
+        const session = authData?.session;
+        if (!session?.access_token || session.user?.id !== user_id) {
+          throw new Error("Session expirée. Reconnecte-toi puis réessaie.");
+        }
+        const finalMode = mode === "hybrid" ? "video" : (mode || "video");
+        if (!["text", "audio", "video"].includes(finalMode)) throw new Error("Format invalide.");
+        const safeTitle = (title || "").trim().slice(0, 120);
+        const rawTopic = (topic || "").trim().slice(0, 300);
+        const finalTopic = mode === "hybrid" ? `${rawTopic.slice(0, 260)} - Tout-en-un` : rawTopic;
+        if (!safeTitle || !rawTopic) throw new Error("Titre et thème requis.");
+        const max = Math.min(Math.max(Number(maxParticipants) || 12, 2), 12);
         let lastErr = null;
-        for (let attempt = 0; attempt < 3 && !room; attempt++) {
-          const { data, error } = await supabase
-            .from("debate_rooms")
-            .insert({
-              title: (title || "Débat").slice(0, 120),
-              topic: (topic || "").slice(0, 300),
-              mode: mode || "text",
-              format: format || "standard",
-              max_participants: Math.min(Math.max(maxParticipants || 8, 2), 100),
-              ai_enabled: !!aiEnabled,
-              host_id: user_id,
-              invite_code: makeInviteCode(),
-              status: "active",
-            })
-            .select()
-            .single();
-          if (!error) {
-            room = data;
-          } else if (error.code === "23505") {
-            lastErr = error;
-          } else {
-            throw error;
-          }
+        for (let attempt = 0; attempt < 5 && !room; attempt++) {
+          const { data, error } = await supabase.from("debate_rooms").insert({
+            title: safeTitle, topic: finalTopic, mode: finalMode,
+            format: format || "standard", max_participants: max,
+            ai_enabled: aiEnabled === undefined ? true : !!aiEnabled,
+            host_id: user_id, invite_code: makeInviteCode(), status: "active",
+          }).select("*").single();
+          if (!error) room = data;
+          else if (error.code === "23505") lastErr = error;
+          else throw error;
         }
-        if (!room) throw lastErr || new Error("Création impossible");
-
-        const { error: e2 } = await supabase.from("debate_participants").insert({
-          room_id: room.id,
-          user_id: user_id,
-          role: "host",
-        });
-        if (e2) {
+        if (!room) throw lastErr || new Error("Création impossible.");
+        const { error: participantError } = await supabase.from("debate_participants").upsert(
+          { room_id: room.id, user_id, role: "host", left_at: null },
+          { onConflict: "room_id,user_id" }
+        );
+        if (participantError) {
+          await supabase.from("debate_rooms").update({ status: "ended", ended_at: new Date().toISOString() })
+            .eq("id", room.id).eq("host_id", user_id);
+          throw participantError;
+        }
+        if (finalMode !== "text") {
+          let hostName = "Hôte";
           try {
-            await supabase
-              .from("debate_rooms")
-              .update({ status: "ended" })
-              .eq("id", room.id)
-              .eq("host_id", user_id);
+            const { data: profile } = await supabase.from("profiles").select("display_name").eq("id", user_id).maybeSingle();
+            if (profile?.display_name) hostName = profile.display_name;
           } catch (_) {}
-          throw e2;
+          const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+          const timeout = setTimeout(() => controller?.abort(), 10000);
+          try {
+            const response = await fetch(apiUrl("/api/create-room"), {
+              method: "POST", signal: controller?.signal,
+              headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
+              body: JSON.stringify({ action: "create-room", userName: hostName, title: safeTitle,
+                topic: finalTopic, mode: finalMode, inviteCode: room.invite_code, maxParticipants: max }),
+            });
+            const daily = await response.json().catch(() => ({}));
+            if (!response.ok) console.warn("Daily create-room:", daily.error || response.statusText);
+            else room.daily_room_name = daily.roomName || daily.daily_room_name || null;
+          } catch (dailyError) {
+            console.warn("Daily sera initialisé à la connexion :", dailyError?.message);
+          } finally { clearTimeout(timeout); }
         }
-
         await loadRooms();
+        callSocial("debate_started", { room_id: room.id }).catch((e) => console.warn("Notification live non envoyée :", e?.message || e));
         return { ok: true, room };
-      } catch (e) {
-        return { ok: false, reason: e.message };
+      } catch (error) {
+        return { ok: false, reason: error?.message || "Création du débat impossible." };
       }
     },
     [user_id, loadRooms]
@@ -336,20 +363,13 @@ export function useDebates(user_id) {
 
   const joinByCode = useCallback(
     async (code) => {
-      const c = (code || "").trim().toLowerCase();
-      if (!c) return { ok: false, reason: "Code requis" };
       if (!user_id) return { ok: false, reason: "Non authentifié" };
       try {
-        const { data, error } = await supabase.rpc("join_debate_by_code", {
-          p_code: c,
-        });
-        if (error) throw error;
-        const room = Array.isArray(data) ? data[0] : data;
-        if (!room) throw new Error("Code invalide");
+        const room = await joinDebateByCode(code);
         await loadRooms();
         return { ok: true, room };
-      } catch (e) {
-        return { ok: false, reason: e.message };
+      } catch (error) {
+        return { ok: false, reason: error?.message || "Impossible de rejoindre." };
       }
     },
     [user_id, loadRooms]
