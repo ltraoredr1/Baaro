@@ -1,7 +1,9 @@
 import { useState } from "react";
+import { Capacitor } from "@capacitor/core";
 import { supabase } from "../../../supabaseClient.js";
 import { useToast } from "../../../components/ToastContext.jsx";
 import { insertVideo } from "../utils/videosApi.js";
+import { API_BASE } from "../../../config.js";
 
 // Actions vidéo : likes, partages, reposts et suppression.
 // Les notifications utilisent l'API existante /api/social.
@@ -165,15 +167,19 @@ export function useVideoActions({
   const handleShare = async (video) => {
     if (!video?.id) return;
 
-    const url =
-      `${window.location.origin}?video=${encodeURIComponent(video.id)}`;
+    const shareOrigin = Capacitor.isNativePlatform()
+      ? import.meta.env.VITE_PUBLIC_APP_URL || API_BASE || "https://baaro-xi.vercel.app"
+      : window.location.origin;
+    const url = new URL("/", shareOrigin);
+    url.searchParams.set("video", String(video.id));
+    const shareUrl = url.toString();
 
     try {
       if (navigator.share) {
         await navigator.share({
           title: video.title || "Vidéo BAARO",
           text: "Regarde cette vidéo sur BAARO",
-          url,
+          url: shareUrl,
         });
       } else {
         if (!navigator.clipboard?.writeText) {
@@ -184,7 +190,7 @@ export function useVideoActions({
           return;
         }
 
-        await navigator.clipboard.writeText(url);
+        await navigator.clipboard.writeText(shareUrl);
         setShareId(video.id);
         showToast("Lien copié !", "success");
 
