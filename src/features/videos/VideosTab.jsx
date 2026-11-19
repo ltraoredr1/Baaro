@@ -289,7 +289,8 @@ export function VideosTab({ onRewardPoints, onExit, onOpenProfile }) {
   };
 
   const [studioOpen, setStudioOpen] = useState(false);
-  const [historyOpen, setHistoryOpen] = useState(false);\n  const [insightsOpen, setInsightsOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [insightsOpen, setInsightsOpen] = useState(false);
   const [historyTargetId, setHistoryTargetId] = useState(null);
   const [viewersVideoId, setViewersVideoId] = useState(null);
 
@@ -310,7 +311,8 @@ export function VideosTab({ onRewardPoints, onExit, onOpenProfile }) {
   };
 
   const overlayOpen =
-    historyOpen ||\n    insightsOpen ||
+    historyOpen ||
+    insightsOpen ||
     !!creator.showUpload ||
     studioOpen ||
     !!commentsState.showComments ||
