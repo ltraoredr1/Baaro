@@ -142,7 +142,6 @@ export default function VideoCard({
     if (!videoEl || castBusy) return;
 
     setCastBusy(true);
-    setCastMenuOpen(false);
 
     try {
       await startGoogleCast(videoEl, keepLocal);
