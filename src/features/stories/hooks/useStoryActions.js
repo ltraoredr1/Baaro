@@ -1,5 +1,7 @@
 import { useState, useRef } from 'react';
+import { Capacitor } from '@capacitor/core';
 import { answerSticker, sendReply } from '../api/storiesApi.js';
+import { API_BASE } from '../../../config.js';
 
 /** Réponses rapides proposées par défaut (le composant peut en fournir d'autres). */
 export const QUICK_REPLIES = ['🔥', '👏', '😍', '😂', 'Bravo !', 'Trop bien !'];
@@ -186,12 +188,18 @@ export function useStoryActions({
 
     // Deep-link app (story id) plutôt que l'URL brute du média CDN.
     const origin = typeof window !== 'undefined' ? window.location.origin : '';
-    const url =
-      story?.id && origin
-        ? `${origin}/?story=${encodeURIComponent(story.id)}`
-        : isHttpUrl(story?.media_url)
-          ? story.media_url
-          : origin || '';
+    const shareOrigin = Capacitor.isNativePlatform()
+      ? import.meta.env.VITE_PUBLIC_APP_URL || API_BASE || 'https://baaro-xi.vercel.app'
+      : origin;
+    const url = story?.id && shareOrigin
+      ? new URL(`/?story=${encodeURIComponent(story.id)}`, shareOrigin).toString()
+      : isHttpUrl(story?.media_url)
+        ? story.media_url
+        : '';
+    if (!url) {
+      setModalMsg({ type: 'error', text: 'Cette story ne peut pas être partagée.' });
+      return false;
+    }
     const data = {
       title: 'BAARO',
       text: String(story?.caption || '').trim() || 'Story BAARO',
