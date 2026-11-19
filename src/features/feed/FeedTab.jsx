@@ -25,6 +25,7 @@ import {
 } from "lucide-react";
 import { Capacitor } from "@capacitor/core";
 import { TextToSpeech } from "@capacitor-community/text-to-speech";
+import { API_BASE } from "@/config.js";
 
 import { COLORS } from "@/theme.js";
 import { useToast } from "@/components/ToastContext.jsx";
@@ -1461,8 +1462,12 @@ export function FeedTab({
     if (!quoteText.trim()) return;
     const excerpt = String(quotePost.text || "Publication média").replace(/\s+/g, " ").slice(0, 500);
     const handle = String(quotePost.handle || quotePost.display_name || "BAARO").replace(/^@/, "");
-    const sourceUrl = `${window.location.origin}/?post=${encodeURIComponent(quotePost.id)}`;
-    const text = `${quoteText.trim()}\n\n↪ @${handle} : « ${excerpt}${excerpt.length >= 500 ? "…" : ""} »\n\n${sourceUrl}`;
+    const shareOrigin = Capacitor.isNativePlatform()
+      ? import.meta.env.VITE_PUBLIC_APP_URL || API_BASE || "https://baaro-xi.vercel.app"
+      : window.location.origin;
+    const sourceUrl = new URL("/", shareOrigin);
+    sourceUrl.searchParams.set("post", String(quotePost.id));
+    const text = `${quoteText.trim()}\n\n↪ @${handle} : « ${excerpt}${excerpt.length >= 500 ? "…" : ""} »\n\n${sourceUrl.toString()}`;
     setQuoteSubmitting(true);
     try {
       const { data, error } = await supabase

@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useState, memo } from "react";
 import { Bookmark, Check, Share2, UserPlus, X, Zap } from "lucide-react";
+import { Capacitor } from "@capacitor/core";
 import { COLORS } from "../../theme.js";
 import { supabase } from "../../supabaseClient.js";
+import { API_BASE } from "../../config.js";
 import { useToast } from "../../components/ToastContext.jsx";
 import TranslatedText from "../../components/TranslatedText.jsx";
 import { checkRateLimit, rateLimitMessage } from "../../lib/rateLimit.js";
@@ -687,7 +689,10 @@ export const SocialPostEnhancements = memo(
       setBusy(true);
 
       try {
-        const url = new URL("/", window.location.origin);
+        const shareOrigin = Capacitor.isNativePlatform()
+          ? import.meta.env.VITE_PUBLIC_APP_URL || API_BASE || "https://baaro-xi.vercel.app"
+          : window.location.origin;
+        const url = new URL("/", shareOrigin);
         url.searchParams.set("post", post.id);
 
         const shareUrl = url.toString();
