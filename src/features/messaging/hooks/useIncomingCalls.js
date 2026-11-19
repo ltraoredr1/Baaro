@@ -45,7 +45,8 @@ export function useIncomingCalls(userId) {
           otherUser: { name: p?.display_name || "Membre", avatar: p?.avatar_url, flag: p?.flag },
         });
       } catch (e) {
-        // Appel terminé (404/410) ou erreur réseau : on ne le réaffiche pas en boucle
+        // Une erreur réseau est retentée au prochain événement ou sondage.
+        handledRef.current.delete(call.id);
         console.error("appel entrant:", e);
       }
     };

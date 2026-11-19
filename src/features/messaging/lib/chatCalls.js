@@ -76,7 +76,7 @@ async function startCallInternal({ roomUrl, token, video = false }) {
 }
 
 export async function startCall(opts) {
-  if (startingLock) { try { await startingLock; } catch {} }
+  if (startingLock) return startingLock;
   startingLock = startCallInternal(opts);
   try { return await startingLock; } finally { startingLock = null; }
 }

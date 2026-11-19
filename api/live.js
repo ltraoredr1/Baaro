@@ -163,6 +163,21 @@ async function createDailyRoom(
   return data;
 }
 
+async function deleteDailyRoom(roomName) {
+  if (!roomName) return;
+  try {
+    await fetch(`${DAILY_API}/rooms/${encodeURIComponent(roomName)}`, {
+      method: "DELETE",
+      headers: dailyHeaders(),
+    });
+  } catch (error) {
+    logWarn("live", "Daily orphan room cleanup failed", {
+      roomName,
+      message: error?.message,
+    });
+  }
+}
+
 async function createMeetingToken(
   roomName,
   { userId, userName, isOwner }
@@ -1158,6 +1173,8 @@ async function handleCreateRoom(req, res, user, admin) {
           daily_room_name: dailyRoom.name,
           caller_id: user.id,
         });
+
+        await deleteDailyRoom(dailyRoom.name);
 
         return res.status(500).json({
           error: "La salle existe, mais l'enregistrement de l'appel a échoué.",
