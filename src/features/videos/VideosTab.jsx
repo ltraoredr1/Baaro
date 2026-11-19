@@ -670,6 +670,32 @@ export function VideosTab({ onRewardPoints, onExit, onOpenProfile }) {
     if (activeId == null) return;
 
     const refs = playback.videoRefs?.current || {};
+
+    // Suspendre toutes les vidéos quand une fenêtre est ouverte.
+    if (overlayOpen) {
+      Object.values(refs).forEach((element) => element?.pause?.());
+      resumeIdRef.current = String(activeId);
+      return;
+    }
+
+    // Reprendre la vidéo active après fermeture de la fenêtre.
+    if (resumeIdRef.current != null) {
+      const resumeId = String(resumeIdRef.current);
+      resumeIdRef.current = null;
+      if (resumeId === String(activeId)) {
+        const element = refs[resumeId];
+        if (element) {
+          element.playbackRate = settings.speed;
+          safePlay(element);
+          if (lastAutoplayRef.current !== String(activeId)) {
+            registerViewRef.current?.(activeId);
+            lastAutoplayRef.current = String(activeId);
+          }
+          return;
+        }
+      }
+    }
+
     const changed = lastAutoplayRef.current !== String(activeId);
     let foundActive = false;
 
@@ -746,7 +772,7 @@ export function VideosTab({ onRewardPoints, onExit, onOpenProfile }) {
       lastAutoplayRef.current = String(activeId);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeId, feedKey]);
+  }, [activeId, feedKey, overlayOpen]);
 
   // Reprise de lecture : mémorise la position de la vidéo active
   // (toutes les 2 s, à la pause, au changement de vidéo, et la supprime à la fin).
