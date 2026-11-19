@@ -28,7 +28,8 @@ async function notifyVideoInteraction({
       return;
     }
 
-    const response = await fetch("/api/social", {
+    const apiOrigin = String(API_BASE || "").replace(/\/$/, "");
+    const response = await fetch(`${apiOrigin}/api/social`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

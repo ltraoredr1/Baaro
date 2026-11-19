@@ -67,6 +67,7 @@ export default function VideoCard({
     handleDelete,
     shareId,
     onUseSound,
+    onOpenProfile,
   } = actions;
 
   // Tolère les deux noms possibles selon la version du hook
@@ -367,7 +368,13 @@ export default function VideoCard({
         className="absolute left-3 right-20 bottom-28 z-20"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center gap-2 mb-2">
+        <button
+          type="button"
+          className="flex items-center gap-2 mb-2 text-left rounded-xl p-1 -ml-1 hover:bg-white/10 active:scale-[.98] transition"
+          onClick={() => authorId && onOpenProfile?.(authorId)}
+          disabled={!authorId}
+          aria-label={`Voir le profil de ${profile.display_name || handleClean}`}
+        >
           <div className="h-10 w-10 rounded-full overflow-hidden border-2 border-white bg-zinc-800 shrink-0">
             {profile.avatar_url ? (
               <img
@@ -385,15 +392,15 @@ export default function VideoCard({
             )}
           </div>
 
-          <div className="min-w-0">
-            <div className="font-black text-sm truncate">
+          <span className="min-w-0">
+            <span className="font-black text-sm truncate block">
               @{handleClean} {profile.flag || ""}
-            </div>
-            <div className="text-[10px] text-white/50 truncate">
+            </span>
+            <span className="text-[10px] text-white/50 truncate block">
               {profile.display_name || "Membre BAARO"}
-            </div>
-          </div>
-        </div>
+            </span>
+          </span>
+        </button>
 
         <button
           type="button"

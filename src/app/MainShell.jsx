@@ -570,6 +570,7 @@ export function MainShell() {
     videos: {
       id,
       onExit: () => setActiveTab("feed"),
+      onOpenProfile: setInspectingProfileId,
     },
 
     messages: {

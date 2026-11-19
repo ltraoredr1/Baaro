@@ -63,7 +63,7 @@ const isTypingTarget = (target) => {
   );
 };
 
-export function VideosTab({ onRewardPoints, onExit }) {
+export function VideosTab({ onRewardPoints, onExit, onOpenProfile }) {
   const reducedMotion = usePrefersReducedMotion();
   const feed = useVideoFeed();
 
@@ -256,6 +256,7 @@ export function VideosTab({ onRewardPoints, onExit }) {
       videoActions.handleLike || videoActions.toggleLike,
     openComments: commentsState.openComments,
     onUseSound: handleUseSound,
+    onOpenProfile,
   };
 
   const [studioOpen, setStudioOpen] = useState(false);
