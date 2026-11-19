@@ -5,7 +5,7 @@ import { supabase } from "../../../supabaseClient.js";
 const money = (value, currency) =>
   `${Number(value || 0).toLocaleString()} ${currency || "XOF"}`;
 
-export default function VideoProductWidget({ video, user, isOwner }) {
+export default function VideoProductWidget({ video, user, isOwner, openCreateRequest = null, onCreateRequestHandled }) {
   const [linked, setLinked] = useState([]);
   const [ownProducts, setOwnProducts] = useState([]);
   const [open, setOpen] = useState(false);
@@ -35,15 +35,6 @@ export default function VideoProductWidget({ video, user, isOwner }) {
   };
 
   useEffect(() => {
-    const openCreator = (event) => {
-      if (!isOwner || String(event.detail?.videoId) !== String(video.id)) return;
-      loadOwnProducts();
-    };
-    window.addEventListener("baaro:open-video-product-create", openCreator);
-    return () => window.removeEventListener("baaro:open-video-product-create", openCreator);
-  }, [video.id, isOwner, user?.id]);
-
-  useEffect(() => {
     let active = true;
     (async () => {
       await load();
@@ -69,6 +60,12 @@ export default function VideoProductWidget({ video, user, isOwner }) {
     setBusy(false);
     setOpen(true);
   };
+
+  useEffect(() => {
+    if (openCreateRequest == null) return;
+    if (isOwner) loadOwnProducts();
+    onCreateRequestHandled?.(openCreateRequest);
+  }, [openCreateRequest, isOwner, onCreateRequestHandled]);
 
   const attach = async (product) => {
     if (linked.length >= 3 || linked.some((p) => p.id === product.id)) return;

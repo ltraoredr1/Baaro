@@ -53,6 +53,8 @@ export default function VideoCard({
   isActive = false,
   loadMode = "active",
   onShowViewers,
+  videoWidgetRequest = null,
+  onVideoWidgetRequestHandled,
 }) {
   const {
     videoRefs,
@@ -532,8 +534,20 @@ export default function VideoCard({
             Utiliser ce son
           </button>
         </div>
-        <VideoPollWidget video={video} user={user} isOwner={isOwner} />
-        <VideoProductWidget video={video} user={user} isOwner={isOwner} />
+        <VideoPollWidget
+          video={video}
+          user={user}
+          isOwner={isOwner}
+          openCreateRequest={videoWidgetRequest?.type === "poll" ? videoWidgetRequest.requestId : null}
+          onCreateRequestHandled={onVideoWidgetRequestHandled}
+        />
+        <VideoProductWidget
+          video={video}
+          user={user}
+          isOwner={isOwner}
+          openCreateRequest={videoWidgetRequest?.type === "product" ? videoWidgetRequest.requestId : null}
+          onCreateRequestHandled={onVideoWidgetRequestHandled}
+        />
       </div>
 
       {/* Colonne d'actions (droite) */}

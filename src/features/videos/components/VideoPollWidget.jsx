@@ -6,21 +6,20 @@ const getOptions = (value) => Array.isArray(value)
   ? value.map((x) => typeof x === "string" ? x : String(x?.option_key || x?.key || x?.label || "")).filter(Boolean)
   : [];
 
-export default function VideoPollWidget({ video, user, isOwner }) {
+export default function VideoPollWidget({ video, user, isOwner, openCreateRequest = null, onCreateRequestHandled }) {
   const [poll,setPoll]=useState(null), [results,setResults]=useState([]);
   const [voted,setVoted]=useState(false), [open,setOpen]=useState(false);
   const [loading,setLoading]=useState(true), [busy,setBusy]=useState(false), [error,setError]=useState("");
   const [question,setQuestion]=useState(""), [options,setOptions]=useState(["",""]), [selected,setSelected]=useState([]);
 
   useEffect(() => {
-    const openCreator = (event) => {
-      if (!isOwner || String(event.detail?.videoId) !== String(video.id)) return;
-      if (poll) { setOpen(true); return; }
+    if (openCreateRequest == null) return;
+    if (isOwner) {
       setOpen(true);
-    };
-    window.addEventListener("baaro:open-video-poll-create", openCreator);
-    return () => window.removeEventListener("baaro:open-video-poll-create", openCreator);
-  }, [video.id, isOwner, poll]);
+      setError("");
+    }
+    onCreateRequestHandled?.(openCreateRequest);
+  }, [openCreateRequest, isOwner, onCreateRequestHandled]);
 
   useEffect(()=>{
     let active=true;

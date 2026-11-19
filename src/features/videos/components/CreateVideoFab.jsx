@@ -34,7 +34,7 @@ function save(value) {
   }
 }
 
-// Bouton flottant « Créer une vidéo » : un appui ouvre le formulaire de création
+// Bouton flottant « Publier une vidéo » : ouvre les actions de publication.
 // (l'utilisateur choisit ensuite : caméra, galerie, etc.).
 // Déplaçable au doigt, se colle au bord le plus proche, position mémorisée.
 export default function CreateVideoFab({ onClick, onCreatePoll, onAddProduct, canCreateExtras = false, hidden = false }) {
@@ -191,8 +191,8 @@ export default function CreateVideoFab({ onClick, onCreatePoll, onAddProduct, ca
     <button
       ref={btnRef}
       type="button"
-      aria-label="Créer une vidéo"
-      title="Créer une vidéo (glisse pour déplacer)"
+      aria-label="Publier une vidéo"
+      title="Publier une vidéo (glisse pour déplacer)"
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerEnd}
@@ -248,7 +248,7 @@ export default function CreateVideoFab({ onClick, onCreatePoll, onAddProduct, ca
         onClick={(event) => event.stopPropagation()}
       >
         <button type="button" onClick={() => runAction(onClick)} className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-bold text-white hover:bg-white/10">
-          <Video size={18} className="text-yellow-300" /> Créer une vidéo
+          <Video size={18} className="text-yellow-300" /> Publier une vidéo
         </button>
         <button type="button" onClick={() => runAction(onCreatePoll)} className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-bold text-yellow-200 hover:bg-white/10">
           <BarChart3 size={18} /> Créer un sondage
