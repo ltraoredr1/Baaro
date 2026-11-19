@@ -283,6 +283,7 @@ export function VideosTab({ onRewardPoints, onExit, onOpenProfile }) {
   };
 
   const overlayOpen =
+    historyOpen ||
     !!creator.showUpload ||
     studioOpen ||
     !!commentsState.showComments ||
