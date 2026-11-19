@@ -402,6 +402,18 @@ export async function processPushQueue(admin, sendToken, options = {}) {
     if (preferencesResult.error) {
       result.errors += claimedJobs.length;
 
+      await Promise.allSettled(
+        claimedJobs.map((job) =>
+          updateJob(admin, job, {
+            status: "queued",
+            available_at: new Date(now()).toISOString(),
+            last_error: "Préférences de notification temporairement indisponibles.",
+            claim_token: null,
+            locked_at: null,
+          })
+        )
+      );
+
       return {
         ...result,
         ok: false,
@@ -565,6 +577,21 @@ export async function processPushQueue(admin, sendToken, options = {}) {
         result.retryScheduled += 1;
       } catch (error) {
         result.errors += 1;
+
+        try {
+          await updateJob(admin, job, {
+            status: "queued",
+            available_at: new Date(now() + exponentialBackoffWithJitter(Math.max(1, Number(job?.attempts) || 1), random)).toISOString(),
+            last_error: safeError(error),
+            claim_token: null,
+            locked_at: null,
+          });
+        } catch (releaseError) {
+          console.error(
+            "[push-queue] Impossible de libérer le job :",
+            safeError(releaseError)
+          );
+        }
 
         console.error(
           "[push-queue] Échec de traitement du job :",

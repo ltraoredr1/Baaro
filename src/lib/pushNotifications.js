@@ -49,6 +49,7 @@ const ANDROID_CHANNEL_ID = "baaro_notifications_v2";
 const ANDROID_CHANNEL_SOUND = "baaro_pulse";
 const SYNC_MIN_INTERVAL_MS = 10 * 60 * 1000;
 const OPT_OUT_KEY = "baaro_push_disabled";
+const NATIVE_TOKEN_KEY = "baaro_native_push_token";
 
 // -----------------------------------------------------------------------------
 // Utilitaires généraux
@@ -80,6 +81,23 @@ function setOptedOut(value) {
     else localStorage.removeItem(OPT_OUT_KEY);
   } catch {
     // Stockage indisponible : sans conséquence.
+  }
+}
+
+function getStoredNativeToken() {
+  try {
+    return localStorage.getItem(NATIVE_TOKEN_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+
+function storeNativeToken(token) {
+  try {
+    if (token) localStorage.setItem(NATIVE_TOKEN_KEY, token);
+    else localStorage.removeItem(NATIVE_TOKEN_KEY);
+  } catch {
+    // Stockage indisponible : le serveur reste la source de vérité.
   }
 }
 
@@ -353,6 +371,7 @@ async function ensureNativeListeners(PushNotifications) {
           }
 
           try {
+            storeNativeToken(token);
             await savePushToken({ token, platform: nativePlatform });
 
             settlePending({
@@ -830,8 +849,12 @@ export async function disablePushNotifications() {
       const Capacitor = await getCapacitor();
 
       const platform = Capacitor?.getPlatform?.() === "ios" ? "ios" : "android";
+      const token = getStoredNativeToken();
 
-      await callSocialOrThrow("delete_push_token", { platform });
+      if (token) {
+        await callSocialOrThrow("delete_push_token", { platform, token });
+        storeNativeToken("");
+      }
 
       return {
         ok: true,
@@ -844,7 +867,8 @@ export async function disablePushNotifications() {
       return { ok: true };
     }
 
-    const registration = await getWebRegistration();
+    const registration = await navigator.serviceWorker.getRegistration();
+    if (!registration) return { ok: true };
     const subscription = await registration.pushManager.getSubscription();
 
     let token = null;
