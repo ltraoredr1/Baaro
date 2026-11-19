@@ -109,12 +109,23 @@ export function VideosTab({ onRewardPoints, onExit, onOpenProfile }) {
     },
   };
 
+  const publishAnchorRef = useRef({ id: null, index: 0 });
+  const activeIdForPublishRef = useRef(null);
+  const visibleVideosForPublishRef = useRef(visibleVideos);
+  visibleVideosForPublishRef.current = visibleVideos;
+
+  const handleVideoPublished = (video) => {
+    const { id, index } = publishAnchorRef.current;
+    feed.insertVideoAtPosition(video, id, index);
+  };
+
   const creator = useVideoCreator({
     user,
     loadVideos,
     onRewardPoints,
     soundPicker,
     filter,
+    onVideoPublished: handleVideoPublished,
   });
 
   // Compression avant envoi : tout fichier (galerie ou caméra) passe par ici.
@@ -188,11 +199,8 @@ export function VideosTab({ onRewardPoints, onExit, onOpenProfile }) {
 
   const creatorForModal = { ...creator, handleFileSelected };
 
-  const camera = useCamera({
-    onOpen: () => creator.setShowUpload(true),
-    onRecorded: handleFileSelected,
-    filter,
-  });
+  // La caméra est initialisée après openUpload pour mémoriser la position.
+
 
   const videoActions = useVideoActions({
     user,
@@ -210,7 +218,22 @@ export function VideosTab({ onRewardPoints, onExit, onOpenProfile }) {
     onRewardPoints,
   });
 
-  const openUpload = () => creator.setShowUpload(true);
+  const openUpload = () => {
+    const list = visibleVideosForPublishRef.current || [];
+    const id = activeIdForPublishRef.current;
+    const index = list.findIndex((video) => String(video.id) === String(id));
+    publishAnchorRef.current = {
+      id,
+      index: index >= 0 ? index : 0,
+    };
+    creator.setShowUpload(true);
+  };
+
+  const camera = useCamera({
+    onOpen: openUpload,
+    onRecorded: handleFileSelected,
+    filter,
+  });
 
   // Garder la dernière version de la fonction pour l'événement global.
   const openUploadRef = useRef(openUpload);
@@ -302,6 +325,7 @@ export function VideosTab({ onRewardPoints, onExit, onOpenProfile }) {
   const slideRefs = useRef({});
   const ratiosRef = useRef({});
   const [activeId, setActiveId] = useState(null);
+  activeIdForPublishRef.current = activeId;
   const [sharedVideoId, setSharedVideoId] = useState(() =>
     typeof window !== "undefined"
       ? new URLSearchParams(window.location.search).get("video")

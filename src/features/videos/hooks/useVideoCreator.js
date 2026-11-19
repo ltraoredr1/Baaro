@@ -51,6 +51,7 @@ export function useVideoCreator({
   collab = null,
   onCollabConsumed,
   filter = null,
+  onVideoPublished,
 }) {
   const { showToast, showPointsReward } = useToast();
   const { selectedSound, muteOriginal, stopSoundPreview, resetSound } =
@@ -401,6 +402,28 @@ export function useVideoCreator({
         videoCreated = true;
         successCount += 1;
 
+        // Récupérer uniquement la vidéo créée, sans recharger le fil.
+        try {
+          const { data: publishedVideo, error: publishedError } = await supabase
+            .from("videos")
+            .select(`
+              id,title,description,video_url,thumbnail_url,duration,views,likes,
+              comments_count,saves_count,shares_count,watch_ratio_sum,watch_ratio_count,
+              is_repost,created_at,author_id,sound_id,
+              profiles:author_id(display_name,handle,flag,avatar_url)
+            `)
+            .eq("id", created.id)
+            .maybeSingle();
+
+          if (!publishedError && publishedVideo) {
+            onVideoPublished?.(publishedVideo);
+          } else if (publishedError) {
+            console.warn("BAARO vidéo publiée, insertion locale différée:", publishedError);
+          }
+        } catch (publishedError) {
+          console.warn("BAARO chargement de la vidéo publiée:", publishedError);
+        }
+
         // Étape 3 : métadonnées complémentaires (non bloquantes).
         setPublishStage("metadata");
         const hashtagsOk = await registerVideoHashtags(
@@ -482,7 +505,7 @@ export function useVideoCreator({
         );
       }
 
-      if (successCount > 0) await loadVideos();
+      // Le fil est actualisé localement via onVideoPublished.
     } finally {
       setUploading(false);
       setUploadProgress(0);

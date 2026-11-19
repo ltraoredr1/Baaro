@@ -308,6 +308,12 @@ export function useVideoFeed() {
 
           if (eventType !== "INSERT" && eventType !== "UPDATE") return;
 
+          // La vidéo publiée localement sera insérée à sa position choisie.
+          if (
+            eventType === "INSERT" &&
+            String(record?.author_id || "") === String(currentUserId.current || "")
+          ) return;
+
           const timer = setTimeout(async () => {
             realtimeTimers.current.delete(videoId);
 
@@ -433,6 +439,36 @@ export function useVideoFeed() {
     };
   }, []);
 
+  const insertVideoAtPosition = useCallback((video, anchorId, anchorIndex = 0) => {
+    if (!video?.id) return;
+
+    const id = String(video.id);
+    const currentOrder = forYouOrderRef.current.length
+      ? [...forYouOrderRef.current]
+      : videos.map((item) => String(item.id));
+    const nextOrder = currentOrder.filter((item) => item !== id);
+    const orderAnchor = nextOrder.findIndex(
+      (item) => item === String(anchorId)
+    );
+    const orderIndex = orderAnchor >= 0
+      ? orderAnchor + 1
+      : Math.min(Math.max(0, Number(anchorIndex) || 0), nextOrder.length);
+    nextOrder.splice(orderIndex, 0, id);
+    forYouOrderRef.current = nextOrder;
+
+    setVideos((current) => {
+      const next = current.filter((item) => String(item.id) !== id);
+      const anchor = next.findIndex(
+        (item) => String(item.id) === String(anchorId)
+      );
+      const index = anchor >= 0
+        ? anchor + 1
+        : Math.min(Math.max(0, Number(anchorIndex) || 0), next.length);
+      next.splice(index, 0, video);
+      return next;
+    });
+  }, [videos]);
+
   const visibleVideos = useMemo(() => {
     const list = [...videos];
 
@@ -446,11 +482,7 @@ export function useVideoFeed() {
     }
 
     if (mode === "newest") {
-      return list.sort(
-        (a, b) =>
-          new Date(b.created_at || 0).getTime() -
-          new Date(a.created_at || 0).getTime()
-      );
+      return list;
     }
 
     if (mode === "trending") {
@@ -493,6 +525,7 @@ export function useVideoFeed() {
     mode,
     setMode,
     visibleVideos,
+    insertVideoAtPosition,
     friends,
     friendsLoading,
   };
