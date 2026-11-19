@@ -13,11 +13,20 @@ import {
   Trash2,
   Volume2,
   VolumeX,
+  Cast,
+  Radio,
 } from "lucide-react";
 import { COLORS } from "../../../theme.js";
 import { VideoTranslateControls } from "../../../components/VideoTranslateControls.jsx";
 import { TipButton } from "../../../components/TipButton.jsx";
 import { baaroLogo } from "../constants.js";
+import {
+  loadGoogleCast,
+  isAirPlayAvailable,
+  openAirPlay,
+  startGoogleCast,
+  stopCastSync,
+} from "../lib/videoCasting.js";
 import { formatCount, formatPublished, formatPublishedFull } from "../utils/format.js";
 
 const IMAGE_EXT = /\.(jpe?g|png|webp|gif|avif)(\?|#|$)/i;
@@ -76,6 +85,10 @@ export default function VideoCard({
   const [captionOpen, setCaptionOpen] = useState(false);
   const [showHeartAnim, setShowHeartAnim] = useState(false);
   const [dragging, setDragging] = useState(false);
+  const [castAvailable, setCastAvailable] = useState(false);
+  const [airPlayAvailable, setAirPlayAvailable] = useState(false);
+  const [castMenuOpen, setCastMenuOpen] = useState(false);
+  const [castBusy, setCastBusy] = useState(false);
 
   const clickTimeoutRef = useRef(null);
   const heartTimeoutRef = useRef(null);
@@ -105,6 +118,52 @@ export default function VideoCard({
 
   const videoPreload =
     loadMode === "active" ? "auto" : loadMode === "preload" ? "metadata" : "none";
+
+  useEffect(() => {
+    if (isImage || !isActive || !shouldLoad) return;
+
+    let cancelled = false;
+    const videoEl = videoRefs.current[video.id];
+
+    setAirPlayAvailable(isAirPlayAvailable(videoEl));
+
+    loadGoogleCast().then((available) => {
+      if (!cancelled) setCastAvailable(Boolean(available));
+    }).catch(() => {
+      if (!cancelled) setCastAvailable(false);
+    });
+
+    return () => {
+      cancelled = true;
+      stopCastSync(videoEl);
+    };
+  }, [video.id, isImage, isActive, shouldLoad, videoRefs]);
+
+  const handleCast = async (keepLocal) => {
+    const videoEl = videoRefs.current[video.id];
+    if (!videoEl || castBusy) return;
+
+    setCastBusy(true);
+    setCastMenuOpen(false);
+
+    try {
+      await startGoogleCast(videoEl, keepLocal);
+      if (!keepLocal) audioRefs.current[video.id]?.pause();
+    } catch (error) {
+      window.alert(error?.message || "Impossible de démarrer la diffusion.");
+    } finally {
+      setCastBusy(false);
+    }
+  };
+
+  const handleAirPlay = () => {
+    try {
+      openAirPlay(videoRefs.current[video.id]);
+    } catch (error) {
+      window.alert(error?.message || "AirPlay indisponible.");
+    }
+  };
+
 
   // Hors de la zone de chargement : on coupe la lecture et on libère le réseau et la mémoire.
   useEffect(() => {
@@ -525,6 +584,57 @@ export default function VideoCard({
         {/* POURBOIRE : visible pour tout le monde sauf l'auteur */}
         {canTip && (
           <TipButton recipientId={authorId} videoId={video.id} iconOnly />
+        )}
+
+        {!isImage && isActive && (castAvailable || airPlayAvailable) && (
+          <div className="relative">
+            {castAvailable && (
+              <button
+                type="button"
+                disabled={castBusy}
+                onClick={() => setCastMenuOpen((value) => !value)}
+                className="h-11 w-11 rounded-full bg-white/10 backdrop-blur-md flex items-center justify-center disabled:opacity-50"
+                aria-label="Diffuser sur un téléviseur"
+                title="Google Cast"
+              >
+                <Cast size={21} />
+              </button>
+            )}
+
+            {castMenuOpen && castAvailable && (
+              <div className="absolute right-12 bottom-0 z-50 w-52 rounded-xl border border-white/15 bg-zinc-950/95 p-2 shadow-2xl">
+                <p className="px-2 py-1 text-[10px] font-bold uppercase text-white/50">
+                  Diffuser la vidéo
+                </p>
+                <button
+                  type="button"
+                  onClick={() => handleCast(false)}
+                  className="w-full rounded-lg px-3 py-2 text-left text-xs font-semibold hover:bg-white/10"
+                >
+                  TV uniquement
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleCast(true)}
+                  className="w-full rounded-lg px-3 py-2 text-left text-xs font-semibold hover:bg-white/10"
+                >
+                  TV + téléphone
+                </button>
+              </div>
+            )}
+
+            {airPlayAvailable && (
+              <button
+                type="button"
+                onClick={handleAirPlay}
+                className="mt-2 h-11 w-11 rounded-full bg-white/10 backdrop-blur-md flex items-center justify-center"
+                aria-label="Diffuser avec AirPlay"
+                title="AirPlay"
+              >
+                <Radio size={20} />
+              </button>
+            )}
+          </div>
         )}
 
         {!isImage && (

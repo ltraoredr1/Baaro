@@ -43,6 +43,7 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(BaaroSmsPlugin.class);
         registerPlugin(BaaroUpdaterPlugin.class);
+        registerPlugin(BaaroCastPlugin.class);
         registerPlugin(NearbyChatPlugin.class);
         super.onCreate(savedInstanceState);
         createBaaroNotificationChannels();
