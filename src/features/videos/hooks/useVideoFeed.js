@@ -50,6 +50,7 @@ function applyCursor(query, cursor) {
 
 export function useVideoFeed() {
   const [videos, setVideos] = useState([]);
+  const videosRef = useRef([]);
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -60,6 +61,7 @@ export function useVideoFeed() {
   const [profileRevision, setProfileRevision] = useState(0);
   const { friends, loading: friendsLoading } = useSocial(user?.id);
 
+  videosRef.current = videos;
   const requestSequence = useRef(0);
   const currentUserId = useRef(null);
   const realtimeTimers = useRef(new Map());
@@ -314,6 +316,12 @@ export function useVideoFeed() {
             String(record?.author_id || "") === String(currentUserId.current || "")
           ) return;
 
+          // UPDATE (compteurs, vues…) d'une vidéo absente du fil : rien à rafraîchir.
+          if (
+            eventType === "UPDATE" &&
+            !videosRef.current.some((v) => String(v.id) === String(videoId))
+          ) return;
+
           const timer = setTimeout(async () => {
             realtimeTimers.current.delete(videoId);
 
@@ -392,6 +400,8 @@ export function useVideoFeed() {
           const actorId = record?.user_id;
 
           if (!videoId) return;
+
+          if (!videosRef.current.some((v) => String(v.id) === String(videoId))) return;
 
           const previous = likeRealtimeTimers.current.get(videoId);
           if (previous) clearTimeout(previous);

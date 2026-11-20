@@ -122,11 +122,19 @@ export function usePosts(user_id, scope = "all") {
 
   // Realtime fil
   useEffect(() => {
+    let reloadTimer;
     const channel = supabase
     .channel("posts-realtime")
-    .on("postgres_changes", { event: "*", schema: "public", table: "posts" }, () => load())
+    .on("postgres_changes", { event: "INSERT", schema: "public", table: "posts" }, () => {
+      if (document.hidden) return;
+      clearTimeout(reloadTimer);
+      reloadTimer = setTimeout(load, 3000);
+    })
     .subscribe();
-    return () => supabase.removeChannel(channel);
+    return () => {
+      clearTimeout(reloadTimer);
+      supabase.removeChannel(channel);
+    };
   }, [load]);
 
   const likePost = useCallback(async (postId) => {

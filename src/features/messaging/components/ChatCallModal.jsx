@@ -354,11 +354,12 @@ export function ChatCallModal({
       .subscribe();
     // Secours si le realtime n'est pas activé sur la table
     const poll = setInterval(async () => {
+      if (document.hidden) return;
       try {
         const { data } = await supabase.from("calls").select("status").eq(column, key).maybeSingle();
         if (data?.status) onStatus(data.status);
       } catch {}
-    }, 3000);
+    }, 6000);
     return () => {
       clearInterval(poll);
       try { supabase.removeChannel(channel); } catch {}
