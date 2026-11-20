@@ -500,7 +500,7 @@ export function MainShell() {
     saveLastTab(activeTab);
   }, [activeTab]);
 
-  const isImmersive = activeTab === "videos";
+  const isImmersive = true;
 
   // Mode vidéo plein écran : le flux gère son propre défilement, la page ne doit
   // pas avoir de barre (elle réduit la largeur et décale les boutons).
