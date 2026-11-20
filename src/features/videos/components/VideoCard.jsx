@@ -21,6 +21,7 @@ import { TipButton } from "../../../components/TipButton.jsx";
 import VideoPollWidget from "./VideoPollWidget.jsx";
 import VideoProductWidget from "./VideoProductWidget.jsx";
 import { baaroLogo } from "../constants.js";
+import { feedImageUrl, avatarUrl } from "../../../lib/mediaUrl.js";
 import {
   loadGoogleCast,
   isAirPlayAvailable,
@@ -297,7 +298,7 @@ export default function VideoCard({
       {isImage ? (
         shouldLoad ? (
           <img
-            src={mediaSrc}
+            src={feedImageUrl(mediaSrc)}
             alt={caption || "Image BAARO"}
             loading="lazy"
             decoding="async"
@@ -447,7 +448,7 @@ export default function VideoCard({
           <div className="h-10 w-10 rounded-full overflow-hidden border-2 border-white bg-zinc-800 shrink-0">
             {profile.avatar_url ? (
               <img
-                src={profile.avatar_url}
+                src={avatarUrl(profile.avatar_url, 160)}
                 alt=""
                 loading="lazy"
                 decoding="async"
