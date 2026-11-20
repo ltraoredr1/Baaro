@@ -296,24 +296,15 @@ export default function VideoCard({
     >
       {isImage ? (
         shouldLoad ? (
-          <>
-            {/* Fond flou + image entière (sans recadrage) */}
-            <img
-              src={mediaSrc}
-              alt=""
-              aria-hidden="true"
-              loading="lazy"
-              decoding="async"
-              className="absolute inset-0 h-full w-full object-cover blur-2xl scale-110 opacity-50"
-            />
-            <img
-              src={mediaSrc}
-              alt={caption || "Image BAARO"}
-              decoding="async"
-              className="absolute inset-0 h-full w-full object-contain"
-              draggable={false}
-            />
-          </>
+          <img
+            src={mediaSrc}
+            alt={caption || "Image BAARO"}
+            loading="lazy"
+            decoding="async"
+            fetchPriority="low"
+            className="absolute inset-0 h-full w-full object-contain"
+            draggable={false}
+          />
         ) : null
       ) : (
         <video
@@ -459,6 +450,8 @@ export default function VideoCard({
                 src={profile.avatar_url}
                 alt=""
                 loading="lazy"
+                decoding="async"
+                fetchPriority="low"
                 className="h-full w-full object-cover"
               />
             ) : (
