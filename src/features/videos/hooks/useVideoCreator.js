@@ -11,7 +11,7 @@ import {
 } from "../../../services/mediaService.js";
 import { supabase } from "../../../supabaseClient.js";
 import { translateMedia } from "../../../lib/translateApi.js";
-import i18n, { translationLang } from "../../../i18n.js";
+import i18n, { translationLang } from "../../../../i18n.js";
 import {
   buildCollabPayload,
   registerVideoHashtags,
