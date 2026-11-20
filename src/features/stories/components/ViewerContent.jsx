@@ -132,16 +132,12 @@ export function ViewerContent({ story, userId, viewer, cart, videoRef, readOnly,
         </>
         ) : (
           <>
-            {/* Fond flouté : remplit les bandes sans rogner l'image principale */}
-            <img
-              src={story.media_url}
-              alt=""
-              aria-hidden="true"
-              className="absolute inset-0 w-full h-full object-cover blur-2xl scale-110 opacity-40 pointer-events-none"
-            />
             <img
               src={story.media_url}
               alt="story content"
+              loading="eager"
+              decoding="async"
+              fetchPriority="high"
               className="relative max-w-full max-h-full w-auto h-auto object-contain"
               onLoad={() => setMediaLoading(false)}
               onError={() => { setMediaLoading(false); next(); }}

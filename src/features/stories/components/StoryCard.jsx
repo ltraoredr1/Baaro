@@ -22,31 +22,18 @@ export function StoryCard({ story: s, isMine, counts, onOpen }) {
         // Le fond flouté de la même image remplit les bandes.
         <div className="relative w-full aspect-[4/5] rounded-lg my-2 overflow-hidden bg-black/40">
           {s.media_type === 'video' ? (
-            <video
-              src={s.media_url}
-              className="absolute inset-0 w-full h-full object-contain pointer-events-none"
-              muted
-              playsInline
-              preload="metadata"
-            />
+            <div className="absolute inset-0 flex items-center justify-center bg-black text-3xl" aria-label="Vidéo">
+              ▶
+            </div>
           ) : (
-            <>
-              <img
-                src={s.media_url}
-                alt=""
-                aria-hidden="true"
-                loading="lazy"
-                decoding="async"
-                className="absolute inset-0 w-full h-full object-cover blur-xl scale-110 opacity-40 pointer-events-none"
-              />
-              <img
-                src={s.media_url}
-                alt="story"
-                loading="lazy"
-                decoding="async"
-                className="absolute inset-0 w-full h-full object-contain"
-              />
-            </>
+            <img
+              src={s.media_url}
+              alt="story"
+              loading="lazy"
+              decoding="async"
+              fetchPriority="low"
+              className="absolute inset-0 w-full h-full object-contain"
+            />
           )}
         </div>
       ) : (
