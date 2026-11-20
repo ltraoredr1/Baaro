@@ -322,64 +322,8 @@ export function VideosTab({ onRewardPoints, onExit, onOpenProfile }) {
       current?.requestId === requestId ? null : current
     );
   };
-  const [videoWidgetRequest, setVideoWidgetRequest] = useState(null);
-  const videoWidgetRequestId = useRef(0);
 
-  const requestVideoWidget = (type) => {
-    const videoId = activeIdForPublishRef.current;
-    if (!videoId) {
-      showToast("Attends que la vidéo active soit chargée.", "info");
-      return;
-    }
-    const target = visibleVideosForPublishRef.current?.find(
-      (video) => String(video.id) === String(videoId)
-    );
-    const ownerId = target?.author_id || target?.user_id || target?.profiles?.id;
-    if (!target || !user?.id || String(ownerId) !== String(user.id)) {
-      showToast("Cette action est réservée à l’auteur de la vidéo.", "info");
-      return;
-    }
-    setVideoWidgetRequest({
-      type,
-      videoId: String(videoId),
-      requestId: ++videoWidgetRequestId.current,
-    });
-  };
 
-  const clearVideoWidgetRequest = (requestId) => {
-    setVideoWidgetRequest((current) =>
-      current?.requestId === requestId ? null : current
-    );
-  };
-  const [videoWidgetRequest, setVideoWidgetRequest] = useState(null);
-  const videoWidgetRequestId = useRef(0);
-
-  const requestVideoWidget = (type) => {
-    const videoId = activeIdForPublishRef.current;
-    if (!videoId) {
-      showToast("Attends que la vidéo active soit chargée.", "info");
-      return;
-    }
-    const target = visibleVideosForPublishRef.current?.find(
-      (video) => String(video.id) === String(videoId)
-    );
-    const ownerId = target?.author_id || target?.user_id || target?.profiles?.id;
-    if (!target || !user?.id || String(ownerId) !== String(user.id)) {
-      showToast("Cette action est réservée à l’auteur de la vidéo.", "info");
-      return;
-    }
-    setVideoWidgetRequest({
-      type,
-      videoId: String(videoId),
-      requestId: ++videoWidgetRequestId.current,
-    });
-  };
-
-  const clearVideoWidgetRequest = (requestId) => {
-    setVideoWidgetRequest((current) =>
-      current?.requestId === requestId ? null : current
-    );
-  };
 
   const handleStudioCreate = (selectedFeatures) => {
     setStudioOpen(false);
@@ -1258,20 +1202,6 @@ export function VideosTab({ onRewardPoints, onExit, onOpenProfile }) {
                     onShowViewers={() =>
                       setViewersVideoId(video.id)
                     }
-                    videoWidgetRequest={
-                      videoWidgetRequest &&
-                      videoWidgetRequest.videoId === String(video.id)
-                        ? videoWidgetRequest
-                        : null
-                    }
-                    onVideoWidgetRequestHandled={clearVideoWidgetRequest}
-                    videoWidgetRequest={
-                      videoWidgetRequest &&
-                      videoWidgetRequest.videoId === String(video.id)
-                        ? videoWidgetRequest
-                        : null
-                    }
-                    onVideoWidgetRequestHandled={clearVideoWidgetRequest}
                     videoWidgetRequest={
                       videoWidgetRequest &&
                       videoWidgetRequest.videoId === String(video.id)
