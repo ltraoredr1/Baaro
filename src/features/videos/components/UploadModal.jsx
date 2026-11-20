@@ -1,4 +1,6 @@
-import { Leaf, X } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Leaf, X, BarChart3, ShoppingBag, Plus } from "lucide-react";
+import { supabase } from "../../../supabaseClient.js";
 import { COLORS } from "../../../theme.js";
 import CameraOverlay from "./CameraOverlay.jsx";
 import CreatorPanel from "./CreatorPanel.jsx";
@@ -25,6 +27,10 @@ export default function UploadModal({
     setUploadTitle,
     uploadDescription,
     setUploadDescription,
+    pendingPoll,
+    setPendingPoll,
+    pendingProductIds,
+    setPendingProductIds,
     uploading,
     uploadProgress,
     bakedAudio,
@@ -33,6 +39,71 @@ export default function UploadModal({
     handleUpload,
     resetUpload,
   } = creator;
+
+  const [showPollForm, setShowPollForm] = useState(false);
+  const [showProductForm, setShowProductForm] = useState(false);
+  const [pollQuestion, setPollQuestion] = useState("");
+  const [pollOptions, setPollOptions] = useState(["", ""]);
+  const [ownProducts, setOwnProducts] = useState([]);
+  const [productsLoading, setProductsLoading] = useState(false);
+
+  useEffect(() => {
+    if (!showPollForm) return;
+    if (pendingPoll) {
+      setPollQuestion(pendingPoll.question || "");
+      setPollOptions(
+        Array.isArray(pendingPoll.options) && pendingPoll.options.length
+          ? pendingPoll.options
+          : ["", ""],
+      );
+    }
+  }, [showPollForm, pendingPoll]);
+
+  useEffect(() => {
+    if (!showProductForm) return;
+    let active = true;
+    (async () => {
+      setProductsLoading(true);
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user?.id || !active) { setProductsLoading(false); return; }
+      const { data } = await supabase
+        .from("shop_products")
+        .select("id,name,price,currency,stock,type,is_available,shops(owner_id,name,is_active)")
+        .eq("is_available", true)
+        .order("created_at", { ascending: false })
+        .limit(40);
+      if (!active) return;
+      setOwnProducts((data || []).filter((p) => p.shops?.owner_id === user.id));
+      setProductsLoading(false);
+    })();
+    return () => { active = false; };
+  }, [showProductForm]);
+
+  const savePollDraft = () => {
+    const opts = pollOptions.map((x) => x.trim()).filter(Boolean);
+    if (!pollQuestion.trim() || opts.length < 2) {
+      setPendingPoll(null);
+      setShowPollForm(false);
+      return;
+    }
+    setPendingPoll({ question: pollQuestion.trim(), options: opts.slice(0, 4) });
+    setShowPollForm(false);
+  };
+
+  const clearPoll = () => {
+    setPendingPoll(null);
+    setPollQuestion("");
+    setPollOptions(["", ""]);
+    setShowPollForm(false);
+  };
+
+  const toggleProduct = (id) => {
+    setPendingProductIds((cur) => {
+      if (cur.includes(id)) return cur.filter((x) => x !== id);
+      if (cur.length >= 3) return cur;
+      return [...cur, id];
+    });
+  };
   const { cameraOpen, closeCamera } = camera;
 
   if (!showUpload) return null;
@@ -169,6 +240,127 @@ export default function UploadModal({
             maxLength={500}
             className="w-full rounded-2xl bg-white/10 px-4 py-3 outline-none text-sm resize-none"
           />
+
+          {/* Sondage & produit à la publication */}
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => { setShowPollForm((v) => !v); setShowProductForm(false); }}
+              className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-xs font-bold ${
+                pendingPoll || showPollForm
+                  ? "border-yellow-400/50 bg-yellow-400/15 text-yellow-200"
+                  : "border-white/15 bg-white/5 text-white/80"
+              }`}
+            >
+              <BarChart3 size={14} /> {pendingPoll ? "Sondage prêt" : "Créer un sondage"}
+            </button>
+            <button
+              type="button"
+              onClick={() => { setShowProductForm((v) => !v); setShowPollForm(false); }}
+              className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-xs font-bold ${
+                (pendingProductIds?.length || showProductForm)
+                  ? "border-emerald-400/50 bg-emerald-400/15 text-emerald-200"
+                  : "border-white/15 bg-white/5 text-white/80"
+              }`}
+            >
+              <ShoppingBag size={14} />{" "}
+              {pendingProductIds?.length
+                ? `${pendingProductIds.length} produit(s)`
+                : "Ajouter un produit"}
+            </button>
+          </div>
+
+          {showPollForm && (
+            <div className="space-y-2 rounded-2xl border border-yellow-400/25 bg-yellow-400/[0.06] p-3">
+              <input
+                value={pollQuestion}
+                onChange={(e) => setPollQuestion(e.target.value)}
+                maxLength={240}
+                placeholder="Pose ta question…"
+                className="w-full rounded-xl border border-white/15 bg-white/10 px-3 py-2 text-sm outline-none"
+              />
+              {pollOptions.map((v, i) => (
+                <input
+                  key={i}
+                  value={v}
+                  maxLength={80}
+                  onChange={(e) =>
+                    setPollOptions((old) => old.map((x, j) => (j === i ? e.target.value : x)))
+                  }
+                  placeholder={`Choix ${i + 1}`}
+                  className="w-full rounded-xl border border-white/15 bg-white/10 px-3 py-2 text-sm outline-none"
+                />
+              ))}
+              {pollOptions.length < 4 && (
+                <button
+                  type="button"
+                  onClick={() => setPollOptions((x) => [...x, ""])}
+                  className="flex items-center gap-1 text-xs text-yellow-200"
+                >
+                  <Plus size={14} /> Ajouter un choix
+                </button>
+              )}
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={savePollDraft}
+                  className="flex-1 rounded-xl bg-yellow-400 px-3 py-2 text-sm font-black text-black"
+                >
+                  Enregistrer le sondage
+                </button>
+                <button
+                  type="button"
+                  onClick={clearPoll}
+                  className="rounded-xl bg-white/10 px-3 py-2 text-sm font-bold"
+                >
+                  Effacer
+                </button>
+              </div>
+            </div>
+          )}
+
+          {showProductForm && (
+            <div className="space-y-2 rounded-2xl border border-emerald-400/25 bg-emerald-400/[0.06] p-3">
+              {productsLoading ? (
+                <p className="text-xs text-white/50">Chargement de tes produits…</p>
+              ) : ownProducts.length === 0 ? (
+                <p className="text-xs text-white/50">
+                  Aucun produit disponible. Crée-en un dans Shop d’abord.
+                </p>
+              ) : (
+                <div className="max-h-40 space-y-1 overflow-y-auto">
+                  {ownProducts.map((p) => {
+                    const selected = pendingProductIds?.includes(p.id);
+                    return (
+                      <button
+                        key={p.id}
+                        type="button"
+                        onClick={() => toggleProduct(p.id)}
+                        className={`flex w-full items-center justify-between rounded-xl border px-3 py-2 text-left text-xs ${
+                          selected
+                            ? "border-emerald-400/50 bg-emerald-400/15"
+                            : "border-white/10 bg-white/5"
+                        }`}
+                      >
+                        <span className="font-bold">{p.name}</span>
+                        <span className="text-white/60">
+                          {p.price} {p.currency || ""}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              <p className="text-[11px] text-white/40">Max 3 produits. Ils seront liés après publication.</p>
+              <button
+                type="button"
+                onClick={() => setShowProductForm(false)}
+                className="w-full rounded-xl bg-white/10 px-3 py-2 text-sm font-bold"
+              >
+                OK
+              </button>
+            </div>
+          )}
 
           <SoundPicker
             soundPicker={soundPicker}

@@ -66,6 +66,8 @@ export function useVideoCreator({
   const [previewUrl, setPreviewUrl] = useState("");
   const [uploadTitle, setUploadTitle] = useState("");
   const [uploadDescription, setUploadDescription] = useState("");
+  const [pendingPoll, setPendingPoll] = useState(null); // { question, options }
+  const [pendingProductIds, setPendingProductIds] = useState([]); // string[]
   const [createMode, setCreateMode] = useState("video");
   const [photoFiles, setPhotoFiles] = useState([]);
   const [photoSeconds, setPhotoSeconds] = useState(3);
@@ -247,6 +249,8 @@ export function useVideoCreator({
     setPreviewUrl("");
     setUploadTitle("");
     setUploadDescription("");
+    setPendingPoll(null);
+    setPendingProductIds([]);
     setUploadProgress(0);
     onCollabConsumed?.();
   };
@@ -404,6 +408,38 @@ export function useVideoCreator({
         // et un échec secondaire ne doit plus la faire passer pour échouée.
         videoCreated = true;
         successCount += 1;
+
+        // Sondage / produits préparés à la publication
+        if (pendingPoll?.question && Array.isArray(pendingPoll.options)) {
+          try {
+            const opts = pendingPoll.options.map((x) => String(x).trim()).filter(Boolean);
+            if (opts.length >= 2) {
+              const { error: pollErr } = await supabase.rpc("create_video_poll", {
+                p_video_id: created.id,
+                p_question: String(pendingPoll.question).trim(),
+                p_options: opts,
+                p_duration_seconds: null,
+                p_allow_multiple: false,
+              });
+              if (pollErr) console.warn("BAARO poll post-upload:", pollErr);
+            }
+          } catch (e) {
+            console.warn("BAARO poll post-upload:", e);
+          }
+        }
+        if (pendingProductIds?.length) {
+          try {
+            const rows = pendingProductIds.slice(0, 3).map((product_id) => ({
+              video_id: created.id,
+              product_id,
+            }));
+            const { error: prodErr } = await supabase.from("video_products").insert(rows);
+            if (prodErr) console.warn("BAARO product post-upload:", prodErr);
+          } catch (e) {
+            console.warn("BAARO product post-upload:", e);
+          }
+        }
+
 
         // Traitement multilingue réel après publication.
         const wantsCaptions =
@@ -605,6 +641,10 @@ export function useVideoCreator({
     setUploadTitle,
     uploadDescription,
     setUploadDescription,
+    pendingPoll,
+    setPendingPoll,
+    pendingProductIds,
+    setPendingProductIds,
     createMode,
     setCreateMode,
     photoFiles,
