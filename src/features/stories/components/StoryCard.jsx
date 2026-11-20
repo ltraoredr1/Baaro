@@ -1,6 +1,7 @@
 import { COLORS as C } from '../../../theme.js';
 import { RichTextRenderer } from '../../../components/RichTextRenderer.jsx';
 import { AutoTranslate } from '../../../components/TranslatedText.jsx';
+import { thumbUrl } from '../../../lib/mediaUrl.js';
 
 export function StoryCard({ story: s, isMine, counts, onOpen }) {
   const hasMedia = s.media_url && s.media_type !== 'text';
@@ -27,7 +28,7 @@ export function StoryCard({ story: s, isMine, counts, onOpen }) {
             </div>
           ) : (
             <img
-              src={s.media_url}
+              src={thumbUrl(s.media_url)}
               alt="story"
               loading="lazy"
               decoding="async"
