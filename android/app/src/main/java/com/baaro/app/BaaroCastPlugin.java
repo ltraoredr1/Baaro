@@ -13,6 +13,7 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 import com.google.android.gms.cast.CastMediaControlIntent;
 import com.google.android.gms.cast.MediaInfo;
 import com.google.android.gms.cast.MediaLoadRequestData;
+import com.google.android.gms.cast.MediaStatus;
 import com.google.android.gms.cast.MediaMetadata;
 import com.google.android.gms.cast.framework.CastContext;
 import com.google.android.gms.cast.framework.CastSession;
@@ -72,9 +73,9 @@ public class BaaroCastPlugin extends Plugin {
         result.put("currentTime",
             Math.max(0L, client.getApproximateStreamPosition()) / 1000.0);
         result.put("isPaused",
-            client.getPlayerState() != RemoteMediaClient.PLAYER_STATE_PLAYING);
+            client.getPlayerState() != MediaStatus.PLAYER_STATE_PLAYING);
         result.put("isLoaded",
-            client.getPlayerState() != RemoteMediaClient.PLAYER_STATE_UNKNOWN);
+            client.getPlayerState() != MediaStatus.PLAYER_STATE_UNKNOWN);
         call.resolve(result);
     }
 
