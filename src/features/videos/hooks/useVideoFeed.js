@@ -201,49 +201,56 @@ export function useVideoFeed() {
           });
         }
 
-        // Likes de l'utilisateur (seulement sur reset pour rester simple)
-        if (reset) {
-          if (!userId) {
-            setLikedMap({});
-          } else {
-            const { data: likes, error: likesError } = await supabase
-              .from("video_likes")
-              .select("video_id")
+        // Ne récupérer que les likes des vidéos de cette page (8 maximum).
+        const pageIds = page.map((video) => video.id).filter(Boolean);
+        if (!userId) {
+          if (reset) setLikedMap({});
+        } else if (pageIds.length) {
+          const { data: likes, error: likesError } = await supabase
+            .from("video_likes")
+            .select("video_id")
+            .eq("user_id", userId)
+            .in("video_id", pageIds);
+
+          if (likesError) throw likesError;
+          if (requestId !== requestSequence.current) return;
+
+          const pageLikedMap = {};
+          (likes || []).forEach((item) => {
+            pageLikedMap[item.video_id] = true;
+          });
+
+          setLikedMap((current) => ({
+            ...(reset ? {} : current),
+            ...pageLikedMap,
+            ...Object.fromEntries(pageIds
+              .filter((id) => !pageLikedMap[id])
+              .map((id) => [id, false])),
+          }));
+        }
+
+        // Signaux de personnalisation : chargés uniquement au premier affichage.
+        if (reset && userId) {
+          try {
+            const { data: saved } = await supabase
+              .from("video_bookmarks")
+              .select("video_id, videos:video_id(author_id, title, description)")
               .eq("user_id", userId)
-              .limit(300);
+              .order("created_at", { ascending: false })
+              .limit(40);
+            recordBookmarks(saved);
 
-            if (likesError) throw likesError;
-            if (requestId !== requestSequence.current) return;
-
-            const map = {};
-            (likes || []).forEach((item) => {
-              map[item.video_id] = true;
-            });
-            setLikedMap(map);
-
-            // Enregistrements de l'utilisateur : alimentent son profil d'intérêts.
-            try {
-              const { data: saved } = await supabase
-                .from("video_bookmarks")
-                .select("video_id, videos:video_id(author_id, title, description)")
-                .eq("user_id", userId)
-                .order("created_at", { ascending: false })
-                .limit(40);
-              recordBookmarks(saved);
-
-              // Historique de visionnage côté serveur (suit l'utilisateur d'un appareil à l'autre)
-              const { data: watched } = await supabase
-                .from("video_watch_events")
-                .select("video_id, ratio, videos:video_id(author_id, title, description)")
-                .eq("user_id", userId)
-                .order("updated_at", { ascending: false })
-                .limit(60);
-              syncWatchHistory(watched);
-            } catch {
-              /* signal facultatif */
-            } finally {
-              setProfileRevision((current) => current + 1);
-            }
+            const { data: watched } = await supabase
+              .from("video_watch_events")
+              .select("video_id, ratio, videos:video_id(author_id, title, description)")
+              .eq("user_id", userId)
+              .order("updated_at", { ascending: false })
+              .limit(60);
+            syncWatchHistory(watched);
+          } catch {
+            /* signal facultatif */
+          } finally {
+            setProfileRevision((current) => current + 1);
           }
         }
       } catch (error) {
