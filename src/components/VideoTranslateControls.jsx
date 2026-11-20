@@ -484,7 +484,7 @@ export function VideoTranslateControls({
       <audio
         ref={dubAudioRef}
         src={active?.dubAudioUrl || undefined}
-        preload="auto"
+        preload="metadata"
         playsInline
       />
     </div>

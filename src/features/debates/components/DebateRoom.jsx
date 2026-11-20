@@ -252,7 +252,9 @@ export function DebateRoom({ inviteCode, onBack }) {
             })
             .catch(() => {});
         }
-        poll = setInterval(sync, 4000);
+        poll = setInterval(() => {
+          if (!document.hidden) sync();
+        }, 15000);
         onWake = () => sync();
         document.addEventListener("visibilitychange", onWake);
         window.addEventListener("focus", onWake);
@@ -331,7 +333,9 @@ export function DebateRoom({ inviteCode, onBack }) {
     };
 
     refreshCount();
-    const timer = setInterval(refreshCount, 15000);
+    const timer = setInterval(() => {
+      if (!document.hidden) refreshCount();
+    }, 60000);
     return () => {
       cancelled = true;
       clearInterval(timer);

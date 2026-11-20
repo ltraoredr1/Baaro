@@ -4,7 +4,7 @@ import { getCallToken } from "../lib/chatCalls.js";
 
 // Aligné sur NO_ANSWER_TIMEOUT_MS de ChatCallModal
 const RECENT_MS = 45000;
-const POLL_MS = 10000;
+const POLL_MS = 30000;
 const FINAL_STATUSES = ["ended", "rejected", "missed", "cancelled"];
 
 export function useIncomingCalls(userId) {
@@ -114,7 +114,9 @@ export function useIncomingCalls(userId) {
     };
     document.addEventListener("visibilitychange", onVisible);
     window.addEventListener("online", fetchPending);
-    const poll = setInterval(fetchPending, POLL_MS); // filet de sécurité
+    const poll = setInterval(() => {
+      if (!document.hidden) fetchPending();
+    }, POLL_MS); // filet de sécurité
 
     return () => {
       active = false;

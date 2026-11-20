@@ -4,7 +4,7 @@ import { useSocial } from "../../../hooks/useSocial.js";
 import { isMissingColumn } from "../utils/videosApi.js";
 import { rankForYou, rankTrending, recordBookmarks, syncWatchHistory } from "../lib/feedScore.js";
 
-const PAGE_SIZE = 24;
+const PAGE_SIZE = 12;
 
 const buildVideoSelect = (withSound) => `
   id,

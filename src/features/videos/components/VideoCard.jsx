@@ -119,7 +119,7 @@ export default function VideoCard({
   const canTip = !!user?.id && !!authorId && !isOwner;
 
   const videoPreload =
-    loadMode === "active" ? "auto" : loadMode === "preload" ? "metadata" : "none";
+    loadMode === "active" || loadMode === "preload" ? "metadata" : "none";
 
   useEffect(() => {
     if (isImage || !isActive || !shouldLoad) return;
@@ -374,7 +374,7 @@ export default function VideoCard({
           }}
           src={sound.url}
           loop
-          preload={loadMode === "active" ? "auto" : "none"}
+          preload={loadMode === "active" ? "metadata" : "none"}
           muted={muted}
         />
       )}

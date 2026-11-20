@@ -711,7 +711,7 @@ export default async function handler(req, res) {
       );
     }
 
-    const translated = String(result.reply || "").trim();    const translated = String(result.reply || "").trim();
+    const translated = String(result.reply || "").trim();
 
     if (!translated) {
       throw Object.assign(

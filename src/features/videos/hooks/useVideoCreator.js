@@ -10,6 +10,8 @@ import {
   uploadLargeVideo,
 } from "../../../services/mediaService.js";
 import { supabase } from "../../../supabaseClient.js";
+import { translateMedia } from "../../../lib/translateApi.js";
+import i18n, { translationLang } from "../../../i18n.js";
 import {
   buildCollabPayload,
   registerVideoHashtags,
@@ -45,6 +47,7 @@ async function generateGeminiVisual(promptText) {
  */
 export function useVideoCreator({
   user,
+  studioFeatures = [],
   loadVideos,
   onRewardPoints,
   soundPicker,
@@ -401,6 +404,85 @@ export function useVideoCreator({
         // et un échec secondaire ne doit plus la faire passer pour échouée.
         videoCreated = true;
         successCount += 1;
+
+        // Traitement multilingue réel après publication.
+        const wantsCaptions =
+          studioFeatures.includes("subtitles") ||
+          studioFeatures.includes("translate");
+
+        if (wantsCaptions) {
+          try {
+            const preferred = translationLang(i18n.language);
+            const supported = new Set([
+              "fr", "en", "es", "pt", "ar", "zh", "hi", "ru", "ja", "de",
+              "sw", "it", "ko", "tr", "nl", "pl", "uk", "vi", "id", "th",
+              "bn", "ha", "yo", "ig", "am", "zu", "af", "fa", "he", "sv",
+              "bm", "wo", "fuc", "dyu", "snk",
+            ]);
+            const targetLang = supported.has(preferred) ? preferred : "fr";
+            const wantsDub = studioFeatures.includes("translate");
+
+            const result = await translateMedia({
+              mediaUrl: publicUrl,
+              videoId: created.id,
+              targetLang,
+              mode: wantsDub ? "dub" : "subtitles",
+            });
+
+            if (!result?.ok || !result?.vttUrl) {
+              throw new Error("Le worker n'a pas retourné de sous-titres.");
+            }
+
+            const rows = [{
+              video_id: created.id,
+              language: targetLang,
+              kind: "translated",
+              status: "ready",
+              vtt_url: result.vttUrl,
+              payload: {
+                provider: result.provider || "baaro-worker",
+                source_language: result.sourceLang || "auto",
+                auto_generated: true,
+              },
+            }];
+
+            if (wantsDub && result.dubAudioUrl) {
+              rows.push({
+                video_id: created.id,
+                language: targetLang,
+                kind: "dubbed",
+                status: "ready",
+                vtt_url: result.vttUrl,
+                payload: {
+                  audio_url: result.dubAudioUrl,
+                  provider: result.provider || "baaro-worker",
+                  auto_generated: true,
+                },
+              });
+            }
+
+            const { error } = await supabase
+              .from("video_captions")
+              .insert(rows);
+
+            if (error) throw error;
+
+            if (wantsDub && !result.dubAudioUrl) {
+              metadataWarnings += 1;
+              showToast(
+                "Sous-titres créés, mais le doublage vocal est indisponible.",
+                "info",
+              );
+            }
+          } catch (error) {
+            metadataWarnings += 1;
+            console.warn("BAARO traitement multilingue :", error);
+            showToast(
+              "Vidéo publiée, mais le traitement multilingue a échoué.",
+              "info",
+            );
+          }
+        }
 
         // Récupérer uniquement la vidéo créée, sans recharger le fil.
         try {
