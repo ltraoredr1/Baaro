@@ -63,7 +63,7 @@ export function useStories(userId, setError) {
     let debounceTimer = null;
     const unsubscribe = api.subscribeToStories(() => {
       clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(() => load(), 450);
+      debounceTimer = setTimeout(() => load(), 1500);
     });
     load(true);
     return () => {

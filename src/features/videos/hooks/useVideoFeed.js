@@ -4,7 +4,7 @@ import { useSocial } from "../../../hooks/useSocial.js";
 import { isMissingColumn } from "../utils/videosApi.js";
 import { rankForYou, rankTrending, recordBookmarks, syncWatchHistory } from "../lib/feedScore.js";
 
-const PAGE_SIZE = 12;
+const PAGE_SIZE = 8;
 
 const buildVideoSelect = (withSound) => `
   id,
@@ -209,7 +209,8 @@ export function useVideoFeed() {
             const { data: likes, error: likesError } = await supabase
               .from("video_likes")
               .select("video_id")
-              .eq("user_id", userId);
+              .eq("user_id", userId)
+              .limit(300);
 
             if (likesError) throw likesError;
             if (requestId !== requestSequence.current) return;
@@ -227,7 +228,7 @@ export function useVideoFeed() {
                 .select("video_id, videos:video_id(author_id, title, description)")
                 .eq("user_id", userId)
                 .order("created_at", { ascending: false })
-                .limit(100);
+                .limit(40);
               recordBookmarks(saved);
 
               // Historique de visionnage côté serveur (suit l'utilisateur d'un appareil à l'autre)
@@ -236,7 +237,7 @@ export function useVideoFeed() {
                 .select("video_id, ratio, videos:video_id(author_id, title, description)")
                 .eq("user_id", userId)
                 .order("updated_at", { ascending: false })
-                .limit(200);
+                .limit(60);
               syncWatchHistory(watched);
             } catch {
               /* signal facultatif */

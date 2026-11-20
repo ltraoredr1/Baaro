@@ -118,8 +118,8 @@ export default function VideoCard({
   const isOwner = !!user?.id && authorId === user.id;
   const canTip = !!user?.id && !!authorId && !isOwner;
 
-  const videoPreload =
-    loadMode === "active" || loadMode === "preload" ? "metadata" : "none";
+  // Aucun téléchargement anticipé : la lecture déclenche elle-même le chargement.
+  const videoPreload = "none";
 
   useEffect(() => {
     if (isImage || !isActive || !shouldLoad) return;
@@ -329,6 +329,7 @@ export default function VideoCard({
           crossOrigin="anonymous"
           muted={muted || !!video.mute_original}
           data-mute-original={video.mute_original ? "1" : "0"}
+          loading="lazy"
           preload={videoPreload}
           onPlay={(event) => {
             // Sécurité : une vidéo qui n'est plus active ne doit jamais jouer.

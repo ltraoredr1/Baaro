@@ -6,7 +6,7 @@ export const SPEEDS = [0.75, 1, 1.25, 1.5, 2];
 export const SAVER_MODES = ["auto", "on", "off"];
 
 const DEFAULTS = {
-  dataSaver: "auto",
+  dataSaver: "on",
   autoNext: true,
   speed: 1,
   compressUploads: true,

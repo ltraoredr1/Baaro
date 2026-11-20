@@ -55,7 +55,7 @@ export async function fetchActiveStories() {
     .lte('publish_at', now)          // les programmées ne sont pas encore visibles
     .is('deleted_at', null)
     .order('created_at', { ascending: false })
-    .limit(80);
+    .limit(30);
   if (error) throw error;
 
   const ids = [...new Set((data || []).map((s) => s.author_id).filter(Boolean))];
