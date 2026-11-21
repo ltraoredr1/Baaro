@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../supabaseClient";
 
 /** auth.users.id (UUID) uniquement */
@@ -152,6 +152,9 @@ export function NotificationDrawer({ user_id, isOpen, onClose }) {
   const [notifs, setNotifs] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  /** Timer de debounce pour les événements Realtime (évite N reloads en rafale). */
+  const realtimeTimerRef = useRef(null);
+  const REALTIME_DEBOUNCE_MS = 400;
 
   const load = useCallback(async () => {
     if (!isValidAuthUserId(user_id)) {
@@ -167,7 +170,9 @@ export function NotificationDrawer({ user_id, isOpen, onClose }) {
     try {
       const { data, error: fetchError } = await supabase
         .from("notifications")
-        .select("*")
+        .select(
+          "notification_id, user_id, actor_id, type, message, source_id, read, read_at, created_at, preview",
+        )
         .eq("user_id", user_id)
         .order("created_at", { ascending: false })
         .limit(30);
@@ -190,9 +195,20 @@ export function NotificationDrawer({ user_id, isOpen, onClose }) {
     load();
   }, [isOpen, user_id, load]);
 
-  // Actualise la liste et les noms lorsqu'une notification change.
+  // Debounce Realtime : regroupe les événements rapprochés (live, likes en rafale)
+  // pour éviter un reload complet du drawer à chaque INSERT/UPDATE.
   useEffect(() => {
     if (!isOpen || !isValidAuthUserId(user_id)) return;
+
+    const scheduleReload = () => {
+      if (realtimeTimerRef.current) {
+        clearTimeout(realtimeTimerRef.current);
+      }
+      realtimeTimerRef.current = setTimeout(() => {
+        realtimeTimerRef.current = null;
+        load();
+      }, REALTIME_DEBOUNCE_MS);
+    };
 
     const channel = supabase
       .channel(`notif-drawer-${user_id}`)
@@ -204,9 +220,7 @@ export function NotificationDrawer({ user_id, isOpen, onClose }) {
           table: "notifications",
           filter: `user_id=eq.${user_id}`,
         },
-        () => {
-          load();
-        },
+        scheduleReload,
       )
       .subscribe((status) => {
         if (status === "CHANNEL_ERROR") {
@@ -215,6 +229,10 @@ export function NotificationDrawer({ user_id, isOpen, onClose }) {
       });
 
     return () => {
+      if (realtimeTimerRef.current) {
+        clearTimeout(realtimeTimerRef.current);
+        realtimeTimerRef.current = null;
+      }
       supabase.removeChannel(channel);
     };
   }, [isOpen, user_id, load]);
