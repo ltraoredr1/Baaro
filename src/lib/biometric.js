@@ -29,6 +29,7 @@ export function hasBiometric(userId) {
 }
 
 export function disableBiometric(userId) {
+  if (!userId) return;
   try {
     localStorage.removeItem(KEY + userId);
   } catch {}

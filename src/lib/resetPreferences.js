@@ -6,6 +6,7 @@ import {
 import { replaceSoundPrefs } from "./notificationSoundStore.js";
 import { DEFAULT_SOUND_PREFS, toServerSoundPrefs } from "./notificationSounds.js";
 import { markBiometricDevice } from "./nativeSettings.js";
+import { disableBiometric } from "./biometric.js";
 import { resetPushDeviceState } from "./pushState.js";
 
 /**
@@ -26,11 +27,15 @@ export async function resetAllPreferences(resetSettings) {
     })(),
   ]);
 
-  // 4. Biométrie : propre à l'appareil, on retire la vérification locale
+  // 4. Biométrie : suppression du credential WebAuthn du compte courant.
   try {
+    const { data } = await import("../supabaseClient.js").then(m =>
+      m.supabase.auth.getUser()
+    );
+    if (data?.user?.id) disableBiometric(data.user.id);
     markBiometricDevice(false);
   } catch {
-    /* ignore */
+    /* La réinitialisation locale ne doit pas être bloquée. */
   }
 
   const res =

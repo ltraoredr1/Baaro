@@ -496,9 +496,6 @@ export default function SettingsTab({
       const profilePayload = {
         id: user.id,
         display_name: name,
-        // La date n'est envoyée que si le champ est rempli : une date déjà
-        // enregistrée n'est jamais effacée par accident.
-        ...(editBirthDate ? { birth_date: editBirthDate } : {}),
         location: editLocation.trim(),
         country: editCountry || null,
         handle: finalHandle,

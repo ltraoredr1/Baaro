@@ -63,6 +63,13 @@ export default function BiometricGate({ children }) {
       setUserId(user.id);
       setLabel(user.phone || "Membre BAARO");
 
+      // La biométrie désactivée ne doit jamais verrouiller l'application.
+      if (!biometricSetting) {
+        ss.del(OK_KEY);
+        setState("open");
+        return;
+      }
+
       // Empreinte déjà enregistrée sur cet appareil : verrou normal
       if (hasBiometric(user.id)) {
         setState(ss.get(OK_KEY) === user.id ? "open" : "locked");
