@@ -258,8 +258,17 @@ export function useSettings() {
     let active = true;
 
     async function loadCloud(userId) {
+      if (!active || activeUserIdRef.current !== userId) return;
+
       const result = await loadCloudSettings(userId);
-      if (!active || !result.ok || !result.data) return;
+
+      // Un autre compte peut s'être connecté pendant la requête.
+      if (
+        !active ||
+        activeUserIdRef.current !== userId ||
+        !result.ok ||
+        !result.data
+      ) return;
 
       const cloud = { ...result.data };
       // Les choix locaux non synchronisés gardent la priorité (même après rechargement).
@@ -306,6 +315,8 @@ export function useSettings() {
         if (event === "SIGNED_OUT") {
           activeUserIdRef.current = null;
           dirtyKeysRef.current = new Set();
+          privateDirtyRef.current = false;
+          privateDirtyUserIdRef.current = null;
           setSyncStatus("local");
           setSyncError(null);
           return;
