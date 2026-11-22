@@ -86,7 +86,7 @@ export function useSettings() {
     return () => window.removeEventListener(SETTINGS_EVENT, onChange);
   }, []);
 
-  const syncToCloud = useCallback(async () => {
+  const syncToCloud = useCallback(async (settingsSnapshot) => {
     try {
       const {
         data: { session },
@@ -101,7 +101,7 @@ export function useSettings() {
       if (!session?.user) return { ok: true, localOnly: true };
 
       const userId = session.user.id;
-      const current = settingsRef.current;
+      const current = settingsSnapshot || { ...settingsRef.current };
 
       if (privateDirtyRef.current) {
         privateDirtyRef.current = false;
@@ -154,13 +154,23 @@ export function useSettings() {
     const waiters = waitersRef.current;
     waitersRef.current = [];
     const keysSnapshot = [...dirtyKeysRef.current];
+    const settingsSnapshot = { ...settingsRef.current };
 
     setSyncStatus("saving");
 
-    const task = saveQueueRef.current.then(syncToCloud).then((res) => {
+    const task = saveQueueRef.current
+      .then(() => syncToCloud(settingsSnapshot))
+      .then((res) => {
       if (res?.ok && !res.localOnly) {
-        // Confirmé par le cloud : ces clés ne sont plus « en attente ».
-        for (const key of keysSnapshot) dirtyKeysRef.current.delete(key);
+        // Ne retire une clé que si elle n'a pas changé pendant l'envoi.
+        for (const key of keysSnapshot) {
+          if (
+            JSON.stringify(settingsRef.current[key]) ===
+            JSON.stringify(settingsSnapshot[key])
+          ) {
+            dirtyKeysRef.current.delete(key);
+          }
+        }
         writeDirty(dirtyKeysRef.current);
         attemptRef.current = 0;
         setSyncError(null);
