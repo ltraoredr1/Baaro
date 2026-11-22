@@ -58,7 +58,7 @@ export const RTL_LANGS = new Set(["ar", "he", "fa", "ur", "ps", "sd", "ug", "nqo
 
 const LEGACY_KEYS = ["baaro_settings_v22", "baaro_settings_v21", "baaro_settings_v20"];
 
-const HEX_COLOR = /^#[0-9a-f]{3,8}$/i;
+const HEX_COLOR = /^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
 const SAFE_URL = /^(https:\/\/|\/)[^"'()\s]+$/;
 
 function isPlainObject(v) {
