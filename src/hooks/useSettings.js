@@ -22,19 +22,27 @@ const RETRY_MAX_MS = 60000;
 /** Clés modifiées localement mais pas encore confirmées par le cloud (persisté). */
 export const DIRTY_KEY = "baaro_settings_dirty";
 
-function readDirty() {
+function getDirtyKey(userId) {
+  return userId ? `${DIRTY_KEY}:${userId}` : null;
+}
+
+function readDirty(userId) {
+  const key = getDirtyKey(userId);
+  if (!key) return [];
   try {
-    const raw = JSON.parse(localStorage.getItem(DIRTY_KEY) || "[]");
+    const raw = JSON.parse(localStorage.getItem(key) || "[]");
     return Array.isArray(raw) ? raw.filter((k) => typeof k === "string") : [];
   } catch {
     return [];
   }
 }
 
-function writeDirty(set) {
+function writeDirty(set, userId) {
+  const key = getDirtyKey(userId);
+  if (!key) return;
   try {
-    if (set.size === 0) localStorage.removeItem(DIRTY_KEY);
-    else localStorage.setItem(DIRTY_KEY, JSON.stringify([...set]));
+    if (set.size === 0) localStorage.removeItem(key);
+    else localStorage.setItem(key, JSON.stringify([...set]));
   } catch {
     /* stockage plein ou indisponible */
   }
@@ -60,9 +68,11 @@ export function useSettings() {
   const [syncError, setSyncError] = useState(null);
 
   const settingsRef = useRef(settings);
-  const dirtyKeysRef = useRef(new Set(readDirty()));
+  const activeUserIdRef = useRef(null);
+  const dirtyKeysRef = useRef(new Set());
   const saveQueueRef = useRef(Promise.resolve());
   const privateDirtyRef = useRef(false);
+  const privateDirtyUserIdRef = useRef(null);
   const timerRef = useRef(null);
   const retryTimerRef = useRef(null);
   const attemptRef = useRef(0);
@@ -86,7 +96,7 @@ export function useSettings() {
     return () => window.removeEventListener(SETTINGS_EVENT, onChange);
   }, []);
 
-  const syncToCloud = useCallback(async (settingsSnapshot) => {
+  const syncToCloud = useCallback(async (settingsSnapshot, expectedUserId) => {
     try {
       const {
         data: { session },
@@ -98,17 +108,24 @@ export function useSettings() {
       }
 
       // Pas connecté : réglages locaux uniquement (ce n'est pas une erreur).
-      if (!session?.user) return { ok: true, localOnly: true };
+      if (!session?.user || session.user.id !== expectedUserId) {
+        return { ok: true, localOnly: true };
+      }
 
       const userId = session.user.id;
       const current = settingsSnapshot || { ...settingsRef.current };
 
-      if (privateDirtyRef.current) {
+      if (
+        privateDirtyRef.current &&
+        privateDirtyUserIdRef.current === userId
+      ) {
         privateDirtyRef.current = false;
         try {
           await syncPrivateProfile(userId, !!current.private_profile);
         } catch (e) {
-          privateDirtyRef.current = true;
+          if (privateDirtyUserIdRef.current === userId) {
+            privateDirtyRef.current = true;
+          }
           throw e;
         }
       }
@@ -153,14 +170,26 @@ export function useSettings() {
 
     const waiters = waitersRef.current;
     waitersRef.current = [];
+    const userIdSnapshot = activeUserIdRef.current;
     const keysSnapshot = [...dirtyKeysRef.current];
     const settingsSnapshot = { ...settingsRef.current };
+
+    if (!userIdSnapshot) {
+      setSyncStatus("local");
+      const result = { ok: true, localOnly: true };
+      waiters.forEach((resolve) => resolve(result));
+      return Promise.resolve(result);
+    }
 
     setSyncStatus("saving");
 
     const task = saveQueueRef.current
-      .then(() => syncToCloud(settingsSnapshot))
+      .then(() => syncToCloud(settingsSnapshot, userIdSnapshot))
       .then((res) => {
+      if (activeUserIdRef.current !== userIdSnapshot) {
+        return { ok: true, localOnly: true };
+      }
+
       if (res?.ok && !res.localOnly) {
         // Ne retire une clé que si elle n'a pas changé pendant l'envoi.
         for (const key of keysSnapshot) {
@@ -171,7 +200,7 @@ export function useSettings() {
             dirtyKeysRef.current.delete(key);
           }
         }
-        writeDirty(dirtyKeysRef.current);
+        writeDirty(dirtyKeysRef.current, userIdSnapshot);
         attemptRef.current = 0;
         setSyncError(null);
         // De nouveaux changements sont arrivés pendant l'envoi : un autre envoi est prévu.
@@ -256,6 +285,9 @@ export function useSettings() {
         }
 
         if (session?.user && active) {
+          activeUserIdRef.current = session.user.id;
+          dirtyKeysRef.current = new Set(readDirty(session.user.id));
+          setSyncStatus(dirtyKeysRef.current.size > 0 ? "pending" : "synced");
           await loadCloud(session.user.id);
           // Rejoue ce qui était resté en attente avant la fermeture de l'app.
           if (active && dirtyKeysRef.current.size > 0) void flushRef.current();
@@ -271,7 +303,20 @@ export function useSettings() {
 
     const { data: authListener } = supabase.auth.onAuthStateChange(
       (event, session) => {
+        if (event === "SIGNED_OUT") {
+          activeUserIdRef.current = null;
+          dirtyKeysRef.current = new Set();
+          setSyncStatus("local");
+          setSyncError(null);
+          return;
+        }
+
         if (event !== "SIGNED_IN" || !session?.user) return;
+
+        activeUserIdRef.current = session.user.id;
+        dirtyKeysRef.current = new Set(readDirty(session.user.id));
+        setSyncStatus(dirtyKeysRef.current.size > 0 ? "pending" : "synced");
+
         setTimeout(() => {
           if (!active) return;
           loadCloud(session.user.id)
@@ -307,16 +352,24 @@ export function useSettings() {
     settingsRef.current = next;
 
     // Les réglages propres à l'appareil ne sont jamais « en attente » de synchro.
+    const userId = activeUserIdRef.current;
     const cloudKeys = keys.filter((k) => !LOCAL_ONLY_KEYS.has(k));
-    for (const key of cloudKeys) dirtyKeysRef.current.add(key);
-    writeDirty(dirtyKeysRef.current);
-    if (keys.includes("private_profile")) privateDirtyRef.current = true;
+
+    if (userId) {
+      for (const key of cloudKeys) dirtyKeysRef.current.add(key);
+      writeDirty(dirtyKeysRef.current, userId);
+
+      if (keys.includes("private_profile")) {
+        privateDirtyRef.current = true;
+        privateDirtyUserIdRef.current = userId;
+      }
+    }
 
     setSettings(next);
     saveLocalSettings(next);
     broadcastSettings(next);
 
-    if (cloudKeys.length === 0) {
+    if (cloudKeys.length === 0 || !userId) {
       return Promise.resolve({ ok: true, localOnly: true });
     }
 
