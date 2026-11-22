@@ -213,6 +213,7 @@ let workingKeyMode = null;
 
 // custom_theme : colonne facultative. On évite de la réécrire inutilement.
 let customThemeColumnMissing = false;
+let lastSavedCustomThemeUserId = null;
 let lastSavedCustomTheme;
 
 function buildPayload(settings) {
@@ -296,7 +297,10 @@ export async function saveCloudSettings(userId, settings) {
   // Réécrit uniquement si la valeur a changé depuis le dernier envoi réussi.
   if (settings && "customTheme" in settings && !customThemeColumnMissing) {
     const json = JSON.stringify(settings.customTheme ?? null);
-    if (json !== lastSavedCustomTheme) {
+    if (
+      userId !== lastSavedCustomThemeUserId ||
+      json !== lastSavedCustomTheme
+    ) {
       const column = usedMode === "id" ? "id" : "user_id";
       const { error } = await supabase
         .from("user_settings")
@@ -310,6 +314,7 @@ export async function saveCloudSettings(userId, settings) {
           error.message
         );
       } else {
+        lastSavedCustomThemeUserId = userId;
         lastSavedCustomTheme = json;
       }
     }
