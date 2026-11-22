@@ -104,7 +104,7 @@ export function useSettings() {
       } = await supabase.auth.getSession();
 
       if (authError) {
-        return { ok: false, localOnly: true, error: authError.message };
+        return { ok: false, localOnly: false, error: authError.message };
       }
 
       // Pas connecté : réglages locaux uniquement (ce n'est pas une erreur).
@@ -134,7 +134,7 @@ export function useSettings() {
       if (!result?.ok) {
         return {
           ok: false,
-          localOnly: true,
+          localOnly: false,
           error: result?.error || "Échec de synchronisation.",
         };
       }
@@ -143,7 +143,7 @@ export function useSettings() {
       console.warn("[useSettings] Synchronisation :", error);
       return {
         ok: false,
-        localOnly: true,
+        localOnly: false,
         error:
           error instanceof Error
             ? error.message
