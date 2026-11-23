@@ -370,9 +370,14 @@ public class BaaroUpdaterPlugin extends Plugin {
     @PluginMethod
     public void installApk(PluginCall call) {
         String relativePath = call.getString("path");
+        String expectedSha256 = call.getString("sha256");
 
         if (relativePath == null || relativePath.trim().isEmpty()) {
             call.reject("Chemin APK manquant.");
+            return;
+        }
+        if (expectedSha256 == null || !expectedSha256.matches("(?i)[a-f0-9]{64}")) {
+            call.reject("Empreinte SHA-256 invalide.");
             return;
         }
 
@@ -393,6 +398,36 @@ public class BaaroUpdaterPlugin extends Plugin {
                 call.reject("Fichier APK invalide.");
                 return;
             }
+
+            String filename = apk.getName();
+            if (!filename.matches("baaro-v\\d+\\.\\d+\\.\\d+\\.apk")) {
+                call.reject("Nom de fichier APK non autorisé.");
+                return;
+            }
+
+            long apkLength = apk.length();
+            if (apkLength <= 0 || apkLength > MAX_APK_BYTES) {
+                call.reject("Taille du fichier APK invalide.");
+                return;
+            }
+
+            MessageDigest installDigest = MessageDigest.getInstance("SHA-256");
+            try (InputStream input = new BufferedInputStream(
+                    new java.io.FileInputStream(apk))) {
+                byte[] buffer = new byte[BUFFER_BYTES];
+                int count;
+                while ((count = input.read(buffer)) != -1) {
+                    installDigest.update(buffer, 0, count);
+                }
+            }
+
+            byte[] actualHash = installDigest.digest();
+            byte[] expectedHash = hexToBytes(expectedSha256);
+            if (!MessageDigest.isEqual(actualHash, expectedHash)) {
+                call.reject("SHA-256 incorrect avant installation : APK rejeté.");
+                return;
+            }
+
             if (Build.VERSION.SDK_INT >= 26
                 && !getContext().getPackageManager().canRequestPackageInstalls()) {
                 call.reject("Autorisation Android d’installation manquante.");

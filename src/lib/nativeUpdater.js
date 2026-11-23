@@ -269,7 +269,10 @@ export async function checkUpdateNative() {
     savePendingUpdate(manifest.version);
 
     try {
-      await BaaroUpdater.installApk({ path: download.path });
+      await BaaroUpdater.installApk({
+        path: download.path,
+        sha256: manifest.sha256
+      });
     } catch (installError) {
       clearPendingUpdate();
       throw installError;
