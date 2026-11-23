@@ -1047,8 +1047,10 @@ export function VideosTab({ onRewardPoints, onExit, onOpenProfile }) {
 
     if (visibleVideos.length === 0 || activeIndex < 0) return;
 
-    if (activeIndex >= visibleVideos.length - 4) loadMore();
-  }, [activeIndex, visibleVideos.length, hasMore, loadingMore, loading, loadMore, mode, friends.length, friendsLoading, videos.length]);
+    // En économie de données, retarder le chargement de la page suivante.
+    const loadAhead = dataSaverActive ? 2 : 4;
+    if (activeIndex >= visibleVideos.length - loadAhead) loadMore();
+  }, [activeIndex, visibleVideos.length, hasMore, loadingMore, loading, loadMore, mode, friends.length, friendsLoading, videos.length, dataSaverActive]);
 
   if (loading) {
     return <FeedLoading />;
