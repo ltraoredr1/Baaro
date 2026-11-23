@@ -421,6 +421,30 @@ public class BaaroUpdaterPlugin extends Plugin {
                 return;
             }
 
+            // Vérifier l'identité réelle de l'APK avant son installation.
+            android.content.pm.PackageInfo archiveInfo =
+                getContext().getPackageManager().getPackageArchiveInfo(
+                    apk.getAbsolutePath(),
+                    0
+                );
+
+            if (archiveInfo == null
+                || !"com.baaro.app".equals(archiveInfo.packageName)) {
+                call.reject("Identifiant Android de l'APK incorrect.");
+                return;
+            }
+
+            String expectedVersion = filename.substring(
+                "baaro-v".length(),
+                filename.length() - ".apk".length()
+            );
+
+            if (archiveInfo.versionName == null
+                || !expectedVersion.equals(archiveInfo.versionName)) {
+                call.reject("Version interne de l'APK incorrecte.");
+                return;
+            }
+
             MessageDigest installDigest = MessageDigest.getInstance("SHA-256");
             try (InputStream input = new BufferedInputStream(
                     new java.io.FileInputStream(apk))) {
