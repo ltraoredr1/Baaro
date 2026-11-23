@@ -291,6 +291,13 @@ export default async function handler(req, res) {
       });
     }
 
+    // La RPC a réservé les fonds : mémoriser immédiatement l'identifiant.
+    // Toute erreur de lecture passe ensuite par le mécanisme d'annulation.
+    if (!payoutId) {
+      throw new Error("Payout ID manquant après réservation.");
+    }
+    reservedPayoutId = payoutId;
+
     const { data: payout, error: readError } = await admin
       .from("economy_payouts")
       .select(
@@ -301,12 +308,12 @@ export default async function handler(req, res) {
       .single();
 
     if (readError || !payout) {
-      return json(res, 500, {
-        ok: false,
-        error: "Demande de retrait introuvable après réservation.",
+      console.error("[payouts] reserved payout read failed", {
+        payout_id: payoutId,
+        error: readError?.message || "Payout not found",
       });
+      throw new Error("Demande de retrait introuvable après réservation.");
     }
-    reservedPayoutId = payout.id;
 
     const transfer = await startCinetPayTransfer({ payout, destination });
     if (!transfer.configured) {

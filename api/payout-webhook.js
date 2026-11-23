@@ -132,9 +132,24 @@ export default async function handler(req, res) {
     return json(res, 500, { ok: false, error: "Configuration serveur." });
   }
 
-  const payoutRef = String(
-    transfer.client_transaction_id || clientTransactionId
-  );
+  const verifiedClientRef = String(
+    transfer.client_transaction_id || ""
+  ).trim();
+
+  // Empêche une réponse fournisseur de pointer vers un autre payout.
+  if (
+    clientTransactionId &&
+    verifiedClientRef &&
+    verifiedClientRef !== clientTransactionId
+  ) {
+    console.error("[payout-webhook] client reference mismatch");
+    return json(res, 400, {
+      ok: false,
+      error: "Référence fournisseur incohérente.",
+    });
+  }
+
+  const payoutRef = verifiedClientRef || clientTransactionId;
   const payoutId = payoutRef.startsWith("payout_")
     ? payoutRef.slice("payout_".length)
     : null;
@@ -174,19 +189,47 @@ export default async function handler(req, res) {
     return json(res, 400, { ok: false, error: "Montant inattendu." });
   }
 
-  const status = String(transfer.treatment_status || "").toUpperCase();
-  const validFlag = String(transfer.transfer_valid || "").toUpperCase();
+  const status = String(transfer.treatment_status || "")
+    .trim()
+    .toUpperCase();
 
-  if (
-    ["VAL", "SUCCESS", "SUCCESSFUL"].includes(status) ||
-    validFlag === "Y"
-  ) {
+  const providerTransactionId = String(
+    transfer.transaction_id || ""
+  ).trim();
+
+  // Si CinetPay fournit une devise, elle doit correspondre au payout.
+  const providerCurrency = String(transfer.currency || "")
+    .trim()
+    .toUpperCase();
+
+  if (providerCurrency && providerCurrency !== "XOF") {
+    console.error("[payout-webhook] currency mismatch", {
+      payout_id: payout.id,
+      currency: providerCurrency,
+    });
+    return json(res, 400, {
+      ok: false,
+      error: "Devise fournisseur inattendue.",
+    });
+  }
+
+  // Seul VAL est un statut final de succès documenté par CinetPay.
+  // transfer_valid ne constitue pas à lui seul une preuve de paiement.
+  if (status === "VAL") {
+    if (!providerTransactionId) {
+      console.error("[payout-webhook] missing provider transaction ID", {
+        payout_id: payout.id,
+      });
+      return json(res, 502, {
+        ok: false,
+        error: "Référence de transaction fournisseur manquante.",
+      });
+    }
+
     const { error } = await admin.rpc("complete_economy_payout", {
       p_payout_id: payout.id,
       p_provider: "cinetpay",
-      p_provider_reference: String(
-        transfer.transaction_id || payoutRef
-      ),
+      p_provider_reference: providerTransactionId,
     });
     if (error) {
       console.error("[payout-webhook] complete rpc", error.message);
@@ -195,7 +238,7 @@ export default async function handler(req, res) {
     return json(res, 200, { ok: true, status: "paid" });
   }
 
-  if (["REJ", "REJECTED", "CANCELLED", "FAILED", "FAIL"].includes(status)) {
+  if (status === "REJ") {
     const reason = String(transfer.comment || status).slice(0, 500);
     const { error } = await admin.rpc("cancel_economy_payout", {
       p_payout_id: payout.id,
@@ -213,7 +256,7 @@ export default async function handler(req, res) {
     .update({
       status: "processing",
       provider: "cinetpay",
-      provider_reference: String(transfer.transaction_id || payoutRef),
+      provider_reference: providerTransactionId || payoutRef,
     })
     .eq("id", payout.id)
     .in("status", ["requested", "processing", "unknown"]);
