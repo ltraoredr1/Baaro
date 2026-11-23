@@ -244,6 +244,7 @@ public class BaaroUpdaterPlugin extends Plugin {
                     }
 
                     if (!validRange) {
+                        keepPartialOnFailure = false;
                         connection.disconnect();
                         throw new IOException("Réponse Content-Range invalide.");
                     }
