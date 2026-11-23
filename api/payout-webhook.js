@@ -208,7 +208,7 @@ export default async function handler(req, res) {
     return json(res, 200, { ok: true, status: "cancelled" });
   }
 
-  await admin
+  const { error: updateError } = await admin
     .from("economy_payouts")
     .update({
       status: "processing",
@@ -216,7 +216,18 @@ export default async function handler(req, res) {
       provider_reference: String(transfer.transaction_id || payoutRef),
     })
     .eq("id", payout.id)
-    .in("status", ["pending", "processing"]);
+    .in("status", ["requested", "processing", "unknown"]);
+
+  if (updateError) {
+    console.error("[payout-webhook] processing update failed", {
+      payout_id: payout.id,
+      error: updateError.message
+    });
+    return json(res, 500, {
+      ok: false,
+      error: "Enregistrement du statut impossible."
+    });
+  }
 
   return json(res, 200, { ok: true, status: "processing" });
 }

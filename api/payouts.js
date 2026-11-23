@@ -144,7 +144,12 @@ async function startCinetPayTransfer({ payout, destination }) {
       "[payouts] CinetPay network error",
       err?.message || "fetch failed"
     );
-    throw clientError("Service de retrait temporairement indisponible.", 502);
+    const error = clientError(
+      "Résultat fournisseur incertain. Réconciliation nécessaire.",
+      202
+    );
+    error.ambiguous = true;
+    throw error;
   }
 
   const result = await response.json().catch(() => ({}));
@@ -156,6 +161,18 @@ async function startCinetPayTransfer({ payout, destination }) {
     !item ||
     Number(item.code) !== 0
   ) {
+    const ambiguous =
+      response.status >= 500 ||
+      (response.ok && Number(result?.code) === 0 && !item);
+
+    if (ambiguous) {
+      const error = clientError(
+        "Résultat fournisseur incertain. Réconciliation nécessaire.",
+        202
+      );
+      error.ambiguous = true;
+      throw error;
+    }
     console.error("[payouts] CinetPay transfer rejected", {
       http: response.status,
       code: result?.code,
@@ -223,10 +240,14 @@ export default async function handler(req, res) {
       return json(res, 400, { ok: false, error: "Méthode de retrait invalide." });
     }
 
-    const destination =
-      method === "mobile_money"
-        ? parseDestination(body.destination)
-        : { prefix: "", phone: "" };
+    if (method === "bank_transfer") {
+      return json(res, 501, {
+        ok: false,
+        error: "Le virement bancaire sera disponible après validation du bénéficiaire bancaire."
+      });
+    }
+
+    const destination = parseDestination(body.destination);
 
     const token = String(req.headers.authorization || "").replace(
       /^Bearer\s+/i,
@@ -252,8 +273,7 @@ export default async function handler(req, res) {
       });
     }
 
-    const destinationToken =
-      method === "mobile_money" ? JSON.stringify(destination) : "{}";
+    const destinationToken = JSON.stringify(destination);
 
     const { data: payoutId, error: requestError } = await userClient.rpc(
       "request_economy_payout",
@@ -288,25 +308,6 @@ export default async function handler(req, res) {
     }
     reservedPayoutId = payout.id;
 
-    if (method === "bank_transfer") {
-      await admin
-        .from("economy_payouts")
-        .update({
-          status: "processing",
-          provider: "manual_bank",
-          provider_reference: `manual_${payout.id}`,
-        })
-        .eq("id", payout.id)
-        .eq("status", "pending");
-
-      return json(res, 202, {
-        ok: true,
-        payout_id: payout.id,
-        status: "processing",
-        message: "Virement bancaire placé en traitement sécurisé.",
-      });
-    }
-
     const transfer = await startCinetPayTransfer({ payout, destination });
     if (!transfer.configured) {
       await admin.rpc("cancel_economy_payout", {
@@ -320,7 +321,7 @@ export default async function handler(req, res) {
       });
     }
 
-    await admin
+    const { data: markedPayout, error: markError } = await admin
       .from("economy_payouts")
       .update({
         status: "processing",
@@ -328,7 +329,25 @@ export default async function handler(req, res) {
         provider_reference: transfer.transaction_id,
       })
       .eq("id", payout.id)
-      .eq("status", "pending");
+      .eq("status", "requested")
+      .select("id")
+      .maybeSingle();
+
+    if (markError || !markedPayout) {
+      // Le fournisseur a accepté la demande : ne jamais libérer
+      // les fonds à cause d'un échec d'écriture local.
+      console.error("[payouts] processing state update failed", {
+        payout_id: payout.id,
+        error: markError?.message || "state conflict",
+      });
+
+      return json(res, 202, {
+        ok: true,
+        payout_id: payout.id,
+        status: "unknown",
+        message: "Transfert initié. Confirmation fournisseur en attente."
+      });
+    }
 
     return json(res, 202, {
       ok: true,
@@ -338,14 +357,48 @@ export default async function handler(req, res) {
       transaction_id: transfer.transaction_id,
     });
   } catch (e) {
+    if (reservedPayoutId && e?.ambiguous) {
+      const { error: unknownError } = await admin
+        .from("economy_payouts")
+        .update({
+          status: "unknown",
+          failure_reason: "PROVIDER_RESULT_UNKNOWN"
+        })
+        .eq("id", reservedPayoutId)
+        .in("status", ["requested", "processing"]);
+
+      if (unknownError) {
+        console.error("[payouts] unknown state update failed", {
+          payout_id: reservedPayoutId,
+          error: unknownError.message
+        });
+      }
+
+      return json(res, 202, {
+        ok: true,
+        payout_id: reservedPayoutId,
+        status: "unknown",
+        message: "Résultat fournisseur incertain. Ne relancez pas le retrait."
+      });
+    }
+
     if (reservedPayoutId) {
-      try {
-        await admin.rpc("cancel_economy_payout", {
+      const { error: cancelError } = await admin.rpc(
+        "cancel_economy_payout",
+        {
           p_payout_id: reservedPayoutId,
           p_reason: "PAYOUT_PROVIDER_FAILURE",
+        }
+      );
+
+      if (cancelError) {
+        console.error("[payouts] cancellation failed", {
+          payout_id: reservedPayoutId,
+          error: cancelError.message
         });
-      } catch {}
+      }
     }
+
     if (e?.safe) {
       return json(res, e.status || 400, { ok: false, error: e.message });
     }
