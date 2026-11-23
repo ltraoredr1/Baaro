@@ -3,39 +3,6 @@ import { supabase } from "../../../supabaseClient.js";
 import { useToast } from "../../../components/ToastContext.jsx";
 import { API_BASE } from "../../../config.js";
 
-async function notifyVideoComment(videoId, commentId) {
-  if (!videoId) return;
-  try {
-    const {
-      data: { session },
-      error: sessionError,
-    } = await supabase.auth.getSession();
-    if (sessionError || !session?.access_token) return;
-
-    const response = await fetch(`${API_BASE}/api/social`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${session.access_token}`,
-      },
-      body: JSON.stringify({
-        action: "notify_interaction",
-        content_type: "video",
-        interaction_type: "comment",
-        target_id: videoId,
-        comment_id: commentId,
-      }),
-    });
-
-    if (!response.ok) {
-      const result = await response.json().catch(() => ({}));
-      console.warn("[video-comment-notification]", result.error || response.status);
-    }
-  } catch (error) {
-    console.warn("[video-comment-notification]", error?.message || error);
-  }
-}
-
 /**
  * Commentaires vidéo + réponse en vidéo.
  * onReplyWithVideo(comment, videoId) → ouvre le composeur en mode reply.
@@ -73,20 +40,34 @@ export function useVideoComments({ user, setVideos, onRewardPoints, onReplyWithV
     const text = newComment.trim();
 
     try {
-      const { data, error } = await supabase
-        .from("video_comments")
-        .insert({
-          video_id: videoId,
-          author_id: user.id,
-          content: text,
-        })
-        .select("id")
-        .single();
+      const {
+        data: { session },
+        error: sessionError,
+      } = await supabase.auth.getSession();
 
-      if (error) throw error;
+      if (sessionError || !session?.access_token) {
+        throw new Error("Session expirée. Reconnectez-vous pour commenter.");
+      }
+
+      const response = await fetch(`${API_BASE}/api/social`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          action: "comment",
+          video_id: videoId,
+          text,
+        }),
+      });
+
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.ok || !result.comment_id) {
+        throw new Error(result.error || "Impossible d'enregistrer le commentaire.");
+      }
 
       setNewComment("");
-      await notifyVideoComment(videoId, data?.id);
       await openComments(videoId);
 
       setVideos((prev) =>
