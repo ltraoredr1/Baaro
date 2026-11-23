@@ -315,7 +315,7 @@ export default function VideoCard({
           }}
           data-id={id}
           src={shouldLoad ? (video.video_url || video.media_url) : undefined}
-          poster={video.thumbnail_url || undefined}
+          poster={video.thumbnail_url ? feedImageUrl(video.thumbnail_url) : undefined}
           className="absolute inset-0 h-full w-full object-cover"
           playsInline
           crossOrigin="anonymous"
