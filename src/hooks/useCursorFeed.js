@@ -1,12 +1,13 @@
 import { useState, useCallback, useRef } from "react";
 import { fetchFeedPage } from "../lib/feedPagination.js";
-import { mergeLatestFeedRows } from "../lib/feedState.js";
+import { dedupeFeedRows, mergeFeedRows, mergeLatestFeedRows } from "../lib/feedState.js";
 
 /**
  * Pagination du fil par curseur.
  * - posts : lignes brutes Supabase (à formater côté composant)
  * - setPosts : pour les mises à jour optimistes (reposts, commentaires, etc.)
  * - reload({ silent }) : recharge la première page
+ * - refreshLatest() : ajoute les nouveautés sans perdre les pages chargées
  * - loadMore() : charge la page suivante
  */
 export function useCursorFeed({ onError } = {}) {
@@ -17,63 +18,84 @@ export function useCursorFeed({ onError } = {}) {
   const [error, setError] = useState(null);
 
   const cursorRef = useRef(null);
-  const busyRef = useRef(false);
+  const generationRef = useRef(0);
+  const refreshVersionRef = useRef(0);
+  const loadMoreBusyRef = useRef(false);
   const onErrorRef = useRef(onError);
   onErrorRef.current = onError;
 
   const load = useCallback(async ({ reset = false, silent = false } = {}) => {
-    if (busyRef.current) return null;
-    if (!reset && !cursorRef.current) return null;
+    // Un reset invalide les anciennes requêtes de pagination. Leur réponse
+    // ne pourra donc pas écraser le nouveau fil si elle arrive en retard.
+    const generation = reset ? ++generationRef.current : generationRef.current;
+    if (!reset && (loadMoreBusyRef.current || !cursorRef.current)) return null;
 
-    busyRef.current = true;
+    const requestedCursor = reset ? null : cursorRef.current;
+    if (!reset) loadMoreBusyRef.current = true;
+
     setError(null);
     if (reset && !silent) setLoading(true);
     if (!reset) setLoadingMore(true);
 
     try {
-      const { rows, nextCursor } = await fetchFeedPage({
-        cursor: reset ? null : cursorRef.current,
+      const { rows = [], nextCursor = null } = await fetchFeedPage({
+        cursor: requestedCursor,
       });
-      setPosts((prev) => (reset ? rows : [...prev, ...rows]));
+
+      if (generation !== generationRef.current) return null;
+      if (!reset && cursorRef.current !== requestedCursor) return null;
+
+      if (reset) {
+        setPosts(dedupeFeedRows(rows));
+      } else {
+        setPosts((previous) => mergeFeedRows(previous, rows));
+      }
       cursorRef.current = nextCursor;
       setHasMore(Boolean(nextCursor));
       return rows;
     } catch (e) {
-      onErrorRef.current?.(e);
-      setError(e);
-      if (reset) {
-        if (!silent) setPosts([]);
-        setHasMore(false);
+      if (generation === generationRef.current) {
+        onErrorRef.current?.(e);
+        setError(e);
       }
+      // En cas d'échec du reset, conserver le fil et son curseur précédents.
       return null;
     } finally {
-      busyRef.current = false;
-      setLoading(false);
-      setLoadingMore(false);
+      if (!reset) loadMoreBusyRef.current = false;
+      if (generation === generationRef.current) {
+        if (reset) setLoading(false);
+        setLoadingMore(false);
+      }
     }
   }, []);
 
-  // Recharge la première page sans perdre les pages déjà parcourues.
-  // Le curseur existant est conservé afin que le prochain loadMore ne répète
-  // pas les publications qui étaient déjà chargées.
+  // Charge les nouveautés en parallèle d'une pagination éventuelle, sans
+  // modifier le curseur des pages déjà parcourues.
   const refreshLatest = useCallback(async () => {
-    if (busyRef.current) return null;
-    busyRef.current = true;
+    const generation = generationRef.current;
+    const refreshVersion = ++refreshVersionRef.current;
     setError(null);
+
     try {
-      const { rows, nextCursor } = await fetchFeedPage({ cursor: null });
-      setPosts((previous) => {
-        return mergeLatestFeedRows(previous, rows);
-      });
+      const { rows = [], nextCursor = null } = await fetchFeedPage({ cursor: null });
+      if (
+        generation !== generationRef.current ||
+        refreshVersion !== refreshVersionRef.current
+      ) return null;
+
+      setPosts((previous) => mergeLatestFeedRows(previous, rows));
       if (!cursorRef.current) cursorRef.current = nextCursor;
       setHasMore(Boolean(cursorRef.current));
       return rows;
     } catch (e) {
-      onErrorRef.current?.(e);
-      setError(e);
+      if (
+        generation === generationRef.current &&
+        refreshVersion === refreshVersionRef.current
+      ) {
+        onErrorRef.current?.(e);
+        setError(e);
+      }
       return null;
-    } finally {
-      busyRef.current = false;
     }
   }, []);
 

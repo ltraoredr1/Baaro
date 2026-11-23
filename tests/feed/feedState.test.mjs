@@ -1,6 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { attachRepostCounts, mergeLatestFeedRows } from "../../src/lib/feedState.js";
+import {
+  attachRepostCounts,
+  dedupeFeedRows,
+  mergeFeedRows,
+  mergeLatestFeedRows,
+} from "../../src/lib/feedState.js";
 import { buildInteractionMap } from "../../src/lib/feedInteractionState.js";
 
 test("fusionne les nouveaux posts en supprimant les doublons", () => {
@@ -10,6 +15,37 @@ test("fusionne les nouveaux posts en supprimant les doublons", () => {
     { id: "new" },
     { id: "same", text: "version récente" },
     { id: "old" },
+  ]);
+});
+
+test("déduplique une page en conservant la première occurrence", () => {
+  const rows = [
+    { id: "p1", text: "première" },
+    { id: "p1", text: "doublon" },
+    { text: "sans identifiant" },
+    { text: "sans identifiant non plus" },
+  ];
+  assert.deepEqual(dedupeFeedRows(rows), [
+    { id: "p1", text: "première" },
+    { text: "sans identifiant" },
+    { text: "sans identifiant non plus" },
+  ]);
+});
+
+test("fusionne une page suivante sans dupliquer et actualise les posts chevauchants", () => {
+  const previous = [
+    { id: "p1", text: "ancienne valeur" },
+    { id: "p2", text: "à conserver" },
+  ];
+  const incoming = [
+    { id: "p1", text: "valeur actualisée" },
+    { id: "p3", text: "nouveau post" },
+    { id: "p3", text: "doublon de page" },
+  ];
+  assert.deepEqual(mergeFeedRows(previous, incoming), [
+    { id: "p1", text: "valeur actualisée" },
+    { id: "p2", text: "à conserver" },
+    { id: "p3", text: "nouveau post" },
   ]);
 });
 
@@ -61,7 +97,6 @@ test("ignore les lignes d’interaction sans post_id", () => {
   const map = buildInteractionMap({ likes: [{ user_id: "user-1" }], shares: [{}] });
   assert.equal(map.size, 0);
 });
-
 
 test("construit les compteurs de partages agrégés sans compter une ligne comme un partage", () => {
   const map = buildInteractionMap({
