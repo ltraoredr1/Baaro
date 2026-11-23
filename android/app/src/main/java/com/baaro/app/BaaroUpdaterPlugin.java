@@ -119,6 +119,17 @@ public class BaaroUpdaterPlugin extends Plugin {
             throw new IOException("Chemin de mise à jour invalide.");
         }
 
+        // Récupérer une sauvegarde laissée par un arrêt brutal du processus.
+        if (backup.exists()) {
+            if (apk.exists()) {
+                if (!backup.delete()) {
+                    throw new IOException("Nettoyage de la sauvegarde APK impossible.");
+                }
+            } else if (!backup.renameTo(apk)) {
+                throw new IOException("Restauration de la sauvegarde APK impossible.");
+            }
+        }
+
         long offset = partial.isFile() ? partial.length() : 0L;
         if (offset > MAX_APK_BYTES) {
             if (!partial.delete()) throw new IOException("Nettoyage du téléchargement invalide impossible.");
