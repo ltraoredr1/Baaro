@@ -98,6 +98,26 @@ export default defineConfig(({ mode }) => ({
             },
           },
 
+          // Images externes (Cloudflare R2 et autres domaines).
+          // Cache sans jamais mettre les vidéos ou audios en cache.
+          {
+            urlPattern: ({ request, url, sameOrigin }) =>
+              !sameOrigin &&
+              request.destination === 'image' &&
+              (url.protocol === 'https:' || url.protocol === 'http:'),
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'baaro-external-images-v1',
+              expiration: {
+                maxEntries: 250,
+                maxAgeSeconds: 60 * 60 * 24 * 14,
+              },
+              cacheableResponse: {
+                statuses: [0, 200],
+              },
+            },
+          },
+
           // Polices Google (si utilisées) : feuilles de style rafraîchies en
           // arrière-plan, fichiers de police gardés un an.
           {
