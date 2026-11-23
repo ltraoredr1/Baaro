@@ -123,12 +123,16 @@ export function VideosTab({ onRewardPoints, onExit, onOpenProfile }) {
 
   const [studioFeatures, setStudioFeatures] = useState([]);
 
+  const [videoCollab, setVideoCollab] = useState(null);
+
   const creator = useVideoCreator({
     user,
     studioFeatures,
     loadVideos,
     onRewardPoints,
     soundPicker,
+    collab: videoCollab,
+    onCollabConsumed: () => setVideoCollab(null),
     filter,
     onVideoPublished: handleVideoPublished,
   });
@@ -221,6 +225,10 @@ export function VideosTab({ onRewardPoints, onExit, onOpenProfile }) {
     user,
     setVideos,
     onRewardPoints,
+    onReplyWithVideo: (payload) => {
+      setVideoCollab(payload);
+      creator.setShowUpload(true);
+    },
   });
 
   const openUpload = () => {
@@ -1237,6 +1245,7 @@ export function VideosTab({ onRewardPoints, onExit, onOpenProfile }) {
           setNewComment={commentsState.setNewComment}
           onSend={commentsState.sendComment}
           onClose={commentsState.closeComments}
+          onReplyWithVideo={commentsState.replyWithVideo}
         />
       )}
 
