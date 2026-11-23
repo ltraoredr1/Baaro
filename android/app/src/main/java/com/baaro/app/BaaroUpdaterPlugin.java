@@ -141,6 +141,7 @@ public class BaaroUpdaterPlugin extends Plugin {
 
         boolean saved = false;
         boolean keepPartialOnFailure = true;
+        boolean rangeRestarted = false;
 
         try {
             HttpURLConnection connection;
@@ -182,8 +183,25 @@ public class BaaroUpdaterPlugin extends Plugin {
 
                 if (status == 416) {
                     connection.disconnect();
-                    if (partial.exists()) partial.delete();
-                    throw new IOException("Reprise refusée par le serveur. Relance le téléchargement.");
+
+                    if (offset > 0 && !rangeRestarted) {
+                        if (partial.exists() && !partial.delete()) {
+                            throw new IOException("Impossible de réinitialiser le téléchargement APK.");
+                        }
+
+                        offset = 0L;
+                        digest = MessageDigest.getInstance("SHA-256");
+                        rangeRestarted = true;
+                        redirects = 0;
+                        currentUrl = new URL(
+                            "https://github.com/" + REPOSITORY
+                                + "/releases/download/v" + version
+                                + "/baaro-v" + version + ".apk"
+                        );
+                        continue;
+                    }
+
+                    throw new IOException("Reprise APK refusée même après redémarrage.");
                 }
 
                 if (status == HttpURLConnection.HTTP_OK && offset > 0) {
@@ -195,9 +213,28 @@ public class BaaroUpdaterPlugin extends Plugin {
                     java.util.regex.Matcher matcher = java.util.regex.Pattern
                         .compile("bytes (\\d+)-(\\d+)/(\\d+|\\*)")
                         .matcher(range == null ? "" : range);
-                    if (!matcher.matches() || Long.parseLong(matcher.group(1)) != offset) {
+
+                    boolean validRange = false;
+                    if (matcher.matches()) {
+                        long rangeStart = Long.parseLong(matcher.group(1));
+                        long rangeEnd = Long.parseLong(matcher.group(2));
+                        String rangeTotal = matcher.group(3);
+
+                        validRange = rangeStart == offset
+                            && rangeEnd >= rangeStart
+                            && ("*".equals(rangeTotal)
+                                || rangeEnd < Long.parseLong(rangeTotal));
+
+                        long responseLength = connection.getContentLengthLong();
+                        if (responseLength >= 0
+                            && responseLength != rangeEnd - rangeStart + 1L) {
+                            validRange = false;
+                        }
+                    }
+
+                    if (!validRange) {
                         connection.disconnect();
-                        throw new IOException("Réponse de reprise HTTP invalide.");
+                        throw new IOException("Réponse Content-Range invalide.");
                     }
                 } else if (status != HttpURLConnection.HTTP_OK) {
                     connection.disconnect();
