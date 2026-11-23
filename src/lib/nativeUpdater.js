@@ -7,6 +7,134 @@ const RELEASE_API =
 
 const BaaroUpdater = registerPlugin("BaaroUpdater");
 
+const PENDING_UPDATE_KEY = "baaro.pending.native.update.v1";
+let resumeListenerPromise = null;
+
+function readPendingUpdate() {
+  try {
+    const value = localStorage.getItem(PENDING_UPDATE_KEY);
+    if (!value) return null;
+    const parsed = JSON.parse(value);
+    if (
+      typeof parsed.version !== "string" ||
+      !/^\d+\.\d+\.\d+$/.test(parsed.version)
+    ) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function savePendingUpdate(version) {
+  try {
+    localStorage.setItem(
+      PENDING_UPDATE_KEY,
+      JSON.stringify({ version, createdAt: Date.now() })
+    );
+  } catch {
+    throw new Error("Impossible de mémoriser la mise à jour en attente.");
+  }
+}
+
+function clearPendingUpdate() {
+  try {
+    localStorage.removeItem(PENDING_UPDATE_KEY);
+  } catch {
+    console.warn("[BAARO Updater] Nettoyage du statut en attente impossible.");
+  }
+}
+
+function emitUpdateResult(detail) {
+  try {
+    window.dispatchEvent(
+      new CustomEvent("baaro:native-update-result", { detail })
+    );
+  } catch (error) {
+    console.warn("[BAARO Updater] Événement de résultat indisponible.", error);
+  }
+}
+
+async function verifyPendingNativeInstall() {
+  const pending = readPendingUpdate();
+  if (!pending) return null;
+
+  // Une entrée trop ancienne ne doit jamais bloquer les mises à jour.
+  if (
+    !Number.isFinite(pending.createdAt) ||
+    Date.now() - pending.createdAt > 24 * 60 * 60 * 1000
+  ) {
+    clearPendingUpdate();
+    emitUpdateResult({
+      status: "expired",
+      version: pending.version
+    });
+    return { updated: false, reason: "pending-expired" };
+  }
+
+  try {
+    const installed = await App.getInfo();
+
+    if (compareVersions(installed.version, pending.version) >= 0) {
+      clearPendingUpdate();
+
+      const result = {
+        status: "installed",
+        version: installed.version,
+        expectedVersion: pending.version
+      };
+
+      emitUpdateResult(result);
+      console.info("[BAARO Updater] Installation confirmée :", installed.version);
+
+      return {
+        updated: true,
+        version: installed.version,
+        reason: "installation-confirmed"
+      };
+    }
+
+    // Le processus d'installation a été quitté sans installer la version.
+    clearPendingUpdate();
+
+    const result = {
+      status: "cancelled",
+      installedVersion: installed.version,
+      expectedVersion: pending.version
+    };
+
+    emitUpdateResult(result);
+    console.warn("[BAARO Updater] Installation non confirmée :", result);
+
+    return {
+      updated: false,
+      reason: "installation-not-confirmed",
+      version: pending.version
+    };
+  } catch (error) {
+    console.warn("[BAARO Updater] Vérification après installation impossible.", error);
+    return null;
+  }
+}
+
+async function ensureNativeResumeListener() {
+  if (!resumeListenerPromise) {
+    resumeListenerPromise = App.addListener(
+      "appStateChange",
+      ({ isActive }) => {
+        if (isActive) {
+          void verifyPendingNativeInstall();
+        }
+      }
+    ).catch((error) => {
+      resumeListenerPromise = null;
+      console.warn("[BAARO Updater] Listener de reprise indisponible.", error);
+    });
+  }
+
+  await resumeListenerPromise;
+}
+
+
 function compareVersions(a, b) {
   const parse = (v) => {
     if (typeof v !== "string" || !/^\d+\.\d+\.\d+$/.test(v)) {
@@ -93,6 +221,11 @@ export async function checkUpdateNative() {
   }
 
   try {
+    await ensureNativeResumeListener();
+
+    const pendingResult = await verifyPendingNativeInstall();
+    if (pendingResult) return pendingResult;
+
     const installed = await App.getInfo();
     const manifest = await getLatestManifest();
 
@@ -132,12 +265,21 @@ export async function checkUpdateNative() {
       throw new Error("Le téléchargement natif n’a pas fourni de fichier APK.");
     }
 
-    await BaaroUpdater.installApk({ path: download.path });
+    // Enregistrer la version AVANT de quitter BAARO vers l'installateur.
+    savePendingUpdate(manifest.version);
+
+    try {
+      await BaaroUpdater.installApk({ path: download.path });
+    } catch (installError) {
+      clearPendingUpdate();
+      throw installError;
+    }
 
     return {
       updated: false,
       installerLaunched: true,
-      version: manifest.version
+      version: manifest.version,
+      verificationPending: true
     };
 
   } catch (error) {
