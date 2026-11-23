@@ -81,7 +81,7 @@ export function useVideoComments({ user, setVideos, onRewardPoints, onReplyWithV
         ),
       );
 
-      onRewardPoints?.("comment_video", "Commentaire", data?.id);
+      onRewardPoints?.("comment_video", "Commentaire", result.comment_id);
       showPointsReward?.(2, "Commentaire");
     } catch (error) {
       console.error("[video-comment]", error);
