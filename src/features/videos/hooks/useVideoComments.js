@@ -2,7 +2,7 @@ import { useState } from "react";
 import { supabase } from "../../../supabaseClient.js";
 import { useToast } from "../../../components/ToastContext.jsx";
 
-async function notifyVideoComment(videoId) {
+async function notifyVideoComment(videoId, commentId) {
   if (!videoId) return;
   try {
     const {
@@ -21,7 +21,8 @@ async function notifyVideoComment(videoId) {
         action: "notify_interaction",
         content_type: "video",
         interaction_type: "comment",
-        content_id: videoId,
+        target_id: videoId,
+        comment_id: commentId,
       }),
     });
 
@@ -84,7 +85,7 @@ export function useVideoComments({ user, setVideos, onRewardPoints, onReplyWithV
       if (error) throw error;
 
       setNewComment("");
-      await notifyVideoComment(videoId);
+      await notifyVideoComment(videoId, data?.id);
       await openComments(videoId);
 
       setVideos((prev) =>

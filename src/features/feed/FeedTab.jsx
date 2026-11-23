@@ -199,7 +199,7 @@ async function notifyPost(post, userId, interactionType, eventId = null) {
     } = await supabase.auth.getSession();
     if (!session?.access_token) return;
 
-    await fetch("/api/social", {
+    await fetch(`${API_BASE}/api/social`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -1511,10 +1511,10 @@ export function FeedTab({
         .from("comments")
         .select("id, text, created_at, author_id, profiles:author_id (display_name, handle)")
         .eq("post_id", postId)
-        .order("created_at", { ascending: true })
+        .order("created_at", { ascending: false })
         .limit(50);
       if (error) throw error;
-      const rows = (data || []).map((c) => ({
+      const rows = (data || []).reverse().map((c) => ({
         id: c.id,
         text: c.text,
         author: c.profiles?.display_name || c.profiles?.handle || "Membre",
@@ -1649,7 +1649,7 @@ export function FeedTab({
       setPosts((prev) =>
         prev.map((p) =>
           p.id === postId
-            ? { ...p, comments_count: (p.comments_count || 0) + 1 }
+            ? { ...p, comments_count: Number(p.comments_count || 0) + 1 }
             : p
         )
       );
@@ -1678,6 +1678,7 @@ export function FeedTab({
         .from("comments")
         .delete()
         .eq("id", commentId)
+        .eq("post_id", postId)
         .eq("author_id", activeUserId);
       if (error) throw error;
       setCommentsMap((prev) => ({
@@ -1687,7 +1688,7 @@ export function FeedTab({
       setPosts((prev) =>
         prev.map((p) =>
           p.id === postId
-            ? { ...p, comments_count: Math.max(0, (p.comments_count || 1) - 1) }
+            ? { ...p, comments_count: Math.max(0, Number(p.comments_count || 0) - 1) }
             : p
         )
       );
