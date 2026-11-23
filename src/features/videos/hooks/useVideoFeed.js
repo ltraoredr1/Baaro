@@ -424,40 +424,26 @@ export function useVideoFeed() {
 
           if (!videosRef.current.some((v) => String(v.id) === String(videoId))) return;
 
-          const previous = likeRealtimeTimers.current.get(videoId);
-          if (previous) clearTimeout(previous);
+          // Le compteur est ajusté directement depuis l'événement Realtime.
+          // Évite un SELECT COUNT(*) à chaque like.
+          if (payload.eventType !== "INSERT" && payload.eventType !== "DELETE") return;
 
-          const timer = setTimeout(async () => {
-            likeRealtimeTimers.current.delete(videoId);
+          const delta = payload.eventType === "INSERT" ? 1 : -1;
 
-            try {
-              const { count, error } = await supabase
-                .from("video_likes")
-                .select("*", { count: "exact", head: true })
-                .eq("video_id", videoId);
+          setVideos((current) =>
+            current.map((video) =>
+              String(video.id) === String(videoId)
+                ? { ...video, likes: Math.max(0, (Number(video.likes) || 0) + delta) }
+                : video
+            )
+          );
 
-              if (!active || error || count === null) return;
-
-              setVideos((current) =>
-                current.map((video) =>
-                  String(video.id) === String(videoId)
-                    ? { ...video, likes: count }
-                    : video,
-                ),
-              );
-
-              if (actorId && actorId === currentUserId.current) {
-                setLikedMap((current) => ({
-                  ...current,
-                  [videoId]: payload.eventType !== "DELETE",
-                }));
-              }
-            } catch (error) {
-              console.warn("[video-likes-realtime]", error);
-            }
-          }, 180);
-
-          likeRealtimeTimers.current.set(videoId, timer);
+          if (actorId && actorId === currentUserId.current) {
+            setLikedMap((current) => ({
+              ...current,
+              [videoId]: payload.eventType === "INSERT",
+            }));
+          }
         },
       )
       .subscribe();
