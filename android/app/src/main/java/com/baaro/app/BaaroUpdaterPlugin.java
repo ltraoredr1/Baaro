@@ -165,7 +165,7 @@ public class BaaroUpdaterPlugin extends Plugin {
                 if (redirects == 0 && !isExpectedReleaseUrl(currentUrl, version)) {
                     throw new IOException("Adresse de téléchargement APK non autorisée.");
                 }
-                if (redirects > 0 && !isTrustedGitHubHost(currentUrl.getHost())) {
+                if (redirects > 0 && !isTrustedGitHubHost(currentUrl)) {
                     throw new IOException("Hôte de redirection APK non autorisé.");
                 }
 
@@ -349,11 +349,20 @@ public class BaaroUpdaterPlugin extends Plugin {
             && expectedPath.equals(url.getPath());
     }
 
-    private boolean isTrustedGitHubHost(String host) {
-        if (host == null) return false;
-        String normalized = host.toLowerCase(Locale.ROOT);
-        return "github.com".equals(normalized)
-            || normalized.endsWith(".githubusercontent.com");
+    private boolean isTrustedGitHubHost(URL url) {
+        if (url == null
+            || !"https".equalsIgnoreCase(url.getProtocol())
+            || url.getUserInfo() != null
+            || (url.getPort() != -1 && url.getPort() != 443)) {
+            return false;
+        }
+
+        String host = url.getHost().toLowerCase(Locale.ROOT);
+
+        return "github.com".equals(host)
+            || "release-assets.githubusercontent.com".equals(host)
+            || "objects.githubusercontent.com".equals(host)
+            || "github-releases.githubusercontent.com".equals(host);
     }
 
     private byte[] hexToBytes(String hex) {
