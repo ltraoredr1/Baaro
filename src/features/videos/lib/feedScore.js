@@ -43,11 +43,47 @@ export function recordWatch(video, ratio) {
   const a = p.authors[video.author_id] || [0, 0];
   p.authors[video.author_id] = [a[0] + 1, a[1] + r];
   saveProfile(p);
-  // Synchronisation serveur, silencieuse (ignorée si non connecté).
+  // Limiter les écritures réseau : une synchronisation par vidéo
+  // toutes les 10 minutes sur cet appareil.
+  const syncKey = `baaro:video-watch-sync:${video.id}`;
+  const syncAt = Date.now();
+  let shouldSync = true;
+
   try {
-    supabase.rpc("record_video_watch", { p_video_id: video.id, p_ratio: r }).then(null, () => {});
+    const lastSync = Number(localStorage.getItem(syncKey)) || 0;
+    shouldSync = syncAt - lastSync >= 10 * 60 * 1000;
+
+    if (shouldSync) {
+      localStorage.setItem(syncKey, String(syncAt));
+    }
   } catch {
-    /* hors ligne */
+    // Si le stockage est indisponible, on conserve la synchronisation.
+  }
+
+  if (!shouldSync) return;
+
+  const releaseSyncLock = () => {
+    try {
+      if (localStorage.getItem(syncKey) === String(syncAt)) {
+        localStorage.removeItem(syncKey);
+      }
+    } catch {}
+  };
+
+  try {
+    supabase
+      .rpc("record_video_watch", {
+        p_video_id: video.id,
+        p_ratio: r,
+      })
+      .then(
+        (result) => {
+          if (result?.error) releaseSyncLock();
+        },
+        releaseSyncLock
+      );
+  } catch {
+    releaseSyncLock();
   }
 }
 
