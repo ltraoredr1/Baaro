@@ -6,11 +6,12 @@ import { rankForYou, rankTrending, recordBookmarks, syncWatchHistory } from "../
 
 const PAGE_SIZE = 8;
 
-const buildVideoSelect = (withSound) => `
+const buildVideoSelect = (withSound, withMobile = true) => `
   id,
   title,
   description,
   video_url,
+  ${withMobile ? "video_mobile_url," : ""}
   thumbnail_url,
   duration,
   views,
@@ -90,10 +91,10 @@ export function useVideoFeed() {
     return () => subscription.unsubscribe();
   }, []);
 
-  const fetchPage = useCallback(async (withSound, cursor) => {
+  const fetchPage = useCallback(async (withSound, withMobile, cursor) => {
     let query = supabase
       .from("videos")
-      .select(buildVideoSelect(withSound))
+      .select(buildVideoSelect(withSound, withMobile))
       .order("created_at", { ascending: false })
       .order("id", { ascending: false })
       .limit(PAGE_SIZE);
@@ -128,10 +129,14 @@ export function useVideoFeed() {
       try {
         const cursor = reset ? null : cursorRef.current;
 
-        let { data, error } = await fetchPage(true, cursor);
+        let { data, error } = await fetchPage(true, true, cursor);
 
         if (error && isMissingColumn(error)) {
-          ({ data, error } = await fetchPage(false, cursor));
+          ({ data, error } = await fetchPage(true, false, cursor));
+        }
+
+        if (error && isMissingColumn(error)) {
+          ({ data, error } = await fetchPage(false, false, cursor));
         }
 
         if (error) throw error;
@@ -153,7 +158,7 @@ export function useVideoFeed() {
               let { data: sharedVideo, error: sharedVideoError } =
                 await supabase
                   .from("videos")
-                  .select(buildVideoSelect(true))
+                  .select(buildVideoSelect(true, true))
                   .eq("id", sharedVideoId)
                   .maybeSingle();
 
@@ -161,7 +166,7 @@ export function useVideoFeed() {
                 ({ data: sharedVideo, error: sharedVideoError } =
                   await supabase
                     .from("videos")
-                    .select(buildVideoSelect(false))
+                    .select(buildVideoSelect(false, false))
                     .eq("id", sharedVideoId)
                     .maybeSingle());
               }
@@ -364,14 +369,14 @@ export function useVideoFeed() {
             try {
               let { data, error } = await supabase
                 .from("videos")
-                .select(buildVideoSelect(true))
+                .select(buildVideoSelect(true, true))
                 .eq("id", videoId)
                 .maybeSingle();
 
               if (error && isMissingColumn(error)) {
                 ({ data, error } = await supabase
                   .from("videos")
-                  .select(buildVideoSelect(false))
+                  .select(buildVideoSelect(false, false))
                   .eq("id", videoId)
                   .maybeSingle());
               }

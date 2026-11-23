@@ -118,7 +118,7 @@ async function transcode(job, input, dir) {
   const profile = String(job.payload?.profile || "mobile");
 
   const profiles = {
-    mobile: ["720:-2", "2500k"],
+    mobile: ["720:-2", "1400k"],
     hd: ["1080:-2", "5000k"],
   };
 
@@ -142,7 +142,7 @@ async function transcode(job, input, dir) {
       "-maxrate", bitrate,
       "-bufsize", "2M",
       "-c:a", "aac",
-      "-b:a", "128k",
+      "-b:a", profile === "mobile" ? "96k" : "128k",
       "-movflags", "+faststart"
     );
   }

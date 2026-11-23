@@ -53,6 +53,7 @@ export default function VideoCard({
   hideVolumeControl = false,
   isActive = false,
   loadMode = "active",
+  dataSaver = false,
   onShowViewers,
   videoWidgetRequest = null,
   onVideoWidgetRequestHandled,
@@ -314,7 +315,7 @@ export default function VideoCard({
             else delete videoRefs.current[video.id];
           }}
           data-id={id}
-          src={shouldLoad ? (video.video_url || video.media_url) : undefined}
+          src={shouldLoad ? (dataSaver && video.video_mobile_url ? video.video_mobile_url : (video.video_url || video.media_url)) : undefined}
           poster={video.thumbnail_url ? feedImageUrl(video.thumbnail_url) : undefined}
           className="absolute inset-0 h-full w-full object-cover"
           playsInline
