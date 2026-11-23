@@ -443,17 +443,32 @@ export function useVideoFeed() {
           // Évite un SELECT COUNT(*) à chaque like.
           if (payload.eventType !== "INSERT" && payload.eventType !== "DELETE") return;
 
-          const delta = payload.eventType === "INSERT" ? 1 : -1;
+          const isOwnAction =
+            actorId &&
+            String(actorId) === String(currentUserId.current);
 
-          setVideos((current) =>
-            current.map((video) =>
-              String(video.id) === String(videoId)
-                ? { ...video, likes: Math.max(0, (Number(video.likes) || 0) + delta) }
-                : video
-            )
-          );
+          // Le compteur local est déjà modifié immédiatement
+          // lors d'un like effectué sur cet appareil.
+          // Ne pas appliquer une deuxième fois le même événement Realtime.
+          if (!isOwnAction) {
+            const delta = payload.eventType === "INSERT" ? 1 : -1;
 
-          if (actorId && actorId === currentUserId.current) {
+            setVideos((current) =>
+              current.map((video) =>
+                String(video.id) === String(videoId)
+                  ? {
+                      ...video,
+                      likes: Math.max(
+                        0,
+                        (Number(video.likes) || 0) + delta
+                      ),
+                    }
+                  : video
+              )
+            );
+          }
+
+          if (isOwnAction) {
             setLikedMap((current) => ({
               ...current,
               [videoId]: payload.eventType === "INSERT",
