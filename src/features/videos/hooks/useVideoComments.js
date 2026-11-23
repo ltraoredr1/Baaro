@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { supabase } from "../../../supabaseClient.js";
 import { useToast } from "../../../components/ToastContext.jsx";
+import { API_BASE } from "../../../config.js";
 
 async function notifyVideoComment(videoId, commentId) {
   if (!videoId) return;
@@ -11,7 +12,7 @@ async function notifyVideoComment(videoId, commentId) {
     } = await supabase.auth.getSession();
     if (sessionError || !session?.access_token) return;
 
-    const response = await fetch("/api/social", {
+    const response = await fetch(`${API_BASE}/api/social`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
