@@ -330,6 +330,19 @@ export function useVideoFeed() {
             !videosRef.current.some((v) => String(v.id) === String(videoId))
           ) return;
 
+          // UPDATE : utiliser les données déjà reçues par Realtime.
+          // Évite une requête SELECT supplémentaire pour chaque modification.
+          if (eventType === "UPDATE") {
+            setVideos((current) =>
+              current.map((video) =>
+                String(video.id) === String(videoId)
+                  ? { ...video, ...record, profiles: video.profiles }
+                  : video
+              )
+            );
+            return;
+          }
+
           const timer = setTimeout(async () => {
             realtimeTimers.current.delete(videoId);
 
