@@ -22,6 +22,8 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.security.MessageDigest;
 import java.util.Locale;
+import java.util.concurrent.atomic.AtomicBoolean;
+import android.os.StatFs;
 
 @CapacitorPlugin(name = "BaaroUpdater")
 public class BaaroUpdaterPlugin extends Plugin {
@@ -31,6 +33,7 @@ public class BaaroUpdaterPlugin extends Plugin {
     private static final int READ_TIMEOUT_MS = 45_000;
     private static final int BUFFER_BYTES = 32 * 1024;
     private static final int MAX_REDIRECTS = 5;
+    private static final AtomicBoolean DOWNLOAD_IN_PROGRESS = new AtomicBoolean(false);
 
     @PluginMethod
     public void canInstallPackages(PluginCall call) {
@@ -72,6 +75,10 @@ public class BaaroUpdaterPlugin extends Plugin {
             call.reject("Empreinte SHA-256 invalide.");
             return;
         }
+        if (!DOWNLOAD_IN_PROGRESS.compareAndSet(false, true)) {
+            call.reject("Un téléchargement APK est déjà en cours.");
+            return;
+        }
 
         Thread downloadThread = new Thread(() -> {
             try {
@@ -86,6 +93,8 @@ public class BaaroUpdaterPlugin extends Plugin {
                         : error.getMessage(),
                     error
                 );
+            } finally {
+                DOWNLOAD_IN_PROGRESS.set(false);
             }
         }, "baaro-apk-download");
         downloadThread.start();
@@ -101,24 +110,42 @@ public class BaaroUpdaterPlugin extends Plugin {
         File root = updateRoot.getCanonicalFile();
         File apk = new File(root, "baaro-v" + version + ".apk").getCanonicalFile();
         File partial = new File(root, "baaro-v" + version + ".apk.part").getCanonicalFile();
+        File backup = new File(root, "baaro-v" + version + ".apk.bak").getCanonicalFile();
         String rootPrefix = root.getPath() + File.separator;
-        if (!apk.getPath().startsWith(rootPrefix) || !partial.getPath().startsWith(rootPrefix)) {
+
+        if (!apk.getPath().startsWith(rootPrefix)
+            || !partial.getPath().startsWith(rootPrefix)
+            || !backup.getPath().startsWith(rootPrefix)) {
             throw new IOException("Chemin de mise à jour invalide.");
         }
-        if (partial.exists() && !partial.delete()) {
-            throw new IOException("Nettoyage du téléchargement précédent impossible.");
+
+        long offset = partial.isFile() ? partial.length() : 0L;
+        if (offset > MAX_APK_BYTES) {
+            if (!partial.delete()) throw new IOException("Nettoyage du téléchargement invalide impossible.");
+            offset = 0L;
         }
 
         URL currentUrl = new URL(
             "https://github.com/" + REPOSITORY + "/releases/download/v" + version
                 + "/baaro-v" + version + ".apk"
         );
+
         MessageDigest digest = MessageDigest.getInstance("SHA-256");
+        if (offset > 0) {
+            try (InputStream existing = new BufferedInputStream(new java.io.FileInputStream(partial))) {
+                byte[] prefixBuffer = new byte[BUFFER_BYTES];
+                int n;
+                while ((n = existing.read(prefixBuffer)) != -1) digest.update(prefixBuffer, 0, n);
+            }
+        }
+
         boolean saved = false;
+        boolean keepPartialOnFailure = true;
 
         try {
-            HttpURLConnection connection = null;
+            HttpURLConnection connection;
             int redirects = 0;
+
             while (true) {
                 if (!"https".equalsIgnoreCase(currentUrl.getProtocol())) {
                     throw new IOException("Redirection non HTTPS refusée.");
@@ -136,13 +163,14 @@ public class BaaroUpdaterPlugin extends Plugin {
                 connection.setReadTimeout(READ_TIMEOUT_MS);
                 connection.setRequestProperty("Accept", "application/vnd.android.package-archive");
                 connection.setRequestProperty("User-Agent", "BAARO-Android-Updater");
+                if (offset > 0) connection.setRequestProperty("Range", "bytes=" + offset + "-");
+
                 int status = connection.getResponseCode();
 
                 if (status == HttpURLConnection.HTTP_MOVED_PERM
                     || status == HttpURLConnection.HTTP_MOVED_TEMP
                     || status == HttpURLConnection.HTTP_SEE_OTHER
-                    || status == 307
-                    || status == 308) {
+                    || status == 307 || status == 308) {
                     String location = connection.getHeaderField("Location");
                     connection.disconnect();
                     if (location == null || ++redirects > MAX_REDIRECTS) {
@@ -151,7 +179,27 @@ public class BaaroUpdaterPlugin extends Plugin {
                     currentUrl = new URL(currentUrl, location);
                     continue;
                 }
-                if (status != HttpURLConnection.HTTP_OK) {
+
+                if (status == 416) {
+                    connection.disconnect();
+                    if (partial.exists()) partial.delete();
+                    throw new IOException("Reprise refusée par le serveur. Relance le téléchargement.");
+                }
+
+                if (status == HttpURLConnection.HTTP_OK && offset > 0) {
+                    // Le serveur ignore Range : on recommence proprement depuis zéro.
+                    offset = 0;
+                    digest = MessageDigest.getInstance("SHA-256");
+                } else if (status == 206 && offset > 0) {
+                    String range = connection.getHeaderField("Content-Range");
+                    java.util.regex.Matcher matcher = java.util.regex.Pattern
+                        .compile("bytes (\\d+)-(\\d+)/(\\d+|\\*)")
+                        .matcher(range == null ? "" : range);
+                    if (!matcher.matches() || Long.parseLong(matcher.group(1)) != offset) {
+                        connection.disconnect();
+                        throw new IOException("Réponse de reprise HTTP invalide.");
+                    }
+                } else if (status != HttpURLConnection.HTTP_OK) {
                     connection.disconnect();
                     throw new IOException("Le serveur a refusé le téléchargement APK (HTTP " + status + ").");
                 }
@@ -159,19 +207,44 @@ public class BaaroUpdaterPlugin extends Plugin {
             }
 
             long declaredLength = connection.getContentLengthLong();
-            if (declaredLength > MAX_APK_BYTES) {
+            long totalLength = -1L;
+            String contentRange = connection.getHeaderField("Content-Range");
+            if (contentRange != null) {
+                java.util.regex.Matcher matcher = java.util.regex.Pattern
+                    .compile("bytes (\\d+)-(\\d+)/(\\d+|\\*)")
+                    .matcher(contentRange);
+                if (matcher.matches() && !"*".equals(matcher.group(3))) {
+                    totalLength = Long.parseLong(matcher.group(3));
+                }
+            } else if (declaredLength >= 0) {
+                totalLength = offset + declaredLength;
+            }
+
+            if (totalLength > MAX_APK_BYTES) {
                 connection.disconnect();
+                keepPartialOnFailure = false;
                 throw new IOException("APK trop volumineux; téléchargement annulé.");
             }
 
-            long received = 0;
+            StatFs stat = new StatFs(getContext().getCacheDir().getAbsolutePath());
+            long available = stat.getAvailableBytes();
+            long needed = (totalLength >= 0 ? totalLength - offset : 0L) + 20L * 1024L * 1024L;
+            if (available < needed) {
+                connection.disconnect();
+                throw new IOException("Espace disque insuffisant pour télécharger l’APK.");
+            }
+
+            long receivedThisRequest = 0L;
+            long receivedTotal = offset;
             byte[] buffer = new byte[BUFFER_BYTES];
             try (InputStream input = new BufferedInputStream(connection.getInputStream());
-                 FileOutputStream output = new FileOutputStream(partial, false)) {
+                 FileOutputStream output = new FileOutputStream(partial, offset > 0)) {
                 int count;
                 while ((count = input.read(buffer)) != -1) {
-                    received += count;
-                    if (received > MAX_APK_BYTES) {
+                    receivedThisRequest += count;
+                    receivedTotal += count;
+                    if (receivedTotal > MAX_APK_BYTES) {
+                        keepPartialOnFailure = false;
                         throw new IOException("APK trop volumineux; téléchargement annulé.");
                     }
                     digest.update(buffer, 0, count);
@@ -182,33 +255,41 @@ public class BaaroUpdaterPlugin extends Plugin {
                 connection.disconnect();
             }
 
-            if (received <= 0) {
-                throw new IOException("Le fichier APK téléchargé est vide.");
+            if (receivedThisRequest <= 0) {
+                throw new IOException("Aucune donnée reçue pour l’APK.");
             }
-            if (declaredLength >= 0 && received != declaredLength) {
-                throw new IOException("Téléchargement APK incomplet.");
+            if (declaredLength >= 0 && receivedThisRequest != declaredLength) {
+                throw new IOException("Téléchargement interrompu. La partie reçue est conservée pour reprise.");
+            }
+            if (totalLength >= 0 && receivedTotal != totalLength) {
+                throw new IOException("Téléchargement incomplet. La partie reçue est conservée pour reprise.");
             }
 
             byte[] actualHash = digest.digest();
             byte[] expectedHash = hexToBytes(expectedSha256);
             if (!MessageDigest.isEqual(actualHash, expectedHash)) {
+                keepPartialOnFailure = false;
                 throw new IOException("SHA-256 incorrect : APK rejeté.");
             }
 
-            if (apk.exists() && !apk.delete()) {
-                throw new IOException("Remplacement de l’ancien APK impossible.");
+            // Remplacement protégé : conserver l'ancien APK si la finalisation échoue.
+            if (backup.exists() && !backup.delete()) {
+                throw new IOException("Nettoyage de l'ancienne sauvegarde APK impossible.");
+            }
+            boolean hadOldApk = apk.exists();
+            if (hadOldApk && !apk.renameTo(backup)) {
+                throw new IOException("Sauvegarde de l'ancien APK impossible.");
             }
             if (!partial.renameTo(apk)) {
-                throw new IOException("Finalisation du fichier APK impossible.");
+                if (hadOldApk && backup.exists()) backup.renameTo(apk);
+                throw new IOException("Finalisation APK impossible; l'ancien fichier est préservé.");
             }
+
             saved = true;
+            if (backup.exists()) backup.delete();
             return relativePath;
         } finally {
-            if (!saved && partial.exists()) {
-                // Le fichier incomplet ou dont l'empreinte est incorrecte ne sera jamais installable.
-                //noinspection ResultOfMethodCallIgnored
-                partial.delete();
-            }
+            if (!saved && !keepPartialOnFailure && partial.exists()) partial.delete();
         }
     }
 
