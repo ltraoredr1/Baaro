@@ -229,28 +229,43 @@ export function useVideoFeed() {
           }));
         }
 
-        // Signaux de personnalisation : chargés uniquement au premier affichage.
+        // Signaux de personnalisation : synchronisation limitée à 30 minutes.
         if (reset && userId) {
-          try {
-            const { data: saved } = await supabase
-              .from("video_bookmarks")
-              .select("video_id, videos:video_id(author_id, title, description)")
-              .eq("user_id", userId)
-              .order("created_at", { ascending: false })
-              .limit(40);
-            recordBookmarks(saved);
+          const syncKey = `baaro:video-signals-sync:${userId}`;
+          let lastSync = 0;
 
-            const { data: watched } = await supabase
-              .from("video_watch_events")
-              .select("video_id, ratio, videos:video_id(author_id, title, description)")
-              .eq("user_id", userId)
-              .order("updated_at", { ascending: false })
-              .limit(60);
-            syncWatchHistory(watched);
-          } catch {
-            /* signal facultatif */
-          } finally {
-            setProfileRevision((current) => current + 1);
+          try {
+            lastSync = Number(localStorage.getItem(syncKey)) || 0;
+          } catch {}
+
+          if (Date.now() - lastSync >= 30 * 60 * 1000) {
+            try {
+              const { data: saved, error: savedError } = await supabase
+                .from("video_bookmarks")
+                .select("video_id, videos:video_id(author_id, title, description)")
+                .eq("user_id", userId)
+                .order("created_at", { ascending: false })
+                .limit(40);
+
+              const { data: watched, error: watchedError } = await supabase
+                .from("video_watch_events")
+                .select("video_id, ratio, videos:video_id(author_id, title, description)")
+                .eq("user_id", userId)
+                .order("updated_at", { ascending: false })
+                .limit(60);
+
+              if (!savedError && !watchedError) {
+                recordBookmarks(saved);
+                syncWatchHistory(watched);
+                try {
+                  localStorage.setItem(syncKey, String(Date.now()));
+                } catch {}
+              }
+            } catch {
+              /* signal facultatif : nouvelle tentative au prochain chargement */
+            } finally {
+              setProfileRevision((current) => current + 1);
+            }
           }
         }
       } catch (error) {
