@@ -103,6 +103,10 @@ export default function VideoCard({
   const lastClickTimeRef = useRef(0);
   const draggingRef = useRef(false);
 
+  const id = String(video.id);
+  const isImage = isImageVideo(video);
+  const shouldLoad = loadMode !== "none";
+
   useEffect(() => {
     return () => {
       if (clickTimeoutRef.current) clearTimeout(clickTimeoutRef.current);
@@ -181,9 +185,6 @@ export default function VideoCard({
     };
   }, [video.id, isImage, isActive, shouldLoad, videoRefs]);
 
-  const id = String(video.id);
-  const isImage = isImageVideo(video);
-  const shouldLoad = loadMode !== "none";
   const mediaSrc =
     video.media_url || video.video_url || video.image_url || video.thumbnail_url;
   const isPlaying = playingId === id;
