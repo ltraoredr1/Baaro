@@ -17,6 +17,7 @@ import {
   Radio,
 } from "lucide-react";
 import { COLORS } from "../../../theme.js";
+import { supabase } from "../../../supabaseClient.js";
 import { VideoTranslateControls } from "../../../components/VideoTranslateControls.jsx";
 import { TipButton } from "../../../components/TipButton.jsx";
 import VideoPollWidget from "./VideoPollWidget.jsx";
@@ -108,6 +109,77 @@ export default function VideoCard({
       if (heartTimeoutRef.current) clearTimeout(heartTimeoutRef.current);
     };
   }, []);
+
+  // Charge automatiquement les sous-titres déjà générés à la publication.
+  // La lecture reste publique grâce à la politique SELECT de video_captions.
+  useEffect(() => {
+    if (isImage || !isActive || !shouldLoad) return undefined;
+
+    const videoEl = videoRefs.current[video.id];
+    if (!videoEl) return undefined;
+
+    let cancelled = false;
+    let autoTrack = null;
+
+    const loadAutomaticCaptions = async () => {
+      try {
+        const { data, error } = await supabase
+          .from("video_captions")
+          .select("language,vtt_url")
+          .eq("video_id", video.id)
+          .eq("kind", "translated")
+          .eq("status", "ready")
+          .not("vtt_url", "is", null)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (error) throw error;
+        if (cancelled || !data?.vtt_url) return;
+
+        let captionUrl;
+        try {
+          captionUrl = new URL(data.vtt_url);
+        } catch {
+          return;
+        }
+
+        if (captionUrl.protocol !== "https:" && captionUrl.protocol !== "http:") {
+          return;
+        }
+
+        // Ne remplace jamais une piste ajoutée manuellement par le spectateur.
+        if (videoEl.querySelector('track[data-baaro-auto-caption="1"]')) return;
+
+        autoTrack = document.createElement("track");
+        autoTrack.kind = "subtitles";
+        autoTrack.label = `BAARO · ${String(data.language || "fr").toUpperCase()}`;
+        autoTrack.srclang = String(data.language || "fr").toLowerCase().split("-")[0];
+        autoTrack.src = captionUrl.toString();
+        autoTrack.default = true;
+        autoTrack.dataset.baaroAutoCaption = "1";
+
+        const showTrack = () => {
+          if (!cancelled && autoTrack?.track) {
+            autoTrack.track.mode = "showing";
+          }
+        };
+
+        autoTrack.addEventListener("load", showTrack, { once: true });
+        videoEl.appendChild(autoTrack);
+        showTrack();
+      } catch (error) {
+        console.warn("BAARO sous-titres automatiques indisponibles :", error);
+      }
+    };
+
+    loadAutomaticCaptions();
+
+    return () => {
+      cancelled = true;
+      if (autoTrack?.parentNode) autoTrack.parentNode.removeChild(autoTrack);
+    };
+  }, [video.id, isImage, isActive, shouldLoad, videoRefs]);
 
   const id = String(video.id);
   const isImage = isImageVideo(video);
