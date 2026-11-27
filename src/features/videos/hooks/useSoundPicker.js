@@ -8,6 +8,8 @@ export function useSoundPicker(sounds) {
   const [selectedSound, setSelectedSound] = useState(null);
   const [showSoundPicker, setShowSoundPicker] = useState(false);
   const [muteOriginal, setMuteOriginal] = useState(false);
+  const [soundVolume, setSoundVolume] = useState(80);
+  const [originalVolume, setOriginalVolume] = useState(100);
   const [previewingSoundId, setPreviewingSoundId] = useState(null);
 
   const soundPreviewRef = useRef(null);
@@ -74,6 +76,8 @@ export function useSoundPicker(sounds) {
   const resetSound = () => {
     stopSoundPreview();
     setMuteOriginal(false);
+    setSoundVolume(80);
+    setOriginalVolume(100);
     setSelectedSound(null);
     setShowSoundPicker(false);
   };
@@ -85,6 +89,10 @@ export function useSoundPicker(sounds) {
     setShowSoundPicker,
     muteOriginal,
     setMuteOriginal,
+    soundVolume,
+    setSoundVolume,
+    originalVolume,
+    setOriginalVolume,
     previewingSoundId,
     soundFileInputRef,
     stopSoundPreview,

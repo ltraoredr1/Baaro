@@ -21,33 +21,34 @@ export const insertVideo = async (base, extra = {}) => {
     .single();
   let degraded = false;
 
-  // Colonnes d'attribution absentes : repli sans perdre le son historique.
-  if (
-    res.error &&
-    hasExtra &&
-    isMissingColumn(res.error) &&
-    ("sound_artist" in extra ||
-      "sound_license" in extra ||
-      "sound_source_url" in extra)
-  ) {
-    const {
-      sound_artist,
-      sound_license,
-      sound_source_url,
-      ...legacyExtra
-    } = extra;
-    void sound_artist;
-    void sound_license;
-    void sound_source_url;
-    res = await supabase
-      .from("videos")
-      .insert({ ...base, ...legacyExtra })
-      .select("id")
-      .single();
-    degraded = !res.error;
+  // Repli ciblé : préserver les colonnes audio déjà disponibles.
+  if (res.error && hasExtra && isMissingColumn(res.error)) {
+    const message = [
+      res.error.message, res.error.details, res.error.hint,
+    ].filter(Boolean).join(" ");
+
+    let omitted = [];
+    if (/sound_volume|original_volume/i.test(message)) {
+      omitted = ["sound_volume", "original_volume"];
+    } else if (/sound_artist|sound_license|sound_source_url/i.test(message)) {
+      omitted = ["sound_artist", "sound_license", "sound_source_url"];
+    } else {
+      omitted = Object.keys(extra);
+    }
+
+    const safeExtra = { ...extra };
+    omitted.forEach((key) => delete safeExtra[key]);
+    if (Object.keys(safeExtra).length !== Object.keys(extra).length) {
+      res = await supabase
+        .from("videos")
+        .insert({ ...base, ...safeExtra })
+        .select("id")
+        .single();
+      degraded = !res.error;
+    }
   }
 
-  // Anciennes colonnes son absentes : repli sans métadonnées audio.
+  // Dernier repli historique : sans colonnes audio optionnelles.
   if (res.error && hasExtra && isMissingColumn(res.error)) {
     res = await supabase.from("videos").insert(base).select("id").single();
     degraded = !res.error;

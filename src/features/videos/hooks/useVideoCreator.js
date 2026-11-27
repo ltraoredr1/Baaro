@@ -57,8 +57,10 @@ export function useVideoCreator({
   onVideoPublished,
 }) {
   const { showToast, showPointsReward } = useToast();
-  const { selectedSound, muteOriginal, stopSoundPreview, resetSound } =
-    soundPicker;
+  const {
+    selectedSound, muteOriginal, stopSoundPreview, resetSound,
+    soundVolume, originalVolume,
+  } = soundPicker;
 
   const [showUpload, setShowUpload] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState([]);
@@ -393,6 +395,8 @@ export function useVideoCreator({
           selectedSound
             ? {
                 sound_title: selectedSound.title || null,
+                sound_volume: Math.max(0, Math.min(1, Number(soundVolume ?? 80) / 100)),
+                original_volume: Math.max(0, Math.min(1, Number(originalVolume ?? 100) / 100)),
                 sound_artist: selectedSound.artist || null,
                 sound_license: selectedSound.license || null,
                 sound_source_url: selectedSound.source_url || null,
@@ -531,6 +535,7 @@ export function useVideoCreator({
               id,title,description,video_url,thumbnail_url,duration,views,likes,
               comments_count,saves_count,shares_count,watch_ratio_sum,watch_ratio_count,
               is_repost,created_at,author_id,sound_id,
+              sound_url,sound_title,mute_original,sound_volume,original_volume,
               profiles:author_id(display_name,handle,flag,avatar_url)
             `)
             .eq("id", created.id)

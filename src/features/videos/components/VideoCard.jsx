@@ -98,6 +98,17 @@ export default function VideoCard({
   const [airPlayAvailable, setAirPlayAvailable] = useState(false);
   const [castBusy, setCastBusy] = useState(false);
 
+  useEffect(() => {
+    const videoEl = videoRefs.current[video.id];
+    const audioEl = audioRefs.current[video.id];
+    if (videoEl) {
+      videoEl.volume = Math.max(0, Math.min(1, Number(video.original_volume ?? 1)));
+    }
+    if (audioEl) {
+      audioEl.volume = Math.max(0, Math.min(1, Number(video.sound_volume ?? 1)));
+    }
+  }, [video.id, video.original_volume, video.sound_volume, sound?.url, videoRefs, audioRefs]);
+
   const clickTimeoutRef = useRef(null);
   const heartTimeoutRef = useRef(null);
   const lastClickTimeRef = useRef(0);

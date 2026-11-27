@@ -27,7 +27,9 @@ const buildVideoSelect = (withSound, withMobile = true) => `
   sound_id,${withSound ? `
   sound_url,
   sound_title,
-  mute_original,` : ""}
+  mute_original,
+  sound_volume,
+  original_volume,` : ""}
   profiles:author_id (
     display_name,
     handle,
