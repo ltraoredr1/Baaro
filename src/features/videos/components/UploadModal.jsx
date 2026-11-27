@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Leaf, X, BarChart3, ShoppingBag, Plus } from "lucide-react";
 import { supabase } from "../../../supabaseClient.js";
 import { COLORS } from "../../../theme.js";
@@ -17,6 +17,7 @@ export default function UploadModal({
   filter = null,
   compressUploads = false,
   onCompressChange,
+  studioFeatures = [],
 }) {
   const {
     showUpload,
@@ -41,11 +42,28 @@ export default function UploadModal({
   } = creator;
 
   const [showPollForm, setShowPollForm] = useState(false);
+  const studioPollAutoOpened = useRef(false);
   const [showProductForm, setShowProductForm] = useState(false);
   const [pollQuestion, setPollQuestion] = useState("");
   const [pollOptions, setPollOptions] = useState(["", ""]);
   const [ownProducts, setOwnProducts] = useState([]);
   const [productsLoading, setProductsLoading] = useState(false);
+
+  useEffect(() => {
+    if (!showUpload) {
+      studioPollAutoOpened.current = false;
+      return;
+    }
+
+    if (
+      studioFeatures.includes("poll") &&
+      !studioPollAutoOpened.current
+    ) {
+      studioPollAutoOpened.current = true;
+      setShowPollForm(true);
+      setShowProductForm(false);
+    }
+  }, [showUpload, studioFeatures]);
 
   useEffect(() => {
     if (!showPollForm) return;

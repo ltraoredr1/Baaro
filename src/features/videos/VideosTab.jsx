@@ -1262,6 +1262,7 @@ export function VideosTab({ onRewardPoints, onExit, onOpenProfile }) {
         onCompressChange={(value) =>
           updateSettings({ compressUploads: value })
         }
+        studioFeatures={studioFeatures}
       />
 
       {/* Studio NextGen */}
