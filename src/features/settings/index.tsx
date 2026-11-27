@@ -821,6 +821,7 @@ export default function SettingsTab({
       localStorage.removeItem("baaro_settings_v22");
       localStorage.removeItem("baaro_settings_v21");
       localStorage.removeItem("baaro_settings_v20");
+      // Ancienne file globale uniquement. Les files par compte sont conservées.
       localStorage.removeItem("baaro_settings_dirty");
     } catch {
       /* ignore */

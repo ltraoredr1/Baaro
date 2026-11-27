@@ -12,6 +12,7 @@ import {
   DEFAULT_SETTINGS,
   LOCAL_ONLY_KEYS,
   SETTINGS_EVENT,
+  setActiveSettingsUser,
 } from "../lib/appSettings.js";
 
 /** Délai de regroupement des écritures cloud (sélecteur de couleur, toggles rapides). */
@@ -274,10 +275,11 @@ export function useSettings() {
       // Les choix locaux non synchronisés gardent la priorité (même après rechargement).
       for (const key of dirtyKeysRef.current) delete cloud[key];
 
-      const merged = { ...settingsRef.current, ...cloud };
+      const local = loadLocalSettings(userId);
+      const merged = { ...local, ...cloud };
       settingsRef.current = merged;
       setSettings(merged);
-      saveLocalSettings(merged);
+      saveLocalSettings(merged, userId);
       broadcastSettings(merged);
     }
 
@@ -294,10 +296,17 @@ export function useSettings() {
         }
 
         if (session?.user && active) {
-          activeUserIdRef.current = session.user.id;
-          dirtyKeysRef.current = new Set(readDirty(session.user.id));
+          const userId = session.user.id;
+          activeUserIdRef.current = userId;
+          setActiveSettingsUser(userId);
+
+          const local = loadLocalSettings(userId);
+          settingsRef.current = local;
+          setSettings(local);
+
+          dirtyKeysRef.current = new Set(readDirty(userId));
           setSyncStatus(dirtyKeysRef.current.size > 0 ? "pending" : "synced");
-          await loadCloud(session.user.id);
+          await loadCloud(userId);
           // Rejoue ce qui était resté en attente avant la fermeture de l'app.
           if (active && dirtyKeysRef.current.size > 0) void flushRef.current();
         }
@@ -314,9 +323,19 @@ export function useSettings() {
       (event, session) => {
         if (event === "SIGNED_OUT") {
           activeUserIdRef.current = null;
+          setActiveSettingsUser(null);
           dirtyKeysRef.current = new Set();
           privateDirtyRef.current = false;
           privateDirtyUserIdRef.current = null;
+
+          window.clearTimeout(timerRef.current);
+          window.clearTimeout(retryTimerRef.current);
+          timerRef.current = null;
+          retryTimerRef.current = null;
+
+          const guestSettings = loadLocalSettings(null);
+          settingsRef.current = guestSettings;
+          setSettings(guestSettings);
           setSyncStatus("local");
           setSyncError(null);
           return;
@@ -324,13 +343,20 @@ export function useSettings() {
 
         if (event !== "SIGNED_IN" || !session?.user) return;
 
-        activeUserIdRef.current = session.user.id;
-        dirtyKeysRef.current = new Set(readDirty(session.user.id));
+        const userId = session.user.id;
+        activeUserIdRef.current = userId;
+        setActiveSettingsUser(userId);
+
+        const local = loadLocalSettings(userId);
+        settingsRef.current = local;
+        setSettings(local);
+
+        dirtyKeysRef.current = new Set(readDirty(userId));
         setSyncStatus(dirtyKeysRef.current.size > 0 ? "pending" : "synced");
 
         setTimeout(() => {
           if (!active) return;
-          loadCloud(session.user.id)
+          loadCloud(userId)
             .then(() => {
               if (dirtyKeysRef.current.size > 0) void flushRef.current();
             })

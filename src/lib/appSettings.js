@@ -15,6 +15,17 @@
 import { supabase } from "../supabaseClient.js";
 
 export const STORAGE_KEY = "baaro_settings_v23";
+let activeSettingsUserId = null;
+
+export function setActiveSettingsUser(userId) {
+  activeSettingsUserId = typeof userId === "string" && userId
+    ? userId
+    : null;
+}
+
+function getUserStorageKey(userId = activeSettingsUserId) {
+  return userId ? `${STORAGE_KEY}:${userId}` : STORAGE_KEY;
+}
 export const SETTINGS_EVENT = "baaro:settings";
 
 export const DEFAULT_SETTINGS = {
@@ -97,12 +108,19 @@ export function sanitizeSettings(input) {
   return out;
 }
 
-export function loadLocalSettings() {
+export function loadLocalSettings(userId = activeSettingsUserId) {
   try {
-    let raw = localStorage.getItem(STORAGE_KEY);
-    for (let i = 0; !raw && i < LEGACY_KEYS.length; i++) {
-      raw = localStorage.getItem(LEGACY_KEYS[i]);
+    const key = getUserStorageKey(userId);
+    let raw = localStorage.getItem(key);
+
+    // Les anciennes clés globales ne sont accessibles qu'en mode invité.
+    // Un compte connecté ne récupère jamais les préférences d'un autre compte.
+    if (!raw && !userId) {
+      for (let i = 0; !raw && i < LEGACY_KEYS.length; i++) {
+        raw = localStorage.getItem(LEGACY_KEYS[i]);
+      }
     }
+
     if (!raw) return { ...DEFAULT_SETTINGS };
     return { ...DEFAULT_SETTINGS, ...sanitizeSettings(JSON.parse(raw)) };
   } catch (_) {
@@ -110,9 +128,12 @@ export function loadLocalSettings() {
   }
 }
 
-export function saveLocalSettings(settings) {
+export function saveLocalSettings(settings, userId = activeSettingsUserId) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+    localStorage.setItem(
+      getUserStorageKey(userId),
+      JSON.stringify(sanitizeSettings(settings))
+    );
   } catch (_) {}
 }
 
