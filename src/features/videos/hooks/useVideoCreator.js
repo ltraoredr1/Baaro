@@ -393,6 +393,9 @@ export function useVideoCreator({
           selectedSound
             ? {
                 sound_title: selectedSound.title || null,
+                sound_artist: selectedSound.artist || null,
+                sound_license: selectedSound.license || null,
+                sound_source_url: selectedSound.source_url || null,
                 ...(soundUrl
                   ? { sound_url: soundUrl, mute_original: !!muteOriginal }
                   : {}),

@@ -21,7 +21,33 @@ export const insertVideo = async (base, extra = {}) => {
     .single();
   let degraded = false;
 
-  // Colonnes son absentes
+  // Colonnes d'attribution absentes : repli sans perdre le son historique.
+  if (
+    res.error &&
+    hasExtra &&
+    isMissingColumn(res.error) &&
+    ("sound_artist" in extra ||
+      "sound_license" in extra ||
+      "sound_source_url" in extra)
+  ) {
+    const {
+      sound_artist,
+      sound_license,
+      sound_source_url,
+      ...legacyExtra
+    } = extra;
+    void sound_artist;
+    void sound_license;
+    void sound_source_url;
+    res = await supabase
+      .from("videos")
+      .insert({ ...base, ...legacyExtra })
+      .select("id")
+      .single();
+    degraded = !res.error;
+  }
+
+  // Anciennes colonnes son absentes : repli sans métadonnées audio.
   if (res.error && hasExtra && isMissingColumn(res.error)) {
     res = await supabase.from("videos").insert(base).select("id").single();
     degraded = !res.error;
