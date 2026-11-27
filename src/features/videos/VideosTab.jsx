@@ -335,18 +335,24 @@ export function VideosTab({ onRewardPoints, onExit, onOpenProfile }) {
 
   const handleStudioCreate = (selectedFeatures) => {
     setStudioOpen(false);
-    setStudioFeatures(selectedFeatures || []);
 
-    if (selectedFeatures?.length > 0) {
+    const features = selectedFeatures || [];
+    const wantsInsights = features.includes("insights");
+    const creationFeatures = features.filter((key) => key !== "insights");
+
+    setStudioFeatures(creationFeatures);
+
+    if (wantsInsights) setInsightsOpen(true);
+
+    if (creationFeatures.length > 0) {
       showToast(
-        `${selectedFeatures.length} outil${
-          selectedFeatures.length > 1 ? "s" : ""
-        } Studio sélectionné${selectedFeatures.length > 1 ? "s" : ""}`,
+        `${creationFeatures.length} outil${
+          creationFeatures.length > 1 ? "s" : ""
+        } Studio sélectionné${creationFeatures.length > 1 ? "s" : ""}`,
         "info"
       );
+      openUpload();
     }
-
-    openUpload();
   };
 
   const overlayOpen =
