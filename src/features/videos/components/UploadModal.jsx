@@ -6,6 +6,7 @@ import CameraOverlay from "./CameraOverlay.jsx";
 import CreatorPanel from "./CreatorPanel.jsx";
 import SoundPicker from "./SoundPicker.jsx";
 import UploadPreview from "./UploadPreview.jsx";
+import { generateAIEditPlan } from "../../../lib/geminiAI.js";
 
 // Fenêtre « Nouvelle vidéo » : médias, titre, description, son, publication.
 // compression : { compressing, progress, cancel, abort } (useVideoCompression)
@@ -48,6 +49,36 @@ export default function UploadModal({
   const [pollOptions, setPollOptions] = useState(["", ""]);
   const [ownProducts, setOwnProducts] = useState([]);
   const [productsLoading, setProductsLoading] = useState(false);
+  const [aiPlanLoading, setAiPlanLoading] = useState(false);
+  const [aiPlan, setAiPlan] = useState(null);
+  const [aiPlanError, setAiPlanError] = useState("");
+
+  const runAiPlan = async () => {
+    if (aiPlanLoading) return;
+
+    const prompt = [
+      uploadTitle.trim(),
+      uploadDescription.trim(),
+      "Propose un montage vidéo engageant pour BAARO, un hook fort, des titres et des idées de couverture."
+    ].filter(Boolean).join("\\n");
+
+    setAiPlanLoading(true);
+    setAiPlanError("");
+    setAiPlan(null);
+
+    try {
+      const plan = await generateAIEditPlan(prompt, "");
+      if (!plan || typeof plan !== "object" || plan.raw) {
+        throw new Error("Le moteur IA n'a pas retourné un plan exploitable.");
+      }
+      setAiPlan(plan);
+    } catch (error) {
+      setAiPlanError(error?.message || "Impossible de générer le plan IA.");
+    } finally {
+      setAiPlanLoading(false);
+    }
+  };
+
 
   useEffect(() => {
     if (!showUpload) {
@@ -258,6 +289,86 @@ export default function UploadModal({
             maxLength={500}
             className="w-full rounded-2xl bg-white/10 px-4 py-3 outline-none text-sm resize-none"
           />
+
+
+          {studioFeatures.includes("ai") && (
+            <section className="space-y-3 rounded-2xl border border-violet-400/25 bg-violet-400/[0.06] p-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-black text-violet-200">BAARO AI Cut</div>
+                  <p className="text-[11px] text-white/50">
+                    Génère un plan de montage, un hook et des idées de couverture.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  disabled={aiPlanLoading || busy}
+                  onClick={runAiPlan}
+                  className="shrink-0 rounded-xl bg-violet-400 px-3 py-2 text-xs font-black text-black disabled:opacity-50"
+                >
+                  {aiPlanLoading ? "Analyse…" : "Générer le plan"}
+                </button>
+              </div>
+
+              {aiPlanError && (
+                <p role="alert" className="text-xs text-red-300">{aiPlanError}</p>
+              )}
+
+              {aiPlan && (
+                <div className="space-y-3 text-xs">
+                  {aiPlan.hook && (
+                    <div>
+                      <div className="mb-1 font-bold text-violet-200">Hook proposé</div>
+                      <p className="text-white/80">{aiPlan.hook}</p>
+                    </div>
+                  )}
+
+                  {!!aiPlan.title_variants?.length && (
+                    <div>
+                      <div className="mb-2 font-bold text-violet-200">Titres proposés</div>
+                      <div className="space-y-2">
+                        {aiPlan.title_variants.map((title, index) => (
+                          <button
+                            key={`${index}-${title}`}
+                            type="button"
+                            onClick={() => setUploadTitle(String(title).slice(0, 120))}
+                            className="w-full rounded-xl border border-white/10 bg-white/5 p-2 text-left text-white/80"
+                          >
+                            {title}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {!!aiPlan.thumbnail_ideas?.length && (
+                    <div>
+                      <div className="mb-1 font-bold text-violet-200">Idées de couverture</div>
+                      <ul className="list-disc space-y-1 pl-5 text-white/70">
+                        {aiPlan.thumbnail_ideas.map((idea, index) => (
+                          <li key={index}>{idea}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {!!aiPlan.cuts?.length && (
+                    <div>
+                      <div className="mb-1 font-bold text-violet-200">Coupes suggérées</div>
+                      {aiPlan.cuts.map((cut, index) => (
+                        <p key={index} className="text-white/70">
+                          {Math.round(Number(cut.start_ms) / 1000)}s – {Math.round(Number(cut.end_ms) / 1000)}s : {cut.reason}
+                        </p>
+                      ))}
+                    </div>
+                  )}
+                  <p className="text-[10px] text-white/40">
+                    Suggestions IA uniquement : rien n'est modifié dans ta vidéo sans ton action.
+                  </p>
+                </div>
+              )}
+            </section>
+          )}
 
           {/* Sondage & produit à la publication */}
           <div className="flex flex-wrap gap-2">

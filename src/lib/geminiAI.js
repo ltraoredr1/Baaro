@@ -1,3 +1,5 @@
+import { supabase } from "../supabaseClient.js";
+
 /**
  * Service Front-End sécurisé pour les fonctionnalités IA de BAARO.
  * Toutes les requêtes passent par le backend pour protéger la clé API Gemini.
@@ -39,9 +41,21 @@ export async function generateAIText(prompt, systemInstruction = "") {
  */
 export async function generateAIEditPlan(prompt, transcript) {
   try {
-    const response = await fetch("/api/ai/video-engine", {
+    const { data: { session }, error: sessionError } =
+      await supabase.auth.getSession();
+
+    if (sessionError) throw sessionError;
+
+    if (!session?.access_token) {
+      throw new Error("Connecte-toi pour utiliser BAARO AI Cut.");
+    }
+
+    const response = await fetch("/api/video-engine", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${session.access_token}`,
+      },
       body: JSON.stringify({ 
         action: "edit_plan", 
         prompt, 
