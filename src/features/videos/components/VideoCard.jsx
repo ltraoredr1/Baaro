@@ -8,6 +8,7 @@ import {
   Eye,
   Music2,
   Play,
+  PlusCircle,
   Repeat2,
   Share2,
   Trash2,
@@ -79,6 +80,8 @@ export default function VideoCard({
     handleRepost,
     handleShare,
     handleDelete,
+    handleStory,
+    storyBusyId,
     shareId,
     onUseSound,
     onOpenProfile,
@@ -638,6 +641,21 @@ export default function VideoCard({
             aria-label="Plein écran"
           >
             <Expand size={20} />
+          </button>
+        )}
+
+        {isOwner && handleStory && (
+          <button
+            type="button"
+            onClick={() => handleStory(video, { isImage })}
+            disabled={storyBusyId === video.id}
+            className="flex flex-col items-center disabled:opacity-50"
+            aria-label="Publier en story"
+          >
+            <span className="h-11 w-11 rounded-full bg-white/10 backdrop-blur-md flex items-center justify-center">
+              <PlusCircle size={21} />
+            </span>
+            <span className="text-[10px] font-black mt-1">Story</span>
           </button>
         )}
 

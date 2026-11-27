@@ -4,6 +4,7 @@ import { supabase } from "../../../supabaseClient.js";
 import { useToast } from "../../../components/ToastContext.jsx";
 import { insertVideo } from "../utils/videosApi.js";
 import { API_BASE } from "../../../config.js";
+import { callSocial } from "../../../lib/notifyInteraction.js";
 
 // Actions vidéo : likes, partages, reposts et suppression.
 // Les notifications utilisent l'API existante /api/social.
@@ -74,6 +75,61 @@ export function useVideoActions({
 }) {
   const { showToast, showPointsReward } = useToast();
   const [shareId, setShareId] = useState(null);
+  const [storyBusyId, setStoryBusyId] = useState(null);
+
+  // Publie une de ses propres vidéos (ou photos) en story pour 24 h.
+  // Le fichier est déjà hébergé : on réutilise son URL, aucun nouvel envoi.
+  const handleStory = async (video, { isImage = false } = {}) => {
+    if (!user) {
+      showToast("Connecte-toi pour publier en story.", "error");
+      return;
+    }
+
+    if (!video?.id || storyBusyId) return;
+
+    const authorId = video.author_id || video.user_id;
+
+    if (authorId !== user.id) {
+      showToast("Tu peux publier en story uniquement tes vidéos.", "error");
+      return;
+    }
+
+    const mediaUrl = isImage
+      ? video.media_url || video.image_url || video.video_url
+      : video.video_url || video.media_url;
+
+    if (!mediaUrl) {
+      showToast("Cette vidéo ne peut pas être publiée en story.", "error");
+      return;
+    }
+
+    if (!window.confirm("Publier cette vidéo en story pendant 24 h ?")) return;
+
+    setStoryBusyId(video.id);
+
+    try {
+      const caption = String(video.title || "").trim().slice(0, 200);
+
+      // visibility et expires_at : valeurs par défaut de la base (abonnés, 24 h).
+      const { error } = await supabase.from("stories").insert({
+        author_id: user.id,
+        media_url: mediaUrl,
+        media_type: isImage ? "image" : "video",
+        caption: caption || null,
+        publish_at: new Date().toISOString(),
+      });
+
+      if (error) throw error;
+
+      callSocial("story_published").catch(() => {});
+      showToast("Publié en story !", "success");
+    } catch (error) {
+      console.error("[video-to-story]", error);
+      showToast("Impossible de publier en story.", "error");
+    } finally {
+      setStoryBusyId(null);
+    }
+  };
 
   const handleLike = async (videoId) => {
     if (!user) {
@@ -327,6 +383,8 @@ export function useVideoActions({
     handleShare,
     handleRepost,
     handleDelete,
+    handleStory,
+    storyBusyId,
     shareId,
   };
 }
