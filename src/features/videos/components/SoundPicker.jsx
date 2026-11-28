@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ChevronDown, Music2, Pause, Play, Search, Loader2 } from "lucide-react";
 import { COLORS } from "../../../theme.js";
+import FreeAudioPanel from "./FreeAudioPanel.jsx";
 
 // Sélecteur de son ; soundPicker = retour de useSoundPicker.
 const SOUND_CATEGORIES = [
@@ -112,8 +113,9 @@ export default function SoundPicker({ soundPicker, hasFile, bakedAudio }) {
           >
             Aucun son (son d'origine)
           </button>
+          <FreeAudioPanel previewingSoundId={previewingSoundId} toggleSoundPreview={toggleSoundPreview} chooseSound={chooseSound} />
           <div className="border-b border-white/10 p-3 space-y-2">
-            <div className="text-xs font-bold text-white/80">Bibliothèque audio gratuite</div>
+            <div className="text-xs font-bold text-white/80">Wikimedia Commons</div>
             <div className="flex gap-2">
               <input value={commonsQuery} onChange={(event) => setCommonsQuery(event.target.value)}
                 onKeyDown={(event) => { if (event.key === "Enter") setCommonsSearch(commonsQuery.trim()); }}
