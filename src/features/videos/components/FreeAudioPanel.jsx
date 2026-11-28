@@ -216,7 +216,7 @@ export default function FreeAudioPanel({ previewingSoundId, toggleSoundPreview, 
 
       {(tab === "Coran" || tab === "Bible") && source?.type === "col" && source.col.group === tab && (
         <input value={surahFilter} onChange={(e) => setSurahFilter(e.target.value)}
-          placeholder={tab === "Coran" ? `Sourate chez ${source.col.label.replace(/^Coran · /, "")} (Yasin, Al-Mulk, 36…)` : "Livre ou chapitre (Psaumes, Jean 3…)"}
+          placeholder={tab === "Coran" ? `Sourate chez ${source.col.label.replace(/^Coran · /, "")} (Yasin, Al-Mulk, 36…)` : "Livre ou chapitre (Psaumes 23, Jean 3, 5…)"}
           className="w-full rounded-xl bg-white/10 px-3 py-2 text-sm outline-none" />
       )}
 

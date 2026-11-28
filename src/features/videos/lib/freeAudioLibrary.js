@@ -45,7 +45,18 @@ async function loadItem(id) {
         .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
       const artist = [].concat(m.creator || m.title || "Internet Archive")[0];
       const license = m.licenseurl ? licenseLabel(m.licenseurl) : "Domaine public / Archive";
-      return files.map((f) => ({
+      // Une seule version par piste (64 kb de préférence), titre le plus propre.
+      const byBase = new Map();
+      for (const f of files) {
+        const base = f.name.replace(/_(64|128|32|48|96)kb(?=\.mp3$)/i, "");
+        const prev = byBase.get(base);
+        const title = cleanTitle(f.title);
+        if (!prev) { byBase.set(base, { ...f, title }); continue; }
+        const better = /_64kb\.mp3$/i.test(f.name) ? f : prev;
+        const bestTitle = [prev.title, title].filter(Boolean).sort((a, b) => a.length - b.length)[0];
+        byBase.set(base, { ...better, title: bestTitle });
+      }
+      return [...byBase.values()].map((f) => ({
         id: `ia-${id}-${f.name}`,
         title: f.title || f.name.replace(/\.mp3$/i, "").replace(/[_/]/g, " "),
         artist: String(artist).slice(0, 80),
@@ -61,6 +72,33 @@ async function loadItem(id) {
   return promise;
 }
 
+// Répare les titres mal encodés (ex. « ÃÂÃÂvangile » → « Évangile »).
+function cleanTitle(t) {
+  const v = String(t || "").replace(/(?:[ÃÂ][\u0080-\u00ff])+(?=vangile)/g, "É").replace(/(?:[ÃÂ][\u0080-\u00ff])+/g, "").trim();
+  return v.length > 120 ? v.slice(0, 120) : v;
+}
+
+// Plage de chapitres d'un titre biblique : « Genèse 3 », « Genesis 1-6 », « Matthew, Chapters 01-07 ».
+function chapterRange(title) {
+  const t = String(title || "");
+  const range = t.match(/(\d+)\s*[-–à]\s*(\d+)\s*$/);
+  if (range) return { from: Number(range[1]), to: Number(range[2]), book: t.slice(0, range.index) };
+  const one = t.match(/(\d+)\s*$/);
+  if (one && one.index > 0) return { from: Number(one[1]), to: Number(one[1]), book: t.slice(0, one.index) };
+  return { from: 1, to: 1, book: t };
+}
+
+// Filtre Bible : « 23 » (chapitre 23 de tous les livres), « Psaumes 23 », « 1 Jean 3 », « Jean ».
+function bibleMatch(track, filter) {
+  const f = String(filter || "").trim();
+  const m = f.match(/^(.*?)\s*(\d+)$/);
+  if (!m || (m[1] && !/\p{L}/u.test(m[1]))) return matchText(track.title, f);
+  const chapter = Number(m[2]);
+  const { from, to, book } = chapterRange(track.title.replace(/^\d+[a-z]?\s*-\s*/i, ""));
+  return chapter >= from && chapter <= to
+    && (!m[1] || (matchText(book, m[1]) && (/^\d/.test(m[1].trim()) || !/^\d/.test(book.trim()))));
+}
+
 function licenseLabel(url) {
   const m = String(url).match(/licenses\/([a-z-]+)\/([\d.]+)/i);
   if (m) return `CC ${m[1].toUpperCase()} ${m[2]}`;
@@ -74,7 +112,11 @@ export const matchText = (text, filter) => !norm(filter) || norm(text).includes(
 // Pistes d'une collection, page par page (pagination infinie), filtre optionnel sur le titre.
 export async function loadCollection(collection, page = 0, size = 15, filter = "") {
   const lists = await Promise.all(collection.ids.map(loadItem));
-  const all = lists.flat().filter((t) => (/^\d+$/.test(filter.trim()) ? t.number === Number(filter) : matchText(t.title, filter)));
+  const all = lists.flat().filter((t) => {
+    if (!filter.trim()) return true;
+    if (collection.group === "Bible") return bibleMatch(t, filter);
+    return /^\d+$/.test(filter.trim()) ? t.number === Number(filter) : matchText(t.title, filter);
+  });
   return { items: all.slice(page * size, (page + 1) * size), hasMore: all.length > (page + 1) * size };
 }
 
