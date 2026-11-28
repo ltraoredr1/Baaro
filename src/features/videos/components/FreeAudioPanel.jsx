@@ -3,7 +3,7 @@ import { Loader2, Pause, Play, Search, Shuffle, Sparkles } from "lucide-react";
 import { COLORS } from "../../../theme.js";
 import {
   AUDIO_COLLECTIONS, AUDIO_SEARCHES, MELODY_MOODS,
-  generateMelody, loadCollection, searchArchive,
+  generateMelody, loadCollection, matchText, searchArchive, searchReciters,
 } from "../lib/freeAudioLibrary.js";
 
 const fmt = (s) => (s ? `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}` : "");
@@ -47,6 +47,9 @@ export default function FreeAudioPanel({ previewingSoundId, toggleSoundPreview, 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
+  const [reciterQuery, setReciterQuery] = useState("");
+  const [reciters, setReciters] = useState({ items: [], page: 0, hasMore: false, loading: false, done: false });
+  const [surahFilter, setSurahFilter] = useState("");
   const sentinel = useRef(null);
   const reqId = useRef(0);
 
@@ -71,7 +74,7 @@ export default function FreeAudioPanel({ previewingSoundId, toggleSoundPreview, 
     setLoading(true);
     setError("");
     try {
-      const res = src.type === "col" ? await loadCollection(src.col, p) : await searchArchive(src.q, p);
+      const res = src.type === "col" ? await loadCollection(src.col, p, 15, src.filter || "") : await searchArchive(src.q, p);
       if (id !== reqId.current) return;
       setItems((prev) => (p === 0 ? res.items : [...prev, ...res.items]));
       setHasMore(res.hasMore);
@@ -83,7 +86,35 @@ export default function FreeAudioPanel({ previewingSoundId, toggleSoundPreview, 
     }
   };
 
-  const open = (src) => { setSource(src); setItems([]); setHasMore(false); fetchPage(src, 0); };
+  const open = (src) => {
+    if (src.type === "col" && src.filter === undefined) { src = { ...src, filter: "" }; setSurahFilter(""); }
+    setSource(src); setItems([]); setHasMore(false); fetchPage(src, 0);
+  };
+
+  const findReciters = async (p = 0) => {
+    const q = reciterQuery.trim();
+    if (!q || reciters.loading) return;
+    setReciters((prev) => ({ ...prev, loading: true, ...(p === 0 ? { items: [], done: false } : {}) }));
+    setError("");
+    try {
+      const res = await searchReciters(q, p);
+      setReciters((prev) => {
+        const seen = new Set(AUDIO_COLLECTIONS.flatMap((c) => c.ids));
+        prev.items.forEach((c) => c.ids.forEach((i) => seen.add(i)));
+        const fresh = res.items.filter((c) => !seen.has(c.ids[0]));
+        return { items: [...(p === 0 ? [] : prev.items), ...fresh], page: p, hasMore: res.hasMore, loading: false, done: true };
+      });
+    } catch {
+      setError("Recherche de récitateurs indisponible. Réessaie.");
+      setReciters((prev) => ({ ...prev, loading: false }));
+    }
+  };
+
+  useEffect(() => {
+    if (source?.type !== "col") return;
+    const t = setTimeout(() => { if ((source.filter || "") !== surahFilter) open({ ...source, filter: surahFilter }); }, 300);
+    return () => clearTimeout(t);
+  }, [surahFilter]);
 
   useEffect(() => {
     const el = sentinel.current;
@@ -144,16 +175,49 @@ export default function FreeAudioPanel({ previewingSoundId, toggleSoundPreview, 
         </div>
       )}
 
+      {tab === "Coran" && (
+        <div className="flex gap-2">
+          <input value={reciterQuery}
+            onChange={(e) => { setReciterQuery(e.target.value); setReciters((prev) => ({ ...prev, done: false })); }}
+            onKeyDown={(e) => { if (e.key === "Enter") findReciters(0); }}
+            placeholder="Nom du récitateur (Sudais, Husary, Minshawi…)"
+            className="min-w-0 flex-1 rounded-xl bg-white/10 px-3 py-2 text-sm outline-none" />
+          <button type="button" onClick={() => findReciters(0)} disabled={!reciterQuery.trim()}
+            className="rounded-xl px-3 py-2" style={{ background: COLORS.gold, color: "#000" }} aria-label="Chercher un récitateur">
+            {reciters.loading ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}
+          </button>
+        </div>
+      )}
+
       {(tab === "Coran" || tab === "Bible") && (
-        <div className="flex flex-wrap gap-1.5">
-          {AUDIO_COLLECTIONS.filter((c) => c.group === tab).map((c) => (
+        <div className="flex flex-wrap gap-1.5 max-h-40 overflow-y-auto">
+          {[...AUDIO_COLLECTIONS.filter((c) => c.group === tab && (tab !== "Coran" || matchText(c.label, reciterQuery))),
+            ...(tab === "Coran" ? reciters.items : [])].map((c) => (
             <button key={c.key} type="button" onClick={() => open({ type: "col", col: c })}
               className="rounded-full px-2.5 py-1 text-[11px]"
               style={source?.col?.key === c.key ? { background: COLORS.gold, color: "#000" } : { background: "rgba(255,255,255,.1)" }}>
               {c.label}
             </button>
           ))}
+          {tab === "Coran" && reciters.hasMore && (
+            <button type="button" onClick={() => findReciters(reciters.page + 1)}
+              className="rounded-full bg-white/10 px-2.5 py-1 text-[11px] underline">Plus de récitateurs</button>
+          )}
+          {tab === "Coran" && reciters.done && !reciters.loading && reciters.items.length === 0
+            && !AUDIO_COLLECTIONS.some((c) => c.group === "Coran" && matchText(c.label, reciterQuery)) && (
+            <p className="text-xs text-white/50">Aucun récitateur trouvé pour « {reciterQuery} ».</p>
+          )}
+          {tab === "Coran" && !reciters.done && reciterQuery.trim()
+            && !AUDIO_COLLECTIONS.some((c) => c.group === "Coran" && matchText(c.label, reciterQuery)) && (
+            <p className="text-xs text-white/50">Appuie sur la loupe pour chercher ce récitateur.</p>
+          )}
         </div>
+      )}
+
+      {(tab === "Coran" || tab === "Bible") && source?.type === "col" && source.col.group === tab && (
+        <input value={surahFilter} onChange={(e) => setSurahFilter(e.target.value)}
+          placeholder={tab === "Coran" ? `Sourate chez ${source.col.label.replace(/^Coran · /, "")} (Yasin, Al-Mulk, 36…)` : "Livre ou chapitre (Psaumes, Jean 3…)"}
+          className="w-full rounded-xl bg-white/10 px-3 py-2 text-sm outline-none" />
       )}
 
       {tab === "search" && (

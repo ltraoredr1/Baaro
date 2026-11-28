@@ -8,6 +8,12 @@ export const AUDIO_COLLECTIONS = [
   { key: "coran-maher", group: "Coran", label: "Coran · Maher Al-Muaiqly", ids: ["TvQuran.com__Maher"] },
   { key: "coran-ajmy", group: "Coran", label: "Coran · Ahmad Al-Ajmy", ids: ["TvQuran.com__Al-Ajmy"] },
   { key: "coran-mulla", group: "Coran", label: "Coran · Ammar Al-Mulla", ids: ["Ammar-Almulla"] },
+  { key: "coran-sudais", group: "Coran", label: "Coran · Abdul-Rahman As-Sudais", ids: ["Abdul-Rahman-Al-Sudais-128Kbps"] },
+  { key: "coran-basit", group: "Coran", label: "Coran · Abdul Basit (mujawwad)", ids: ["TvQuran.com__basit_mjwd"] },
+  { key: "coran-shatri", group: "Coran", label: "Coran · Abu Bakr Al-Shatri", ids: ["TvQuran.com__Shatri"] },
+  { key: "coran-abbad", group: "Coran", label: "Coran · Fares Abbad", ids: ["TvQuran.com__Fares.Abbad"] },
+  { key: "coran-huthaifi", group: "Coran", label: "Coran · Ali Al-Huthaifi", ids: ["TvQuran.com__Ali-Alhuthaifi"] },
+  { key: "coran-shuraim", group: "Coran", label: "Coran · Saud Al-Shuraim", ids: ["TvQuran.com__Al-Shuraimm"] },
   { key: "bible-lsg", group: "Bible", label: "Bible · Louis Segond (FR)", ids: ["LSG_201807"] },
   { key: "bible-jean", group: "Bible", label: "Évangile de Jean (FR)", ids: ["jean_lsg_librivox"] },
   { key: "bible-kjv", group: "Bible", label: "Bible · KJV (EN)", ids: ["bible_kjv_01_02_03_0908_librivox"] },
@@ -43,6 +49,7 @@ async function loadItem(id) {
         id: `ia-${id}-${f.name}`,
         title: f.title || f.name.replace(/\.mp3$/i, "").replace(/[_/]/g, " "),
         artist: String(artist).slice(0, 80),
+        number: Number((f.name.match(/(\d+)\.mp3$/i) || [])[1]) || null,
         audio_url: `${IA}/download/${encodeURIComponent(id)}/${f.name.split("/").map(encodeURIComponent).join("/")}`,
         duration: Number(f.length) || null,
         license,
@@ -61,11 +68,42 @@ function licenseLabel(url) {
   return "Licence à consulter";
 }
 
-// Pistes d'une collection, page par page (pagination infinie).
-export async function loadCollection(collection, page = 0, size = 15) {
+const norm = (v) => String(v || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^\p{L}\p{N}]/gu, "").toLowerCase();
+export const matchText = (text, filter) => !norm(filter) || norm(text).includes(norm(filter));
+
+// Pistes d'une collection, page par page (pagination infinie), filtre optionnel sur le titre.
+export async function loadCollection(collection, page = 0, size = 15, filter = "") {
   const lists = await Promise.all(collection.ids.map(loadItem));
-  const all = lists.flat();
+  const all = lists.flat().filter((t) => (/^\d+$/.test(filter.trim()) ? t.number === Number(filter) : matchText(t.title, filter)));
   return { items: all.slice(page * size, (page + 1) * size), hasMore: all.length > (page + 1) * size };
+}
+
+// Recherche de récitateurs du Coran par nom (Internet Archive), paginée.
+export async function searchReciters(name, page = 0) {
+  const n = String(name).trim().replace(/[^\p{L}\p{N} .-]/gu, " ").trim();
+  if (!n) return { items: [], hasMore: false };
+  const words = n.split(/\s+/).map((w) => `${w}*`).join(" AND ");
+  const params = new URLSearchParams({
+    q: `mediatype:audio AND (identifier:tvquran* OR subject:quran OR subject:coran OR title:quran OR title:coran OR title:قرآن) AND (title:(${words}) OR creator:(${words}) OR identifier:*${n.split(/\s+/)[0]}*)`,
+    "fl[]": "identifier",
+    rows: "12",
+    page: String(page + 1),
+    "sort[]": "downloads desc",
+    output: "json",
+  });
+  params.append("fl[]", "title");
+  const r = await fetch(`${IA}/advancedsearch.php?${params}`);
+  if (!r.ok) throw new Error("reciters");
+  const data = await r.json();
+  const items = (data?.response?.docs || [])
+    .filter((d) => !/zip$/i.test(d.identifier))
+    .map((d) => ({
+      key: `ia-${d.identifier}`,
+      group: "Coran",
+      label: String([].concat(d.title || d.identifier)[0]).replace(/^tvquran\.com\s*_*/i, "").replace(/[_-]{2,}/g, " ").slice(0, 60),
+      ids: [d.identifier],
+    }));
+  return { items, hasMore: (page + 1) * 12 < (data?.response?.numFound || 0) };
 }
 
 // Recherche libre dans les audios Internet Archive (pagination infinie).
