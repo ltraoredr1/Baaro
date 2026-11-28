@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Loader2, Pause, Play, Search, Shuffle, Sparkles } from "lucide-react";
 import { COLORS } from "../../../theme.js";
 import {
-  AUDIO_COLLECTIONS, AUDIO_SEARCHES, MELODY_MOODS,
+  AUDIO_COLLECTIONS, AUDIO_SEARCHES, MELODY_MOODS, RECITER_COUNTRIES,
   generateMelody, loadCollection, matchText, searchArchive, searchReciters,
 } from "../lib/freeAudioLibrary.js";
 
@@ -50,6 +50,9 @@ export default function FreeAudioPanel({ previewingSoundId, toggleSoundPreview, 
   const [reciterQuery, setReciterQuery] = useState("");
   const [reciters, setReciters] = useState({ items: [], page: 0, hasMore: false, loading: false, done: false });
   const [surahFilter, setSurahFilter] = useState("");
+  const [country, setCountry] = useState("");
+  const reciterOk = (c) => matchText(c.label, reciterQuery) && (!country || c.country === country);
+  const localReciters = AUDIO_COLLECTIONS.filter((c) => c.group === "Coran" && reciterOk(c));
   const sentinel = useRef(null);
   const reqId = useRef(0);
 
@@ -189,26 +192,41 @@ export default function FreeAudioPanel({ previewingSoundId, toggleSoundPreview, 
         </div>
       )}
 
+      {tab === "Coran" && (
+        <div className="flex gap-1.5 overflow-x-auto pb-1" role="group" aria-label="Filtrer par pays">
+          {["", ...RECITER_COUNTRIES].map((c) => (
+            <button key={c || "all"} type="button" onClick={() => setCountry(c)}
+              className="shrink-0 rounded-full px-2.5 py-1 text-[11px]"
+              style={country === c ? { background: COLORS.gold, color: "#000" } : { background: "rgba(255,255,255,.1)" }}>
+              {c || "Tous les pays"}
+            </button>
+          ))}
+        </div>
+      )}
+
       {(tab === "Coran" || tab === "Bible") && (
         <div className="flex flex-wrap gap-1.5 max-h-40 overflow-y-auto">
-          {[...AUDIO_COLLECTIONS.filter((c) => c.group === tab && (tab !== "Coran" || matchText(c.label, reciterQuery))),
-            ...(tab === "Coran" ? reciters.items : [])].map((c) => (
+          {[...(tab === "Coran" ? localReciters : AUDIO_COLLECTIONS.filter((c) => c.group === tab)),
+            ...(tab === "Coran" ? reciters.items.filter((c) => !country || c.country === country) : [])].map((c) => (
             <button key={c.key} type="button" onClick={() => open({ type: "col", col: c })}
               className="rounded-full px-2.5 py-1 text-[11px]"
               style={source?.col?.key === c.key ? { background: COLORS.gold, color: "#000" } : { background: "rgba(255,255,255,.1)" }}>
-              {c.label}
+              {tab === "Coran" ? c.label.replace(/^Coran · /, "") : c.label}
+              {tab === "Coran" && !country && c.country ? <span className="opacity-60"> · {c.country}</span> : null}
             </button>
           ))}
           {tab === "Coran" && reciters.hasMore && (
             <button type="button" onClick={() => findReciters(reciters.page + 1)}
               className="rounded-full bg-white/10 px-2.5 py-1 text-[11px] underline">Plus de récitateurs</button>
           )}
-          {tab === "Coran" && reciters.done && !reciters.loading && reciters.items.length === 0
-            && !AUDIO_COLLECTIONS.some((c) => c.group === "Coran" && matchText(c.label, reciterQuery)) && (
-            <p className="text-xs text-white/50">Aucun récitateur trouvé pour « {reciterQuery} ».</p>
+          {tab === "Coran" && localReciters.length === 0
+            && !reciters.items.some((c) => !country || c.country === country)
+            && (reciters.done || !reciterQuery.trim()) && !reciters.loading && (
+            <p className="text-xs text-white/50">
+              Aucun récitateur{reciterQuery.trim() ? ` « ${reciterQuery.trim()} »` : ""}{country ? ` pour ${country}` : ""}.
+            </p>
           )}
-          {tab === "Coran" && !reciters.done && reciterQuery.trim()
-            && !AUDIO_COLLECTIONS.some((c) => c.group === "Coran" && matchText(c.label, reciterQuery)) && (
+          {tab === "Coran" && !reciters.done && reciterQuery.trim() && localReciters.length === 0 && (
             <p className="text-xs text-white/50">Appuie sur la loupe pour chercher ce récitateur.</p>
           )}
         </div>

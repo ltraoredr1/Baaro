@@ -4,21 +4,59 @@
 const IA = "https://archive.org";
 
 export const AUDIO_COLLECTIONS = [
-  { key: "coran-alafasy", group: "Coran", label: "Coran · Mishary Alafasy", ids: ["TvQuran.com__Alafasi"] },
-  { key: "coran-maher", group: "Coran", label: "Coran · Maher Al-Muaiqly", ids: ["TvQuran.com__Maher"] },
-  { key: "coran-ajmy", group: "Coran", label: "Coran · Ahmad Al-Ajmy", ids: ["TvQuran.com__Al-Ajmy"] },
+  { key: "coran-alafasy", group: "Coran", country: "Koweït", label: "Coran · Mishary Alafasy", ids: ["TvQuran.com__Alafasi"] },
+  { key: "coran-maher", group: "Coran", country: "Arabie saoudite", label: "Coran · Maher Al-Muaiqly", ids: ["TvQuran.com__Maher"] },
+  { key: "coran-ajmy", group: "Coran", country: "Arabie saoudite", label: "Coran · Ahmad Al-Ajmy", ids: ["TvQuran.com__Al-Ajmy"] },
   { key: "coran-mulla", group: "Coran", label: "Coran · Ammar Al-Mulla", ids: ["Ammar-Almulla"] },
-  { key: "coran-sudais", group: "Coran", label: "Coran · Abdul-Rahman As-Sudais", ids: ["Abdul-Rahman-Al-Sudais-128Kbps"] },
-  { key: "coran-basit", group: "Coran", label: "Coran · Abdul Basit (mujawwad)", ids: ["TvQuran.com__basit_mjwd"] },
-  { key: "coran-shatri", group: "Coran", label: "Coran · Abu Bakr Al-Shatri", ids: ["TvQuran.com__Shatri"] },
-  { key: "coran-abbad", group: "Coran", label: "Coran · Fares Abbad", ids: ["TvQuran.com__Fares.Abbad"] },
-  { key: "coran-huthaifi", group: "Coran", label: "Coran · Ali Al-Huthaifi", ids: ["TvQuran.com__Ali-Alhuthaifi"] },
-  { key: "coran-shuraim", group: "Coran", label: "Coran · Saud Al-Shuraim", ids: ["TvQuran.com__Al-Shuraimm"] },
+  { key: "coran-sudais", group: "Coran", country: "Arabie saoudite", label: "Coran · Abdul-Rahman As-Sudais", ids: ["Abdul-Rahman-Al-Sudais-128Kbps"] },
+  { key: "coran-basit", group: "Coran", country: "Égypte", label: "Coran · Abdul Basit (mujawwad)", ids: ["TvQuran.com__basit_mjwd"] },
+  { key: "coran-shatri", group: "Coran", country: "Arabie saoudite", label: "Coran · Abu Bakr Al-Shatri", ids: ["TvQuran.com__Shatri"] },
+  { key: "coran-abbad", group: "Coran", country: "Arabie saoudite", label: "Coran · Fares Abbad", ids: ["TvQuran.com__Fares.Abbad"] },
+  { key: "coran-huthaifi", group: "Coran", country: "Arabie saoudite", label: "Coran · Ali Al-Huthaifi", ids: ["TvQuran.com__Ali-Alhuthaifi"] },
+  { key: "coran-shuraim", group: "Coran", country: "Arabie saoudite", label: "Coran · Saud Al-Shuraim", ids: ["TvQuran.com__Al-Shuraimm"] },
+  { key: "coran-husary", group: "Coran", country: "Égypte", label: "Coran · Mahmoud Khalil Al-Husary", ids: ["MahmoudKhalilAl-husary"] },
+  { key: "coran-minshawi", group: "Coran", country: "Égypte", label: "Coran · Al-Minshawi (enseignement)", ids: ["tvQuran.com__Moalim-Minshawi"] },
+  { key: "coran-tablawi", group: "Coran", country: "Égypte", label: "Coran · Mohamed Al-Tablawi", ids: ["TvQuran.com__Tablawi"] },
+  { key: "coran-neana", group: "Coran", country: "Égypte", label: "Coran · Ahmed Neana", ids: ["tvQuran.com__Ahmed-Neana_201509"] },
+  { key: "coran-basfar", group: "Coran", country: "Arabie saoudite", label: "Coran · Abdullah Basfar", ids: ["TvQuran.com__Basfar"] },
+  { key: "coran-muhaisny", group: "Coran", country: "Arabie saoudite", label: "Coran · Mohamed Al-Muhaisny", ids: ["TvQuran.com__Mhsny_201509"] },
+  { key: "coran-ayyub", group: "Coran", country: "Arabie saoudite", label: "Coran · Mohamed Ayyub", ids: ["TvQuran.com__Ayyub_201509"] },
+  { key: "coran-johany", group: "Coran", country: "Arabie saoudite", label: "Coran · Abdullah Al-Juhany", ids: ["TvQuran.com__Al-Johany_201509"] },
+  { key: "coran-qasim", group: "Coran", country: "Arabie saoudite", label: "Coran · Abdul Mohsen Al-Qasim", ids: ["TvQuran.com__Alqasim_201509"] },
+  { key: "coran-matrood", group: "Coran", country: "Arabie saoudite", label: "Coran · Abdullah Al-Matrood", ids: ["TvQuran.com__Al-Mattrod_201509"] },
+  { key: "coran-akhdar", group: "Coran", country: "Arabie saoudite", label: "Coran · Ibrahim Al-Akhdar", ids: ["TvQuran.com__Alakhda"] },
+  { key: "coran-kalbani", group: "Coran", country: "Arabie saoudite", label: "Coran · Adel Al-Kalbani", ids: ["TvQuran.com__Alkalbany_201508"] },
+  { key: "coran-abkar", group: "Coran", country: "Arabie saoudite", label: "Coran · Idris Abkar", ids: ["TvQuran.com__Abkar"] },
+  { key: "coran-qazabri", group: "Coran", country: "Maroc", label: "Coran · Omar Al-Qazabri", ids: ["TvQuran.com__Al-Qazabri"] },
+  { key: "coran-benkirane", group: "Coran", country: "Maroc", label: "Coran · Abdelmojib Benkirane", ids: ["tvQuran.com__Benkirane"] },
+  { key: "coran-koshi", group: "Coran", country: "Maroc", label: "Coran · Al-Oyoun Al-Koshi (warsh)", ids: ["TvQuran.com__koshi"] },
+  { key: "coran-doukkali", group: "Coran", country: "Maroc", label: "Coran · Mohamed Doukkali", ids: ["TvQuran.com__doukkali"] },
+  { key: "coran-zain", group: "Coran", country: "Soudan", label: "Coran · Al-Zain Mohamed Ahmed", ids: ["TvQuran.com__Zain_201509"] },
+  { key: "coran-kanakeri", group: "Coran", country: "Syrie", label: "Coran · Abdul Hadi Kanakeri", ids: ["TvQuran.com__Kanakeri_201509"] },
+  { key: "coran-azzawi", group: "Coran", country: "Irak", label: "Coran · Mustafa Raad Al-Azzawi", ids: ["TvQuran.com__Azzawi"] },
+  { key: "coran-almali", group: "Coran", country: "Mali", label: "Coran · Souleymane Al-Mali", ids: ["SouleymanAlMali-Recitation"] },
   { key: "bible-lsg", group: "Bible", label: "Bible · Louis Segond (FR)", ids: ["LSG_201807"] },
   { key: "bible-jean", group: "Bible", label: "Évangile de Jean (FR)", ids: ["jean_lsg_librivox"] },
   { key: "bible-kjv", group: "Bible", label: "Bible · KJV (EN)", ids: ["bible_kjv_01_02_03_0908_librivox"] },
   { key: "bible-web", group: "Bible", label: "Nouveau Testament (EN)", ids: ["web_new_testament_0811_librivox1"] },
 ];
+
+export const RECITER_COUNTRIES = [
+  "Arabie saoudite", "Égypte", "Koweït", "Maroc", "Soudan", "Syrie", "Irak", "Mali",
+];
+
+// Pays devinés pour les récitateurs trouvés par la recherche (mots-clés du nom).
+const COUNTRY_KEYWORDS = [
+  ["Arabie saoudite", /sudais|shuraim|shuraym|ghamdi|dosar|dossar|ajmy|ajami|muaiqly|maher|shatri|huthaif|hudhaif|basfar|juhan|johan|kalban|ayyub|ayoub|abbad|qasim|akhdar|muhaisn|mhsny|matrood|mattrod|barrak|abkar|rifai|baleela|balilah|jibreel|shuraim|qahtani|harthi|budair|bukhatir|السديس|الشريم|الغامدي|الغامدى|الدوسري|العجمي|العجمى|المعيقلي|الشاطري|الحذيفي|بصفر|الجهني|الكلباني|الكلبانى|أيوب|عباد|القاسم|الأخضر|المحيسني|المطرود|البراك|أبكر|بليلة/i],
+  ["Égypte", /husar|hosar|hussar|minshaw|menshaw|basit|baset|tablaw|neana|naina|mustafa\s*ismail|banna|shahat|abdel\s*samad|samad|الحصري|الحصرى|المنشاوي|المنشاوى|عبد الباسط|عبدالباسط|الطبلاوي|نعينع|البنا|الشحات/i],
+  ["Koweït", /afas|mishar|kandari|qattan|العفاسي|مشاري|الكندري/i],
+  ["Maroc", /koshi|kouchi|qazabri|kazabri|benkirane|doukkali|kantaoui|qantaoui|الكوشي|القزابري|بنكيران|الدكالي|القنطاوي/i],
+  ["Soudan", /nourin|noreen|zain\s*mohamed|siddig|sudan|soudan|نورين|الزين|السودان/i],
+  ["Syrie", /kanakeri|syri|كناكري/i],
+  ["Irak", /azzawi|iraq|irak|العزاوي/i],
+  ["Mali", /\bmali\b|al[-\s]?mali|almali|maly|bamako|malien|المالي/i],
+];
+export const guessCountry = (text) => (COUNTRY_KEYWORDS.find(([, re]) => re.test(String(text || ""))) || [])[0] || null;
 
 export const AUDIO_SEARCHES = [
   ["Coran", "quran recitation"],
@@ -144,6 +182,7 @@ export async function searchReciters(name, page = 0) {
       group: "Coran",
       label: String([].concat(d.title || d.identifier)[0]).replace(/^tvquran\.com\s*_*/i, "").replace(/[_-]{2,}/g, " ").slice(0, 60),
       ids: [d.identifier],
+      country: guessCountry(`${[].concat(d.title || "")[0]} ${d.identifier}`),
     }));
   return { items, hasMore: (page + 1) * 12 < (data?.response?.numFound || 0) };
 }
